@@ -3,12 +3,13 @@ use core::ops::Range;
 
 use miden_air::trace::{
     CLK_COL_IDX, Challenges, DECODER_TRACE_OFFSET, RowIndex,
+    bus_interactions::CHIPLETS_BUS,
     chiplets::{
         HASHER_NODE_INDEX_COL_IDX, HASHER_STATE_COL_RANGE, HASHER_TRACE_OFFSET,
         hasher::{
             CAPACITY_DOMAIN_IDX, DIGEST_RANGE, HASH_CYCLE_LEN, HasherState, LAST_CYCLE_ROW,
             LINEAR_HASH, LINEAR_HASH_LABEL, MP_VERIFY, MP_VERIFY_LABEL, MR_UPDATE_NEW,
-            MR_UPDATE_NEW_LABEL, MR_UPDATE_OLD, MR_UPDATE_OLD_LABEL, RATE_LEN, RETURN_HASH,
+            MR_UPDATE_NEW_LABEL, MR_UPDATE_OLD, MR_UPDATE_OLD_LABEL, RETURN_HASH,
             RETURN_HASH_LABEL, RETURN_STATE, RETURN_STATE_LABEL, STATE_WIDTH, Selectors,
         },
     },
@@ -916,22 +917,45 @@ fn build_expected(
 ) -> Felt {
     let first_cycle_row = addr_to_cycle_row(addr) == 0;
     let transition_label = if first_cycle_row { label + 16_u8 } else { label + 32_u8 };
-    let header = challenges.alpha
-        + challenges.beta_powers[0] * Felt::from_u8(transition_label)
-        + challenges.beta_powers[1] * addr
-        + challenges.beta_powers[2] * index;
-    let mut value = header;
+    let header = challenges.partial::<{ CHIPLETS_BUS }, _, 3>(
+        [0, 1, 2],
+        [Felt::from_u8(transition_label), addr, index],
+    );
 
     if (first_cycle_row && label == LINEAR_HASH_LABEL) || label == RETURN_STATE_LABEL {
         // include the entire state (words a, b, c)
-        value += build_value(&challenges.beta_powers[3..15], &state);
+        challenges.extend(
+            &header,
+            [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+            [
+                state[0], state[1], state[2], state[3], state[4], state[5], state[6], state[7],
+                state[8], state[9], state[10], state[11],
+            ],
+        )
     } else if label == LINEAR_HASH_LABEL {
         // Include the next absorbed rate portion of the state (RATE0 || RATE1).
         // With LE sponge layout [RATE0, RATE1, CAP], rate is at indices 0..8.
-        value += build_value(&challenges.beta_powers[3..11], &next_state[0..RATE_LEN]);
+        challenges.extend(
+            &header,
+            [3, 4, 5, 6, 7, 8, 9, 10],
+            [
+                next_state[0],
+                next_state[1],
+                next_state[2],
+                next_state[3],
+                next_state[4],
+                next_state[5],
+                next_state[6],
+                next_state[7],
+            ],
+        )
     } else if label == RETURN_HASH_LABEL {
         // include the digest (word b)
-        value += build_value(&challenges.beta_powers[3..7], &state[DIGEST_RANGE]);
+        challenges.extend(
+            &header,
+            [3, 4, 5, 6],
+            [state[DIGEST_RANGE.start], state[DIGEST_RANGE.start + 1], state[DIGEST_RANGE.start + 2], state[DIGEST_RANGE.start + 3]],
+        )
     } else {
         assert!(
             label == MP_VERIFY_LABEL
@@ -941,13 +965,15 @@ fn build_expected(
         let bit = index.as_canonical_u64() & 1;
         // For Merkle operations, RATE0 and RATE1 hold the two child digests.
         // With LE sponge layout [RATE0, RATE1, CAP], they are at indices 0..4 and 4..8.
-        let left_word = build_value(&challenges.beta_powers[3..7], &state[0..4]);
-        let right_word = build_value(&challenges.beta_powers[3..7], &state[4..8]);
-
-        value += Felt::new(1 - bit) * left_word + Felt::new(bit) * right_word;
+        // When bit=0, sibling is in the right word (indices 0..4 for left, 4..8 for right).
+        // We select which word to encode at positions 3..7.
+        let word = if bit == 0 { &state[0..4] } else { &state[4..8] };
+        challenges.extend(
+            &header,
+            [3, 4, 5, 6],
+            [word[0], word[1], word[2], word[3]],
+        )
     }
-
-    value
 }
 
 /// Reduces the specified row in the execution trace to an expected value representing a hash
@@ -981,16 +1007,6 @@ fn build_expected_from_trace(
     }
 
     build_expected(challenges, label, state, next_state, addr, index)
-}
-
-/// Builds a value from coefficients and elements of matching lengths. This can be used to build
-/// the value for a single word or for the entire state.
-fn build_value(coeffs: &[Felt], elements: &[Felt]) -> Felt {
-    let mut value = ZERO;
-    for (&coeff, &element) in coeffs.iter().zip(elements.iter()) {
-        value += coeff * element;
-    }
-    value
 }
 
 /// Returns the hash operation label for the specified selectors.

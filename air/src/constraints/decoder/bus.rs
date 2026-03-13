@@ -16,8 +16,8 @@
 //!
 //! ## Message encoding
 //! Each table message is encoded as:
-//! `alpha + sum_i beta^i * element[i]`
-//! This matches the multiset protocol used by the processor.
+//! `bus_prefix[BUS] + sum_i alpha^(i+1) * element[i]`
+//! with a unique bus interaction index per table for domain separation.
 //!
 //! ## References
 //! - Processor tables: `processor/src/decoder/aux_trace/block_stack_table.rs` (p1),
@@ -35,7 +35,10 @@ use crate::{
         op_flags::OpFlags,
         tagging::{TaggingAirBuilderExt, ids::TAG_DECODER_BUS_BASE},
     },
-    trace::Challenges,
+    trace::{
+        Challenges,
+        bus_interactions::{BLOCK_HASH_TABLE, BLOCK_STACK_TABLE, OP_GROUP_TABLE},
+    },
 };
 
 // CONSTANTS
@@ -66,7 +69,8 @@ impl<'a, AB: LiftedAirBuilder> BlockStackEncoders<'a, AB> {
 
     /// Encodes `[block_id, parent_id, is_loop]`.
     fn simple(&self, block_id: &AB::Expr, parent_id: &AB::Expr, is_loop: &AB::Expr) -> AB::ExprEF {
-        self.challenges.encode([block_id.clone(), parent_id.clone(), is_loop.clone()])
+        self.challenges
+            .encode::<{ BLOCK_STACK_TABLE }, _, _>([block_id.clone(), parent_id.clone(), is_loop.clone()])
     }
 
     /// Encodes `[block_id, parent_id, is_loop, ctx, depth, overflow, fn_hash[0..4]]`.
@@ -80,7 +84,7 @@ impl<'a, AB: LiftedAirBuilder> BlockStackEncoders<'a, AB> {
         overflow: &AB::Expr,
         fh: &[AB::Expr; 4],
     ) -> AB::ExprEF {
-        self.challenges.encode([
+        self.challenges.encode::<{ BLOCK_STACK_TABLE }, _, _>([
             block_id.clone(),
             parent_id.clone(),
             is_loop.clone(),
@@ -113,7 +117,7 @@ impl<'a, AB: LiftedAirBuilder> BlockHashEncoder<'a, AB> {
         first_child: &AB::Expr,
         loop_body: &AB::Expr,
     ) -> AB::ExprEF {
-        self.challenges.encode([
+        self.challenges.encode::<{ BLOCK_HASH_TABLE }, _, _>([
             parent.clone(),
             hash[0].clone(),
             hash[1].clone(),
@@ -137,7 +141,8 @@ impl<'a, AB: LiftedAirBuilder> OpGroupEncoder<'a, AB> {
 
     /// Encodes `[block_id, group_count, op_value]`.
     fn encode(&self, block_id: &AB::Expr, group_count: &AB::Expr, value: &AB::Expr) -> AB::ExprEF {
-        self.challenges.encode([block_id.clone(), group_count.clone(), value.clone()])
+        self.challenges
+            .encode::<{ OP_GROUP_TABLE }, _, _>([block_id.clone(), group_count.clone(), value.clone()])
     }
 }
 

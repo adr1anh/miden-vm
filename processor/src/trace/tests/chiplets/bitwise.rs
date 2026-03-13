@@ -1,5 +1,6 @@
 use miden_air::trace::{
     Challenges, RowIndex,
+    bus_interactions::CHIPLETS_BUS,
     chiplets::{
         BITWISE_A_COL_IDX, BITWISE_B_COL_IDX, BITWISE_OUTPUT_COL_IDX, BITWISE_TRACE_OFFSET,
         bitwise::{BITWISE_AND, BITWISE_AND_LABEL, BITWISE_XOR, BITWISE_XOR_LABEL, OP_CYCLE_LEN},
@@ -191,7 +192,7 @@ fn build_expected_bitwise(
     s1: Felt,
     result: Felt,
 ) -> Felt {
-    challenges.encode([label, s0, s1, result])
+    challenges.encode::<{ CHIPLETS_BUS }, _, _>([label, s0, s1, result])
 }
 
 fn build_expected_bitwise_from_trace(

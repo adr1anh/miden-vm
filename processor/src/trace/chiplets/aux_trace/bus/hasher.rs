@@ -2,6 +2,7 @@ use core::fmt::{Display, Formatter, Result as FmtResult};
 
 use miden_air::trace::{
     Challenges, MainTrace, RowIndex, bus_message,
+    bus_interactions::CHIPLETS_BUS,
     chiplets::{
         hasher,
         hasher::{
@@ -60,9 +61,9 @@ const MP_VERIFY_LABEL_START: Felt = Felt::new((MP_VERIFY_LABEL + 16) as u64);
 const MR_UPDATE_OLD_LABEL_START: Felt = Felt::new((MR_UPDATE_OLD_LABEL + 16) as u64);
 const MR_UPDATE_NEW_LABEL_START: Felt = Felt::new((MR_UPDATE_NEW_LABEL + 16) as u64);
 
-/// Encodes hasher message as **alpha + <beta, [label, addr, node_index, state...]>**
+/// Encodes hasher message with label, addr, node_index, and state elements.
 ///
-/// Used for tree operations (MPVERIFY, MRUPDATE) and generic hasher messages with node_index.
+/// Uses sparse encoding at positions [LABEL, ADDR, NODE_INDEX, STATE_START..STATE_START+N].
 #[inline(always)]
 fn hasher_message_value<E, const N: usize>(
     challenges: &Challenges<E>,
@@ -74,17 +75,24 @@ fn hasher_message_value<E, const N: usize>(
 where
     E: ExtensionField<Felt>,
 {
-    let mut acc = challenges.alpha
-        + challenges.beta_powers[bus_message::LABEL_IDX] * transition_label
-        + challenges.beta_powers[bus_message::ADDR_IDX] * addr_next
-        + challenges.beta_powers[bus_message::NODE_INDEX_IDX] * node_index;
-    for (i, &elem) in state.iter().enumerate() {
-        acc += challenges.beta_powers[bus_message::STATE_START_IDX + i] * elem;
-    }
-    acc
+    // Build layout and values arrays: [LABEL, ADDR, NODE_INDEX, STATE_START+0, ..., STATE_START+N-1]
+    let layout: [usize; 3] = [
+        bus_message::LABEL_IDX,
+        bus_message::ADDR_IDX,
+        bus_message::NODE_INDEX_IDX,
+    ];
+    let header_values = [transition_label, addr_next, node_index];
+
+    let partial =
+        challenges.partial::<{ CHIPLETS_BUS }, _, _>(layout, header_values);
+
+    let state_layout: [usize; N] = core::array::from_fn(|i| bus_message::STATE_START_IDX + i);
+    challenges.extend(&partial, state_layout, state)
 }
 
-/// Encodes hasher message as **alpha + <beta, [label, addr, _, state[0..7]]>** (skips node_index).
+/// Encodes hasher message with label, addr, and rate state (skips node_index).
+///
+/// Uses sparse encoding at positions [LABEL, ADDR, STATE_START..STATE_START+8].
 #[inline(always)]
 fn header_rate_value<E>(
     challenges: &Challenges<E>,
@@ -95,17 +103,19 @@ fn header_rate_value<E>(
 where
     E: ExtensionField<Felt>,
 {
-    let mut acc = challenges.alpha
-        + challenges.beta_powers[bus_message::LABEL_IDX] * transition_label
-        + challenges.beta_powers[bus_message::ADDR_IDX] * addr;
-    for (i, &elem) in state.iter().enumerate() {
-        acc += challenges.beta_powers[bus_message::STATE_START_IDX + i] * elem;
-    }
-    acc
+    let layout: [usize; 2] = [bus_message::LABEL_IDX, bus_message::ADDR_IDX];
+    let header_values = [transition_label, addr];
+
+    let partial = challenges.partial::<{ CHIPLETS_BUS }, _, _>(layout, header_values);
+
+    let state_layout: [usize; hasher::RATE_LEN] =
+        core::array::from_fn(|i| bus_message::STATE_START_IDX + i);
+    challenges.extend(&partial, state_layout, state)
 }
 
-/// Encodes hasher message as **alpha + <beta, [label, addr, _, digest]>** (skips node_index, digest
-/// is RATE0 only).
+/// Encodes hasher message with label, addr, and digest (RATE0 only, skips node_index).
+///
+/// Uses sparse encoding at positions [LABEL, ADDR, STATE_START..STATE_START+4].
 #[inline(always)]
 fn header_digest_value<E>(
     challenges: &Challenges<E>,
@@ -116,13 +126,14 @@ fn header_digest_value<E>(
 where
     E: ExtensionField<Felt>,
 {
-    let mut acc = challenges.alpha
-        + challenges.beta_powers[bus_message::LABEL_IDX] * transition_label
-        + challenges.beta_powers[bus_message::ADDR_IDX] * addr;
-    for (i, &elem) in digest.iter().enumerate() {
-        acc += challenges.beta_powers[bus_message::STATE_START_IDX + i] * elem;
-    }
-    acc
+    let layout: [usize; 2] = [bus_message::LABEL_IDX, bus_message::ADDR_IDX];
+    let header_values = [transition_label, addr];
+
+    let partial = challenges.partial::<{ CHIPLETS_BUS }, _, _>(layout, header_values);
+
+    let digest_layout: [usize; WORD_SIZE] =
+        core::array::from_fn(|i| bus_message::STATE_START_IDX + i);
+    challenges.extend(&partial, digest_layout, digest)
 }
 
 // REQUESTS
@@ -737,18 +748,39 @@ impl<E> BusMessage<E> for ControlBlockRequestMessage
 where
     E: ExtensionField<Felt>,
 {
-    /// Encodes as **alpha + <beta, [label, addr, _, state[0..7], ..., op_code]>** (skips
+    /// Encodes as bus_prefix + alphas * [label, addr, _, state[0..7], ..., op_code] (skips
     /// node_index).
     fn value(&self, challenges: &Challenges<E>) -> E {
-        // Header + rate portion + capacity domain element for op_code
-        let mut acc = header_rate_value(
-            challenges,
-            self.transition_label,
-            self.addr_next,
-            self.decoder_hasher_state,
-        );
-        acc += challenges.beta_powers[bus_message::CAPACITY_DOMAIN_IDX] * self.op_code;
-        acc
+        // Build header + rate portion as partial, then extend with capacity domain for op_code.
+        let layout: [usize; 2] = [bus_message::LABEL_IDX, bus_message::ADDR_IDX];
+        let header_values = [self.transition_label, self.addr_next];
+        let partial =
+            challenges.partial::<{ CHIPLETS_BUS }, _, _>(layout, header_values);
+
+        // Extend with state + capacity domain
+        let ext_layout: [usize; 9] = [
+            bus_message::STATE_START_IDX,
+            bus_message::STATE_START_IDX + 1,
+            bus_message::STATE_START_IDX + 2,
+            bus_message::STATE_START_IDX + 3,
+            bus_message::STATE_START_IDX + 4,
+            bus_message::STATE_START_IDX + 5,
+            bus_message::STATE_START_IDX + 6,
+            bus_message::STATE_START_IDX + 7,
+            bus_message::CAPACITY_DOMAIN_IDX,
+        ];
+        let ext_values = [
+            self.decoder_hasher_state[0],
+            self.decoder_hasher_state[1],
+            self.decoder_hasher_state[2],
+            self.decoder_hasher_state[3],
+            self.decoder_hasher_state[4],
+            self.decoder_hasher_state[5],
+            self.decoder_hasher_state[6],
+            self.decoder_hasher_state[7],
+            self.op_code,
+        ];
+        challenges.extend(&partial, ext_layout, ext_values)
     }
 
     fn source(&self) -> &str {

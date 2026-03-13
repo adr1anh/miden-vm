@@ -1,6 +1,9 @@
 use alloc::{collections::BTreeMap, vec::Vec};
 
-use miden_air::trace::{Challenges, MainTrace, RowIndex, chiplets::ace::ACE_CHIPLET_NUM_COLS};
+use miden_air::trace::{
+    Challenges, MainTrace, RowIndex, bus_interactions::ACE_WIRING_BUS,
+    chiplets::ace::ACE_CHIPLET_NUM_COLS,
+};
 use miden_core::{Felt, ZERO, field::ExtensionField};
 
 use crate::trace::TraceFragment;
@@ -147,7 +150,7 @@ impl AceHints {
         ctx: u32,
         wire: [Felt; 3],
     ) -> E {
-        challenges.encode([Felt::from_u32(clk), Felt::from_u32(ctx), wire[0], wire[1], wire[2]])
+        challenges.encode::<{ ACE_WIRING_BUS }, _, _>([Felt::from_u32(clk), Felt::from_u32(ctx), wire[0], wire[1], wire[2]])
     }
 
     pub(crate) fn build_divisors<E: ExtensionField<Felt>>(

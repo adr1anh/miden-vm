@@ -175,19 +175,18 @@ where
 /// Standard control block encoding includes state[0..7] which are always zero for DYN/DYNCALL.
 /// This optimization skips those 8 multiplications.
 ///
-/// Encoding: `alpha + beta^0*label + beta^1*addr + beta^12*op_code`
-/// where beta^12 is the capacity domain element at coeffs[13].
+/// Uses sparse encoding at indices [LABEL_IDX, ADDR_IDX, CAPACITY_DOMAIN_IDX].
 #[inline(always)]
 fn encode_control_block_without_state<E>(challenges: &Challenges<E>, addr: Felt, op_code: Felt) -> E
 where
     E: ExtensionField<Felt>,
 {
-    use miden_air::trace::bus_message;
+    use miden_air::trace::{bus_interactions::CHIPLETS_BUS, bus_message};
 
-    challenges.alpha
-        + challenges.beta_powers[bus_message::LABEL_IDX] * Felt::from_u8(LINEAR_HASH_LABEL + 16)
-        + challenges.beta_powers[bus_message::ADDR_IDX] * addr
-        + challenges.beta_powers[bus_message::CAPACITY_DOMAIN_IDX] * op_code
+    challenges.encode_sparse::<{ CHIPLETS_BUS }, _, _>(
+        [bus_message::LABEL_IDX, bus_message::ADDR_IDX, bus_message::CAPACITY_DOMAIN_IDX],
+        [Felt::from_u8(LINEAR_HASH_LABEL + 16), addr, op_code],
+    )
 }
 
 /// Builds requests made on a `DYN` operation.

@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use miden_air::trace::{
     AUX_TRACE_RAND_CHALLENGES, Challenges,
+    bus_interactions::{BLOCK_STACK_TABLE, OP_GROUP_TABLE},
     chiplets::hasher::HASH_CYCLE_LEN_FELT,
     decoder::{P1_COL_IDX, P2_COL_IDX, P3_COL_IDX},
 };
@@ -893,18 +894,19 @@ impl BlockStackTableRow {
     /// at least 12 coefficients.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
         let is_loop = if self.is_loop { ONE } else { ZERO };
-        challenges.alpha
-            + challenges.beta_powers[0] * self.block_id
-            + challenges.beta_powers[1] * self.parent_id
-            + challenges.beta_powers[2] * is_loop
-            + challenges.beta_powers[3] * Felt::from_u32(u32::from(self.parent_ctx))
-            + challenges.beta_powers[4] * self.parent_fmp
-            + challenges.beta_powers[5] * Felt::from_u32(self.parent_stack_depth)
-            + challenges.beta_powers[6] * self.parent_next_overflow_addr
-            + challenges.beta_powers[7] * self.parent_fn_hash[0]
-            + challenges.beta_powers[8] * self.parent_fn_hash[1]
-            + challenges.beta_powers[9] * self.parent_fn_hash[2]
-            + challenges.beta_powers[10] * self.parent_fn_hash[3]
+        challenges.encode::<{ BLOCK_STACK_TABLE }, _, _>([
+            self.block_id,
+            self.parent_id,
+            is_loop,
+            Felt::from_u32(u32::from(self.parent_ctx)),
+            self.parent_fmp,
+            Felt::from_u32(self.parent_stack_depth),
+            self.parent_next_overflow_addr,
+            self.parent_fn_hash[0],
+            self.parent_fn_hash[1],
+            self.parent_fn_hash[2],
+            self.parent_fn_hash[3],
+        ])
     }
 }
 
@@ -928,9 +930,10 @@ impl OpGroupTableRow {
     /// Reduces this row to a single field element in the field specified by E. This requires
     /// at least 4 coefficients.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
-        challenges.alpha
-            + challenges.beta_powers[0] * self.batch_id
-            + challenges.beta_powers[1] * self.group_pos
-            + challenges.beta_powers[2] * self.group_value
+        challenges.encode::<{ OP_GROUP_TABLE }, _, _>([
+            self.batch_id,
+            self.group_pos,
+            self.group_value,
+        ])
     }
 }

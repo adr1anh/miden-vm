@@ -2,6 +2,7 @@ use core::fmt::{Display, Formatter, Result as FmtResult};
 
 use miden_air::trace::{
     Challenges, MainTrace, RowIndex,
+    bus_interactions::CHIPLETS_BUS,
     chiplets::kernel_rom::{KERNEL_PROC_CALL_LABEL, KERNEL_PROC_INIT_LABEL},
 };
 use miden_core::{Felt, field::ExtensionField};
@@ -74,7 +75,7 @@ where
 {
     #[inline(always)]
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode([
+        challenges.encode::<{ CHIPLETS_BUS }, _, _>([
             KERNEL_PROC_CALL_LABEL,
             self.kernel_proc_digest[0],
             self.kernel_proc_digest[1],
@@ -106,7 +107,7 @@ where
 {
     #[inline(always)]
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode([
+        challenges.encode::<{ CHIPLETS_BUS }, _, _>([
             KERNEL_PROC_INIT_LABEL,
             self.kernel_proc_digest[0],
             self.kernel_proc_digest[1],

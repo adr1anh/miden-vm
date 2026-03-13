@@ -3,6 +3,7 @@ use core::mem::MaybeUninit;
 
 use miden_air::trace::{
     Challenges, MainTrace, RowIndex,
+    bus_interactions::RANGE_CHECK_BUS,
     range::{M_COL_IDX, V_COL_IDX},
 };
 
@@ -68,7 +69,7 @@ impl AuxTraceBuilder {
         challenges: &Challenges<E>,
     ) -> Vec<E> {
         // run batch inversion on the lookup values
-        let divisors = get_divisors(&self.lookup_values, challenges.alpha);
+        let divisors = get_divisors(&self.lookup_values, challenges);
 
         // allocate memory for the running sum column and set the initial value to ZERO
         let mut b_range: Vec<MaybeUninit<E>> = uninit_vector(main_trace.num_rows());
@@ -163,8 +164,11 @@ impl AuxTraceBuilder {
 
 /// Runs batch inversion on all range check lookup values and returns a map which maps each value
 /// to the divisor used for including it in the LogUp lookup. In other words, the map contains
-/// mappings of x to 1/(alpha + x).
-fn get_divisors<E: ExtensionField<Felt>>(lookup_values: &[u16], alpha: E) -> BTreeMap<u16, E> {
+/// mappings of x to 1 / encode(x) where encode uses the RANGE_CHECK_BUS domain prefix.
+fn get_divisors<E: ExtensionField<Felt>>(
+    lookup_values: &[u16],
+    challenges: &Challenges<E>,
+) -> BTreeMap<u16, E> {
     // run batch inversion on the lookup values
     let mut values: Vec<MaybeUninit<E>> = uninit_vector(lookup_values.len());
     let mut inv_values: Vec<MaybeUninit<E>> = uninit_vector(lookup_values.len());
@@ -172,7 +176,8 @@ fn get_divisors<E: ExtensionField<Felt>>(lookup_values: &[u16], alpha: E) -> BTr
     let mut acc = E::ONE;
     for (i, (value, inv_value)) in values.iter_mut().zip(inv_values.iter_mut()).enumerate() {
         inv_value.write(acc);
-        let v = alpha + E::from_u16(lookup_values[i]);
+        let v: E =
+            challenges.encode::<{ RANGE_CHECK_BUS }, _, _>([Felt::from_u16(lookup_values[i])]);
         value.write(v);
         acc *= v;
     }

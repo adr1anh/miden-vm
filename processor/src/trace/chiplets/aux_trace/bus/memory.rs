@@ -2,6 +2,7 @@ use core::fmt::{Display, Formatter, Result as FmtResult};
 
 use miden_air::trace::{
     Challenges, MainTrace, RowIndex,
+    bus_interactions::CHIPLETS_BUS,
     chiplets::{
         ace::{ACE_INSTRUCTION_ID1_OFFSET, ACE_INSTRUCTION_ID2_OFFSET},
         memory::{
@@ -601,7 +602,7 @@ where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode([
+        challenges.encode::<{ CHIPLETS_BUS }, _, _>([
             self.op_label,
             self.ctx,
             self.addr,
@@ -641,7 +642,7 @@ where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode([self.op_label, self.ctx, self.addr, self.clk, self.element])
+        challenges.encode::<{ CHIPLETS_BUS }, _, _>([self.op_label, self.ctx, self.addr, self.clk, self.element])
     }
 
     fn source(&self) -> &str {
