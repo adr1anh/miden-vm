@@ -103,7 +103,7 @@ where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode::<{ CHIPLETS_BUS }, _, _>([
+        challenges.encode(CHIPLETS_BUS, [
             self.op_label,
             self.clk,
             self.ctx,

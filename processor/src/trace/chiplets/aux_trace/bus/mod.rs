@@ -183,7 +183,7 @@ where
 {
     use miden_air::trace::{bus_interactions::CHIPLETS_BUS, bus_message};
 
-    challenges.encode_sparse::<{ CHIPLETS_BUS }, _, _>(
+    challenges.encode_sparse(CHIPLETS_BUS, 
         [bus_message::LABEL_IDX, bus_message::ADDR_IDX, bus_message::CAPACITY_DOMAIN_IDX],
         [Felt::from_u8(LINEAR_HASH_LABEL + 16), addr, op_code],
     )

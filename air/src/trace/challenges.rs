@@ -2,10 +2,10 @@
 //!
 //! Provides [`Challenges`], a single struct for encoding multiset/LogUp bus messages
 //! with per-bus domain separation. Each message is encoded as:
-//! `bus_prefix[BUS] + <alphas, message>`
+//! `bus_prefix[bus] + <alphas, message>`
 //!
 //! Where:
-//! - `bus_prefix[BUS] = beta + BUS` provides unique domain separation per bus interaction type
+//! - `bus_prefix[bus] = beta + bus` provides unique domain separation per bus interaction type
 //! - `alphas[i] = alpha^(i+1)` are the reduction coefficients (skipping 1)
 //!
 //! This type is used by:
@@ -22,7 +22,7 @@ use miden_core::field::PrimeCharacteristicRing;
 
 use super::{MAX_MESSAGE_WIDTH, bus_interactions::NUM_BUS_INTERACTIONS};
 
-/// Encodes multiset/LogUp contributions as **bus_prefix\[BUS\] + \<alphas, message\>**.
+/// Encodes multiset/LogUp contributions as **bus_prefix\[bus\] + \<alphas, message\>**.
 ///
 /// - `alphas`: precomputed powers `[alpha^1, alpha^2, ..., alpha^MAX_MESSAGE_WIDTH]`
 /// - `bus_prefix`: precomputed per-bus domain separation values `[beta+0, beta+1, ..., beta+B]`
@@ -55,31 +55,32 @@ impl<EF: PrimeCharacteristicRing> Challenges<EF> {
         Self { alphas, bus_prefix }
     }
 
-    /// Encodes as **bus_prefix\[BUS\] + sum(alphas\[i\] * elem\[i\])** with K consecutive elements.
+    /// Encodes as **bus_prefix\[bus\] + sum(alphas\[i\] * elem\[i\])** with K consecutive elements.
     ///
-    /// The `BUS` const generic selects the bus interaction type for domain separation.
+    /// The `bus` parameter selects the bus interaction type for domain separation.
     #[inline(always)]
-    pub fn encode<const BUS: usize, BF, const K: usize>(&self, elems: [BF; K]) -> EF
+    pub fn encode<BF, const K: usize>(&self, bus: usize, elems: [BF; K]) -> EF
     where
         EF: Mul<BF, Output = EF> + AddAssign,
         BF: Clone,
     {
-        const { assert!(K <= MAX_MESSAGE_WIDTH, "Message length exceeds alphas capacity") };
-        const { assert!(BUS < NUM_BUS_INTERACTIONS, "Bus index exceeds bus_prefix capacity") };
-        let mut acc = self.bus_prefix[BUS].clone();
+        debug_assert!(K <= MAX_MESSAGE_WIDTH, "Message length exceeds alphas capacity");
+        debug_assert!(bus < NUM_BUS_INTERACTIONS, "Bus index exceeds bus_prefix capacity");
+        let mut acc = self.bus_prefix[bus].clone();
         for (i, elem) in elems.iter().enumerate() {
             acc += self.alphas[i].clone() * elem.clone();
         }
         acc
     }
 
-    /// Encodes as **bus_prefix\[BUS\] + sum(alphas\[layout\[i\]\] * values\[i\])** using sparse
+    /// Encodes as **bus_prefix\[bus\] + sum(alphas\[layout\[i\]\] * values\[i\])** using sparse
     /// positions.
     ///
-    /// The `BUS` const generic selects the bus interaction type for domain separation.
+    /// The `bus` parameter selects the bus interaction type for domain separation.
     #[inline(always)]
-    pub fn encode_sparse<const BUS: usize, BF, const K: usize>(
+    pub fn encode_sparse<BF, const K: usize>(
         &self,
+        bus: usize,
         layout: [usize; K],
         values: [BF; K],
     ) -> EF
@@ -87,8 +88,8 @@ impl<EF: PrimeCharacteristicRing> Challenges<EF> {
         EF: Mul<BF, Output = EF> + AddAssign,
         BF: Clone,
     {
-        const { assert!(BUS < NUM_BUS_INTERACTIONS, "Bus index exceeds bus_prefix capacity") };
-        let mut acc = self.bus_prefix[BUS].clone();
+        debug_assert!(bus < NUM_BUS_INTERACTIONS, "Bus index exceeds bus_prefix capacity");
+        let mut acc = self.bus_prefix[bus].clone();
         for i in 0..K {
             let idx = layout[i];
             debug_assert!(
@@ -110,12 +111,13 @@ impl<EF: PrimeCharacteristicRing> Challenges<EF> {
     ///
     /// # Example
     /// ```ignore
-    /// let partial = challenges.partial::<_, BUS, 2>([0, 1], [label, addr]);
+    /// let partial = challenges.partial(CHIPLETS_BUS, [0, 1], [label, addr]);
     /// let full = challenges.extend(&partial, [2, 3], [val0, val1]);
     /// ```
     #[inline(always)]
-    pub fn partial<const BUS: usize, BF, const M: usize>(
+    pub fn partial<BF, const M: usize>(
         &self,
+        bus: usize,
         indices: [usize; M],
         values: [BF; M],
     ) -> PartialMessage<EF, M>
@@ -123,8 +125,8 @@ impl<EF: PrimeCharacteristicRing> Challenges<EF> {
         EF: Mul<BF, Output = EF> + AddAssign,
         BF: Clone,
     {
-        const { assert!(BUS < NUM_BUS_INTERACTIONS, "Bus index exceeds bus_prefix capacity") };
-        let mut acc = self.bus_prefix[BUS].clone();
+        debug_assert!(bus < NUM_BUS_INTERACTIONS, "Bus index exceeds bus_prefix capacity");
+        let mut acc = self.bus_prefix[bus].clone();
         for i in 0..M {
             debug_assert!(
                 indices[i] < self.alphas.len(),

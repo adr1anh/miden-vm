@@ -285,7 +285,7 @@ fn build_expected_bus_element_msg(
 ) -> Felt {
     assert!(op_label == MEMORY_READ_ELEMENT_LABEL || op_label == MEMORY_WRITE_ELEMENT_LABEL);
 
-    challenges.encode::<{ CHIPLETS_BUS }, _, _>([Felt::from_u8(op_label), ctx, addr, clk, value])
+    challenges.encode(CHIPLETS_BUS, [Felt::from_u8(op_label), ctx, addr, clk, value])
 }
 
 fn build_expected_bus_word_msg(
@@ -298,7 +298,7 @@ fn build_expected_bus_word_msg(
 ) -> Felt {
     assert!(op_label == MEMORY_READ_WORD_LABEL || op_label == MEMORY_WRITE_WORD_LABEL);
 
-    challenges.encode::<{ CHIPLETS_BUS }, _, _>([Felt::from_u8(op_label), ctx, addr, clk, word[0], word[1], word[2], word[3]])
+    challenges.encode(CHIPLETS_BUS, [Felt::from_u8(op_label), ctx, addr, clk, word[0], word[1], word[2], word[3]])
 }
 
 fn build_expected_bus_msg_from_trace(

@@ -150,7 +150,7 @@ impl AceHints {
         ctx: u32,
         wire: [Felt; 3],
     ) -> E {
-        challenges.encode::<{ ACE_WIRING_BUS }, _, _>([Felt::from_u32(clk), Felt::from_u32(ctx), wire[0], wire[1], wire[2]])
+        challenges.encode(ACE_WIRING_BUS, [Felt::from_u32(clk), Felt::from_u32(ctx), wire[0], wire[1], wire[2]])
     }
 
     pub(crate) fn build_divisors<E: ExtensionField<Felt>>(

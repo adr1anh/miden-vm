@@ -75,16 +75,16 @@ fn get_op_group_table_inclusion_multiplicand<E: ExtensionField<Felt>>(
     if op_batch_flag == OP_BATCH_8_GROUPS {
         let h = main_trace.decoder_hasher_state(i);
         (1..8_u8).fold(E::ONE, |acc, k| {
-            acc * challenges.encode::<{ OP_GROUP_TABLE }, _, _>([block_id, group_count - Felt::from_u8(k), h[k as usize]])
+            acc * challenges.encode(OP_GROUP_TABLE, [block_id, group_count - Felt::from_u8(k), h[k as usize]])
         })
     } else if op_batch_flag == OP_BATCH_4_GROUPS {
         let h = main_trace.decoder_hasher_state_first_half(i);
         (1..4_u8).fold(E::ONE, |acc, k| {
-            acc * challenges.encode::<{ OP_GROUP_TABLE }, _, _>([block_id, group_count - Felt::from_u8(k), h[k as usize]])
+            acc * challenges.encode(OP_GROUP_TABLE, [block_id, group_count - Felt::from_u8(k), h[k as usize]])
         })
     } else if op_batch_flag == OP_BATCH_2_GROUPS {
         let h = main_trace.decoder_hasher_state_first_half(i);
-        challenges.encode::<{ OP_GROUP_TABLE }, _, _>([block_id, group_count - ONE, h[1]])
+        challenges.encode(OP_GROUP_TABLE, [block_id, group_count - ONE, h[1]])
     } else {
         E::ONE
     }
@@ -111,5 +111,5 @@ fn get_op_group_table_removal_multiplicand<E: ExtensionField<Felt>>(
         }
     };
 
-    challenges.encode::<{ OP_GROUP_TABLE }, _, _>([block_id, group_count, group_value])
+    challenges.encode(OP_GROUP_TABLE, [block_id, group_count, group_value])
 }

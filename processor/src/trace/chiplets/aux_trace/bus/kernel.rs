@@ -75,7 +75,7 @@ where
 {
     #[inline(always)]
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode::<{ CHIPLETS_BUS }, _, _>([
+        challenges.encode(CHIPLETS_BUS, [
             KERNEL_PROC_CALL_LABEL,
             self.kernel_proc_digest[0],
             self.kernel_proc_digest[1],
@@ -107,7 +107,7 @@ where
 {
     #[inline(always)]
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode::<{ CHIPLETS_BUS }, _, _>([
+        challenges.encode(CHIPLETS_BUS, [
             KERNEL_PROC_INIT_LABEL,
             self.kernel_proc_digest[0],
             self.kernel_proc_digest[1],

@@ -602,7 +602,7 @@ where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode::<{ CHIPLETS_BUS }, _, _>([
+        challenges.encode(CHIPLETS_BUS, [
             self.op_label,
             self.ctx,
             self.addr,
@@ -642,7 +642,7 @@ where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode::<{ CHIPLETS_BUS }, _, _>([self.op_label, self.ctx, self.addr, self.clk, self.element])
+        challenges.encode(CHIPLETS_BUS, [self.op_label, self.ctx, self.addr, self.clk, self.element])
     }
 
     fn source(&self) -> &str {

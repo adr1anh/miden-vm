@@ -111,15 +111,15 @@ pub fn enforce_bus<AB>(
 
     // Response row value (adding to table during right_shift):
     let response_row =
-        challenges.encode::<{ STACK_OVERFLOW_TABLE }, _, _>([clk.clone(), s15.clone(), b1.clone()]);
+        challenges.encode(STACK_OVERFLOW_TABLE, [clk.clone(), s15.clone(), b1.clone()]);
 
     // Request row value for left_shift (removing from table):
     let request_row_left = challenges
-        .encode::<{ STACK_OVERFLOW_TABLE }, _, _>([b1.clone(), s15_next.clone(), b1_next.clone()]);
+        .encode(STACK_OVERFLOW_TABLE, [b1.clone(), s15_next.clone(), b1_next.clone()]);
 
     // Request row value for dyncall (removing from table):
     let request_row_dyncall = challenges
-        .encode::<{ STACK_OVERFLOW_TABLE }, _, _>([b1.clone(), s15_next.clone(), hasher_state_5.clone()]);
+        .encode(STACK_OVERFLOW_TABLE, [b1.clone(), s15_next.clone(), hasher_state_5.clone()]);
 
     // -------------------------------------------------------------------------
     // Compute response and request terms

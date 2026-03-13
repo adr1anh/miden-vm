@@ -26,7 +26,7 @@ fn b_range_trace_stack() {
 
     // Helper to compute 1/encode(value) for range check bus
     let rc_inv = |v: u64| -> Felt {
-        let encoded: Felt = challenges.encode::<{ RANGE_CHECK_BUS }, _, _>([Felt::new(v)]);
+        let encoded: Felt = challenges.encode(RANGE_CHECK_BUS, [Felt::new(v)]);
         encoded.inverse()
     };
 
@@ -103,7 +103,7 @@ fn b_range_trace_mem() {
 
     // Helper to compute 1/encode(value) for range check bus
     let rc_inv = |v: Felt| -> Felt {
-        let encoded: Felt = challenges.encode::<{ RANGE_CHECK_BUS }, _, _>([v]);
+        let encoded: Felt = challenges.encode(RANGE_CHECK_BUS, [v]);
         encoded.inverse()
     };
 

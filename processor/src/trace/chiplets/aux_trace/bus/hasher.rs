@@ -84,7 +84,7 @@ where
     let header_values = [transition_label, addr_next, node_index];
 
     let partial =
-        challenges.partial::<{ CHIPLETS_BUS }, _, _>(layout, header_values);
+        challenges.partial(CHIPLETS_BUS, layout, header_values);
 
     let state_layout: [usize; N] = core::array::from_fn(|i| bus_message::STATE_START_IDX + i);
     challenges.extend(&partial, state_layout, state)
@@ -106,7 +106,7 @@ where
     let layout: [usize; 2] = [bus_message::LABEL_IDX, bus_message::ADDR_IDX];
     let header_values = [transition_label, addr];
 
-    let partial = challenges.partial::<{ CHIPLETS_BUS }, _, _>(layout, header_values);
+    let partial = challenges.partial(CHIPLETS_BUS, layout, header_values);
 
     let state_layout: [usize; hasher::RATE_LEN] =
         core::array::from_fn(|i| bus_message::STATE_START_IDX + i);
@@ -129,7 +129,7 @@ where
     let layout: [usize; 2] = [bus_message::LABEL_IDX, bus_message::ADDR_IDX];
     let header_values = [transition_label, addr];
 
-    let partial = challenges.partial::<{ CHIPLETS_BUS }, _, _>(layout, header_values);
+    let partial = challenges.partial(CHIPLETS_BUS, layout, header_values);
 
     let digest_layout: [usize; WORD_SIZE] =
         core::array::from_fn(|i| bus_message::STATE_START_IDX + i);
@@ -755,7 +755,7 @@ where
         let layout: [usize; 2] = [bus_message::LABEL_IDX, bus_message::ADDR_IDX];
         let header_values = [self.transition_label, self.addr_next];
         let partial =
-            challenges.partial::<{ CHIPLETS_BUS }, _, _>(layout, header_values);
+            challenges.partial(CHIPLETS_BUS, layout, header_values);
 
         // Extend with state + capacity domain
         let ext_layout: [usize; 9] = [

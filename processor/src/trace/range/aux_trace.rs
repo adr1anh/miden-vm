@@ -177,7 +177,7 @@ fn get_divisors<E: ExtensionField<Felt>>(
     for (i, (value, inv_value)) in values.iter_mut().zip(inv_values.iter_mut()).enumerate() {
         inv_value.write(acc);
         let v: E =
-            challenges.encode::<{ RANGE_CHECK_BUS }, _, _>([Felt::from_u16(lookup_values[i])]);
+            challenges.encode(RANGE_CHECK_BUS, [Felt::from_u16(lookup_values[i])]);
         value.write(v);
         acc *= v;
     }

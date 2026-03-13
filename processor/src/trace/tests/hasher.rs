@@ -206,12 +206,12 @@ impl SiblingTableRow {
         // we need to compute the 2nd and the 3rd word values for other purposes as well.
         let lsb = self.index.as_canonical_u64() & 1;
         if lsb == 0 {
-            challenges.encode_sparse::<{ SIBLING_TABLE }, _, _>(
+            challenges.encode_sparse(SIBLING_TABLE, 
                 [2, 7, 8, 9, 10],
                 [self.index, self.sibling[0], self.sibling[1], self.sibling[2], self.sibling[3]],
             )
         } else {
-            challenges.encode_sparse::<{ SIBLING_TABLE }, _, _>(
+            challenges.encode_sparse(SIBLING_TABLE, 
                 [2, 3, 4, 5, 6],
                 [self.index, self.sibling[0], self.sibling[1], self.sibling[2], self.sibling[3]],
             )

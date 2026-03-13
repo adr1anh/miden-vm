@@ -187,7 +187,7 @@ pub fn enforce_hash_kernel_constraint<AB>(
         let v1_1: AB::Expr = local.chiplets[NUM_ACE_SELECTORS + V_1_1_IDX].clone().into();
         let label: AB::Expr = AB::Expr::from(Felt::from_u8(MEMORY_READ_WORD_LABEL));
 
-        challenges.encode::<{ CHIPLETS_BUS }, _, _>([
+        challenges.encode(CHIPLETS_BUS, [
             label,
             ace_ctx.clone(),
             ace_ptr.clone(),
@@ -210,7 +210,7 @@ pub fn enforce_hash_kernel_constraint<AB>(
         let element = id_1 + id_2 * offset1 + (eval_op + one.clone()) * offset2;
         let label: AB::Expr = AB::Expr::from(Felt::from_u8(MEMORY_READ_ELEMENT_LABEL));
 
-        challenges.encode::<{ CHIPLETS_BUS }, _, _>([label, ace_ctx, ace_ptr, ace_clk, element])
+        challenges.encode(CHIPLETS_BUS, [label, ace_ctx, ace_ptr, ace_clk, element])
     };
 
     // =========================================================================
@@ -233,7 +233,7 @@ pub fn enforce_hash_kernel_constraint<AB>(
     let log_label: AB::Expr = AB::Expr::from(Felt::from_u8(LOG_PRECOMPILE_LABEL));
 
     // CAP_PREV value (request - removed).
-    let v_cap_prev = challenges.encode::<{ LOG_PRECOMPILE_TRANSCRIPT }, _, _>([
+    let v_cap_prev = challenges.encode(LOG_PRECOMPILE_TRANSCRIPT, [
         log_label.clone(),
         cap_prev[0].clone(),
         cap_prev[1].clone(),
@@ -242,7 +242,7 @@ pub fn enforce_hash_kernel_constraint<AB>(
     ]);
 
     // CAP_NEXT value (response - inserted).
-    let v_cap_next = challenges.encode::<{ LOG_PRECOMPILE_TRANSCRIPT }, _, _>([
+    let v_cap_next = challenges.encode(LOG_PRECOMPILE_TRANSCRIPT, [
         log_label,
         cap_next[0].clone(),
         cap_next[1].clone(),
@@ -303,7 +303,7 @@ fn compute_sibling_b0<AB>(
 where
     AB: LiftedAirBuilder<F = Felt>,
 {
-    challenges.encode_sparse::<{ SIBLING_TABLE }, _, _>(
+    challenges.encode_sparse(SIBLING_TABLE, 
         SIBLING_B0_LAYOUT,
         [node_index.clone(), h[4].clone(), h[5].clone(), h[6].clone(), h[7].clone()],
     )
@@ -320,7 +320,7 @@ fn compute_sibling_b1<AB>(
 where
     AB: LiftedAirBuilder<F = Felt>,
 {
-    challenges.encode_sparse::<{ SIBLING_TABLE }, _, _>(
+    challenges.encode_sparse(SIBLING_TABLE, 
         SIBLING_B1_LAYOUT,
         [node_index.clone(), h[0].clone(), h[1].clone(), h[2].clone(), h[3].clone()],
     )

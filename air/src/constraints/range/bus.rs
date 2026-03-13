@@ -83,28 +83,28 @@ where
 
     // Denominators for LogUp: encode each value through the challenges for domain separation.
     // Convert AB::Var to AB::Expr for type compatibility with Challenges<AB::ExprEF>.
-    let mv0: AB::ExprEF = challenges.encode::<{ RANGE_CHECK_BUS }, AB::Expr, _>(
+    let mv0: AB::ExprEF = challenges.encode(RANGE_CHECK_BUS, 
         [local.chiplets[MEMORY_D0_IDX].clone().into()],
     );
-    let mv1: AB::ExprEF = challenges.encode::<{ RANGE_CHECK_BUS }, AB::Expr, _>(
+    let mv1: AB::ExprEF = challenges.encode(RANGE_CHECK_BUS, 
         [local.chiplets[MEMORY_D1_IDX].clone().into()],
     );
 
-    let sv0: AB::ExprEF = challenges.encode::<{ RANGE_CHECK_BUS }, AB::Expr, _>(
+    let sv0: AB::ExprEF = challenges.encode(RANGE_CHECK_BUS, 
         [local.decoder[STACK_LOOKUP_BASE].clone().into()],
     );
-    let sv1: AB::ExprEF = challenges.encode::<{ RANGE_CHECK_BUS }, AB::Expr, _>(
+    let sv1: AB::ExprEF = challenges.encode(RANGE_CHECK_BUS, 
         [local.decoder[STACK_LOOKUP_BASE + 1].clone().into()],
     );
-    let sv2: AB::ExprEF = challenges.encode::<{ RANGE_CHECK_BUS }, AB::Expr, _>(
+    let sv2: AB::ExprEF = challenges.encode(RANGE_CHECK_BUS, 
         [local.decoder[STACK_LOOKUP_BASE + 2].clone().into()],
     );
-    let sv3: AB::ExprEF = challenges.encode::<{ RANGE_CHECK_BUS }, AB::Expr, _>(
+    let sv3: AB::ExprEF = challenges.encode(RANGE_CHECK_BUS, 
         [local.decoder[STACK_LOOKUP_BASE + 3].clone().into()],
     );
 
     // Range check value: encode(range V column)
-    let range_check: AB::ExprEF = challenges.encode::<{ RANGE_CHECK_BUS }, AB::Expr, _>(
+    let range_check: AB::ExprEF = challenges.encode(RANGE_CHECK_BUS, 
         [local.range[RANGE_V_COL_IDX].clone().into()],
     );
 

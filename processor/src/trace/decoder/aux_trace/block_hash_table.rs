@@ -235,7 +235,7 @@ impl BlockHashTableRow {
     pub fn collapse<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
         let is_first_child = if self.is_first_child { ONE } else { ZERO };
         let is_loop_body = if self.is_loop_body { ONE } else { ZERO };
-        challenges.encode::<{ BLOCK_HASH_TABLE }, _, _>([
+        challenges.encode(BLOCK_HASH_TABLE, [
             self.parent_block_id,
             self.child_block_hash[0],
             self.child_block_hash[1],

@@ -192,7 +192,7 @@ fn build_expected_bitwise(
     s1: Felt,
     result: Felt,
 ) -> Felt {
-    challenges.encode::<{ CHIPLETS_BUS }, _, _>([label, s0, s1, result])
+    challenges.encode(CHIPLETS_BUS, [label, s0, s1, result])
 }
 
 fn build_expected_bitwise_from_trace(

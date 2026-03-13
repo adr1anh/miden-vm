@@ -917,7 +917,7 @@ fn build_expected(
 ) -> Felt {
     let first_cycle_row = addr_to_cycle_row(addr) == 0;
     let transition_label = if first_cycle_row { label + 16_u8 } else { label + 32_u8 };
-    let header = challenges.partial::<{ CHIPLETS_BUS }, _, 3>(
+    let header = challenges.partial(CHIPLETS_BUS, 
         [0, 1, 2],
         [Felt::from_u8(transition_label), addr, index],
     );

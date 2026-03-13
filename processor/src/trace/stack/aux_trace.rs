@@ -112,6 +112,6 @@ impl OverflowTableRow {
     /// Reduces this row to a single field element in the field specified by E. This requires
     /// at least 4 alpha values.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode::<{ STACK_OVERFLOW_TABLE }, _, _>([self.clk, self.val, self.prev])
+        challenges.encode(STACK_OVERFLOW_TABLE, [self.clk, self.val, self.prev])
     }
 }

@@ -88,7 +88,7 @@ where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode::<{ CHIPLETS_BUS }, _, _>([self.op_label, self.a, self.b, self.z])
+        challenges.encode(CHIPLETS_BUS, [self.op_label, self.a, self.b, self.z])
     }
 
     fn source(&self) -> &str {

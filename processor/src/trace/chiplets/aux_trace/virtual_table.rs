@@ -128,7 +128,7 @@ fn encode_sibling_from_trace<E: ExtensionField<Felt>>(
         // Node is right child, sibling is left child at RATE0
         (SIBLING_RATE0_LAYOUT, &main_trace.chiplet_hasher_state(state_row)[RATE0_RANGE])
     };
-    challenges.encode_sparse::<{ SIBLING_TABLE }, _, _>(layout, [index, sibling[0], sibling[1], sibling[2], sibling[3]])
+    challenges.encode_sparse(SIBLING_TABLE, layout, [index, sibling[0], sibling[1], sibling[2], sibling[3]])
 }
 
 /// Constructs the removals from the table when the hasher absorbs a new sibling node while
@@ -180,7 +180,7 @@ where
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
         let state_elements: [Felt; 4] = self.state.into();
-        challenges.encode::<{ LOG_PRECOMPILE_TRANSCRIPT }, _, _>([
+        challenges.encode(LOG_PRECOMPILE_TRANSCRIPT, [
             Felt::from_u8(LOG_PRECOMPILE_LABEL),
             state_elements[0],
             state_elements[1],

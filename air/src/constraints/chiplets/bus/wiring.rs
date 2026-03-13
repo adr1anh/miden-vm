@@ -206,7 +206,7 @@ where
     AB: LiftedAirBuilder<F = Felt>,
 {
     challenges
-        .encode::<{ ACE_WIRING_BUS }, _, _>([clk.clone(), ctx.clone(), wire.id.clone(), wire.v0.clone(), wire.v1.clone()])
+        .encode(ACE_WIRING_BUS, [clk.clone(), ctx.clone(), wire.id.clone(), wire.v0.clone(), wire.v1.clone()])
 }
 
 /// Load a column from the ACE section of chiplets.
