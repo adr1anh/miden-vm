@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use miden_air::trace::{
     AUX_TRACE_RAND_CHALLENGES, Challenges,
-    bus_interactions::{BLOCK_STACK_TABLE, OP_GROUP_TABLE},
+    bus_interactions::{BLOCK_STACK_TABLE, OP_GROUP_TABLE, block_stack_cols},
     chiplets::hasher::HASH_CYCLE_LEN_FELT,
     decoder::{P1_COL_IDX, P2_COL_IDX, P3_COL_IDX},
 };
@@ -891,22 +891,26 @@ impl BlockStackTableRow {
 
 impl BlockStackTableRow {
     /// Reduces this row to a single field element in the field specified by E. This requires
-    /// at least 12 coefficients.
+    /// at least 10 coefficients.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
+        use block_stack_cols::*;
         let is_loop = if self.is_loop { ONE } else { ZERO };
-        challenges.encode(BLOCK_STACK_TABLE, [
-            self.block_id,
-            self.parent_id,
-            is_loop,
-            Felt::from_u32(u32::from(self.parent_ctx)),
-            self.parent_fmp,
-            Felt::from_u32(self.parent_stack_depth),
-            self.parent_next_overflow_addr,
-            self.parent_fn_hash[0],
-            self.parent_fn_hash[1],
-            self.parent_fn_hash[2],
-            self.parent_fn_hash[3],
-        ])
+        challenges.encode_sparse(
+            BLOCK_STACK_TABLE,
+            [BLOCK_ID, PARENT_ID, IS_LOOP, CTX, DEPTH, OVERFLOW, FN_HASH_0, FN_HASH_1, FN_HASH_2, FN_HASH_3],
+            [
+                self.block_id,
+                self.parent_id,
+                is_loop,
+                Felt::from_u32(u32::from(self.parent_ctx)),
+                Felt::from_u32(self.parent_stack_depth),
+                self.parent_next_overflow_addr,
+                self.parent_fn_hash[0],
+                self.parent_fn_hash[1],
+                self.parent_fn_hash[2],
+                self.parent_fn_hash[3],
+            ],
+        )
     }
 }
 

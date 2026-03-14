@@ -251,7 +251,24 @@ pub mod bus_interactions {
     pub const CHIPLETS_BUS: usize = 0;
 
     /// Block stack table (decoder p1): tracks control flow block nesting.
+    ///
+    /// Message layout (alpha indices):
+    /// `[block_id, parent_id, is_loop, ctx, depth, overflow, fn_hash[0..4]]`
     pub const BLOCK_STACK_TABLE: usize = 1;
+
+    /// Column indices for [`BLOCK_STACK_TABLE`] messages.
+    pub mod block_stack_cols {
+        pub const BLOCK_ID: usize = 0;
+        pub const PARENT_ID: usize = 1;
+        pub const IS_LOOP: usize = 2;
+        pub const CTX: usize = 3;
+        pub const DEPTH: usize = 4;
+        pub const OVERFLOW: usize = 5;
+        pub const FN_HASH_0: usize = 6;
+        pub const FN_HASH_1: usize = 7;
+        pub const FN_HASH_2: usize = 8;
+        pub const FN_HASH_3: usize = 9;
+    }
 
     /// Block hash table (decoder p2): tracks block digest computation.
     pub const BLOCK_HASH_TABLE: usize = 2;

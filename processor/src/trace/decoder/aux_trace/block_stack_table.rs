@@ -1,4 +1,7 @@
-use miden_air::trace::{Challenges, RowIndex, bus_interactions::BLOCK_STACK_TABLE};
+use miden_air::trace::{
+    Challenges, RowIndex,
+    bus_interactions::{BLOCK_STACK_TABLE, block_stack_cols::*},
+};
 use miden_core::{field::ExtensionField, operations::opcodes};
 
 use super::{AuxColumnBuilder, Felt, MainTrace, ONE, ZERO};
@@ -76,11 +79,8 @@ fn get_block_stack_table_respan_multiplicand<E: ExtensionField<Felt>>(
 ) -> E {
     let block_id = main_trace.addr(i);
     let parent_id = main_trace.decoder_hasher_state_element(1, i + 1);
-    let is_loop = ZERO;
 
-    challenges.encode(BLOCK_STACK_TABLE, [
-        block_id, parent_id, is_loop, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO,
-    ])
+    challenges.encode_sparse(BLOCK_STACK_TABLE, [BLOCK_ID, PARENT_ID], [block_id, parent_id])
 }
 
 /// Computes the multiplicand representing the removal of a row from the block stack table when
@@ -100,22 +100,28 @@ fn get_block_stack_table_end_multiplicand<E: ExtensionField<Felt>>(
         let parent_next_overflow_addr = main_trace.parent_overflow_address(i + 1);
         let parent_fn_hash = main_trace.fn_hash(i + 1);
 
-        challenges.encode(BLOCK_STACK_TABLE, [
-            block_id,
-            parent_id,
-            is_loop,
-            parent_ctx,
-            parent_stack_depth,
-            parent_next_overflow_addr,
-            parent_fn_hash[0],
-            parent_fn_hash[1],
-            parent_fn_hash[2],
-            parent_fn_hash[3],
-        ])
+        challenges.encode_sparse(
+            BLOCK_STACK_TABLE,
+            [BLOCK_ID, PARENT_ID, IS_LOOP, CTX, DEPTH, OVERFLOW, FN_HASH_0, FN_HASH_1, FN_HASH_2, FN_HASH_3],
+            [
+                block_id,
+                parent_id,
+                is_loop,
+                parent_ctx,
+                parent_stack_depth,
+                parent_next_overflow_addr,
+                parent_fn_hash[0],
+                parent_fn_hash[1],
+                parent_fn_hash[2],
+                parent_fn_hash[3],
+            ],
+        )
     } else {
-        challenges.encode(BLOCK_STACK_TABLE, [
-            block_id, parent_id, is_loop, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO,
-        ])
+        challenges.encode_sparse(
+            BLOCK_STACK_TABLE,
+            [BLOCK_ID, PARENT_ID, IS_LOOP],
+            [block_id, parent_id, is_loop],
+        )
     }
 }
 
@@ -143,38 +149,48 @@ fn get_block_stack_table_inclusion_multiplicand<E: ExtensionField<Felt>>(
         let parent_stack_depth = main_trace.stack_depth(i);
         let parent_next_overflow_addr = main_trace.parent_overflow_address(i);
         let parent_fn_hash = main_trace.fn_hash(i);
-        challenges.encode(BLOCK_STACK_TABLE, [
-            block_id,
-            parent_id,
-            is_loop,
-            parent_ctx,
-            parent_stack_depth,
-            parent_next_overflow_addr,
-            parent_fn_hash[0],
-            parent_fn_hash[1],
-            parent_fn_hash[2],
-            parent_fn_hash[3],
-        ])
+        challenges.encode_sparse(
+            BLOCK_STACK_TABLE,
+            [BLOCK_ID, PARENT_ID, IS_LOOP, CTX, DEPTH, OVERFLOW, FN_HASH_0, FN_HASH_1, FN_HASH_2, FN_HASH_3],
+            [
+                block_id,
+                parent_id,
+                is_loop,
+                parent_ctx,
+                parent_stack_depth,
+                parent_next_overflow_addr,
+                parent_fn_hash[0],
+                parent_fn_hash[1],
+                parent_fn_hash[2],
+                parent_fn_hash[3],
+            ],
+        )
     } else if op_code == opcodes::DYNCALL {
         let parent_ctx = main_trace.ctx(i);
         let parent_stack_depth = main_trace.decoder_hasher_state_element(4, i);
         let parent_next_overflow_addr = main_trace.decoder_hasher_state_element(5, i);
         let parent_fn_hash = main_trace.fn_hash(i);
-        challenges.encode(BLOCK_STACK_TABLE, [
-            block_id,
-            parent_id,
-            is_loop,
-            parent_ctx,
-            parent_stack_depth,
-            parent_next_overflow_addr,
-            parent_fn_hash[0],
-            parent_fn_hash[1],
-            parent_fn_hash[2],
-            parent_fn_hash[3],
-        ])
+        challenges.encode_sparse(
+            BLOCK_STACK_TABLE,
+            [BLOCK_ID, PARENT_ID, IS_LOOP, CTX, DEPTH, OVERFLOW, FN_HASH_0, FN_HASH_1, FN_HASH_2, FN_HASH_3],
+            [
+                block_id,
+                parent_id,
+                is_loop,
+                parent_ctx,
+                parent_stack_depth,
+                parent_next_overflow_addr,
+                parent_fn_hash[0],
+                parent_fn_hash[1],
+                parent_fn_hash[2],
+                parent_fn_hash[3],
+            ],
+        )
     } else {
-        challenges.encode(BLOCK_STACK_TABLE, [
-            block_id, parent_id, is_loop, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO, ZERO,
-        ])
+        challenges.encode_sparse(
+            BLOCK_STACK_TABLE,
+            [BLOCK_ID, PARENT_ID, IS_LOOP],
+            [block_id, parent_id, is_loop],
+        )
     }
 }
