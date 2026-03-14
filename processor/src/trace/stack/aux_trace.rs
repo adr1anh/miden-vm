@@ -47,13 +47,13 @@ impl<E: ExtensionField<Felt>> AuxColumnBuilder<E> for AuxTraceBuilder {
             let s15_prime = main_trace.stack_element(15, i + 1);
             let b1_prime = main_trace.parent_overflow_address(i + 1);
 
-            OverflowTableRow::new(b1, s15_prime, b1_prime).to_value(challenges)
+            challenges.encode(STACK_OVERFLOW_TABLE, [b1, s15_prime, b1_prime])
         } else if is_dyncall && is_non_empty_overflow {
             let b1 = main_trace.parent_overflow_address(i);
             let s15_prime = main_trace.stack_element(15, i + 1);
             let b1_prime = main_trace.decoder_hasher_state_element(5, i);
 
-            OverflowTableRow::new(b1, s15_prime, b1_prime).to_value(challenges)
+            challenges.encode(STACK_OVERFLOW_TABLE, [b1, s15_prime, b1_prime])
         } else {
             E::ONE
         }
@@ -74,8 +74,7 @@ impl<E: ExtensionField<Felt>> AuxColumnBuilder<E> for AuxTraceBuilder {
             let s15 = main_trace.stack_element(15, i);
             let b1 = main_trace.parent_overflow_address(i);
 
-            let row = OverflowTableRow::new(k0, s15, b1);
-            row.to_value(challenges)
+            challenges.encode(STACK_OVERFLOW_TABLE, [k0, s15, b1])
         } else {
             E::ONE
         }
@@ -87,31 +86,3 @@ impl<E: ExtensionField<Felt>> AuxColumnBuilder<E> for AuxTraceBuilder {
     }
 }
 
-// OVERFLOW STACK ROW
-// ================================================================================================
-
-/// A single row in the stack overflow table. Each row contains the following values:
-/// - The value of the stack item pushed into the overflow stack.
-/// - The clock cycle at which the stack item was pushed into the overflow stack.
-/// - The clock cycle of the value which was at the top of the overflow stack when this value was
-///   pushed onto it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OverflowTableRow {
-    val: Felt,
-    clk: Felt,
-    prev: Felt,
-}
-
-impl OverflowTableRow {
-    pub fn new(clk: Felt, val: Felt, prev: Felt) -> Self {
-        Self { val, clk, prev }
-    }
-}
-
-impl OverflowTableRow {
-    /// Reduces this row to a single field element in the field specified by E. This requires
-    /// at least 4 alpha values.
-    pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode(STACK_OVERFLOW_TABLE, [self.clk, self.val, self.prev])
-    }
-}
