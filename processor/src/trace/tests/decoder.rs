@@ -2,14 +2,13 @@ use alloc::vec::Vec;
 
 use miden_air::trace::{
     AUX_TRACE_RAND_CHALLENGES, Challenges,
-    bus_interactions::{BLOCK_STACK_TABLE, OP_GROUP_TABLE, block_stack_cols},
     chiplets::hasher::HASH_CYCLE_LEN_FELT,
     decoder::{P1_COL_IDX, P2_COL_IDX, P3_COL_IDX},
 };
 use miden_utils_testing::rand::rand_array;
 
 use super::super::{
-    decoder::{BlockHashTableRow, build_op_group},
+    decoder::{BlockHashTableRow, BlockStackMessage, OpGroupMessage, build_op_group},
     tests::{build_trace_from_ops, build_trace_from_program},
     utils::build_span_with_respan_ops,
 };
@@ -893,24 +892,17 @@ impl BlockStackTableRow {
     /// Reduces this row to a single field element in the field specified by E. This requires
     /// at least 10 coefficients.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
-        use block_stack_cols::*;
         let is_loop = if self.is_loop { ONE } else { ZERO };
-        challenges.encode_sparse(
-            BLOCK_STACK_TABLE,
-            [BLOCK_ID, PARENT_ID, IS_LOOP, CTX, DEPTH, OVERFLOW, FN_HASH_0, FN_HASH_1, FN_HASH_2, FN_HASH_3],
-            [
-                self.block_id,
-                self.parent_id,
-                is_loop,
-                Felt::from_u32(u32::from(self.parent_ctx)),
-                Felt::from_u32(self.parent_stack_depth),
-                self.parent_next_overflow_addr,
-                self.parent_fn_hash[0],
-                self.parent_fn_hash[1],
-                self.parent_fn_hash[2],
-                self.parent_fn_hash[3],
-            ],
-        )
+        BlockStackMessage::Full {
+            block_id: self.block_id,
+            parent_id: self.parent_id,
+            is_loop,
+            ctx: Felt::from_u32(u32::from(self.parent_ctx)),
+            depth: Felt::from_u32(self.parent_stack_depth),
+            overflow: self.parent_next_overflow_addr,
+            fn_hash: self.parent_fn_hash.into(),
+        }
+        .encode(challenges)
     }
 }
 
@@ -934,10 +926,11 @@ impl OpGroupTableRow {
     /// Reduces this row to a single field element in the field specified by E. This requires
     /// at least 4 coefficients.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode(OP_GROUP_TABLE, [
-            self.batch_id,
-            self.group_pos,
-            self.group_value,
-        ])
+        OpGroupMessage {
+            block_id: self.batch_id,
+            group_pos: self.group_pos,
+            group_value: self.group_value,
+        }
+        .encode(challenges)
     }
 }

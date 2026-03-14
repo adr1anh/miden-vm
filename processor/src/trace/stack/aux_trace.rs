@@ -6,6 +6,27 @@ use miden_core::{field::ExtensionField, operations::opcodes};
 use super::Felt;
 use crate::{debug::BusDebugger, trace::AuxColumnBuilder};
 
+// STACK OVERFLOW TABLE MESSAGE
+// ================================================================================================
+
+/// Describes a single message sent on the stack overflow table bus. Each message is a tuple
+/// `(clk, val, prev)` where:
+/// - For insertions (right shift): `clk` is the clock cycle, `val` is s15, `prev` is the previous
+///   overflow address (b1).
+/// - For removals (left shift / dyncall): `clk` is the overflow address (b1), `val` is s15',
+///   `prev` is the next overflow address (b1').
+pub(crate) struct StackOverflowMessage {
+    pub clk: Felt,
+    pub val: Felt,
+    pub prev: Felt,
+}
+
+impl StackOverflowMessage {
+    pub fn encode<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
+        challenges.encode(STACK_OVERFLOW_TABLE, [self.clk, self.val, self.prev])
+    }
+}
+
 // AUXILIARY TRACE BUILDER
 // ================================================================================================
 
@@ -47,13 +68,13 @@ impl<E: ExtensionField<Felt>> AuxColumnBuilder<E> for AuxTraceBuilder {
             let s15_prime = main_trace.stack_element(15, i + 1);
             let b1_prime = main_trace.parent_overflow_address(i + 1);
 
-            challenges.encode(STACK_OVERFLOW_TABLE, [b1, s15_prime, b1_prime])
+            StackOverflowMessage { clk: b1, val: s15_prime, prev: b1_prime }.encode(challenges)
         } else if is_dyncall && is_non_empty_overflow {
             let b1 = main_trace.parent_overflow_address(i);
             let s15_prime = main_trace.stack_element(15, i + 1);
             let b1_prime = main_trace.decoder_hasher_state_element(5, i);
 
-            challenges.encode(STACK_OVERFLOW_TABLE, [b1, s15_prime, b1_prime])
+            StackOverflowMessage { clk: b1, val: s15_prime, prev: b1_prime }.encode(challenges)
         } else {
             E::ONE
         }
@@ -74,7 +95,7 @@ impl<E: ExtensionField<Felt>> AuxColumnBuilder<E> for AuxTraceBuilder {
             let s15 = main_trace.stack_element(15, i);
             let b1 = main_trace.parent_overflow_address(i);
 
-            challenges.encode(STACK_OVERFLOW_TABLE, [k0, s15, b1])
+            StackOverflowMessage { clk: k0, val: s15, prev: b1 }.encode(challenges)
         } else {
             E::ONE
         }

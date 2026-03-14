@@ -8,6 +8,23 @@ use miden_core::{field::ExtensionField, operations::opcodes};
 use super::{AuxColumnBuilder, Felt, MainTrace, ONE};
 use crate::debug::BusDebugger;
 
+// OP GROUP TABLE MESSAGE
+// ================================================================================================
+
+/// Describes a single message sent on the op group table bus. Each message is a tuple
+/// `(block_id, group_pos, group_value)` representing a single operation group within a span block.
+pub(crate) struct OpGroupMessage {
+    pub block_id: Felt,
+    pub group_pos: Felt,
+    pub group_value: Felt,
+}
+
+impl OpGroupMessage {
+    pub fn encode<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
+        challenges.encode(OP_GROUP_TABLE, [self.block_id, self.group_pos, self.group_value])
+    }
+}
+
 // OP GROUP TABLE COLUMN
 // ================================================================================================
 
@@ -75,16 +92,16 @@ fn get_op_group_table_inclusion_multiplicand<E: ExtensionField<Felt>>(
     if op_batch_flag == OP_BATCH_8_GROUPS {
         let h = main_trace.decoder_hasher_state(i);
         (1..8_u8).fold(E::ONE, |acc, k| {
-            acc * challenges.encode(OP_GROUP_TABLE, [block_id, group_count - Felt::from_u8(k), h[k as usize]])
+            acc * OpGroupMessage { block_id, group_pos: group_count - Felt::from_u8(k), group_value: h[k as usize] }.encode(challenges)
         })
     } else if op_batch_flag == OP_BATCH_4_GROUPS {
         let h = main_trace.decoder_hasher_state_first_half(i);
         (1..4_u8).fold(E::ONE, |acc, k| {
-            acc * challenges.encode(OP_GROUP_TABLE, [block_id, group_count - Felt::from_u8(k), h[k as usize]])
+            acc * OpGroupMessage { block_id, group_pos: group_count - Felt::from_u8(k), group_value: h[k as usize] }.encode(challenges)
         })
     } else if op_batch_flag == OP_BATCH_2_GROUPS {
         let h = main_trace.decoder_hasher_state_first_half(i);
-        challenges.encode(OP_GROUP_TABLE, [block_id, group_count - ONE, h[1]])
+        OpGroupMessage { block_id, group_pos: group_count - ONE, group_value: h[1] }.encode(challenges)
     } else {
         E::ONE
     }
@@ -111,5 +128,5 @@ fn get_op_group_table_removal_multiplicand<E: ExtensionField<Felt>>(
         }
     };
 
-    challenges.encode(OP_GROUP_TABLE, [block_id, group_count, group_value])
+    OpGroupMessage { block_id, group_pos: group_count, group_value }.encode(challenges)
 }

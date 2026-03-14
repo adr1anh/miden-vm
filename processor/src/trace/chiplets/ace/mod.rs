@@ -8,6 +8,29 @@ use miden_core::{Felt, ZERO, field::ExtensionField};
 
 use crate::trace::TraceFragment;
 
+// ACE WIRING BUS MESSAGE
+// ================================================================================================
+
+/// Describes a message sent on the ACE wiring bus. Each message encodes a single wire value
+/// (3 field elements) along with the clock cycle and context of the ACE chiplet invocation.
+struct AceWireMessage {
+    clk: Felt,
+    ctx: Felt,
+    wire: [Felt; 3],
+}
+
+impl AceWireMessage {
+    fn encode<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
+        challenges.encode(ACE_WIRING_BUS, [
+            self.clk,
+            self.ctx,
+            self.wire[0],
+            self.wire[1],
+            self.wire[2],
+        ])
+    }
+}
+
 mod trace;
 pub use trace::{CircuitEvaluation, NUM_ACE_LOGUP_FRACTIONS_EVAL, NUM_ACE_LOGUP_FRACTIONS_READ};
 
@@ -171,9 +194,11 @@ impl AceHints {
 
                 let wire_0 = main_trace.chiplet_ace_wire_0(trace_row.into());
                 let wire_1 = main_trace.chiplet_ace_wire_1(trace_row.into());
+                let clk_felt = Felt::from_u32(clk);
+                let ctx_felt = Felt::from_u32(ctx);
 
-                let value_0 = challenges.encode(ACE_WIRING_BUS, [Felt::from_u32(clk), Felt::from_u32(ctx), wire_0[0], wire_0[1], wire_0[2]]);
-                let value_1 = challenges.encode(ACE_WIRING_BUS, [Felt::from_u32(clk), Felt::from_u32(ctx), wire_1[0], wire_1[1], wire_1[2]]);
+                let value_0 = AceWireMessage { clk: clk_felt, ctx: ctx_felt, wire: wire_0 }.encode(challenges);
+                let value_1 = AceWireMessage { clk: clk_felt, ctx: ctx_felt, wire: wire_1 }.encode(challenges);
 
                 value[0] = value_0;
                 value[1] = value_1;
@@ -201,10 +226,12 @@ impl AceHints {
                 let wire_0 = main_trace.chiplet_ace_wire_0(trace_row.into());
                 let wire_1 = main_trace.chiplet_ace_wire_1(trace_row.into());
                 let wire_2 = main_trace.chiplet_ace_wire_2(trace_row.into());
+                let clk_felt = Felt::from_u32(clk);
+                let ctx_felt = Felt::from_u32(ctx);
 
-                let value_0 = challenges.encode(ACE_WIRING_BUS, [Felt::from_u32(clk), Felt::from_u32(ctx), wire_0[0], wire_0[1], wire_0[2]]);
-                let value_1 = challenges.encode(ACE_WIRING_BUS, [Felt::from_u32(clk), Felt::from_u32(ctx), wire_1[0], wire_1[1], wire_1[2]]);
-                let value_2 = challenges.encode(ACE_WIRING_BUS, [Felt::from_u32(clk), Felt::from_u32(ctx), wire_2[0], wire_2[1], wire_2[2]]);
+                let value_0 = AceWireMessage { clk: clk_felt, ctx: ctx_felt, wire: wire_0 }.encode(challenges);
+                let value_1 = AceWireMessage { clk: clk_felt, ctx: ctx_felt, wire: wire_1 }.encode(challenges);
+                let value_2 = AceWireMessage { clk: clk_felt, ctx: ctx_felt, wire: wire_2 }.encode(challenges);
 
                 value[0] = value_0;
                 value[1] = value_1;
