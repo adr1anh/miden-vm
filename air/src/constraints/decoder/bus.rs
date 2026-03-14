@@ -254,7 +254,7 @@ pub fn enforce_block_stack_table_constraint<AB>(
     let is_dyncall = op_flags.dyncall();
     let is_end = op_flags.end();
 
-    // JOIN/SPLIT/SPAN/DYN: insert(addr', addr, 0, 0, 0, 0, 0, 0, 0, 0)
+    // JOIN/SPLIT/SPAN/DYN: insert [block_id, parent_id, is_loop]
     let msg_simple = challenges.encode(BLOCK_STACK_TABLE, [
         addr_next.clone(),
         addr_local.clone(),
@@ -265,7 +265,7 @@ pub fn enforce_block_stack_table_constraint<AB>(
     let v_span = msg_simple.clone() * is_span.clone();
     let v_dyn = msg_simple.clone() * is_dyn.clone();
 
-    // LOOP: insert(addr', addr, s0, 0, 0, 0, 0, 0, 0, 0)
+    // LOOP: insert [block_id, parent_id, is_loop=s0]
     let msg_loop = challenges.encode(BLOCK_STACK_TABLE, [
         addr_next.clone(),
         addr_local.clone(),
@@ -273,7 +273,7 @@ pub fn enforce_block_stack_table_constraint<AB>(
     ]);
     let v_loop = msg_loop * is_loop.clone();
 
-    // RESPAN: insert(addr', h1', 0, 0, 0, 0, 0, 0, 0, 0)
+    // RESPAN: insert [block_id, parent_id=h1', is_loop=0]
     let msg_respan_insert = challenges.encode(BLOCK_STACK_TABLE, [
         addr_next.clone(),
         h1_next.clone(),
@@ -281,7 +281,7 @@ pub fn enforce_block_stack_table_constraint<AB>(
     ]);
     let v_respan = msg_respan_insert * is_respan.clone();
 
-    // CALL/SYSCALL: insert(addr', addr, 0, ctx, fmp, b0, b1, fn_hash[0..4])
+    // CALL/SYSCALL: insert [block_id, parent_id, is_loop, ctx, b0, b1, fn_hash[0..4]]
     let msg_call = challenges.encode(BLOCK_STACK_TABLE, [
         addr_next.clone(),
         addr_local.clone(),
@@ -297,7 +297,7 @@ pub fn enforce_block_stack_table_constraint<AB>(
     let v_call = msg_call.clone() * is_call.clone();
     let v_syscall = msg_call * is_syscall.clone();
 
-    // DYNCALL: insert(addr', addr, 0, ctx, h4, h5, fn_hash[0..4])
+    // DYNCALL: insert [block_id, parent_id, is_loop, ctx, h4, h5, fn_hash[0..4]]
     let msg_dyncall = challenges.encode(BLOCK_STACK_TABLE, [
         addr_next.clone(),
         addr_local.clone(),
@@ -334,7 +334,7 @@ pub fn enforce_block_stack_table_constraint<AB>(
     // REMOVAL CONTRIBUTIONS (u_xxx = f_xxx * message)
     // =========================================================================
 
-    // RESPAN removal: remove(addr, h1', 0, 0, 0, 0, 0, 0, 0, 0)
+    // RESPAN removal: remove [block_id, parent_id=h1', is_loop=0]
     let msg_respan_remove = challenges.encode(BLOCK_STACK_TABLE, [
         addr_local.clone(),
         h1_next.clone(),
@@ -342,7 +342,7 @@ pub fn enforce_block_stack_table_constraint<AB>(
     ]);
     let u_respan = msg_respan_remove * is_respan.clone();
 
-    // END for simple blocks: remove(addr, addr', is_loop_flag, 0, 0, 0, 0, 0, 0, 0)
+    // END for simple blocks: remove [block_id, parent_id, is_loop_flag]
     let is_simple_end = one.clone() - is_call_flag.clone() - is_syscall_flag.clone();
     let msg_end_simple = challenges.encode(BLOCK_STACK_TABLE, [
         addr_local.clone(),
@@ -352,9 +352,8 @@ pub fn enforce_block_stack_table_constraint<AB>(
     let end_simple_gate = is_end.clone() * is_simple_end;
     let u_end_simple = msg_end_simple * end_simple_gate;
 
-    // END for CALL/SYSCALL: remove(addr, addr', is_loop_flag, ctx', b0', b1', fn_hash'[0..4])
-    // Note: The is_loop value is the is_loop_flag from the current row (same as simple END)
-    // Context values come from the next row's dedicated columns (not hasher state)
+    // END for CALL/SYSCALL: remove [block_id, parent_id, is_loop_flag, ctx', b0', b1',
+    // fn_hash'[0..4]]
     let is_call_or_syscall = is_call_flag.clone() + is_syscall_flag.clone();
     let msg_end_call = challenges.encode(BLOCK_STACK_TABLE, [
         addr_local.clone(),
