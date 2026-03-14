@@ -254,61 +254,82 @@ pub fn enforce_block_stack_table_constraint<AB>(
     let is_dyncall = op_flags.dyncall();
     let is_end = op_flags.end();
 
-    // JOIN/SPLIT/SPAN/DYN: insert [block_id, parent_id, is_loop]
+    // JOIN/SPLIT/SPAN/DYN
     let msg_simple = challenges.encode(BLOCK_STACK_TABLE, [
-        addr_next.clone(),
-        addr_local.clone(),
-        zero.clone(),
+        /* block_id  */ addr_next.clone(),
+        /* parent_id */ addr_local.clone(),
+        /* is_loop   */ zero.clone(),
+        /* ctx       */ zero.clone(),
+        /* depth     */ zero.clone(),
+        /* overflow   */ zero.clone(),
+        /* fn_hash0  */ zero.clone(),
+        /* fn_hash1  */ zero.clone(),
+        /* fn_hash2  */ zero.clone(),
+        /* fn_hash3  */ zero.clone(),
     ]);
     let v_join = msg_simple.clone() * is_join.clone();
     let v_split = msg_simple.clone() * is_split.clone();
     let v_span = msg_simple.clone() * is_span.clone();
     let v_dyn = msg_simple.clone() * is_dyn.clone();
 
-    // LOOP: insert [block_id, parent_id, is_loop=s0]
+    // LOOP (is_loop = s0)
     let msg_loop = challenges.encode(BLOCK_STACK_TABLE, [
-        addr_next.clone(),
-        addr_local.clone(),
-        s0.clone(),
+        /* block_id  */ addr_next.clone(),
+        /* parent_id */ addr_local.clone(),
+        /* is_loop   */ s0.clone(),
+        /* ctx       */ zero.clone(),
+        /* depth     */ zero.clone(),
+        /* overflow   */ zero.clone(),
+        /* fn_hash0  */ zero.clone(),
+        /* fn_hash1  */ zero.clone(),
+        /* fn_hash2  */ zero.clone(),
+        /* fn_hash3  */ zero.clone(),
     ]);
     let v_loop = msg_loop * is_loop.clone();
 
-    // RESPAN: insert [block_id, parent_id=h1', is_loop=0]
+    // RESPAN (parent_id = h1')
     let msg_respan_insert = challenges.encode(BLOCK_STACK_TABLE, [
-        addr_next.clone(),
-        h1_next.clone(),
-        zero.clone(),
+        /* block_id  */ addr_next.clone(),
+        /* parent_id */ h1_next.clone(),
+        /* is_loop   */ zero.clone(),
+        /* ctx       */ zero.clone(),
+        /* depth     */ zero.clone(),
+        /* overflow   */ zero.clone(),
+        /* fn_hash0  */ zero.clone(),
+        /* fn_hash1  */ zero.clone(),
+        /* fn_hash2  */ zero.clone(),
+        /* fn_hash3  */ zero.clone(),
     ]);
     let v_respan = msg_respan_insert * is_respan.clone();
 
-    // CALL/SYSCALL: insert [block_id, parent_id, is_loop, ctx, b0, b1, fn_hash[0..4]]
+    // CALL/SYSCALL
     let msg_call = challenges.encode(BLOCK_STACK_TABLE, [
-        addr_next.clone(),
-        addr_local.clone(),
-        zero.clone(),
-        ctx_local.clone(),
-        b0_local.clone(),
-        b1_local.clone(),
-        fn_hash_local[0].clone(),
-        fn_hash_local[1].clone(),
-        fn_hash_local[2].clone(),
-        fn_hash_local[3].clone(),
+        /* block_id  */ addr_next.clone(),
+        /* parent_id */ addr_local.clone(),
+        /* is_loop   */ zero.clone(),
+        /* ctx       */ ctx_local.clone(),
+        /* depth     */ b0_local.clone(),
+        /* overflow   */ b1_local.clone(),
+        /* fn_hash0  */ fn_hash_local[0].clone(),
+        /* fn_hash1  */ fn_hash_local[1].clone(),
+        /* fn_hash2  */ fn_hash_local[2].clone(),
+        /* fn_hash3  */ fn_hash_local[3].clone(),
     ]);
     let v_call = msg_call.clone() * is_call.clone();
     let v_syscall = msg_call * is_syscall.clone();
 
-    // DYNCALL: insert [block_id, parent_id, is_loop, ctx, h4, h5, fn_hash[0..4]]
+    // DYNCALL
     let msg_dyncall = challenges.encode(BLOCK_STACK_TABLE, [
-        addr_next.clone(),
-        addr_local.clone(),
-        zero.clone(),
-        ctx_local.clone(),
-        h4_local.clone(),
-        h5_local.clone(),
-        fn_hash_local[0].clone(),
-        fn_hash_local[1].clone(),
-        fn_hash_local[2].clone(),
-        fn_hash_local[3].clone(),
+        /* block_id  */ addr_next.clone(),
+        /* parent_id */ addr_local.clone(),
+        /* is_loop   */ zero.clone(),
+        /* ctx       */ ctx_local.clone(),
+        /* depth     */ h4_local.clone(),
+        /* overflow   */ h5_local.clone(),
+        /* fn_hash0  */ fn_hash_local[0].clone(),
+        /* fn_hash1  */ fn_hash_local[1].clone(),
+        /* fn_hash2  */ fn_hash_local[2].clone(),
+        /* fn_hash3  */ fn_hash_local[3].clone(),
     ]);
     let v_dyncall = msg_dyncall * is_dyncall.clone();
 
@@ -334,38 +355,51 @@ pub fn enforce_block_stack_table_constraint<AB>(
     // REMOVAL CONTRIBUTIONS (u_xxx = f_xxx * message)
     // =========================================================================
 
-    // RESPAN removal: remove [block_id, parent_id=h1', is_loop=0]
+    // RESPAN removal (parent_id = h1')
     let msg_respan_remove = challenges.encode(BLOCK_STACK_TABLE, [
-        addr_local.clone(),
-        h1_next.clone(),
-        zero.clone(),
+        /* block_id  */ addr_local.clone(),
+        /* parent_id */ h1_next.clone(),
+        /* is_loop   */ zero.clone(),
+        /* ctx       */ zero.clone(),
+        /* depth     */ zero.clone(),
+        /* overflow   */ zero.clone(),
+        /* fn_hash0  */ zero.clone(),
+        /* fn_hash1  */ zero.clone(),
+        /* fn_hash2  */ zero.clone(),
+        /* fn_hash3  */ zero.clone(),
     ]);
     let u_respan = msg_respan_remove * is_respan.clone();
 
-    // END for simple blocks: remove [block_id, parent_id, is_loop_flag]
+    // END for simple blocks
     let is_simple_end = one.clone() - is_call_flag.clone() - is_syscall_flag.clone();
     let msg_end_simple = challenges.encode(BLOCK_STACK_TABLE, [
-        addr_local.clone(),
-        addr_next.clone(),
-        is_loop_flag.clone(),
+        /* block_id  */ addr_local.clone(),
+        /* parent_id */ addr_next.clone(),
+        /* is_loop   */ is_loop_flag.clone(),
+        /* ctx       */ zero.clone(),
+        /* depth     */ zero.clone(),
+        /* overflow   */ zero.clone(),
+        /* fn_hash0  */ zero.clone(),
+        /* fn_hash1  */ zero.clone(),
+        /* fn_hash2  */ zero.clone(),
+        /* fn_hash3  */ zero.clone(),
     ]);
     let end_simple_gate = is_end.clone() * is_simple_end;
     let u_end_simple = msg_end_simple * end_simple_gate;
 
-    // END for CALL/SYSCALL: remove [block_id, parent_id, is_loop_flag, ctx', b0', b1',
-    // fn_hash'[0..4]]
+    // END for CALL/SYSCALL
     let is_call_or_syscall = is_call_flag.clone() + is_syscall_flag.clone();
     let msg_end_call = challenges.encode(BLOCK_STACK_TABLE, [
-        addr_local.clone(),
-        addr_next.clone(),
-        is_loop_flag.clone(),
-        ctx_next.clone(),
-        b0_next.clone(),
-        b1_next.clone(),
-        fn_hash_next[0].clone(),
-        fn_hash_next[1].clone(),
-        fn_hash_next[2].clone(),
-        fn_hash_next[3].clone(),
+        /* block_id  */ addr_local.clone(),
+        /* parent_id */ addr_next.clone(),
+        /* is_loop   */ is_loop_flag.clone(),
+        /* ctx       */ ctx_next.clone(),
+        /* depth     */ b0_next.clone(),
+        /* overflow   */ b1_next.clone(),
+        /* fn_hash0  */ fn_hash_next[0].clone(),
+        /* fn_hash1  */ fn_hash_next[1].clone(),
+        /* fn_hash2  */ fn_hash_next[2].clone(),
+        /* fn_hash3  */ fn_hash_next[3].clone(),
     ]);
     let end_call_gate = is_end.clone() * is_call_or_syscall;
     let u_end_call = msg_end_call * end_call_gate;
