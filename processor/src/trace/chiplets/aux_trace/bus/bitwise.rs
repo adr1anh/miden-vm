@@ -2,7 +2,7 @@ use core::fmt::{Display, Formatter, Result as FmtResult};
 
 use miden_air::trace::{
     Challenges, MainTrace, RowIndex,
-    bus_interactions::CHIPLETS_BUS,
+    bus_messages,
     chiplets::bitwise::OP_CYCLE_LEN as BITWISE_OP_CYCLE_LEN,
 };
 use miden_core::{Felt, ONE, ZERO, field::ExtensionField};
@@ -23,10 +23,12 @@ pub(super) fn build_bitwise_request<E: ExtensionField<Felt>>(
     _debugger: &mut BusDebugger<E>,
 ) -> E {
     let bitwise_request_message = BitwiseMessage {
-        op_label: get_op_label(ONE, ZERO, is_xor, ZERO),
-        a: main_trace.stack_element(0, row),
-        b: main_trace.stack_element(1, row),
-        z: main_trace.stack_element(0, row + 1),
+        inner: bus_messages::BitwiseMessage {
+            op_label: get_op_label(ONE, ZERO, is_xor, ZERO),
+            a: main_trace.stack_element(0, row),
+            b: main_trace.stack_element(1, row),
+            z: main_trace.stack_element(0, row + 1),
+        },
         source: if is_xor == ONE { "u32xor" } else { "u32and" },
     };
 
@@ -54,10 +56,12 @@ where
     let is_xor = main_trace.chiplet_selector_2(row);
     if row.as_usize() % BITWISE_OP_CYCLE_LEN == BITWISE_OP_CYCLE_LEN - 1 {
         let bitwise_message = BitwiseMessage {
-            op_label: get_op_label(ONE, ZERO, is_xor, ZERO),
-            a: main_trace.chiplet_bitwise_a(row),
-            b: main_trace.chiplet_bitwise_b(row),
-            z: main_trace.chiplet_bitwise_z(row),
+            inner: bus_messages::BitwiseMessage {
+                op_label: get_op_label(ONE, ZERO, is_xor, ZERO),
+                a: main_trace.chiplet_bitwise_a(row),
+                b: main_trace.chiplet_bitwise_b(row),
+                z: main_trace.chiplet_bitwise_z(row),
+            },
             source: "bitwise chiplet",
         };
 
@@ -76,10 +80,7 @@ where
 // ===============================================================================================
 
 pub struct BitwiseMessage {
-    pub op_label: Felt,
-    pub a: Felt,
-    pub b: Felt,
-    pub z: Felt,
+    pub inner: bus_messages::BitwiseMessage<Felt>,
     pub source: &'static str,
 }
 
@@ -88,7 +89,7 @@ where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode(CHIPLETS_BUS, [self.op_label, self.a, self.b, self.z])
+        self.inner.encode(challenges)
     }
 
     fn source(&self) -> &str {
@@ -101,7 +102,7 @@ impl Display for BitwiseMessage {
         write!(
             f,
             "{{ op_label: {}, a: {}, b: {}, z: {} }}",
-            self.op_label, self.a, self.b, self.z
+            self.inner.op_label, self.inner.a, self.inner.b, self.inner.z
         )
     }
 }

@@ -3,6 +3,8 @@ use core::ops::Range;
 use chiplets::hasher::RATE_LEN;
 use miden_core::utils::range;
 
+pub mod bus_messages;
+
 mod challenges;
 pub use challenges::{Challenges, PartialMessage};
 

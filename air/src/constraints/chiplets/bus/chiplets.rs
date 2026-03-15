@@ -46,6 +46,7 @@ use crate::{
     trace::{
         Challenges,
         bus_interactions::CHIPLETS_BUS,
+        bus_messages,
         chiplets::{
             NUM_ACE_SELECTORS, NUM_KERNEL_ROM_SELECTORS,
             ace::{
@@ -347,14 +348,14 @@ fn compute_bitwise_request<AB: LiftedAirBuilder<F = Felt>>(
     is_xor: bool,
 ) -> AB::ExprEF {
     let label: Felt = if is_xor { BITWISE_XOR_LABEL } else { BITWISE_AND_LABEL };
-    let label: AB::Expr = AB::Expr::from(label);
 
-    // Stack values
-    let a: AB::Expr = local.stack[0].clone().into();
-    let b: AB::Expr = local.stack[1].clone().into();
-    let z: AB::Expr = next.stack[0].clone().into();
-
-    challenges.encode(CHIPLETS_BUS, [label, a, b, z])
+    bus_messages::BitwiseMessage {
+        op_label: AB::Expr::from(label),
+        a: local.stack[0].clone().into(),
+        b: local.stack[1].clone().into(),
+        z: next.stack[0].clone().into(),
+    }
+    .encode(challenges)
 }
 
 /// Computes the bitwise chiplet response message value.
@@ -377,12 +378,13 @@ fn compute_bitwise_response<AB: LiftedAirBuilder<F = Felt>>(
     let label = one_minus_sel * AB::Expr::from(BITWISE_AND_LABEL)
         + sel.clone() * AB::Expr::from(BITWISE_XOR_LABEL);
 
-    // Bitwise chiplet data columns (offset by bw_offset + bitwise internal indices)
-    let a: AB::Expr = local.chiplets[bw_offset + bitwise::A_COL_IDX].clone().into();
-    let b: AB::Expr = local.chiplets[bw_offset + bitwise::B_COL_IDX].clone().into();
-    let z: AB::Expr = local.chiplets[bw_offset + bitwise::OUTPUT_COL_IDX].clone().into();
-
-    challenges.encode(CHIPLETS_BUS, [label, a, b, z])
+    bus_messages::BitwiseMessage {
+        op_label: label,
+        a: local.chiplets[bw_offset + bitwise::A_COL_IDX].clone().into(),
+        b: local.chiplets[bw_offset + bitwise::B_COL_IDX].clone().into(),
+        z: local.chiplets[bw_offset + bitwise::OUTPUT_COL_IDX].clone().into(),
+    }
+    .encode(challenges)
 }
 
 // MEMORY MESSAGE HELPERS

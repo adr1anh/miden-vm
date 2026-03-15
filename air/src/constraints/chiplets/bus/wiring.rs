@@ -43,7 +43,7 @@ use crate::{
     },
     trace::{
         Challenges,
-        bus_interactions::ACE_WIRING_BUS,
+        bus_messages,
         chiplets::ace::{
             CLK_IDX, CTX_IDX, ID_0_IDX, ID_1_IDX, ID_2_IDX, M_0_IDX, M_1_IDX, SELECTOR_BLOCK_IDX,
             V_0_0_IDX, V_0_1_IDX, V_1_0_IDX, V_1_1_IDX, V_2_0_IDX, V_2_1_IDX,
@@ -111,9 +111,9 @@ pub fn enforce_wiring_bus_constraint<AB>(
     let clk: AB::Expr = load_ace_col::<AB>(local, CLK_IDX);
     let ctx: AB::Expr = load_ace_col::<AB>(local, CTX_IDX);
 
-    let wire_0 = load_ace_wire::<AB>(local, ID_0_IDX, V_0_0_IDX, V_0_1_IDX);
-    let wire_1 = load_ace_wire::<AB>(local, ID_1_IDX, V_1_0_IDX, V_1_1_IDX);
-    let wire_2 = load_ace_wire::<AB>(local, ID_2_IDX, V_2_0_IDX, V_2_1_IDX);
+    let wire_0 = load_ace_wire_message::<AB>(local, ID_0_IDX, V_0_0_IDX, V_0_1_IDX);
+    let wire_1 = load_ace_wire_message::<AB>(local, ID_1_IDX, V_1_0_IDX, V_1_1_IDX);
+    let wire_2 = load_ace_wire_message::<AB>(local, ID_2_IDX, V_2_0_IDX, V_2_1_IDX);
     let m0: AB::Expr = load_ace_col::<AB>(local, M_0_IDX);
     // On READ rows this column stores m1 (fan-out for wire_1). On EVAL rows it is v2_1,
     // but we only use it under the READ gate below.
@@ -123,9 +123,9 @@ pub fn enforce_wiring_bus_constraint<AB>(
     // Wire value computation.
     // ---------------------------------------------------------------------
 
-    let wire_0: AB::ExprEF = encode_wire::<AB>(challenges, &clk, &ctx, &wire_0);
-    let wire_1: AB::ExprEF = encode_wire::<AB>(challenges, &clk, &ctx, &wire_1);
-    let wire_2: AB::ExprEF = encode_wire::<AB>(challenges, &clk, &ctx, &wire_2);
+    let wire_0: AB::ExprEF = wire_0.encode(challenges, clk.clone(), ctx.clone());
+    let wire_1: AB::ExprEF = wire_1.encode(challenges, clk.clone(), ctx.clone());
+    let wire_2: AB::ExprEF = wire_2.encode(challenges, clk, ctx);
 
     // ---------------------------------------------------------------------
     // Transition constraint.
@@ -171,42 +171,21 @@ pub fn enforce_wiring_bus_constraint<AB>(
 // INTERNAL HELPERS
 // ================================================================================================
 
-/// ACE wire triplet (id, v0, v1).
-struct AceWire<Expr> {
-    id: Expr,
-    v0: Expr,
-    v1: Expr,
-}
-
-/// Load an ACE wire (id, v0, v1) from the chiplet slice.
-fn load_ace_wire<AB>(
+/// Load an ACE wire message from the chiplet slice.
+fn load_ace_wire_message<AB>(
     row: &MainTraceRow<AB::Var>,
     id_idx: usize,
     v0_idx: usize,
     v1_idx: usize,
-) -> AceWire<AB::Expr>
+) -> bus_messages::AceWireMessage<AB::Expr>
 where
     AB: LiftedAirBuilder<F = Felt>,
 {
-    AceWire {
+    bus_messages::AceWireMessage {
         id: load_ace_col::<AB>(row, id_idx),
         v0: load_ace_col::<AB>(row, v0_idx),
         v1: load_ace_col::<AB>(row, v1_idx),
     }
-}
-
-/// Encode an ACE wire using the wiring-bus challenge vector.
-fn encode_wire<AB>(
-    challenges: &Challenges<AB::ExprEF>,
-    clk: &AB::Expr,
-    ctx: &AB::Expr,
-    wire: &AceWire<AB::Expr>,
-) -> AB::ExprEF
-where
-    AB: LiftedAirBuilder<F = Felt>,
-{
-    challenges
-        .encode(ACE_WIRING_BUS, [clk.clone(), ctx.clone(), wire.id.clone(), wire.v0.clone(), wire.v1.clone()])
 }
 
 /// Load a column from the ACE section of chiplets.

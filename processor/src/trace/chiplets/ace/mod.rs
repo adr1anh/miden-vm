@@ -1,35 +1,12 @@
 use alloc::{collections::BTreeMap, vec::Vec};
 
 use miden_air::trace::{
-    Challenges, MainTrace, RowIndex, bus_interactions::ACE_WIRING_BUS,
+    Challenges, MainTrace, RowIndex, bus_messages,
     chiplets::ace::ACE_CHIPLET_NUM_COLS,
 };
 use miden_core::{Felt, ZERO, field::ExtensionField};
 
 use crate::trace::TraceFragment;
-
-// ACE WIRING BUS MESSAGE
-// ================================================================================================
-
-/// A wire value transmitted on the ACE wiring bus.
-///
-/// Each wire carries 3 field elements. The clock cycle and context identifying the ACE chiplet
-/// invocation are metadata passed to [`encode`](Self::encode) separately, since they are constant
-/// across all wires within a single circuit evaluation section.
-struct AceWireMessage {
-    wire: [Felt; 3],
-}
-
-impl AceWireMessage {
-    fn encode<E: ExtensionField<Felt>>(
-        &self,
-        clk: Felt,
-        ctx: Felt,
-        challenges: &Challenges<E>,
-    ) -> E {
-        challenges.encode(ACE_WIRING_BUS, [clk, ctx, self.wire[0], self.wire[1], self.wire[2]])
-    }
-}
 
 mod trace;
 pub use trace::{CircuitEvaluation, NUM_ACE_LOGUP_FRACTIONS_EVAL, NUM_ACE_LOGUP_FRACTIONS_READ};
@@ -197,8 +174,8 @@ impl AceHints {
                 let wire_0 = main_trace.chiplet_ace_wire_0(trace_row.into());
                 let wire_1 = main_trace.chiplet_ace_wire_1(trace_row.into());
 
-                let value_0 = AceWireMessage { wire: wire_0 }.encode(clk_felt, ctx_felt, challenges);
-                let value_1 = AceWireMessage { wire: wire_1 }.encode(clk_felt, ctx_felt, challenges);
+                let value_0 = bus_messages::AceWireMessage::from_array(wire_0).encode(challenges, clk_felt, ctx_felt);
+                let value_1 = bus_messages::AceWireMessage::from_array(wire_1).encode(challenges, clk_felt, ctx_felt);
 
                 value[0] = value_0;
                 value[1] = value_1;
@@ -227,9 +204,9 @@ impl AceHints {
                 let wire_1 = main_trace.chiplet_ace_wire_1(trace_row.into());
                 let wire_2 = main_trace.chiplet_ace_wire_2(trace_row.into());
 
-                let value_0 = AceWireMessage { wire: wire_0 }.encode(clk_felt, ctx_felt, challenges);
-                let value_1 = AceWireMessage { wire: wire_1 }.encode(clk_felt, ctx_felt, challenges);
-                let value_2 = AceWireMessage { wire: wire_2 }.encode(clk_felt, ctx_felt, challenges);
+                let value_0 = bus_messages::AceWireMessage::from_array(wire_0).encode(challenges, clk_felt, ctx_felt);
+                let value_1 = bus_messages::AceWireMessage::from_array(wire_1).encode(challenges, clk_felt, ctx_felt);
+                let value_2 = bus_messages::AceWireMessage::from_array(wire_2).encode(challenges, clk_felt, ctx_felt);
 
                 value[0] = value_0;
                 value[1] = value_1;
