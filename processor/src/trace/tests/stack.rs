@@ -1,10 +1,12 @@
 use alloc::vec::Vec;
 
-use miden_air::trace::{AUX_TRACE_RAND_CHALLENGES, Challenges, STACK_AUX_TRACE_OFFSET};
+use miden_air::trace::{
+    AUX_TRACE_RAND_CHALLENGES, Challenges, STACK_AUX_TRACE_OFFSET,
+    bus_interactions::STACK_OVERFLOW_TABLE,
+};
 use miden_core::{ONE, ZERO, field::Field, operations::Operation};
 
 use super::{Felt, build_trace_from_ops, rand_array};
-use crate::trace::stack::StackOverflowMessage;
 
 // CONSTANTS
 // ================================================================================================
@@ -39,10 +41,10 @@ fn p1_trace() {
 
     let challenges: Challenges<Felt> = Challenges::<Felt>::new(challenges[0], challenges[1]);
     let row_values = [
-        StackOverflowMessage { clk: Felt::new(2), val: ONE, prev: ZERO }.encode(&challenges),
-        StackOverflowMessage { clk: Felt::new(3), val: TWO, prev: TWO }.encode(&challenges),
-        StackOverflowMessage { clk: Felt::new(6), val: TWO, prev: TWO }.encode(&challenges),
-        StackOverflowMessage { clk: Felt::new(10), val: ZERO, prev: ZERO }.encode(&challenges),
+        challenges.encode(STACK_OVERFLOW_TABLE, [Felt::new(2), ONE, ZERO]),
+        challenges.encode(STACK_OVERFLOW_TABLE, [Felt::new(3), TWO, TWO]),
+        challenges.encode(STACK_OVERFLOW_TABLE, [Felt::new(6), TWO, TWO]),
+        challenges.encode(STACK_OVERFLOW_TABLE, [Felt::new(10), ZERO, ZERO]),
     ];
 
     // make sure the first entry is ONE

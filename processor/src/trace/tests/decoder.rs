@@ -7,8 +7,10 @@ use miden_air::trace::{
 };
 use miden_utils_testing::rand::rand_array;
 
+use miden_air::trace::bus_interactions::OP_GROUP_TABLE;
+
 use super::super::{
-    decoder::{BlockHashTableRow, BlockStackMessage, OpGroupMessage, build_op_group},
+    decoder::{BlockHashTableRow, ParentContext, build_op_group},
     tests::{build_trace_from_ops, build_trace_from_program},
     utils::build_span_with_respan_ops,
 };
@@ -893,16 +895,13 @@ impl BlockStackTableRow {
     /// at least 10 coefficients.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
         let is_loop = if self.is_loop { ONE } else { ZERO };
-        BlockStackMessage::Full {
-            block_id: self.block_id,
-            parent_id: self.parent_id,
-            is_loop,
+        ParentContext {
             ctx: Felt::from_u32(u32::from(self.parent_ctx)),
             depth: Felt::from_u32(self.parent_stack_depth),
             overflow: self.parent_next_overflow_addr,
             fn_hash: self.parent_fn_hash.into(),
         }
-        .encode(challenges)
+        .encode(self.block_id, self.parent_id, is_loop, challenges)
     }
 }
 
@@ -926,11 +925,6 @@ impl OpGroupTableRow {
     /// Reduces this row to a single field element in the field specified by E. This requires
     /// at least 4 coefficients.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
-        OpGroupMessage {
-            block_id: self.batch_id,
-            group_pos: self.group_pos,
-            group_value: self.group_value,
-        }
-        .encode(challenges)
+        challenges.encode(OP_GROUP_TABLE, [self.batch_id, self.group_pos, self.group_value])
     }
 }

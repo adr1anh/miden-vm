@@ -6,7 +6,7 @@ pub use aux_trace::AuxTraceBuilder;
 #[cfg(test)]
 pub use aux_trace::BlockHashTableRow;
 #[cfg(test)]
-pub(crate) use aux_trace::{BlockStackMessage, OpGroupMessage};
+pub(crate) use aux_trace::ParentContext;
 
 pub mod block_stack;
 
