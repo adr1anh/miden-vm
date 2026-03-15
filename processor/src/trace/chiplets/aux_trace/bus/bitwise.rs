@@ -1,6 +1,6 @@
 use miden_air::trace::{
     Challenges, MainTrace, RowIndex,
-    bus_messages::BitwiseMessage,
+    bus_messages::{BitwiseMessage, BitwiseSource},
     chiplets::bitwise::OP_CYCLE_LEN as BITWISE_OP_CYCLE_LEN,
 };
 use miden_core::{Felt, ONE, ZERO, field::ExtensionField};
@@ -25,7 +25,7 @@ pub(super) fn build_bitwise_request<E: ExtensionField<Felt>>(
         a: main_trace.stack_element(0, row),
         b: main_trace.stack_element(1, row),
         z: main_trace.stack_element(0, row + 1),
-        source: if is_xor == ONE { "u32xor" } else { "u32and" },
+        source: if is_xor == ONE { BitwiseSource::U32Xor } else { BitwiseSource::U32And },
     };
 
     let value = msg.encode(challenges);
@@ -56,7 +56,7 @@ where
             a: main_trace.chiplet_bitwise_a(row),
             b: main_trace.chiplet_bitwise_b(row),
             z: main_trace.chiplet_bitwise_z(row),
-            source: "bitwise chiplet",
+            source: BitwiseSource::Chiplet,
         };
 
         let value = msg.encode(challenges);
@@ -82,6 +82,10 @@ where
     }
 
     fn source(&self) -> &str {
-        self.source
+        match self.source {
+            BitwiseSource::U32And => "u32and",
+            BitwiseSource::U32Xor => "u32xor",
+            BitwiseSource::Chiplet => "bitwise chiplet",
+        }
     }
 }

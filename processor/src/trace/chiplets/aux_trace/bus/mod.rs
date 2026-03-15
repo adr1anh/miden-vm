@@ -6,7 +6,8 @@ use hasher::{
     build_mpverify_request, build_mrupdate_request, build_respan_block_request,
     build_span_block_request,
 };
-use kernel::{KernelRomMessage, build_kernel_chiplet_responses};
+use kernel::build_kernel_chiplet_responses;
+use miden_air::trace::bus_messages::KernelRomMessage;
 use memory::{
     build_crypto_stream_request, build_dyn_dyncall_callee_hash_read_request,
     build_fmp_initialization_write_request, build_hornerbase_eval_request,
@@ -310,7 +311,9 @@ where
     };
 
     let kernel_rom_req = KernelRomMessage {
+        op_label: miden_air::trace::chiplets::kernel_rom::KERNEL_PROC_CALL_LABEL,
         kernel_proc_digest: main_trace.decoder_hasher_state(row)[0..4].try_into().unwrap(),
+        source: miden_air::trace::bus_messages::KernelRomSource::Call,
     };
 
     let combined_value = control_block_req.value(challenges) * kernel_rom_req.value(challenges);
