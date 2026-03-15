@@ -354,6 +354,7 @@ fn compute_bitwise_request<AB: LiftedAirBuilder<F = Felt>>(
         a: local.stack[0].clone().into(),
         b: local.stack[1].clone().into(),
         z: next.stack[0].clone().into(),
+        source: "",
     }
     .encode(challenges)
 }
@@ -383,6 +384,7 @@ fn compute_bitwise_response<AB: LiftedAirBuilder<F = Felt>>(
         a: local.chiplets[bw_offset + bitwise::A_COL_IDX].clone().into(),
         b: local.chiplets[bw_offset + bitwise::B_COL_IDX].clone().into(),
         z: local.chiplets[bw_offset + bitwise::OUTPUT_COL_IDX].clone().into(),
+        source: "",
     }
     .encode(challenges)
 }

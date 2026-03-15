@@ -7,7 +7,10 @@
 //! Each struct captures the data fields of a bus message and provides an `encode` method
 //! that delegates to [`Challenges::encode`](super::Challenges::encode).
 
-use core::ops::{AddAssign, Mul};
+use core::{
+    fmt,
+    ops::{AddAssign, Mul},
+};
 
 use miden_core::field::PrimeCharacteristicRing;
 
@@ -19,11 +22,14 @@ use super::{Challenges, bus_interactions::{ACE_WIRING_BUS, CHIPLETS_BUS}};
 /// A bitwise chiplet bus message (U32AND / U32XOR).
 ///
 /// Encodes: `bus_prefix[CHIPLETS_BUS] + alpha^1 * label + alpha^2 * a + alpha^3 * b + alpha^4 * z`
+///
+/// The `source` field is metadata for debugging and is not part of the encoding.
 pub struct BitwiseMessage<F> {
     pub op_label: F,
     pub a: F,
     pub b: F,
     pub z: F,
+    pub source: &'static str,
 }
 
 impl<F: Clone> BitwiseMessage<F> {
@@ -35,6 +41,21 @@ impl<F: Clone> BitwiseMessage<F> {
         challenges.encode(
             CHIPLETS_BUS,
             [self.op_label.clone(), self.a.clone(), self.b.clone(), self.z.clone()],
+        )
+    }
+
+    /// Returns the debug source label for this message.
+    pub fn source(&self) -> &str {
+        self.source
+    }
+}
+
+impl<F: fmt::Display> fmt::Display for BitwiseMessage<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{{ op_label: {}, a: {}, b: {}, z: {} }}",
+            self.op_label, self.a, self.b, self.z
         )
     }
 }
