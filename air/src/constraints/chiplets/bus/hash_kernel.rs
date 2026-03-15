@@ -26,6 +26,7 @@ use crate::{
     },
     trace::{
         CHIPLETS_OFFSET, Challenges, LOG_PRECOMPILE_LABEL,
+        bus_interactions::{CHIPLETS_BUS, LOG_PRECOMPILE_TRANSCRIPT, SIBLING_TABLE},
         chiplets::{
             HASHER_NODE_INDEX_COL_IDX, HASHER_SELECTOR_COL_RANGE, HASHER_STATE_COL_RANGE,
             NUM_ACE_SELECTORS,
@@ -186,7 +187,7 @@ pub fn enforce_hash_kernel_constraint<AB>(
         let v1_1: AB::Expr = local.chiplets[NUM_ACE_SELECTORS + V_1_1_IDX].clone().into();
         let label: AB::Expr = AB::Expr::from(Felt::from_u8(MEMORY_READ_WORD_LABEL));
 
-        challenges.encode([
+        challenges.encode(CHIPLETS_BUS, [
             label,
             ace_ctx.clone(),
             ace_ptr.clone(),
@@ -209,7 +210,7 @@ pub fn enforce_hash_kernel_constraint<AB>(
         let element = id_1 + id_2 * offset1 + (eval_op + one.clone()) * offset2;
         let label: AB::Expr = AB::Expr::from(Felt::from_u8(MEMORY_READ_ELEMENT_LABEL));
 
-        challenges.encode([label, ace_ctx, ace_ptr, ace_clk, element])
+        challenges.encode(CHIPLETS_BUS, [label, ace_ctx, ace_ptr, ace_clk, element])
     };
 
     // =========================================================================
@@ -232,7 +233,7 @@ pub fn enforce_hash_kernel_constraint<AB>(
     let log_label: AB::Expr = AB::Expr::from(Felt::from_u8(LOG_PRECOMPILE_LABEL));
 
     // CAP_PREV value (request - removed).
-    let v_cap_prev = challenges.encode([
+    let v_cap_prev = challenges.encode(LOG_PRECOMPILE_TRANSCRIPT, [
         log_label.clone(),
         cap_prev[0].clone(),
         cap_prev[1].clone(),
@@ -241,7 +242,7 @@ pub fn enforce_hash_kernel_constraint<AB>(
     ]);
 
     // CAP_NEXT value (response - inserted).
-    let v_cap_next = challenges.encode([
+    let v_cap_next = challenges.encode(LOG_PRECOMPILE_TRANSCRIPT, [
         log_label,
         cap_next[0].clone(),
         cap_next[1].clone(),
@@ -302,7 +303,7 @@ fn compute_sibling_b0<AB>(
 where
     AB: LiftedAirBuilder<F = Felt>,
 {
-    challenges.encode_sparse(
+    challenges.encode_sparse(SIBLING_TABLE, 
         SIBLING_B0_LAYOUT,
         [node_index.clone(), h[4].clone(), h[5].clone(), h[6].clone(), h[7].clone()],
     )
@@ -310,7 +311,7 @@ where
 
 /// Compute sibling value when b=1 (sibling at h[0..3]).
 ///
-/// Message layout: alpha[0] (constant) + alpha[3] * node_index + alpha[4..7] * h[0..3].
+/// Message layout: bus_prefix[SIBLING_TABLE] + alphas[2] * node_index + alphas[3..6] * h[0..3].
 fn compute_sibling_b1<AB>(
     challenges: &Challenges<AB::ExprEF>,
     node_index: &AB::Expr,
@@ -319,7 +320,7 @@ fn compute_sibling_b1<AB>(
 where
     AB: LiftedAirBuilder<F = Felt>,
 {
-    challenges.encode_sparse(
+    challenges.encode_sparse(SIBLING_TABLE, 
         SIBLING_B1_LAYOUT,
         [node_index.clone(), h[0].clone(), h[1].clone(), h[2].clone(), h[3].clone()],
     )

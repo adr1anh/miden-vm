@@ -1,6 +1,9 @@
 use alloc::{collections::BTreeMap, vec::Vec};
 
-use miden_air::trace::{Challenges, MainTrace, RowIndex, chiplets::ace::ACE_CHIPLET_NUM_COLS};
+use miden_air::trace::{
+    Challenges, MainTrace, RowIndex, bus_messages,
+    chiplets::ace::ACE_CHIPLET_NUM_COLS,
+};
 use miden_core::{Felt, ZERO, field::ExtensionField};
 
 use crate::trace::TraceFragment;
@@ -137,19 +140,6 @@ impl AceHints {
         self.offset_chiplet_trace
     }
 
-    /// Encodes an ACE wire value into a bus message.
-    ///
-    /// Layout: `alpha + beta^0*clk + beta^1*ctx + beta^2*wire[0] + beta^3*wire[1] + beta^4*wire[2]`
-    #[inline(always)]
-    fn encode_ace_wire_value<E: ExtensionField<Felt>>(
-        challenges: &Challenges<E>,
-        clk: u32,
-        ctx: u32,
-        wire: [Felt; 3],
-    ) -> E {
-        challenges.encode([Felt::from_u32(clk), Felt::from_u32(ctx), wire[0], wire[1], wire[2]])
-    }
-
     pub(crate) fn build_divisors<E: ExtensionField<Felt>>(
         &self,
         main_trace: &MainTrace,
@@ -165,6 +155,8 @@ impl AceHints {
         for section in self.sections.iter() {
             let clk = section.clk();
             let ctx = section.ctx();
+            let clk_felt = Felt::from_u32(clk);
+            let ctx_felt = Felt::from_u32(ctx);
 
             let values = &mut total_values[values_offset
                 ..values_offset + NUM_ACE_LOGUP_FRACTIONS_READ * section.num_vars() as usize];
@@ -182,8 +174,8 @@ impl AceHints {
                 let wire_0 = main_trace.chiplet_ace_wire_0(trace_row.into());
                 let wire_1 = main_trace.chiplet_ace_wire_1(trace_row.into());
 
-                let value_0 = Self::encode_ace_wire_value(challenges, clk, ctx, wire_0);
-                let value_1 = Self::encode_ace_wire_value(challenges, clk, ctx, wire_1);
+                let value_0 = bus_messages::AceWireMessage::from_array(wire_0).encode(challenges, clk_felt, ctx_felt);
+                let value_1 = bus_messages::AceWireMessage::from_array(wire_1).encode(challenges, clk_felt, ctx_felt);
 
                 value[0] = value_0;
                 value[1] = value_1;
@@ -212,9 +204,9 @@ impl AceHints {
                 let wire_1 = main_trace.chiplet_ace_wire_1(trace_row.into());
                 let wire_2 = main_trace.chiplet_ace_wire_2(trace_row.into());
 
-                let value_0 = Self::encode_ace_wire_value(challenges, clk, ctx, wire_0);
-                let value_1 = Self::encode_ace_wire_value(challenges, clk, ctx, wire_1);
-                let value_2 = Self::encode_ace_wire_value(challenges, clk, ctx, wire_2);
+                let value_0 = bus_messages::AceWireMessage::from_array(wire_0).encode(challenges, clk_felt, ctx_felt);
+                let value_1 = bus_messages::AceWireMessage::from_array(wire_1).encode(challenges, clk_felt, ctx_felt);
+                let value_2 = bus_messages::AceWireMessage::from_array(wire_2).encode(challenges, clk_felt, ctx_felt);
 
                 value[0] = value_0;
                 value[1] = value_1;

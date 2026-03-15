@@ -1,7 +1,8 @@
-use core::fmt::{Display, Formatter, Result as FmtResult};
-
 use miden_air::trace::{
     Challenges, MainTrace, RowIndex,
+    bus_messages::{
+        MemoryElementMessage, MemoryElementSource, MemoryWordMessage, MemoryWordSource,
+    },
     chiplets::{
         ace::{ACE_INSTRUCTION_ID1_OFFSET, ACE_INSTRUCTION_ID2_OFFSET},
         memory::{
@@ -48,7 +49,7 @@ pub fn build_ace_memory_read_word_request<E: ExtensionField<Felt>>(
         addr,
         clk,
         word,
-        source: "read word ACE",
+        source: MemoryWordSource::ReadWordAce,
     };
 
     let value = message.value(challenges);
@@ -83,9 +84,10 @@ pub fn build_ace_memory_read_element_request<E: ExtensionField<Felt>>(
         addr,
         clk,
         element,
+        source: MemoryElementSource::AceRead,
     };
 
-    let value = message.value(challenges);
+    let value = message.encode(challenges);
 
     #[cfg(any(test, feature = "bus-debugger"))]
     _debugger.add_request(alloc::boxed::Box::new(message), challenges);
@@ -108,9 +110,9 @@ pub(super) fn build_dyn_dyncall_callee_hash_read_request<E: ExtensionField<Felt>
         clk: main_trace.clk(row),
         word: main_trace.decoder_hasher_state_first_half(row).into(),
         source: if op_code_felt == Felt::from_u8(opcodes::DYNCALL) {
-            "dyncall"
+            MemoryWordSource::Dyncall
         } else {
-            "dyn"
+            MemoryWordSource::Dyn
         },
     };
 
@@ -141,6 +143,7 @@ pub(super) fn build_fmp_initialization_write_request<E: ExtensionField<Felt>>(
         addr: FMP_ADDR,
         clk: main_trace.clk(row),
         element: FMP_INIT_VALUE,
+        source: MemoryElementSource::FmpInit,
     };
 
     let value = memory_req.value(challenges);
@@ -179,9 +182,9 @@ pub(super) fn build_mem_mloadw_mstorew_request<E: ExtensionField<Felt>>(
         clk,
         word,
         source: if op_label == MEMORY_READ_WORD_LABEL {
-            "mloadw"
+            MemoryWordSource::Mloadw
         } else {
-            "mstorew"
+            MemoryWordSource::Mstorew
         },
     };
 
@@ -215,9 +218,14 @@ pub(super) fn build_mem_mload_mstore_request<E: ExtensionField<Felt>>(
         addr,
         clk,
         element,
+        source: if op_label == MEMORY_READ_ELEMENT_LABEL {
+            MemoryElementSource::Mload
+        } else {
+            MemoryElementSource::Mstore
+        },
     };
 
-    let value = message.value(challenges);
+    let value = message.encode(challenges);
 
     #[cfg(any(test, feature = "bus-debugger"))]
     _debugger.add_request(alloc::boxed::Box::new(message), challenges);
@@ -250,7 +258,7 @@ pub(super) fn build_mstream_request<E: ExtensionField<Felt>>(
             main_trace.stack_element(2, row + 1),
             main_trace.stack_element(3, row + 1),
         ],
-        source: "mstream req 1",
+        source: MemoryWordSource::Mstream1,
     };
     let mem_req_2 = MemoryWordMessage {
         op_label,
@@ -263,7 +271,7 @@ pub(super) fn build_mstream_request<E: ExtensionField<Felt>>(
             main_trace.stack_element(6, row + 1),
             main_trace.stack_element(7, row + 1),
         ],
-        source: "mstream req 2",
+        source: MemoryWordSource::Mstream2,
     };
 
     let combined_value = mem_req_1.value(challenges) * mem_req_2.value(challenges);
@@ -302,7 +310,7 @@ pub(super) fn build_pipe_request<E: ExtensionField<Felt>>(
             main_trace.stack_element(2, row + 1),
             main_trace.stack_element(3, row + 1),
         ],
-        source: "pipe req 1",
+        source: MemoryWordSource::Pipe1,
     };
     let mem_req_2 = MemoryWordMessage {
         op_label,
@@ -315,7 +323,7 @@ pub(super) fn build_pipe_request<E: ExtensionField<Felt>>(
             main_trace.stack_element(6, row + 1),
             main_trace.stack_element(7, row + 1),
         ],
-        source: "pipe req 2",
+        source: MemoryWordSource::Pipe2,
     };
 
     let combined_value = mem_req_1.value(challenges) * mem_req_2.value(challenges);
@@ -363,7 +371,7 @@ pub(super) fn build_crypto_stream_request<E: ExtensionField<Felt>>(
         addr: src_addr,
         clk,
         word: [plaintext[0], plaintext[1], plaintext[2], plaintext[3]],
-        source: "crypto_stream read 1",
+        source: MemoryWordSource::CryptoStreamRead1,
     };
     let read_req_2 = MemoryWordMessage {
         op_label: read_label,
@@ -371,7 +379,7 @@ pub(super) fn build_crypto_stream_request<E: ExtensionField<Felt>>(
         addr: src_addr + FOUR,
         clk,
         word: [plaintext[4], plaintext[5], plaintext[6], plaintext[7]],
-        source: "crypto_stream read 2",
+        source: MemoryWordSource::CryptoStreamRead2,
     };
 
     // Two write-word requests at dst_addr and dst_addr + 4.
@@ -382,7 +390,7 @@ pub(super) fn build_crypto_stream_request<E: ExtensionField<Felt>>(
         addr: dst_addr,
         clk,
         word: [ciphertext[0], ciphertext[1], ciphertext[2], ciphertext[3]],
-        source: "crypto_stream write 1",
+        source: MemoryWordSource::CryptoStreamWrite1,
     };
     let write_req_2 = MemoryWordMessage {
         op_label: write_label,
@@ -390,7 +398,7 @@ pub(super) fn build_crypto_stream_request<E: ExtensionField<Felt>>(
         addr: dst_addr + FOUR,
         clk,
         word: [ciphertext[4], ciphertext[5], ciphertext[6], ciphertext[7]],
-        source: "crypto_stream write 2",
+        source: MemoryWordSource::CryptoStreamWrite2,
     };
 
     let combined_value = read_req_1.value(challenges)
@@ -430,6 +438,7 @@ pub(super) fn build_hornerbase_eval_request<E: ExtensionField<Felt>>(
         addr: eval_point_ptr,
         clk,
         element: eval_point_0,
+        source: MemoryElementSource::Hornerbase,
     };
     let mem_req_1 = MemoryElementMessage {
         op_label,
@@ -437,6 +446,7 @@ pub(super) fn build_hornerbase_eval_request<E: ExtensionField<Felt>>(
         addr: eval_point_ptr + ONE,
         clk,
         element: eval_point_1,
+        source: MemoryElementSource::Hornerbase,
     };
 
     let value = mem_req_0.value(challenges) * mem_req_1.value(challenges);
@@ -473,7 +483,7 @@ pub(super) fn build_hornerext_eval_request<E: ExtensionField<Felt>>(
         addr: eval_point_ptr,
         clk,
         word: [eval_point_0, eval_point_1, mem_junk_0, mem_junk_1],
-        source: "hornerext_eval_* req",
+        source: MemoryWordSource::HornerextEval,
     };
 
     let value = mem_req.value(challenges);
@@ -530,7 +540,8 @@ where
             panic!("Invalid word indices. idx0: {idx0}, idx1: {idx1}");
         };
 
-        let message = MemoryElementMessage { op_label, ctx, addr, clk, element };
+        let message =
+            MemoryElementMessage { op_label, ctx, addr, clk, element, source: MemoryElementSource::Chiplet };
 
         let value = message.value(challenges);
 
@@ -550,7 +561,7 @@ where
             addr,
             clk,
             word: [value0, value1, value2, value3],
-            source: "memory chiplet",
+            source: MemoryWordSource::Chiplet,
         };
 
         let value = message.value(challenges);
@@ -584,77 +595,54 @@ fn get_memory_op_label(is_read: Felt, is_word_access: Felt) -> Felt {
     Felt::from_u8(MEMORY_SELECTOR_FLAG_BASE + (op_flag << OP_FLAG_SHIFT))
 }
 
-// MESSAGES
+// BUS MESSAGE IMPLS
 // ===============================================================================================
 
-pub struct MemoryWordMessage {
-    pub op_label: Felt,
-    pub ctx: Felt,
-    pub addr: Felt,
-    pub clk: Felt,
-    pub word: [Felt; 4],
-    pub source: &'static str,
-}
-
-impl<E> BusMessage<E> for MemoryWordMessage
+impl<E> BusMessage<E> for MemoryWordMessage<Felt>
 where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode([
-            self.op_label,
-            self.ctx,
-            self.addr,
-            self.clk,
-            self.word[0],
-            self.word[1],
-            self.word[2],
-            self.word[3],
-        ])
+        self.encode(challenges)
     }
 
     fn source(&self) -> &str {
-        self.source
+        match self.source {
+            MemoryWordSource::Chiplet => "memory chiplet",
+            MemoryWordSource::Mloadw => "mloadw",
+            MemoryWordSource::Mstorew => "mstorew",
+            MemoryWordSource::Mstream1 => "mstream req 1",
+            MemoryWordSource::Mstream2 => "mstream req 2",
+            MemoryWordSource::Pipe1 => "pipe req 1",
+            MemoryWordSource::Pipe2 => "pipe req 2",
+            MemoryWordSource::CryptoStreamRead1 => "crypto_stream read 1",
+            MemoryWordSource::CryptoStreamRead2 => "crypto_stream read 2",
+            MemoryWordSource::CryptoStreamWrite1 => "crypto_stream write 1",
+            MemoryWordSource::CryptoStreamWrite2 => "crypto_stream write 2",
+            MemoryWordSource::Dyn => "dyn",
+            MemoryWordSource::Dyncall => "dyncall",
+            MemoryWordSource::ReadWordAce => "read word ACE",
+            MemoryWordSource::HornerextEval => "hornerext_eval_* req",
+        }
     }
 }
 
-impl Display for MemoryWordMessage {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(
-            f,
-            "{{ op_label: {}, ctx: {}, addr: {}, clk: {}, word: {:?} }}",
-            self.op_label, self.ctx, self.addr, self.clk, self.word
-        )
-    }
-}
-
-pub struct MemoryElementMessage {
-    pub op_label: Felt,
-    pub ctx: Felt,
-    pub addr: Felt,
-    pub clk: Felt,
-    pub element: Felt,
-}
-
-impl<E> BusMessage<E> for MemoryElementMessage
+impl<E> BusMessage<E> for MemoryElementMessage<Felt>
 where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode([self.op_label, self.ctx, self.addr, self.clk, self.element])
+        self.encode(challenges)
     }
 
     fn source(&self) -> &str {
-        "memory element"
-    }
-}
-
-impl Display for MemoryElementMessage {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(
-            f,
-            "{{ op_label: {}, ctx: {}, addr: {}, clk: {}, element: {} }}",
-            self.op_label, self.ctx, self.addr, self.clk, self.element
-        )
+        match self.source {
+            MemoryElementSource::Chiplet => "memory chiplet",
+            MemoryElementSource::Mload => "mload",
+            MemoryElementSource::Mstore => "mstore",
+            MemoryElementSource::FmpInit => "fmp init",
+            MemoryElementSource::AceRead => "ace read element",
+            MemoryElementSource::Hornerbase => "hornerbase",
+        }
     }
 }

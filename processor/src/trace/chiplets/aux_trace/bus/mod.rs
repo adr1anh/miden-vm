@@ -6,7 +6,8 @@ use hasher::{
     build_mpverify_request, build_mrupdate_request, build_respan_block_request,
     build_span_block_request,
 };
-use kernel::{KernelRomMessage, build_kernel_chiplet_responses};
+use kernel::build_kernel_chiplet_responses;
+use miden_air::trace::bus_messages::KernelRomMessage;
 use memory::{
     build_crypto_stream_request, build_dyn_dyncall_callee_hash_read_request,
     build_fmp_initialization_write_request, build_hornerbase_eval_request,
@@ -175,19 +176,18 @@ where
 /// Standard control block encoding includes state[0..7] which are always zero for DYN/DYNCALL.
 /// This optimization skips those 8 multiplications.
 ///
-/// Encoding: `alpha + beta^0*label + beta^1*addr + beta^12*op_code`
-/// where beta^12 is the capacity domain element at coeffs[13].
+/// Uses sparse encoding at indices [LABEL_IDX, ADDR_IDX, CAPACITY_DOMAIN_IDX].
 #[inline(always)]
 fn encode_control_block_without_state<E>(challenges: &Challenges<E>, addr: Felt, op_code: Felt) -> E
 where
     E: ExtensionField<Felt>,
 {
-    use miden_air::trace::bus_message;
+    use miden_air::trace::{bus_interactions::CHIPLETS_BUS, bus_message};
 
-    challenges.alpha
-        + challenges.beta_powers[bus_message::LABEL_IDX] * Felt::from_u8(LINEAR_HASH_LABEL + 16)
-        + challenges.beta_powers[bus_message::ADDR_IDX] * addr
-        + challenges.beta_powers[bus_message::CAPACITY_DOMAIN_IDX] * op_code
+    challenges.encode_sparse(CHIPLETS_BUS, 
+        [bus_message::LABEL_IDX, bus_message::ADDR_IDX, bus_message::CAPACITY_DOMAIN_IDX],
+        [Felt::from_u8(LINEAR_HASH_LABEL + 16), addr, op_code],
+    )
 }
 
 /// Builds requests made on a `DYN` operation.
@@ -311,7 +311,9 @@ where
     };
 
     let kernel_rom_req = KernelRomMessage {
+        op_label: miden_air::trace::chiplets::kernel_rom::KERNEL_PROC_CALL_LABEL,
         kernel_proc_digest: main_trace.decoder_hasher_state(row)[0..4].try_into().unwrap(),
+        source: miden_air::trace::bus_messages::KernelRomSource::Call,
     };
 
     let combined_value = control_block_req.value(challenges) * kernel_rom_req.value(challenges);

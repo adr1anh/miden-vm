@@ -1,5 +1,8 @@
 use miden_air::trace::{
-    AUX_TRACE_RAND_CHALLENGES, chiplets::hasher::HASH_CYCLE_LEN, range::B_RANGE_COL_IDX,
+    AUX_TRACE_RAND_CHALLENGES, Challenges,
+    bus_interactions::RANGE_CHECK_BUS,
+    chiplets::hasher::HASH_CYCLE_LEN,
+    range::B_RANGE_COL_IDX,
 };
 use miden_core::{ONE, ZERO, field::Field, operations::Operation};
 use miden_utils_testing::rand::rand_array;
@@ -17,9 +20,15 @@ fn b_range_trace_stack() {
     let trace = build_trace_from_ops(operations, &stack);
 
     let rand_elements = rand_array::<Felt, AUX_TRACE_RAND_CHALLENGES>();
-    let alpha = rand_elements[0];
+    let challenges = Challenges::new(rand_elements[0], rand_elements[1]);
     let aux_columns = trace.build_aux_trace(&rand_elements).unwrap();
     let b_range = aux_columns.get_column(B_RANGE_COL_IDX);
+
+    // Helper to compute 1/encode(value) for range check bus
+    let rc_inv = |v: u64| -> Felt {
+        let encoded: Felt = challenges.encode(RANGE_CHECK_BUS, [Felt::new(v)]);
+        encoded.inverse()
+    };
 
     assert_eq!(trace.length(), b_range.len());
 
@@ -31,9 +40,9 @@ fn b_range_trace_stack() {
 
     // The first range check lookup from the stack will happen when the add operation is executed,
     // at cycle 1. (The trace begins by executing `span`). It must be subtracted out of `b_range`.
-    // The range-checked values are 0, 256, 0, 0, so the values to subtract are 3/(alpha + 0) and
-    // 1/(alpha + 256).
-    let lookups = alpha.inverse() * Felt::new(3) + (alpha + Felt::new(256)).inverse();
+    // The range-checked values are 0, 256, 0, 0, so the values to subtract are 3/encode(0) and
+    // 1/encode(256).
+    let lookups = rc_inv(0) * Felt::new(3) + rc_inv(256);
     let mut expected = b_range[1] - lookups;
     assert_eq!(expected, b_range[2]);
 
@@ -49,14 +58,14 @@ fn b_range_trace_stack() {
     // After the padded rows, the first value will be unchanged.
     assert_eq!(expected, b_range[values_start]);
     // We include 3 lookups of 0.
-    expected += alpha.inverse() * Felt::new(3);
+    expected += rc_inv(0) * Felt::new(3);
     assert_eq!(expected, b_range[values_start + 1]);
     // Then we have 3 bridge rows between 0 and 255 where the value does not change
     assert_eq!(expected, b_range[values_start + 2]);
     assert_eq!(expected, b_range[values_start + 3]);
     assert_eq!(expected, b_range[values_start + 4]);
-    // Then we include 1 lookup of 256, so it should be multiplied by alpha + 256.
-    expected += (alpha + Felt::new(256)).inverse();
+    // Then we include 1 lookup of 256, so it should be multiplied by encode(256).
+    expected += rc_inv(256);
     assert_eq!(expected, b_range[values_start + 5]);
 
     // --- Check the last value of the b_range column is zero --------------------------------------
@@ -88,9 +97,15 @@ fn b_range_trace_mem() {
     let trace = build_trace_from_ops(operations, &stack);
 
     let rand_elements = rand_array::<Felt, AUX_TRACE_RAND_CHALLENGES>();
-    let alpha = rand_elements[0];
+    let challenges = Challenges::new(rand_elements[0], rand_elements[1]);
     let aux_columns = trace.build_aux_trace(&rand_elements).unwrap();
     let b_range = aux_columns.get_column(B_RANGE_COL_IDX);
+
+    // Helper to compute 1/encode(value) for range check bus
+    let rc_inv = |v: Felt| -> Felt {
+        let encoded: Felt = challenges.encode(RANGE_CHECK_BUS, [v]);
+        encoded.inverse()
+    };
 
     assert_eq!(trace.length(), b_range.len());
 
@@ -117,27 +132,27 @@ fn b_range_trace_mem() {
     let (d0_load, d1_load) = (Felt::new(5), ZERO);
 
     // Include the lookups from the `MStoreW` operation at the next row.
-    expected -= (alpha + d0_store).inverse() + (alpha + d1_store).inverse();
+    expected -= rc_inv(d0_store) + rc_inv(d1_store);
     assert_eq!(expected, b_range[memory_start + 1]);
     // Include the lookup from the `MLoadW` operation at the next row.
-    expected -= (alpha + d0_load).inverse() + (alpha + d1_load).inverse();
+    expected -= rc_inv(d0_load) + rc_inv(d1_load);
     assert_eq!(expected, b_range[memory_start + 2]);
 
     // --- Check the range checker's lookups. -----------------------------------------------------
 
     // We include 2 lookups of ZERO in the next row.
-    expected += alpha.inverse() * Felt::new(2);
+    expected += rc_inv(ZERO) * Felt::new(2);
     assert_eq!(expected, b_range[values_start + 1]);
 
     // We include 1 lookup of ONE in the next row.
-    expected += (alpha + d0_store).inverse();
+    expected += rc_inv(d0_store);
     assert_eq!(expected, b_range[values_start + 2]);
 
     // We have one bridge row between 1 and 5 where the value does not change.
     assert_eq!(expected, b_range[values_start + 3]);
 
     // We include 1 lookup of 5 in the next row.
-    expected += (alpha + d0_load).inverse();
+    expected += rc_inv(d0_load);
     assert_eq!(expected, b_range[values_start + 4]);
 
     // --- The value should now be ZERO for the rest of the trace. ---------------------------------

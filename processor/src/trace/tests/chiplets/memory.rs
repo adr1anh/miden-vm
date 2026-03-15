@@ -1,5 +1,6 @@
 use miden_air::trace::{
     Challenges, RowIndex,
+    bus_interactions::CHIPLETS_BUS,
     chiplets::{
         MEMORY_CLK_COL_IDX, MEMORY_CTX_COL_IDX, MEMORY_IDX0_COL_IDX, MEMORY_IDX1_COL_IDX,
         MEMORY_IS_READ_COL_IDX, MEMORY_IS_WORD_ACCESS_COL_IDX, MEMORY_V_COL_RANGE,
@@ -284,7 +285,7 @@ fn build_expected_bus_element_msg(
 ) -> Felt {
     assert!(op_label == MEMORY_READ_ELEMENT_LABEL || op_label == MEMORY_WRITE_ELEMENT_LABEL);
 
-    challenges.encode([Felt::from_u8(op_label), ctx, addr, clk, value])
+    challenges.encode(CHIPLETS_BUS, [Felt::from_u8(op_label), ctx, addr, clk, value])
 }
 
 fn build_expected_bus_word_msg(
@@ -297,7 +298,7 @@ fn build_expected_bus_word_msg(
 ) -> Felt {
     assert!(op_label == MEMORY_READ_WORD_LABEL || op_label == MEMORY_WRITE_WORD_LABEL);
 
-    challenges.encode([Felt::from_u8(op_label), ctx, addr, clk, word[0], word[1], word[2], word[3]])
+    challenges.encode(CHIPLETS_BUS, [Felt::from_u8(op_label), ctx, addr, clk, word[0], word[1], word[2], word[3]])
 }
 
 fn build_expected_bus_msg_from_trace(

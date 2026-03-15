@@ -1,7 +1,7 @@
-use core::fmt::{Display, Formatter, Result as FmtResult};
-
 use miden_air::trace::{
-    Challenges, MainTrace, RowIndex, chiplets::bitwise::OP_CYCLE_LEN as BITWISE_OP_CYCLE_LEN,
+    Challenges, MainTrace, RowIndex,
+    bus_messages::{BitwiseMessage, BitwiseSource},
+    chiplets::bitwise::OP_CYCLE_LEN as BITWISE_OP_CYCLE_LEN,
 };
 use miden_core::{Felt, ONE, ZERO, field::ExtensionField};
 
@@ -20,18 +20,18 @@ pub(super) fn build_bitwise_request<E: ExtensionField<Felt>>(
     row: RowIndex,
     _debugger: &mut BusDebugger<E>,
 ) -> E {
-    let bitwise_request_message = BitwiseMessage {
+    let msg = BitwiseMessage {
         op_label: get_op_label(ONE, ZERO, is_xor, ZERO),
         a: main_trace.stack_element(0, row),
         b: main_trace.stack_element(1, row),
         z: main_trace.stack_element(0, row + 1),
-        source: if is_xor == ONE { "u32xor" } else { "u32and" },
+        source: if is_xor == ONE { BitwiseSource::U32Xor } else { BitwiseSource::U32And },
     };
 
-    let value = bitwise_request_message.value(challenges);
+    let value = msg.encode(challenges);
 
     #[cfg(any(test, feature = "bus-debugger"))]
-    _debugger.add_request(alloc::boxed::Box::new(bitwise_request_message), challenges);
+    _debugger.add_request(alloc::boxed::Box::new(msg), challenges);
 
     value
 }
@@ -51,18 +51,18 @@ where
 {
     let is_xor = main_trace.chiplet_selector_2(row);
     if row.as_usize() % BITWISE_OP_CYCLE_LEN == BITWISE_OP_CYCLE_LEN - 1 {
-        let bitwise_message = BitwiseMessage {
+        let msg = BitwiseMessage {
             op_label: get_op_label(ONE, ZERO, is_xor, ZERO),
             a: main_trace.chiplet_bitwise_a(row),
             b: main_trace.chiplet_bitwise_b(row),
             z: main_trace.chiplet_bitwise_z(row),
-            source: "bitwise chiplet",
+            source: BitwiseSource::Chiplet,
         };
 
-        let value = bitwise_message.value(challenges);
+        let value = msg.encode(challenges);
 
         #[cfg(any(test, feature = "bus-debugger"))]
-        _debugger.add_response(alloc::boxed::Box::new(bitwise_message), challenges);
+        _debugger.add_response(alloc::boxed::Box::new(msg), challenges);
 
         value
     } else {
@@ -70,36 +70,22 @@ where
     }
 }
 
-// MESSAGE
+// BUS MESSAGE IMPL
 // ===============================================================================================
 
-pub struct BitwiseMessage {
-    pub op_label: Felt,
-    pub a: Felt,
-    pub b: Felt,
-    pub z: Felt,
-    pub source: &'static str,
-}
-
-impl<E> BusMessage<E> for BitwiseMessage
+impl<E> BusMessage<E> for BitwiseMessage<Felt>
 where
     E: ExtensionField<Felt>,
 {
     fn value(&self, challenges: &Challenges<E>) -> E {
-        challenges.encode([self.op_label, self.a, self.b, self.z])
+        self.encode(challenges)
     }
 
     fn source(&self) -> &str {
-        self.source
-    }
-}
-
-impl Display for BitwiseMessage {
-    fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
-        write!(
-            f,
-            "{{ op_label: {}, a: {}, b: {}, z: {} }}",
-            self.op_label, self.a, self.b, self.z
-        )
+        match self.source {
+            BitwiseSource::U32And => "u32and",
+            BitwiseSource::U32Xor => "u32xor",
+            BitwiseSource::Chiplet => "bitwise chiplet",
+        }
     }
 }

@@ -12,6 +12,8 @@ pub use block_hash_table::BlockHashTableRow;
 
 mod block_stack_table;
 use block_stack_table::BlockStackColumnBuilder;
+#[cfg(test)]
+pub(crate) use block_stack_table::ParentContext;
 
 mod op_group_table;
 use op_group_table::OpGroupTableColumnBuilder;

@@ -7,8 +7,10 @@ use miden_air::trace::{
 };
 use miden_utils_testing::rand::rand_array;
 
+use miden_air::trace::bus_interactions::OP_GROUP_TABLE;
+
 use super::super::{
-    decoder::{BlockHashTableRow, build_op_group},
+    decoder::{BlockHashTableRow, ParentContext, build_op_group},
     tests::{build_trace_from_ops, build_trace_from_program},
     utils::build_span_with_respan_ops,
 };
@@ -890,21 +892,16 @@ impl BlockStackTableRow {
 
 impl BlockStackTableRow {
     /// Reduces this row to a single field element in the field specified by E. This requires
-    /// at least 12 coefficients.
+    /// at least 10 coefficients.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
         let is_loop = if self.is_loop { ONE } else { ZERO };
-        challenges.alpha
-            + challenges.beta_powers[0] * self.block_id
-            + challenges.beta_powers[1] * self.parent_id
-            + challenges.beta_powers[2] * is_loop
-            + challenges.beta_powers[3] * Felt::from_u32(u32::from(self.parent_ctx))
-            + challenges.beta_powers[4] * self.parent_fmp
-            + challenges.beta_powers[5] * Felt::from_u32(self.parent_stack_depth)
-            + challenges.beta_powers[6] * self.parent_next_overflow_addr
-            + challenges.beta_powers[7] * self.parent_fn_hash[0]
-            + challenges.beta_powers[8] * self.parent_fn_hash[1]
-            + challenges.beta_powers[9] * self.parent_fn_hash[2]
-            + challenges.beta_powers[10] * self.parent_fn_hash[3]
+        ParentContext {
+            ctx: Felt::from_u32(u32::from(self.parent_ctx)),
+            depth: Felt::from_u32(self.parent_stack_depth),
+            overflow: self.parent_next_overflow_addr,
+            fn_hash: self.parent_fn_hash.into(),
+        }
+        .encode(self.block_id, self.parent_id, is_loop, challenges)
     }
 }
 
@@ -928,9 +925,6 @@ impl OpGroupTableRow {
     /// Reduces this row to a single field element in the field specified by E. This requires
     /// at least 4 coefficients.
     pub fn to_value<E: ExtensionField<Felt>>(&self, challenges: &Challenges<E>) -> E {
-        challenges.alpha
-            + challenges.beta_powers[0] * self.batch_id
-            + challenges.beta_powers[1] * self.group_pos
-            + challenges.beta_powers[2] * self.group_value
+        challenges.encode(OP_GROUP_TABLE, [self.batch_id, self.group_pos, self.group_value])
     }
 }

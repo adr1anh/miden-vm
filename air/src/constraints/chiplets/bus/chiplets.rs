@@ -45,6 +45,8 @@ use crate::{
     },
     trace::{
         Challenges,
+        bus_interactions::CHIPLETS_BUS,
+        bus_messages,
         chiplets::{
             NUM_ACE_SELECTORS, NUM_KERNEL_ROM_SELECTORS,
             ace::{
@@ -346,14 +348,15 @@ fn compute_bitwise_request<AB: LiftedAirBuilder<F = Felt>>(
     is_xor: bool,
 ) -> AB::ExprEF {
     let label: Felt = if is_xor { BITWISE_XOR_LABEL } else { BITWISE_AND_LABEL };
-    let label: AB::Expr = AB::Expr::from(label);
 
-    // Stack values
-    let a: AB::Expr = local.stack[0].clone().into();
-    let b: AB::Expr = local.stack[1].clone().into();
-    let z: AB::Expr = next.stack[0].clone().into();
-
-    challenges.encode([label, a, b, z])
+    bus_messages::BitwiseMessage {
+        op_label: AB::Expr::from(label),
+        a: local.stack[0].clone().into(),
+        b: local.stack[1].clone().into(),
+        z: next.stack[0].clone().into(),
+        source: bus_messages::BitwiseSource::Chiplet,
+    }
+    .encode(challenges)
 }
 
 /// Computes the bitwise chiplet response message value.
@@ -376,12 +379,14 @@ fn compute_bitwise_response<AB: LiftedAirBuilder<F = Felt>>(
     let label = one_minus_sel * AB::Expr::from(BITWISE_AND_LABEL)
         + sel.clone() * AB::Expr::from(BITWISE_XOR_LABEL);
 
-    // Bitwise chiplet data columns (offset by bw_offset + bitwise internal indices)
-    let a: AB::Expr = local.chiplets[bw_offset + bitwise::A_COL_IDX].clone().into();
-    let b: AB::Expr = local.chiplets[bw_offset + bitwise::B_COL_IDX].clone().into();
-    let z: AB::Expr = local.chiplets[bw_offset + bitwise::OUTPUT_COL_IDX].clone().into();
-
-    challenges.encode([label, a, b, z])
+    bus_messages::BitwiseMessage {
+        op_label: label,
+        a: local.chiplets[bw_offset + bitwise::A_COL_IDX].clone().into(),
+        b: local.chiplets[bw_offset + bitwise::B_COL_IDX].clone().into(),
+        z: local.chiplets[bw_offset + bitwise::OUTPUT_COL_IDX].clone().into(),
+        source: bus_messages::BitwiseSource::Chiplet,
+    }
+    .encode(challenges)
 }
 
 // MEMORY MESSAGE HELPERS
@@ -405,35 +410,39 @@ fn compute_memory_word_request<AB: LiftedAirBuilder<F = Felt>>(
     } else {
         MEMORY_WRITE_WORD_LABEL
     };
-    let label: AB::Expr = AB::Expr::from_u16(label as u16);
-
-    // Context and clock from system columns
-    let ctx: AB::Expr = local.ctx.clone().into();
-    let clk: AB::Expr = local.clk.clone().into();
-
-    // Address is at stack[0]
-    let addr: AB::Expr = local.stack[0].clone().into();
 
     // Word values depend on read vs write
-    let (w0, w1, w2, w3) = if is_read {
+    let word = if is_read {
         // MLOADW: word comes from next stack state
-        (
+        [
             next.stack[0].clone().into(),
             next.stack[1].clone().into(),
             next.stack[2].clone().into(),
             next.stack[3].clone().into(),
-        )
+        ]
     } else {
         // MSTOREW: word comes from current stack[1..5]
-        (
+        [
             local.stack[1].clone().into(),
             local.stack[2].clone().into(),
             local.stack[3].clone().into(),
             local.stack[4].clone().into(),
-        )
+        ]
     };
 
-    challenges.encode([label, ctx, addr, clk, w0, w1, w2, w3])
+    bus_messages::MemoryWordMessage {
+        op_label: AB::Expr::from_u16(label as u16),
+        ctx: local.ctx.clone().into(),
+        addr: local.stack[0].clone().into(),
+        clk: local.clk.clone().into(),
+        word,
+        source: if is_read {
+            bus_messages::MemoryWordSource::Mloadw
+        } else {
+            bus_messages::MemoryWordSource::Mstorew
+        },
+    }
+    .encode(challenges)
 }
 
 /// Computes the memory element request message value.
@@ -450,14 +459,6 @@ fn compute_memory_element_request<AB: LiftedAirBuilder<F = Felt>>(
     } else {
         MEMORY_WRITE_ELEMENT_LABEL
     };
-    let label: AB::Expr = AB::Expr::from_u16(label as u16);
-
-    // Context and clock from system columns
-    let ctx: AB::Expr = local.ctx.clone().into();
-    let clk: AB::Expr = local.clk.clone().into();
-
-    // Address is at stack[0]
-    let addr: AB::Expr = local.stack[0].clone().into();
 
     // Element value
     let element = if is_read {
@@ -468,7 +469,19 @@ fn compute_memory_element_request<AB: LiftedAirBuilder<F = Felt>>(
         local.stack[1].clone().into()
     };
 
-    challenges.encode([label, ctx, addr, clk, element])
+    bus_messages::MemoryElementMessage {
+        op_label: AB::Expr::from_u16(label as u16),
+        ctx: local.ctx.clone().into(),
+        addr: local.stack[0].clone().into(),
+        clk: local.clk.clone().into(),
+        element,
+        source: if is_read {
+            bus_messages::MemoryElementSource::Mload
+        } else {
+            bus_messages::MemoryElementSource::Mstore
+        },
+    }
+    .encode(challenges)
 }
 
 /// Computes the MSTREAM request message value (two word reads).
@@ -499,7 +512,7 @@ fn compute_mstream_request<AB: LiftedAirBuilder<F = Felt>>(
         next.stack[7].clone().into(),
     ];
 
-    let msg1 = challenges.encode([
+    let msg1 = challenges.encode(CHIPLETS_BUS, [
         label.clone(),
         ctx.clone(),
         addr.clone(),
@@ -510,7 +523,7 @@ fn compute_mstream_request<AB: LiftedAirBuilder<F = Felt>>(
         word1[3].clone(),
     ]);
 
-    let msg2 = challenges.encode([
+    let msg2 = challenges.encode(CHIPLETS_BUS, [
         label,
         ctx,
         addr + four.clone(),
@@ -552,7 +565,7 @@ fn compute_pipe_request<AB: LiftedAirBuilder<F = Felt>>(
         next.stack[7].clone().into(),
     ];
 
-    let msg1 = challenges.encode([
+    let msg1 = challenges.encode(CHIPLETS_BUS, [
         label.clone(),
         ctx.clone(),
         addr.clone(),
@@ -563,7 +576,7 @@ fn compute_pipe_request<AB: LiftedAirBuilder<F = Felt>>(
         word1[3].clone(),
     ]);
 
-    let msg2 = challenges.encode([
+    let msg2 = challenges.encode(CHIPLETS_BUS, [
         label,
         ctx,
         addr + four.clone(),
@@ -595,7 +608,7 @@ fn compute_cryptostream_request<AB: LiftedAirBuilder<F = Felt>>(
     let cipher: [AB::Expr; 8] = core::array::from_fn(|i| next.stack[i].clone().into());
     let plain: [AB::Expr; 8] = core::array::from_fn(|i| cipher[i].clone() - rate[i].clone());
 
-    let read_msg1 = challenges.encode([
+    let read_msg1 = challenges.encode(CHIPLETS_BUS, [
         read_label.clone(),
         ctx.clone(),
         src.clone(),
@@ -606,7 +619,7 @@ fn compute_cryptostream_request<AB: LiftedAirBuilder<F = Felt>>(
         plain[3].clone(),
     ]);
 
-    let read_msg2 = challenges.encode([
+    let read_msg2 = challenges.encode(CHIPLETS_BUS, [
         read_label,
         ctx.clone(),
         src + four.clone(),
@@ -617,7 +630,7 @@ fn compute_cryptostream_request<AB: LiftedAirBuilder<F = Felt>>(
         plain[7].clone(),
     ]);
 
-    let write_msg1 = challenges.encode([
+    let write_msg1 = challenges.encode(CHIPLETS_BUS, [
         write_label.clone(),
         ctx.clone(),
         dst.clone(),
@@ -628,7 +641,7 @@ fn compute_cryptostream_request<AB: LiftedAirBuilder<F = Felt>>(
         cipher[3].clone(),
     ]);
 
-    let write_msg2 = challenges.encode([
+    let write_msg2 = challenges.encode(CHIPLETS_BUS, [
         write_label,
         ctx,
         dst + four,
@@ -659,9 +672,9 @@ fn compute_hornerbase_request<AB: LiftedAirBuilder<F = Felt>>(
     let eval0: AB::Expr = local.decoder[helper0_idx].clone().into();
     let eval1: AB::Expr = local.decoder[helper1_idx].clone().into();
 
-    let msg0 = challenges.encode([label.clone(), ctx.clone(), addr.clone(), clk.clone(), eval0]);
+    let msg0 = challenges.encode(CHIPLETS_BUS, [label.clone(), ctx.clone(), addr.clone(), clk.clone(), eval0]);
 
-    let msg1 = challenges.encode([label, ctx, addr + one, clk, eval1]);
+    let msg1 = challenges.encode(CHIPLETS_BUS, [label, ctx, addr + one, clk, eval1]);
 
     msg0 * msg1
 }
@@ -685,7 +698,7 @@ fn compute_hornerext_request<AB: LiftedAirBuilder<F = Felt>>(
         local.decoder[base + 3].clone().into(),
     ];
 
-    challenges.encode([
+    challenges.encode(CHIPLETS_BUS, [
         label,
         ctx,
         addr,
@@ -755,10 +768,10 @@ fn compute_memory_response<AB: LiftedAirBuilder<F = Felt>>(
 
     // Element access: include the selected element in the last slot.
     let element_msg =
-        challenges.encode([label.clone(), ctx.clone(), addr.clone(), clk.clone(), element]);
+        challenges.encode(CHIPLETS_BUS, [label.clone(), ctx.clone(), addr.clone(), clk.clone(), element]);
 
     // Word access: include all 4 values.
-    let word_msg = challenges.encode([label, ctx, addr, clk, v0, v1, v2, v3]);
+    let word_msg = challenges.encode(CHIPLETS_BUS, [label, ctx, addr, clk, v0, v1, v2, v3]);
 
     // Select based on is_word
     element_msg * is_element + word_msg * is_word
@@ -1142,7 +1155,7 @@ fn compute_hasher_message<AB: LiftedAirBuilder<F = Felt>>(
     node_index: AB::Expr,
     state: &[AB::Expr; 12],
 ) -> AB::ExprEF {
-    challenges.encode([
+    challenges.encode(CHIPLETS_BUS, [
         transition_label,
         addr,
         node_index,
@@ -1169,7 +1182,7 @@ fn compute_hasher_word_message<AB: LiftedAirBuilder<F = Felt>>(
     node_index: AB::Expr,
     word: &[AB::Expr; 4],
 ) -> AB::ExprEF {
-    challenges.encode([
+    challenges.encode(CHIPLETS_BUS, [
         transition_label,
         addr,
         node_index,
@@ -1188,7 +1201,7 @@ fn compute_hasher_rate_message<AB: LiftedAirBuilder<F = Felt>>(
     node_index: AB::Expr,
     rate: &[AB::Expr; 8],
 ) -> AB::ExprEF {
-    challenges.encode([
+    challenges.encode(CHIPLETS_BUS, [
         transition_label,
         addr,
         node_index,
@@ -1216,19 +1229,16 @@ fn compute_ace_request<AB: LiftedAirBuilder<F = Felt>>(
     local: &MainTraceRow<AB::Var>,
     challenges: &Challenges<AB::ExprEF>,
 ) -> AB::ExprEF {
-    // Label is ACE_INIT_LABEL
-    let label: AB::Expr = AB::Expr::from(ACE_INIT_LABEL);
-
-    // Context and clock from system columns
-    let ctx: AB::Expr = local.ctx.clone().into();
-    let clk: AB::Expr = local.clk.clone().into();
-
-    // Stack values
-    let ptr: AB::Expr = local.stack[0].clone().into();
-    let num_read_rows: AB::Expr = local.stack[1].clone().into();
-    let num_eval_rows: AB::Expr = local.stack[2].clone().into();
-
-    challenges.encode([label, clk, ctx, ptr, num_read_rows, num_eval_rows])
+    bus_messages::AceMessage {
+        op_label: AB::Expr::from(ACE_INIT_LABEL),
+        clk: local.clk.clone().into(),
+        ctx: local.ctx.clone().into(),
+        ptr: local.stack[0].clone().into(),
+        num_read_rows: local.stack[1].clone().into(),
+        num_eval_rows: local.stack[2].clone().into(),
+        source: bus_messages::AceSource::Request,
+    }
+    .encode(challenges)
 }
 
 /// Computes the ACE chiplet response message value.
@@ -1246,26 +1256,23 @@ fn compute_ace_response<AB: LiftedAirBuilder<F = Felt>>(
     local: &MainTraceRow<AB::Var>,
     challenges: &Challenges<AB::ExprEF>,
 ) -> AB::ExprEF {
-    // Label is ACE_INIT_LABEL
-    let label: AB::Expr = AB::Expr::from(ACE_INIT_LABEL);
-
     // Read values from ACE chiplet columns (offset by NUM_ACE_SELECTORS)
-    let clk: AB::Expr = local.chiplets[NUM_ACE_SELECTORS + CLK_IDX].clone().into();
-    let ctx: AB::Expr = local.chiplets[NUM_ACE_SELECTORS + CTX_IDX].clone().into();
-    let ptr: AB::Expr = local.chiplets[NUM_ACE_SELECTORS + PTR_IDX].clone().into();
-
-    // num_eval_rows = READ_NUM_EVAL_IDX value + 1
     let read_num_eval: AB::Expr =
         local.chiplets[NUM_ACE_SELECTORS + READ_NUM_EVAL_IDX].clone().into();
     let num_eval_rows: AB::Expr = read_num_eval + AB::Expr::ONE;
-
-    // id_0 from ID_0_IDX
     let id_0: AB::Expr = local.chiplets[NUM_ACE_SELECTORS + ID_0_IDX].clone().into();
-
-    // num_read_rows = id_0 + 1 - num_eval_rows
     let num_read_rows: AB::Expr = id_0 + AB::Expr::ONE - num_eval_rows.clone();
 
-    challenges.encode([label, clk, ctx, ptr, num_read_rows, num_eval_rows])
+    bus_messages::AceMessage {
+        op_label: AB::Expr::from(ACE_INIT_LABEL),
+        clk: local.chiplets[NUM_ACE_SELECTORS + CLK_IDX].clone().into(),
+        ctx: local.chiplets[NUM_ACE_SELECTORS + CTX_IDX].clone().into(),
+        ptr: local.chiplets[NUM_ACE_SELECTORS + PTR_IDX].clone().into(),
+        num_read_rows,
+        num_eval_rows,
+        source: bus_messages::AceSource::Chiplet,
+    }
+    .encode(challenges)
 }
 
 // KERNEL ROM MESSAGE HELPERS
@@ -1292,14 +1299,17 @@ fn compute_kernel_rom_response<AB: LiftedAirBuilder<F = Felt>>(
     let call_label: AB::Expr = AB::Expr::from(KERNEL_PROC_CALL_LABEL);
     let label: AB::Expr = s_first.clone() * init_label + (AB::Expr::ONE - s_first) * call_label;
 
-    // Kernel procedure digest (root0..root3) at columns 6, 7, 8, 9 relative to chiplets
-    // These are at NUM_KERNEL_ROM_SELECTORS + 1..5 (after s_first which is at +0)
-    let root0: AB::Expr = local.chiplets[NUM_KERNEL_ROM_SELECTORS + 1].clone().into();
-    let root1: AB::Expr = local.chiplets[NUM_KERNEL_ROM_SELECTORS + 2].clone().into();
-    let root2: AB::Expr = local.chiplets[NUM_KERNEL_ROM_SELECTORS + 3].clone().into();
-    let root3: AB::Expr = local.chiplets[NUM_KERNEL_ROM_SELECTORS + 4].clone().into();
-
-    challenges.encode([label, root0, root1, root2, root3])
+    bus_messages::KernelRomMessage {
+        op_label: label,
+        kernel_proc_digest: [
+            local.chiplets[NUM_KERNEL_ROM_SELECTORS + 1].clone().into(),
+            local.chiplets[NUM_KERNEL_ROM_SELECTORS + 2].clone().into(),
+            local.chiplets[NUM_KERNEL_ROM_SELECTORS + 3].clone().into(),
+            local.chiplets[NUM_KERNEL_ROM_SELECTORS + 4].clone().into(),
+        ],
+        source: bus_messages::KernelRomSource::Call,
+    }
+    .encode(challenges)
 }
 
 // CONTROL BLOCK REQUEST HELPERS
@@ -1463,7 +1473,7 @@ fn compute_syscall_request<AB: LiftedAirBuilder<F = Felt>>(
     let root3: AB::Expr = local.decoder[HASHER_STATE_RANGE.start + 3].clone().into();
 
     let label: AB::Expr = AB::Expr::from(KERNEL_PROC_CALL_LABEL);
-    let kernel_req = challenges.encode([label, root0, root1, root2, root3]);
+    let kernel_req = challenges.encode(CHIPLETS_BUS, [label, root0, root1, root2, root3]);
 
     control_req * kernel_req
 }
@@ -1605,7 +1615,7 @@ fn compute_fmp_write_request<AB: LiftedAirBuilder<F = Felt>>(
     let addr: AB::Expr = AB::Expr::from(FMP_ADDR);
     let element: AB::Expr = AB::Expr::from(FMP_INIT_VALUE);
 
-    challenges.encode([label, ctx, addr, clk, element])
+    challenges.encode(CHIPLETS_BUS, [label, ctx, addr, clk, element])
 }
 
 /// Computes the callee hash read request for DYN/DYNCALL.
@@ -1627,7 +1637,7 @@ fn compute_dyn_callee_hash_read<AB: LiftedAirBuilder<F = Felt>>(
     let w2: AB::Expr = local.decoder[HASHER_STATE_RANGE.start + 2].clone().into();
     let w3: AB::Expr = local.decoder[HASHER_STATE_RANGE.start + 3].clone().into();
 
-    challenges.encode([label, ctx, addr, clk, w0, w1, w2, w3])
+    challenges.encode(CHIPLETS_BUS, [label, ctx, addr, clk, w0, w1, w2, w3])
 }
 
 // MPVERIFY/MRUPDATE REQUEST HELPERS

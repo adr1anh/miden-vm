@@ -2072,10 +2072,7 @@ pub fn current_group_expected() -> Vec<EvalRecord> {
         EvalRecord {
             id: 411,
             namespace: "bus.boundary.first_row",
-            value: QuadFelt::new([
-                Felt::new(12010012593361720439),
-                Felt::new(12696089236309457996),
-            ]),
+            value: QuadFelt::new([Felt::new(12010012593361720439), Felt::new(12696089236309457996)]),
         },
         EvalRecord {
             id: 412,
@@ -2085,10 +2082,7 @@ pub fn current_group_expected() -> Vec<EvalRecord> {
         EvalRecord {
             id: 413,
             namespace: "bus.boundary.first_row",
-            value: QuadFelt::new([
-                Felt::new(14293326901983424168),
-                Felt::new(17664958916890505700),
-            ]),
+            value: QuadFelt::new([Felt::new(14293326901983424168), Felt::new(17664958916890505700)]),
         },
         EvalRecord {
             id: 414,
@@ -2133,18 +2127,12 @@ pub fn current_group_expected() -> Vec<EvalRecord> {
         EvalRecord {
             id: 422,
             namespace: "bus.boundary.last_row",
-            value: QuadFelt::new([
-                Felt::new(10901759410743368556),
-                Felt::new(10824838696757528120),
-            ]),
+            value: QuadFelt::new([Felt::new(10901759410743368556), Felt::new(10824838696757528120)]),
         },
         EvalRecord {
             id: 423,
             namespace: "bus.boundary.last_row",
-            value: QuadFelt::new([
-                Felt::new(11130917779834521749),
-                Felt::new(17051345074679664416),
-            ]),
+            value: QuadFelt::new([Felt::new(11130917779834521749), Felt::new(17051345074679664416)]),
         },
         EvalRecord {
             id: 424,
@@ -2154,51 +2142,42 @@ pub fn current_group_expected() -> Vec<EvalRecord> {
         EvalRecord {
             id: 425,
             namespace: "range.bus.transition",
-            value: QuadFelt::new([
-                Felt::new(10365289165200035540),
-                Felt::new(16469718665506609592),
-            ]),
+            value: QuadFelt::new([Felt::new(8145464270314545141), Felt::new(11679529784156812073)]),
         },
         EvalRecord {
             id: 426,
             namespace: "stack.overflow.bus.transition",
-            value: QuadFelt::new([Felt::new(7384164985445418427), Felt::new(3858806565449404456)]),
+            value: QuadFelt::new([Felt::new(3178099559199826303), Felt::new(360438665023687677)]),
         },
         EvalRecord {
             id: 427,
             namespace: "decoder.bus.p1.transition",
-            value: QuadFelt::new([
-                Felt::new(11611432650982424455),
-                Felt::new(10377793451000863001),
-            ]),
+            value: QuadFelt::new([Felt::new(4348623484954482308), Felt::new(11580857913348775843)]),
         },
         EvalRecord {
             id: 428,
             namespace: "decoder.bus.p2.transition",
-            value: QuadFelt::new([
-                Felt::new(15040597896341508305),
-                Felt::new(11465419388996005277),
-            ]),
+            value: QuadFelt::new([Felt::new(238015872092205005), Felt::new(6683781429349849558)]),
         },
         EvalRecord {
             id: 429,
             namespace: "decoder.bus.p3.transition",
-            value: QuadFelt::new([Felt::new(9395869302542898577), Felt::new(6472917827183803848)]),
+            value: QuadFelt::new([Felt::new(16268944929266534957), Felt::new(11030165880227538320)]),
         },
         EvalRecord {
             id: 430,
             namespace: "chiplets.bus.hash_kernel.transition",
-            value: QuadFelt::new([Felt::new(4291070431816775519), Felt::new(7576850277917859979)]),
+            value: QuadFelt::new([Felt::new(18268286519436224433), Felt::new(11831621392879786320)]),
         },
         EvalRecord {
             id: 431,
             namespace: "chiplets.bus.chiplets.transition",
-            value: QuadFelt::new([Felt::new(7990980974626587792), Felt::new(5675027937982935418)]),
+            value: QuadFelt::new([Felt::new(2243377083188409143), Felt::new(14187026268672314053)]),
         },
         EvalRecord {
             id: 432,
             namespace: "chiplets.bus.wiring.transition",
-            value: QuadFelt::new([Felt::new(7613678356270986878), Felt::new(10445474671979834467)]),
+            value: QuadFelt::new([Felt::new(17770077910327121168), Felt::new(13708106662941315627)]),
         },
         EvalRecord {
             id: 433,
@@ -2360,6 +2339,7 @@ pub fn current_group_expected() -> Vec<EvalRecord> {
             namespace: "public_inputs.stack_output",
             value: QuadFelt::new([Felt::new(2298685071572703448), Felt::new(0)]),
         },
+
     ]
 }
 

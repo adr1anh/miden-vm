@@ -3,8 +3,10 @@ use core::ops::Range;
 use chiplets::hasher::RATE_LEN;
 use miden_core::utils::range;
 
+pub mod bus_messages;
+
 mod challenges;
-pub use challenges::Challenges;
+pub use challenges::{Challenges, PartialMessage};
 
 pub mod chiplets;
 pub mod decoder;
@@ -188,47 +190,109 @@ pub const MAX_MESSAGE_WIDTH: usize = 16;
 /// Bus message coefficient indices.
 ///
 /// These define the standard positions for encoding bus messages using the pattern:
-/// `alpha + sum(beta_powers\[i\] * elem\[i\])` where:
-/// - `alpha` is the randomness base (accessed directly as `.alpha`)
-/// - `beta_powers\[i\] = beta^i` are the powers of beta
+/// `bus_prefix[BUS] + sum(alphas[i] * elem[i])` where:
+/// - `bus_prefix[BUS] = beta + BUS` is the per-bus domain separation constant
+/// - `alphas[i] = alpha^(i+1)` are the reduction coefficients
 ///
-/// These indices refer to positions in the `beta_powers` array, not including alpha.
+/// These indices refer to positions in the `alphas` array (powers of alpha, skipping 1).
 ///
 /// This layout is shared between:
 /// - AIR constraint builders (symbolic expressions): `Challenges<AB::ExprEF>`
 /// - Processor auxiliary trace builders (concrete field elements): `Challenges<E>`
 pub mod bus_message {
-    /// Label coefficient index: `beta_powers[0] = beta^0`.
+    /// Label coefficient index: `alphas[0] = alpha^1`.
     ///
     /// Used for transition type/operation label.
     pub const LABEL_IDX: usize = 0;
 
-    /// Address coefficient index: `beta_powers[1] = beta^1`.
+    /// Address coefficient index: `alphas[1] = alpha^2`.
     ///
     /// Used for chiplet address.
     pub const ADDR_IDX: usize = 1;
 
-    /// Node index coefficient index: `beta_powers[2] = beta^2`.
+    /// Node index coefficient index: `alphas[2] = alpha^3`.
     ///
     /// Used for Merkle path position. Set to 0 for non-Merkle operations (SPAN, RESPAN, HPERM,
     /// etc.).
     pub const NODE_INDEX_IDX: usize = 2;
 
-    /// State start coefficient index: `beta_powers[3] = beta^3`.
+    /// State start coefficient index: `alphas[3] = alpha^4`.
     ///
     /// Beginning of hasher state. Hasher state occupies 8 consecutive coefficients:
-    /// `beta_powers[3..11]` (beta^3..beta^10) for `state[0..7]` (rate portion: RATE0 || RATE1).
+    /// `alphas[3..11]` (alpha^4..alpha^11) for `state[0..7]` (rate portion: RATE0 || RATE1).
     pub const STATE_START_IDX: usize = 3;
 
-    /// Capacity start coefficient index: `beta_powers[11] = beta^11`.
+    /// Capacity start coefficient index: `alphas[11] = alpha^12`.
     ///
     /// Beginning of hasher capacity. Hasher capacity occupies 4 consecutive coefficients:
-    /// `beta_powers[11..15]` (beta^11..beta^14) for `capacity[0..3]`.
+    /// `alphas[11..15]` (alpha^12..alpha^15) for `capacity[0..3]`.
     pub const CAPACITY_START_IDX: usize = 11;
 
-    /// Capacity domain coefficient index: `beta_powers[12] = beta^12`.
+    /// Capacity domain coefficient index: `alphas[12] = alpha^13`.
     ///
     /// Second capacity element. Used for encoding operation-specific data (e.g., op_code in control
     /// block messages).
     pub const CAPACITY_DOMAIN_IDX: usize = CAPACITY_START_IDX + 1;
+}
+
+/// Bus interaction type constants for domain separation.
+///
+/// Each constant identifies a distinct type of bus interaction. When encoding a message,
+/// the bus interaction index is passed as a const generic to [`Challenges::encode`] or
+/// [`Challenges::encode_sparse`], which uses `bus_prefix[BUS] = beta + BUS` as the
+/// additive constant in the encoding.
+///
+/// This ensures that messages from different interaction types are always distinct,
+/// even if they use the same coefficient layout and labels. This is a prerequisite
+/// for switching to a unified/universal bus.
+pub mod bus_interactions {
+    /// All chiplet interactions: hasher, bitwise, memory, ACE, kernel ROM.
+    ///
+    /// Also used for ACE memory reads on the hash_kernel column, since these represent
+    /// the same logical memory interaction (same labels as regular memory reads/writes).
+    pub const CHIPLETS_BUS: usize = 0;
+
+    /// Block stack table (decoder p1): tracks control flow block nesting.
+    ///
+    /// Message layout (alpha indices):
+    /// `[block_id, parent_id, is_loop, ctx, depth, overflow, fn_hash[0..4]]`
+    pub const BLOCK_STACK_TABLE: usize = 1;
+
+    /// Column indices for [`BLOCK_STACK_TABLE`] messages.
+    pub mod block_stack_cols {
+        pub const BLOCK_ID: usize = 0;
+        pub const PARENT_ID: usize = 1;
+        pub const IS_LOOP: usize = 2;
+        pub const CTX: usize = 3;
+        pub const DEPTH: usize = 4;
+        pub const OVERFLOW: usize = 5;
+        pub const FN_HASH_0: usize = 6;
+        pub const FN_HASH_1: usize = 7;
+        pub const FN_HASH_2: usize = 8;
+        pub const FN_HASH_3: usize = 9;
+    }
+
+    /// Block hash table (decoder p2): tracks block digest computation.
+    pub const BLOCK_HASH_TABLE: usize = 2;
+
+    /// Op group table (decoder p3): tracks operation batch consumption.
+    pub const OP_GROUP_TABLE: usize = 3;
+
+    /// Stack overflow table: tracks stack elements pushed to overflow.
+    pub const STACK_OVERFLOW_TABLE: usize = 4;
+
+    /// Sibling table: shares Merkle tree sibling nodes between old/new root computations.
+    pub const SIBLING_TABLE: usize = 5;
+
+    /// Log-precompile transcript: tracks capacity state transitions for LOGPRECOMPILE.
+    pub const LOG_PRECOMPILE_TRANSCRIPT: usize = 6;
+
+    /// Range checker bus (LogUp): verifies values are in the valid range.
+    pub const RANGE_CHECK_BUS: usize = 7;
+
+    /// ACE wiring bus (LogUp): verifies arithmetic circuit wire connections.
+    pub const ACE_WIRING_BUS: usize = 8;
+
+    /// Total number of distinct bus interaction types.
+    pub const NUM_BUS_INTERACTIONS: usize = 9;
 }

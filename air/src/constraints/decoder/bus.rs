@@ -16,8 +16,8 @@
 //!
 //! ## Message encoding
 //! Each table message is encoded as:
-//! `alpha + sum_i beta^i * element[i]`
-//! This matches the multiset protocol used by the processor.
+//! `bus_prefix[BUS] + sum_i alpha^(i+1) * element[i]`
+//! with a unique bus interaction index per table for domain separation.
 //!
 //! ## References
 //! - Processor tables: `processor/src/decoder/aux_trace/block_stack_table.rs` (p1),
@@ -35,7 +35,12 @@ use crate::{
         op_flags::OpFlags,
         tagging::{TaggingAirBuilderExt, ids::TAG_DECODER_BUS_BASE},
     },
-    trace::Challenges,
+    trace::{
+        Challenges,
+        bus_interactions::{
+            BLOCK_HASH_TABLE, BLOCK_STACK_TABLE, OP_GROUP_TABLE, block_stack_cols,
+        },
+    },
 };
 
 // CONSTANTS
@@ -53,93 +58,6 @@ const DECODER_BUS_NAMES: [&str; 3] = [
 
 /// Weights for opcode bit decoding: b0 + 2*b1 + ... + 64*b6.
 const OP_BIT_WEIGHTS: [u16; 7] = [1, 2, 4, 8, 16, 32, 64];
-
-/// Encoders for block stack table (p1) messages.
-struct BlockStackEncoders<'a, AB: LiftedAirBuilder> {
-    challenges: &'a Challenges<AB::ExprEF>,
-}
-
-impl<'a, AB: LiftedAirBuilder> BlockStackEncoders<'a, AB> {
-    fn new(challenges: &'a Challenges<AB::ExprEF>) -> Self {
-        Self { challenges }
-    }
-
-    /// Encodes `[block_id, parent_id, is_loop]`.
-    fn simple(&self, block_id: &AB::Expr, parent_id: &AB::Expr, is_loop: &AB::Expr) -> AB::ExprEF {
-        self.challenges.encode([block_id.clone(), parent_id.clone(), is_loop.clone()])
-    }
-
-    /// Encodes `[block_id, parent_id, is_loop, ctx, depth, overflow, fn_hash[0..4]]`.
-    fn full(
-        &self,
-        block_id: &AB::Expr,
-        parent_id: &AB::Expr,
-        is_loop: &AB::Expr,
-        ctx: &AB::Expr,
-        depth: &AB::Expr,
-        overflow: &AB::Expr,
-        fh: &[AB::Expr; 4],
-    ) -> AB::ExprEF {
-        self.challenges.encode([
-            block_id.clone(),
-            parent_id.clone(),
-            is_loop.clone(),
-            ctx.clone(),
-            depth.clone(),
-            overflow.clone(),
-            fh[0].clone(),
-            fh[1].clone(),
-            fh[2].clone(),
-            fh[3].clone(),
-        ])
-    }
-}
-
-/// Encoder for block hash table (p2) messages.
-struct BlockHashEncoder<'a, AB: LiftedAirBuilder> {
-    challenges: &'a Challenges<AB::ExprEF>,
-}
-
-impl<'a, AB: LiftedAirBuilder> BlockHashEncoder<'a, AB> {
-    fn new(challenges: &'a Challenges<AB::ExprEF>) -> Self {
-        Self { challenges }
-    }
-
-    /// Encodes `[parent_id, hash[0..4], is_first_child, is_loop_body]`.
-    fn encode(
-        &self,
-        parent: &AB::Expr,
-        hash: [&AB::Expr; 4],
-        first_child: &AB::Expr,
-        loop_body: &AB::Expr,
-    ) -> AB::ExprEF {
-        self.challenges.encode([
-            parent.clone(),
-            hash[0].clone(),
-            hash[1].clone(),
-            hash[2].clone(),
-            hash[3].clone(),
-            first_child.clone(),
-            loop_body.clone(),
-        ])
-    }
-}
-
-/// Encoder for op group table (p3) messages.
-struct OpGroupEncoder<'a, AB: LiftedAirBuilder> {
-    challenges: &'a Challenges<AB::ExprEF>,
-}
-
-impl<'a, AB: LiftedAirBuilder> OpGroupEncoder<'a, AB> {
-    fn new(challenges: &'a Challenges<AB::ExprEF>) -> Self {
-        Self { challenges }
-    }
-
-    /// Encodes `[block_id, group_count, op_value]`.
-    fn encode(&self, block_id: &AB::Expr, group_count: &AB::Expr, value: &AB::Expr) -> AB::ExprEF {
-        self.challenges.encode([block_id.clone(), group_count.clone(), value.clone()])
-    }
-}
 
 /// Decoder column indices (relative to decoder trace).
 mod decoder_cols {
@@ -323,12 +241,6 @@ pub fn enforce_block_stack_table_constraint<AB>(
     ];
 
     // =========================================================================
-    // MESSAGE BUILDERS
-    // =========================================================================
-
-    let encoders = BlockStackEncoders::<AB>::new(challenges);
-
-    // =========================================================================
     // INSERTION CONTRIBUTIONS (v_xxx = f_xxx * message)
     // =========================================================================
 
@@ -344,43 +256,69 @@ pub fn enforce_block_stack_table_constraint<AB>(
     let is_dyncall = op_flags.dyncall();
     let is_end = op_flags.end();
 
-    // JOIN/SPLIT/SPAN/DYN: insert(addr', addr, 0, 0, 0, 0, 0, 0, 0, 0)
-    let msg_simple = encoders.simple(&addr_next, &addr_local, &zero);
+    use block_stack_cols::*;
+
+    // JOIN/SPLIT/SPAN/DYN (is_loop = 0)
+    let msg_simple = challenges.encode_sparse(
+        BLOCK_STACK_TABLE,
+        [BLOCK_ID, PARENT_ID],
+        [addr_next.clone(), addr_local.clone()],
+    );
     let v_join = msg_simple.clone() * is_join.clone();
     let v_split = msg_simple.clone() * is_split.clone();
     let v_span = msg_simple.clone() * is_span.clone();
     let v_dyn = msg_simple.clone() * is_dyn.clone();
 
-    // LOOP: insert(addr', addr, s0, 0, 0, 0, 0, 0, 0, 0)
-    let msg_loop = encoders.simple(&addr_next, &addr_local, &s0);
+    // LOOP (is_loop = s0)
+    let msg_loop = challenges.encode_sparse(
+        BLOCK_STACK_TABLE,
+        [BLOCK_ID, PARENT_ID, IS_LOOP],
+        [addr_next.clone(), addr_local.clone(), s0.clone()],
+    );
     let v_loop = msg_loop * is_loop.clone();
 
-    // RESPAN: insert(addr', h1', 0, 0, 0, 0, 0, 0, 0, 0)
-    let msg_respan_insert = encoders.simple(&addr_next, &h1_next, &zero);
+    // RESPAN (parent_id = h1', is_loop = 0)
+    let msg_respan_insert = challenges.encode_sparse(
+        BLOCK_STACK_TABLE,
+        [BLOCK_ID, PARENT_ID],
+        [addr_next.clone(), h1_next.clone()],
+    );
     let v_respan = msg_respan_insert * is_respan.clone();
 
-    // CALL/SYSCALL: insert(addr', addr, 0, ctx, fmp, b0, b1, fn_hash[0..4])
-    let msg_call = encoders.full(
-        &addr_next,
-        &addr_local,
-        &zero,
-        &ctx_local,
-        &b0_local,
-        &b1_local,
-        &fn_hash_local,
+    // CALL/SYSCALL (is_loop = 0)
+    let msg_call = challenges.encode_sparse(
+        BLOCK_STACK_TABLE,
+        [BLOCK_ID, PARENT_ID, CTX, DEPTH, OVERFLOW, FN_HASH_0, FN_HASH_1, FN_HASH_2, FN_HASH_3],
+        [
+            addr_next.clone(),
+            addr_local.clone(),
+            ctx_local.clone(),
+            b0_local.clone(),
+            b1_local.clone(),
+            fn_hash_local[0].clone(),
+            fn_hash_local[1].clone(),
+            fn_hash_local[2].clone(),
+            fn_hash_local[3].clone(),
+        ],
     );
     let v_call = msg_call.clone() * is_call.clone();
     let v_syscall = msg_call * is_syscall.clone();
 
-    // DYNCALL: insert(addr', addr, 0, ctx, h4, h5, fn_hash[0..4])
-    let msg_dyncall = encoders.full(
-        &addr_next,
-        &addr_local,
-        &zero,
-        &ctx_local,
-        &h4_local,
-        &h5_local,
-        &fn_hash_local,
+    // DYNCALL (is_loop = 0)
+    let msg_dyncall = challenges.encode_sparse(
+        BLOCK_STACK_TABLE,
+        [BLOCK_ID, PARENT_ID, CTX, DEPTH, OVERFLOW, FN_HASH_0, FN_HASH_1, FN_HASH_2, FN_HASH_3],
+        [
+            addr_next.clone(),
+            addr_local.clone(),
+            ctx_local.clone(),
+            h4_local.clone(),
+            h5_local.clone(),
+            fn_hash_local[0].clone(),
+            fn_hash_local[1].clone(),
+            fn_hash_local[2].clone(),
+            fn_hash_local[3].clone(),
+        ],
     );
     let v_dyncall = msg_dyncall * is_dyncall.clone();
 
@@ -406,28 +344,41 @@ pub fn enforce_block_stack_table_constraint<AB>(
     // REMOVAL CONTRIBUTIONS (u_xxx = f_xxx * message)
     // =========================================================================
 
-    // RESPAN removal: remove(addr, h1', 0, 0, 0, 0, 0, 0, 0, 0)
-    let msg_respan_remove = encoders.simple(&addr_local, &h1_next, &zero);
+    // RESPAN removal (parent_id = h1', is_loop = 0)
+    let msg_respan_remove = challenges.encode_sparse(
+        BLOCK_STACK_TABLE,
+        [BLOCK_ID, PARENT_ID],
+        [addr_local.clone(), h1_next.clone()],
+    );
     let u_respan = msg_respan_remove * is_respan.clone();
 
-    // END for simple blocks: remove(addr, addr', is_loop_flag, 0, 0, 0, 0, 0, 0, 0)
+    // END for simple blocks
     let is_simple_end = one.clone() - is_call_flag.clone() - is_syscall_flag.clone();
-    let msg_end_simple = encoders.simple(&addr_local, &addr_next, &is_loop_flag);
+    let msg_end_simple = challenges.encode_sparse(
+        BLOCK_STACK_TABLE,
+        [BLOCK_ID, PARENT_ID, IS_LOOP],
+        [addr_local.clone(), addr_next.clone(), is_loop_flag.clone()],
+    );
     let end_simple_gate = is_end.clone() * is_simple_end;
     let u_end_simple = msg_end_simple * end_simple_gate;
 
-    // END for CALL/SYSCALL: remove(addr, addr', is_loop_flag, ctx', b0', b1', fn_hash'[0..4])
-    // Note: The is_loop value is the is_loop_flag from the current row (same as simple END)
-    // Context values come from the next row's dedicated columns (not hasher state)
+    // END for CALL/SYSCALL
     let is_call_or_syscall = is_call_flag.clone() + is_syscall_flag.clone();
-    let msg_end_call = encoders.full(
-        &addr_local,
-        &addr_next,
-        &is_loop_flag,
-        &ctx_next,
-        &b0_next,
-        &b1_next,
-        &fn_hash_next,
+    let msg_end_call = challenges.encode_sparse(
+        BLOCK_STACK_TABLE,
+        [BLOCK_ID, PARENT_ID, IS_LOOP, CTX, DEPTH, OVERFLOW, FN_HASH_0, FN_HASH_1, FN_HASH_2, FN_HASH_3],
+        [
+            addr_local.clone(),
+            addr_next.clone(),
+            is_loop_flag.clone(),
+            ctx_next.clone(),
+            b0_next.clone(),
+            b1_next.clone(),
+            fn_hash_next[0].clone(),
+            fn_hash_next[1].clone(),
+            fn_hash_next[2].clone(),
+            fn_hash_next[3].clone(),
+        ],
     );
     let end_call_gate = is_end.clone() * is_call_or_syscall;
     let u_end_call = msg_end_call * end_call_gate;
@@ -576,12 +527,6 @@ pub fn enforce_block_hash_table_constraint<AB>(
     let is_first_child = one.clone() - is_not_first_child;
 
     // =========================================================================
-    // MESSAGE BUILDERS
-    // =========================================================================
-
-    let encoder = BlockHashEncoder::<AB>::new(challenges);
-
-    // =========================================================================
     // OPERATION FLAGS
     // =========================================================================
 
@@ -601,9 +546,25 @@ pub fn enforce_block_hash_table_constraint<AB>(
 
     // JOIN: Insert both children
     // Left child (is_first_child=1): hash from first half
-    let msg_join_left = encoder.encode(&parent_id, [&h0, &h1, &h2, &h3], &one, &zero);
+    let msg_join_left = challenges.encode(BLOCK_HASH_TABLE, [
+        parent_id.clone(),
+        h0.clone(),
+        h1.clone(),
+        h2.clone(),
+        h3.clone(),
+        one.clone(),
+        zero.clone(),
+    ]);
     // Right child (is_first_child=0): hash from second half
-    let msg_join_right = encoder.encode(&parent_id, [&h4, &h5, &h6, &h7], &zero, &zero);
+    let msg_join_right = challenges.encode(BLOCK_HASH_TABLE, [
+        parent_id.clone(),
+        h4.clone(),
+        h5.clone(),
+        h6.clone(),
+        h7.clone(),
+        zero.clone(),
+        zero.clone(),
+    ]);
     let v_join = (msg_join_left * msg_join_right) * is_join.clone();
 
     // SPLIT: Insert selected child based on s0
@@ -612,21 +573,52 @@ pub fn enforce_block_hash_table_constraint<AB>(
     let split_h1 = s0.clone() * h1.clone() + (one.clone() - s0.clone()) * h5.clone();
     let split_h2 = s0.clone() * h2.clone() + (one.clone() - s0.clone()) * h6.clone();
     let split_h3 = s0.clone() * h3.clone() + (one.clone() - s0.clone()) * h7.clone();
-    let msg_split =
-        encoder.encode(&parent_id, [&split_h0, &split_h1, &split_h2, &split_h3], &zero, &zero);
+    let msg_split = challenges.encode(BLOCK_HASH_TABLE, [
+        parent_id.clone(),
+        split_h0,
+        split_h1,
+        split_h2,
+        split_h3,
+        zero.clone(),
+        zero.clone(),
+    ]);
     let v_split = msg_split * is_split.clone();
 
     // LOOP: Conditionally insert body if s0=1
-    let msg_loop = encoder.encode(&parent_id, [&h0, &h1, &h2, &h3], &zero, &one);
+    let msg_loop = challenges.encode(BLOCK_HASH_TABLE, [
+        parent_id.clone(),
+        h0.clone(),
+        h1.clone(),
+        h2.clone(),
+        h3.clone(),
+        zero.clone(),
+        one.clone(),
+    ]);
     // When s0=1: insert msg_loop; when s0=0: multiply by 1 (no insertion)
     let v_loop = (msg_loop * s0.clone() + (one_ef.clone() - s0.clone())) * is_loop.clone();
 
     // REPEAT: Insert loop body
-    let msg_repeat = encoder.encode(&parent_id, [&h0, &h1, &h2, &h3], &zero, &one);
+    let msg_repeat = challenges.encode(BLOCK_HASH_TABLE, [
+        parent_id.clone(),
+        h0.clone(),
+        h1.clone(),
+        h2.clone(),
+        h3.clone(),
+        zero.clone(),
+        one.clone(),
+    ]);
     let v_repeat = msg_repeat * is_repeat.clone();
 
     // DYN/DYNCALL/CALL/SYSCALL: Insert child hash from first half
-    let msg_call_like = encoder.encode(&parent_id, [&h0, &h1, &h2, &h3], &zero, &zero);
+    let msg_call_like = challenges.encode(BLOCK_HASH_TABLE, [
+        parent_id.clone(),
+        h0.clone(),
+        h1.clone(),
+        h2.clone(),
+        h3.clone(),
+        zero.clone(),
+        zero.clone(),
+    ]);
     let v_dyn = msg_call_like.clone() * is_dyn.clone();
     let v_dyncall = msg_call_like.clone() * is_dyncall.clone();
     let v_call = msg_call_like.clone() * is_call.clone();
@@ -659,12 +651,15 @@ pub fn enforce_block_hash_table_constraint<AB>(
 
     // END: Remove the block
     // is_first_child is computed above from next row's opcode flags
-    let msg_end = encoder.encode(
-        &end_parent_id,
-        [&end_hash_0, &end_hash_1, &end_hash_2, &end_hash_3],
-        &is_first_child,
-        &is_loop_body_flag,
-    );
+    let msg_end = challenges.encode(BLOCK_HASH_TABLE, [
+        end_parent_id.clone(),
+        end_hash_0.clone(),
+        end_hash_1.clone(),
+        end_hash_2.clone(),
+        end_hash_3.clone(),
+        is_first_child.clone(),
+        is_loop_body_flag.clone(),
+    ]);
     let u_end = msg_end * is_end.clone();
 
     // Request side
@@ -792,12 +787,6 @@ pub fn enforce_op_group_table_constraint<AB>(
     let sp = to_expr(local.decoder[op_group_cols::IS_IN_SPAN].clone());
 
     // =========================================================================
-    // MESSAGE BUILDER
-    // =========================================================================
-
-    let encoder = OpGroupEncoder::<AB>::new(challenges);
-
-    // =========================================================================
     // OPERATION FLAGS
     // =========================================================================
 
@@ -834,13 +823,13 @@ pub fn enforce_op_group_table_constraint<AB>(
     // =========================================================================
 
     // Build messages for each group: v_i = msg(block_id', gc - i, h_i)
-    let v_1 = encoder.encode(&block_id_insert, &(gc.clone() - one.clone()), &h1);
-    let v_2 = encoder.encode(&block_id_insert, &(gc.clone() - two.clone()), &h2);
-    let v_3 = encoder.encode(&block_id_insert, &(gc.clone() - three.clone()), &h3);
-    let v_4 = encoder.encode(&block_id_insert, &(gc.clone() - four.clone()), &h4);
-    let v_5 = encoder.encode(&block_id_insert, &(gc.clone() - five.clone()), &h5);
-    let v_6 = encoder.encode(&block_id_insert, &(gc.clone() - six.clone()), &h6);
-    let v_7 = encoder.encode(&block_id_insert, &(gc.clone() - seven.clone()), &h7);
+    let v_1 = challenges.encode(OP_GROUP_TABLE, [block_id_insert.clone(), gc.clone() - one.clone(), h1]);
+    let v_2 = challenges.encode(OP_GROUP_TABLE, [block_id_insert.clone(), gc.clone() - two.clone(), h2]);
+    let v_3 = challenges.encode(OP_GROUP_TABLE, [block_id_insert.clone(), gc.clone() - three.clone(), h3]);
+    let v_4 = challenges.encode(OP_GROUP_TABLE, [block_id_insert.clone(), gc.clone() - four.clone(), h4]);
+    let v_5 = challenges.encode(OP_GROUP_TABLE, [block_id_insert.clone(), gc.clone() - five.clone(), h5]);
+    let v_6 = challenges.encode(OP_GROUP_TABLE, [block_id_insert.clone(), gc.clone() - six.clone(), h6]);
+    let v_7 = challenges.encode(OP_GROUP_TABLE, [block_id_insert.clone(), gc.clone() - seven.clone(), h7]);
 
     // Compute products for each batch size
     let prod_3 = v_1.clone() * v_2.clone() * v_3.clone();
@@ -879,7 +868,7 @@ pub fn enforce_op_group_table_constraint<AB>(
     let group_value = is_push.clone() * s0_next + (one.clone() - is_push) * group_value_non_push;
 
     // Removal message: u = msg(block_id, gc, group_value)
-    let u = encoder.encode(&block_id_remove, &gc, &group_value);
+    let u = challenges.encode(OP_GROUP_TABLE, [block_id_remove.clone(), gc.clone(), group_value]);
 
     // Request formula: f_dg * u + (1 - f_dg)
     let request = u * f_dg.clone() + (one_ef.clone() - f_dg);

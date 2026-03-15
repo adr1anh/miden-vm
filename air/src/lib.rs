@@ -361,7 +361,8 @@ fn program_hash_message<EF: ExtensionField<Felt>>(
     challenges: &trace::Challenges<EF>,
     program_hash: &Word,
 ) -> EF {
-    challenges.encode([
+    use trace::bus_interactions::BLOCK_HASH_TABLE;
+    challenges.encode(BLOCK_HASH_TABLE, [
         Felt::ZERO, // parent_id = 0 (root block)
         program_hash[0],
         program_hash[1],
@@ -381,9 +382,10 @@ fn transcript_messages<EF: ExtensionField<Felt>>(
     challenges: &trace::Challenges<EF>,
     final_state: PrecompileTranscriptState,
 ) -> (EF, EF) {
+    use trace::bus_interactions::LOG_PRECOMPILE_TRANSCRIPT;
     let encode = |state: PrecompileTranscriptState| {
         let cap: &[Felt] = state.as_ref();
-        challenges.encode([
+        challenges.encode(LOG_PRECOMPILE_TRANSCRIPT, [
             Felt::from_u8(trace::LOG_PRECOMPILE_LABEL),
             cap[0],
             cap[1],
@@ -402,7 +404,8 @@ fn kernel_proc_message<EF: ExtensionField<Felt>>(
     challenges: &trace::Challenges<EF>,
     digest: &Word,
 ) -> EF {
-    challenges.encode([
+    use trace::bus_interactions::CHIPLETS_BUS;
+    challenges.encode(CHIPLETS_BUS, [
         trace::chiplets::kernel_rom::KERNEL_PROC_INIT_LABEL,
         digest[0],
         digest[1],

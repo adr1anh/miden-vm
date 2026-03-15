@@ -1,24 +1,31 @@
 //! Unified bus challenge encoding.
 //!
 //! Provides [`Challenges`], a single struct for encoding multiset/LogUp bus messages
-//! as `alpha + <beta, message>`. This type is used by:
+//! with per-bus domain separation. Each message is encoded as:
+//! `bus_prefix[bus] + <alphas, message>`
 //!
+//! Where:
+//! - `bus_prefix[bus] = beta + bus` provides unique domain separation per bus interaction type
+//! - `alphas[i] = alpha^(i+1)` are the reduction coefficients (skipping 1)
+//!
+//! This type is used by:
 //! - **AIR constraints** (symbolic expressions): `Challenges<AB::ExprEF>`
 //! - **Processor aux trace builders** (concrete field elements): `Challenges<E>`
 //! - **Verifier** (`reduced_aux_values`): `Challenges<EF>`
 //!
 //! See [`super::bus_message`] for the standard coefficient index layout.
+//! See [`super::bus_interactions`] for the bus interaction type constants.
 
 use core::ops::{AddAssign, Mul};
 
 use miden_core::field::PrimeCharacteristicRing;
 
-use super::MAX_MESSAGE_WIDTH;
+use super::{MAX_MESSAGE_WIDTH, bus_interactions::NUM_BUS_INTERACTIONS};
 
-/// Encodes multiset/LogUp contributions as **alpha + <beta, message>**.
+/// Encodes multiset/LogUp contributions as **bus_prefix\[bus\] + \<alphas, message\>**.
 ///
-/// - `alpha`: randomness base
-/// - `beta_powers`: precomputed powers `[beta^0, beta^1, ..., beta^(MAX_MESSAGE_WIDTH-1)]`
+/// - `alphas`: precomputed powers `[alpha^1, alpha^2, ..., alpha^MAX_MESSAGE_WIDTH]`
+/// - `bus_prefix`: precomputed per-bus domain separation values `[beta+0, beta+1, ..., beta+B]`
 ///
 /// The challenges are derived from permutation randomness:
 /// - `alpha = challenges[0]`
@@ -26,53 +33,158 @@ use super::MAX_MESSAGE_WIDTH;
 ///
 /// Precomputed once and passed by reference to all bus components.
 pub struct Challenges<EF: PrimeCharacteristicRing> {
-    pub alpha: EF,
-    pub beta_powers: [EF; MAX_MESSAGE_WIDTH],
+    alphas: [EF; MAX_MESSAGE_WIDTH],
+    bus_prefix: [EF; NUM_BUS_INTERACTIONS],
 }
 
 impl<EF: PrimeCharacteristicRing> Challenges<EF> {
-    /// Builds `alpha` and precomputed `beta` powers.
+    /// Builds precomputed `alpha` powers and `bus_prefix` values.
+    ///
+    /// - `alphas[i] = alpha^(i+1)` for i in 0..MAX_MESSAGE_WIDTH
+    /// - `bus_prefix[i] = beta + i` for i in 0..NUM_BUS_INTERACTIONS
     pub fn new(alpha: EF, beta: EF) -> Self {
-        let mut beta_powers = core::array::from_fn(|_| EF::ONE);
-        for i in 1..MAX_MESSAGE_WIDTH {
-            beta_powers[i] = beta_powers[i - 1].clone() * beta.clone();
-        }
-        Self { alpha, beta_powers }
+        let alphas = {
+            let mut arr: [EF; MAX_MESSAGE_WIDTH] = core::array::from_fn(|_| EF::ONE);
+            arr[0] = alpha.clone();
+            for i in 1..MAX_MESSAGE_WIDTH {
+                arr[i] = arr[i - 1].clone() * alpha.clone();
+            }
+            arr
+        };
+        let bus_prefix = core::array::from_fn(|i| beta.clone() + EF::from_u32(i as u32));
+        Self { alphas, bus_prefix }
     }
 
-    /// Encodes as **alpha + sum(beta_powers\[i\] * elem\[i\])** with K consecutive elements.
+    /// Encodes as **bus_prefix\[bus\] + sum(alphas\[i\] * elem\[i\])** with K consecutive elements.
+    ///
+    /// The `bus` parameter selects the bus interaction type for domain separation.
     #[inline(always)]
-    pub fn encode<BF, const K: usize>(&self, elems: [BF; K]) -> EF
+    pub fn encode<BF, const K: usize>(&self, bus: usize, elems: [BF; K]) -> EF
     where
         EF: Mul<BF, Output = EF> + AddAssign,
         BF: Clone,
     {
-        const { assert!(K <= MAX_MESSAGE_WIDTH, "Message length exceeds beta_powers capacity") };
-        let mut acc = self.alpha.clone();
+        debug_assert!(K <= MAX_MESSAGE_WIDTH, "Message length exceeds alphas capacity");
+        debug_assert!(bus < NUM_BUS_INTERACTIONS, "Bus index exceeds bus_prefix capacity");
+        let mut acc = self.bus_prefix[bus].clone();
         for (i, elem) in elems.iter().enumerate() {
-            acc += self.beta_powers[i].clone() * elem.clone();
+            acc += self.alphas[i].clone() * elem.clone();
         }
         acc
     }
 
-    /// Encodes as **alpha + sum(beta_powers\[layout\[i\]\] * values\[i\])** using sparse positions.
+    /// Encodes as **bus_prefix\[bus\] + sum(alphas\[layout\[i\]\] * values\[i\])** using sparse
+    /// positions.
+    ///
+    /// The `bus` parameter selects the bus interaction type for domain separation.
     #[inline(always)]
-    pub fn encode_sparse<BF, const K: usize>(&self, layout: [usize; K], values: [BF; K]) -> EF
+    pub fn encode_sparse<BF, const K: usize>(
+        &self,
+        bus: usize,
+        layout: [usize; K],
+        values: [BF; K],
+    ) -> EF
     where
         EF: Mul<BF, Output = EF> + AddAssign,
         BF: Clone,
     {
-        let mut acc = self.alpha.clone();
+        debug_assert!(bus < NUM_BUS_INTERACTIONS, "Bus index exceeds bus_prefix capacity");
+        let mut acc = self.bus_prefix[bus].clone();
         for i in 0..K {
             let idx = layout[i];
             debug_assert!(
-                idx < self.beta_powers.len(),
-                "encode_sparse index {} exceeds beta_powers length ({})",
+                idx < self.alphas.len(),
+                "encode_sparse index {} exceeds alphas length ({})",
                 idx,
-                self.beta_powers.len()
+                self.alphas.len()
             );
-            acc += self.beta_powers[idx].clone() * values[i].clone();
+            acc += self.alphas[idx].clone() * values[i].clone();
         }
         acc
     }
+
+    /// Creates a partial message by precomputing the bus prefix plus a subset of alpha-reduced
+    /// values.
+    ///
+    /// Returns a [`PartialMessage`] that can be extended with additional elements via
+    /// [`extend`](Self::extend).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let partial = challenges.partial(CHIPLETS_BUS, [0, 1], [label, addr]);
+    /// let full = challenges.extend(&partial, [2, 3], [val0, val1]);
+    /// ```
+    #[inline(always)]
+    pub fn partial<BF, const M: usize>(
+        &self,
+        bus: usize,
+        indices: [usize; M],
+        values: [BF; M],
+    ) -> PartialMessage<EF, M>
+    where
+        EF: Mul<BF, Output = EF> + AddAssign,
+        BF: Clone,
+    {
+        debug_assert!(bus < NUM_BUS_INTERACTIONS, "Bus index exceeds bus_prefix capacity");
+        let mut acc = self.bus_prefix[bus].clone();
+        for i in 0..M {
+            debug_assert!(
+                indices[i] < self.alphas.len(),
+                "partial index {} exceeds alphas length ({})",
+                indices[i],
+                self.alphas.len()
+            );
+            acc += self.alphas[indices[i]].clone() * values[i].clone();
+        }
+        PartialMessage {
+            value: acc,
+            used_indices: indices,
+        }
+    }
+
+    /// Extends a partial message with additional alpha-reduced elements.
+    ///
+    /// In debug mode, asserts that none of the new indices overlap with previously used indices.
+    #[inline(always)]
+    pub fn extend<BF, const M: usize, const N: usize>(
+        &self,
+        partial: &PartialMessage<EF, M>,
+        indices: [usize; N],
+        values: [BF; N],
+    ) -> EF
+    where
+        EF: Mul<BF, Output = EF> + AddAssign,
+        BF: Clone,
+    {
+        #[cfg(debug_assertions)]
+        for new_idx in &indices {
+            debug_assert!(
+                !partial.used_indices.contains(new_idx),
+                "extend index {} overlaps with partial message indices {:?}",
+                new_idx,
+                partial.used_indices
+            );
+        }
+        let mut acc = partial.value.clone();
+        for i in 0..N {
+            debug_assert!(
+                indices[i] < self.alphas.len(),
+                "extend index {} exceeds alphas length ({})",
+                indices[i],
+                self.alphas.len()
+            );
+            acc += self.alphas[indices[i]].clone() * values[i].clone();
+        }
+        acc
+    }
+}
+
+/// A partially-encoded bus message.
+///
+/// Stores the accumulated value (bus prefix + partial alpha reduction) and the indices
+/// already used, enabling `debug_assert` checks against overlapping indices in
+/// [`Challenges::extend`].
+pub struct PartialMessage<EF: PrimeCharacteristicRing, const M: usize> {
+    value: EF,
+    used_indices: [usize; M],
 }
