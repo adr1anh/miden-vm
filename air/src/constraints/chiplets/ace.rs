@@ -226,7 +226,7 @@ pub fn enforce_ace_constraints_all_rows<AB>(
 
     // op must be -1, 0, or 1: op * (op - 1) * (op + 1) = 0
     builder.assert_zero(
-        ace_flag.clone() * f_eval.clone() * op.clone() * (op.clone() + F_1) * (op.clone() + F_1),
+        ace_flag.clone() * f_eval.clone() * op.clone() * (op.clone() - F_1) * (op.clone() + F_1),
     );
 
     // Arithmetic operation constraints
