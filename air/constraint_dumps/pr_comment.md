@@ -2,17 +2,17 @@
 
 ## Constraint Equivalence Report
 
-**Last updated:** 2026-03-26 14:07 UTC  
-**Range:** `f7c294c441..a105bd53e9` (50 commits)
+**Last updated:** 2026-03-26 17:26 UTC  
+**Range:** `f7c294c441..9662896aba` (52 commits)
 
 ### Summary
 
 | Metric | Value |
 |--------|-------|
-| Commits analyzed | 50 |
-| Pairs with changes | **8** |
-| Pairs verified equivalent | 41 |
-| Total constraints updated | 110 |
+| Commits analyzed | 52 |
+| Pairs with changes | **9** |
+| Pairs verified equivalent | 42 |
+| Total constraints updated | 114 |
 | Total constraints added | 5 |
 
 ### Changes
@@ -194,8 +194,8 @@
 |------------|--------|
 | [`chiplets/ace.rs`](https://github.com/0xMiden/miden-vm/blob/9cdaaf575b/air/src/constraints/chiplets/ace.rs#L108) `.assert_zero(f_read_next.clone());` | ace.rs:132→108. Sign flip: `assert_one(sblock_next)` → `assert_zero(f_read_next)` where `f_read_next = 1 - sblock_next`. `assert_one(x)` = `assert_zero(1-x)`. Equivalent. |
 | [`ext_field.rs`](https://github.com/0xMiden/miden-vm/blob/9cdaaf575b/air/src/constraints/ext_field.rs#L154) `self.assert_eq(lhs.1, rhs.1);` | ACE shared columns restructured from flat `shared[10]` array to named fields with `QuadFeltExpr<T>`. 4 of 7 constraints moved into `assert_eq_quad()` via `QuadFeltAirBuilder` — source extraction artifact shows `self.assert_eq(lhs.N, rhs.N)` at ext_field.rs instead of the call site. The underlying assertions are identical: per-component `assert_eq` / `assert_zero` pairs, with the gate changed from `ace_flag * f_end` to `is_last + is_transition * sstart_next` (see per-constraint entries below for gate equivalence). Equivalent. |
-| [`ext_field.rs`](https://github.com/0xMiden/miden-vm/blob/9cdaaf575b/air/src/constraints/ext_field.rs#L155) `self.assert_eq(lhs.1, rhs.1);` | ACE shared columns restructured from flat `shared[10]` array to named fields with `QuadFeltExpr<T>`. 4 of 7 constraints moved into `assert_eq_quad()` via `QuadFeltAirBuilder` — source extraction artifact shows `self.assert_eq(lhs.N, rhs.N)` at ext_field.rs instead of the call site. The underlying assertions are identical: per-component `assert_eq` / `assert_zero` pairs, with the gate changed from `ace_flag * f_end` to `is_last + is_transition * sstart_next` (see per-constraint entries below for gate equivalence). Equivalent. |
 | [`ext_field.rs`](https://github.com/0xMiden/miden-vm/blob/9cdaaf575b/air/src/constraints/ext_field.rs#L154) `self.assert_eq(lhs.1, rhs.1);` | ACE shared columns restructured from flat `shared[10]` array to named fields with `QuadFeltExpr<T>`. 4 of 7 constraints moved into `assert_eq_quad()` via `QuadFeltAirBuilder` — source extraction artifact shows `self.assert_eq(lhs.N, rhs.N)` at ext_field.rs instead of the call site. The underlying assertions are identical: per-component `assert_eq` / `assert_zero` pairs, with the gate changed from `ace_flag * f_end` to `is_last + is_transition * sstart_next` (see per-constraint entries below for gate equivalence). Equivalent. |
+| [`ext_field.rs`](https://github.com/0xMiden/miden-vm/blob/9cdaaf575b/air/src/constraints/ext_field.rs#L155) `self.assert_eq(lhs.1, rhs.1);` | ACE shared columns restructured from flat `shared[10]` array to named fields with `QuadFeltExpr<T>`. 4 of 7 constraints moved into `assert_eq_quad()` via `QuadFeltAirBuilder` — source extraction artifact shows `self.assert_eq(lhs.N, rhs.N)` at ext_field.rs instead of the call site. The underlying assertions are identical: per-component `assert_eq` / `assert_zero` pairs, with the gate changed from `ace_flag * f_end` to `is_last + is_transition * sstart_next` (see per-constraint entries below for gate equivalence). Equivalent. |
 | [`ext_field.rs`](https://github.com/0xMiden/miden-vm/blob/9cdaaf575b/air/src/constraints/ext_field.rs#L155) `self.assert_eq(lhs.1, rhs.1);` | ACE shared columns restructured from flat `shared[10]` array to named fields with `QuadFeltExpr<T>`. 4 of 7 constraints moved into `assert_eq_quad()` via `QuadFeltAirBuilder` — source extraction artifact shows `self.assert_eq(lhs.N, rhs.N)` at ext_field.rs instead of the call site. The underlying assertions are identical: per-component `assert_eq` / `assert_zero` pairs, with the gate changed from `ace_flag * f_end` to `is_last + is_transition * sstart_next` (see per-constraint entries below for gate equivalence). Equivalent. |
 | [`chiplets/ace.rs`](https://github.com/0xMiden/miden-vm/blob/9cdaaf575b/air/src/constraints/chiplets/ace.rs#L202) `builder.assert_zero(f_read);` | ACE shared columns restructured from flat `shared[10]` array to named fields with `QuadFeltExpr<T>`. 4 of 7 constraints moved into `assert_eq_quad()` via `QuadFeltAirBuilder` — source extraction artifact shows `self.assert_eq(lhs.N, rhs.N)` at ext_field.rs instead of the call site. The underlying assertions are identical: per-component `assert_eq` / `assert_zero` pairs, with the gate changed from `ace_flag * f_end` to `is_last + is_transition * sstart_next` (see per-constraint entries below for gate equivalence). Equivalent. |
 | [`chiplets/ace.rs`](https://github.com/0xMiden/miden-vm/blob/9cdaaf575b/air/src/constraints/chiplets/ace.rs#L208) `builder.assert_zero(local.id_0);` | ace.rs:210→208. Column rename: `assert_zero(id0)` → `assert_zero(local.id_0)`. Same column (`shared[0]` = `id_0`). Gate changed from `ace_flag * f_end` to new `f_end` (see be0e→820472 entry for gate equivalence proof). Equivalent. |
@@ -213,3 +213,16 @@
 | [`chiplets/kernel_rom.rs`](https://github.com/0xMiden/miden-vm/blob/a105bd53e9/air/src/constraints/chiplets/kernel_rom.rs#L63) `builder.assert_eq(krom_next.root[2], krom.root[2]);` | kernel_rom.rs:70-73→62-65. Identical assertion expressions (`assert_eq(krom_next.root[i], krom.root[i])`); fingerprints changed because the upstream gate lost a redundant `(1 - s4')` factor. Old gate: `flags.is_transition * (1 - s4') * (1 - s_first')`. New gate: `flags.is_transition * (1 - s_first')`. Since `flags.is_transition` for kernel_rom already includes `(1 - s4')` (from selectors.rs:193: `kernel_rom_transition = is_transition_flag * s0123 * not_s4_next`), the old code was squaring `(1 - s4')²` which equals `(1 - s4')` on binary values. Polynomial changed (lost squared factor) but semantically equivalent on valid traces. |
 | [`chiplets/kernel_rom.rs`](https://github.com/0xMiden/miden-vm/blob/a105bd53e9/air/src/constraints/chiplets/kernel_rom.rs#L64) `builder.assert_eq(krom_next.root[3], krom.root[3]);` | kernel_rom.rs:70-73→62-65. Identical assertion expressions (`assert_eq(krom_next.root[i], krom.root[i])`); fingerprints changed because the upstream gate lost a redundant `(1 - s4')` factor. Old gate: `flags.is_transition * (1 - s4') * (1 - s_first')`. New gate: `flags.is_transition * (1 - s_first')`. Since `flags.is_transition` for kernel_rom already includes `(1 - s4')` (from selectors.rs:193: `kernel_rom_transition = is_transition_flag * s0123 * not_s4_next`), the old code was squaring `(1 - s4')²` which equals `(1 - s4')` on binary values. Polynomial changed (lost squared factor) but semantically equivalent on valid traces. |
 | [`chiplets/kernel_rom.rs`](https://github.com/0xMiden/miden-vm/blob/a105bd53e9/air/src/constraints/chiplets/kernel_rom.rs#L65) `builder.assert_eq(krom_next.root[3], krom.root[3]);` | kernel_rom.rs:70-73→62-65. Identical assertion expressions (`assert_eq(krom_next.root[i], krom.root[i])`); fingerprints changed because the upstream gate lost a redundant `(1 - s4')` factor. Old gate: `flags.is_transition * (1 - s4') * (1 - s_first')`. New gate: `flags.is_transition * (1 - s_first')`. Since `flags.is_transition` for kernel_rom already includes `(1 - s4')` (from selectors.rs:193: `kernel_rom_transition = is_transition_flag * s0123 * not_s4_next`), the old code was squaring `(1 - s4')²` which equals `(1 - s4')` on binary values. Polynomial changed (lost squared factor) but semantically equivalent on valid traces. |
+
+#### `9662896aba` refactor: simplify op_flags with bit-selector pattern and iterative expansion ([diff](https://github.com/0xMiden/miden-vm/compare/d920e0cf77...9662896aba))
+
+> 4 updated | 466 unchanged
+
+**Updated:**
+
+| Expression |
+|------------|
+| [`stack/general.rs`](https://github.com/0xMiden/miden-vm/blob/9662896aba/air/src/constraints/stack/general.rs#L76) `builder.when_transition().assert_zero(actual * flag_sum - expected);` |
+| [`stack/general.rs`](https://github.com/0xMiden/miden-vm/blob/9662896aba/air/src/constraints/stack/general.rs#L76) `builder.when_transition().assert_zero(actual * flag_sum - expected);` |
+| [`stack/general.rs`](https://github.com/0xMiden/miden-vm/blob/9662896aba/air/src/constraints/stack/general.rs#L76) `builder.when_transition().assert_zero(actual * flag_sum - expected);` |
+| [`stack/general.rs`](https://github.com/0xMiden/miden-vm/blob/9662896aba/air/src/constraints/stack/general.rs#L76) `builder.when_transition().assert_zero(actual * flag_sum - expected);` |

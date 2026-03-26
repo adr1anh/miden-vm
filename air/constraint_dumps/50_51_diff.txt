@@ -1,0 +1,16 @@
+d920e0cf77 -> 9662896aba: refactor: simplify op_flags with bit-selector pattern and iterative expansion
+Unchanged: 466 | Updated: 4 | Removed: 0 | Added: 0
+
+UPDATED:
+    src/constraints/stack/general.rs:76 -> src/constraints/stack/general.rs:76
+      - builder.when_transition().assert_zero(actual * flag_sum - expected);
+      + builder.when_transition().assert_zero(actual * flag_sum - expected);
+    src/constraints/stack/general.rs:76 -> src/constraints/stack/general.rs:76
+      - builder.when_transition().assert_zero(actual * flag_sum - expected);
+      + builder.when_transition().assert_zero(actual * flag_sum - expected);
+    src/constraints/stack/general.rs:76 -> src/constraints/stack/general.rs:76
+      - builder.when_transition().assert_zero(actual * flag_sum - expected);
+      + builder.when_transition().assert_zero(actual * flag_sum - expected);
+    src/constraints/stack/general.rs:76 -> src/constraints/stack/general.rs:76
+      - builder.when_transition().assert_zero(actual * flag_sum - expected);
+      + builder.when_transition().assert_zero(actual * flag_sum - expected);
