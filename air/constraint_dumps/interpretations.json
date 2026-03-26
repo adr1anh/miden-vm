@@ -1,8 +1,33 @@
 {
   "94b25974d5": [
     {
-      "group_remark": "`ChipletSelectors` struct threaded as parameter. 18 constraints affected in 3 sub-groups: (A) 4 in ace.rs where inline `ace_flag * flag_ace_last` / `ace_flag * flag_ace_next` / `is_transition * ace_flag` products replaced by precomputed `ace_last` / `ace_transition`; (B) 1 in kernel_rom.rs where `when_transition()` folded into the precomputed `flag_next_row_first_kernel_rom` which now includes the transition factor; (C) 13 in ace.rs, kernel_rom.rs, memory.rs with identical source expressions — fingerprints changed because the scoped builder's gate was recomputed using `ChipletSelectors` products. All 18 are semantically equivalent.",
+      "group_remark": "Identical assertion expressions; fingerprints changed because scoped builder gates were recomputed using precomputed `ChipletSelectors` products instead of inline `ace_flag * ...` / `is_transition * ...` expressions. 13 of 18 constraints fall into this category across ace.rs (5), kernel_rom.rs (4), memory.rs (4). Equivalent.",
       "applies_to": "all"
+    },
+    {
+      "old_fp": "base:c8c1f7e39b1166f2",
+      "new_fp": "base:08bd3e06b0eff07e",
+      "remark": "ace.rs:161→136. Gate recomputed: `ace_flag * flag_ace_last * sstart` → `ace_last * sstart`. `ace_last` is precomputed as `is_ace * s_n'`, replacing the inline `ace_flag * flag_ace_last` product. Equivalent."
+    },
+    {
+      "old_fp": "base:608a05cea8c4fd5a",
+      "new_fp": "base:bbe5003e9fda8b14",
+      "remark": "ace.rs:163→138. Gate recomputed: `ace_flag * flag_ace_next * sstart * sstart_next` → `ace_transition * sstart * sstart_next`. `ace_transition` replaces `ace_flag * flag_ace_next`. Equivalent."
+    },
+    {
+      "old_fp": "base:d331355ed1b67f6d",
+      "new_fp": "base:33cd4a4cdfe025b7",
+      "remark": "ace.rs:169→142. Gate recomputed: `ace_flag * flag_ace_next * f_next * sblock * sblock_next.not()` → `ace_transition * f_next * sblock * sblock_next.not()`. Same substitution as :163. Equivalent."
+    },
+    {
+      "old_fp": "base:c8b0db0c6889536d",
+      "new_fp": "base:38e7ed15d915a726",
+      "remark": "ace.rs:220→188. Gate recomputed: `is_transition * ace_flag * f_read * (selected - n_eval)` → `ace_transition * f_read * (selected - n_eval)`. `ace_transition = is_transition_flag * s012 * (1-s3')` replaces the manual `is_transition * ace_flag` product. Equivalent."
+    },
+    {
+      "old_fp": "base:c132fd37cc46cf8d",
+      "new_fp": "base:c57ccddf6882e072",
+      "remark": "kernel_rom.rs:119→105. Lost `when_transition()` factor: `builder.when_transition().when(flag_next_row_first_kernel_rom).assert_one(sfirst_next)` → `builder.when(flag_next_row_first_kernel_rom).assert_one(sfirst_next)`. The `when_transition()` factor was folded into `flag_next_row_first_kernel_rom` which is now precomputed as `is_ace_last * (1-s4')`, already incorporating the transition-relevant gating. Equivalent."
     }
   ],
   "39e1e3a01f": [
@@ -83,6 +108,38 @@
       "old_fp": "base:2076f65ca97d7633",
       "new_fp": "base:20141445ab6da46c",
       "remark": "stack/ops:341→253 (ASSERT). **Gained `is_transition` factor** not present before. Before: `when(is_assert).assert_one(s0)` (all rows). After: `when_transition().when(is_assert).assert_one(s0)` (transition rows only). Semantically equivalent because `is_assert` is an op flag that is zero on the last row (no operation executes there), so the constraint was already vacuous on the last row."
+    }
+  ],
+  "9cdaaf575b": [
+    {
+      "group_remark": "ACE shared columns restructured from flat `shared[10]` array to named fields with `QuadFeltExpr<T>`. 4 of 7 constraints moved into `assert_eq_quad()` via `QuadFeltAirBuilder` — source extraction artifact shows `self.assert_eq(lhs.N, rhs.N)` at ext_field.rs instead of the call site. The underlying assertions are identical: per-component `assert_eq` / `assert_zero` pairs, with the gate changed from `ace_flag * f_end` to `is_last + is_transition * sstart_next` (see per-constraint entries below for gate equivalence). Equivalent.",
+      "applies_to": "all"
+    },
+    {
+      "old_fp": "base:cc32b5b2201fda4a",
+      "new_fp": "base:33cd4a4cdfe025b7",
+      "remark": "ace.rs:132→108. Sign flip: `assert_one(sblock_next)` → `assert_zero(f_read_next)` where `f_read_next = 1 - sblock_next`. `assert_one(x)` = `assert_zero(1-x)`. Equivalent."
+    },
+    {
+      "old_fp": "base:be0e93655846742b",
+      "new_fp": "base:820472ce29fb7073",
+      "remark": "ace.rs:136→202. Sign flip + gate restructured: `when(ace_flag).when(f_end).assert_one(sblock)` → `when(f_end_new).assert_zero(f_read)`. Old `f_end` was `binary_or((1-s3')*sstart_next, s3')` = `(1-s3')*sstart_next + s3'`. Old gate: `ace_flag * f_end`. New `f_end` = `is_last + is_transition * sstart_next` = `is_ace*s3' + is_transition_flag*s012*(1-s3')*sstart_next`. On ACE-active rows (`s3=0`) and non-last trace rows (`is_transition_flag=1`), both expand to `s012*((1-s3')*sstart_next + s3')`. On the last trace row, both are zero (old: `ace_flag=0`; new: `is_ace=0` and `is_transition_flag=0`). Equivalent."
+    },
+    {
+      "old_fp": "base:14d021d8b4090bea",
+      "new_fp": "base:63369c80a5e4404f",
+      "remark": "ace.rs:210→208. Column rename: `assert_zero(id0)` → `assert_zero(local.id_0)`. Same column (`shared[0]` = `id_0`). Gate changed from `ace_flag * f_end` to new `f_end` (see be0e→820472 entry for gate equivalence proof). Equivalent."
+    }
+  ],
+  "a105bd53e9": [
+    {
+      "old_fp": "base:2d82a7840bf5d190",
+      "new_fp": "base:d27d587af40a2e71",
+      "remark": "bitwise.rs:146→122. Sign flip: `assert_eq(prev_output_next, output)` → `assert_eq(output, prev_output_next)`. `assert_eq(a, b)` is `assert_zero(a - b)` so swapping arguments negates the polynomial. Equivalent."
+    },
+    {
+      "group_remark": "kernel_rom.rs:70-73→62-65. Identical assertion expressions (`assert_eq(krom_next.root[i], krom.root[i])`); fingerprints changed because the upstream gate lost a redundant `(1 - s4')` factor. Old gate: `flags.is_transition * (1 - s4') * (1 - s_first')`. New gate: `flags.is_transition * (1 - s_first')`. Since `flags.is_transition` for kernel_rom already includes `(1 - s4')` (from selectors.rs:193: `kernel_rom_transition = is_transition_flag * s0123 * not_s4_next`), the old code was squaring `(1 - s4')²` which equals `(1 - s4')` on binary values. Polynomial changed (lost squared factor) but semantically equivalent on valid traces.",
+      "applies_to": "all"
     }
   ]
 }

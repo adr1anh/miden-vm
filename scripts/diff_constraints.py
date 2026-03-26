@@ -546,6 +546,18 @@ def print_report(dumps):
 # Regeneration from existing dumps
 # ---------------------------------------------------------------------------
 
+def next_dump_index(dump_dir):
+    """Return the next available file index by scanning existing dump files."""
+    import glob as glob_mod
+    pattern = str(dump_dir / "*_dump.txt")
+    indices = []
+    for path in sorted(glob_mod.glob(pattern)):
+        m = re.match(r"^(\d+)_([a-f0-9]+)_dump\.txt$", Path(path).name)
+        if m:
+            indices.append(int(m.group(1)))
+    return (max(indices) + 1) if indices else 0
+
+
 def load_dumps_from_dir(dump_dir):
     """Scan dump_dir for existing dump files and reconstruct CommitDump objects."""
     import glob as glob_mod
@@ -938,6 +950,10 @@ def main():
         "--extract-sources", action="store_true",
         help="Generate JSON source sidecars from existing dumps (checkout + read, no build)",
     )
+    parser.add_argument(
+        "--start-index", type=int, default=None, metavar="N",
+        help="Override the starting file index (default: auto-detect from existing dumps)",
+    )
     args = parser.parse_args()
 
     os.chdir(REPO_ROOT)
@@ -1072,7 +1088,32 @@ def main():
         if had_stash:
             run(["git", "stash", "pop"])
         sys.exit(1)
-    print(f"Processing {len(commits)} commits...\n")
+
+    # --- Determine starting index (append to existing dumps) ---
+    if args.start_index is not None:
+        idx_offset = args.start_index
+    else:
+        idx_offset = next_dump_index(dump_dir)
+        # Skip commits that already have dumps (match by hash)
+        existing_hashes = set()
+        import glob as glob_mod
+        for path in glob_mod.glob(str(dump_dir / "*_dump.txt")):
+            m = re.match(r"^(\d+)_([a-f0-9]+)_dump\.txt$", Path(path).name)
+            if m:
+                existing_hashes.add(m.group(2))
+        original_len = len(commits)
+        commits = [c for c in commits if short_hash(c) not in existing_hashes]
+        if len(commits) < original_len:
+            skipped = original_len - len(commits)
+            print(f"Skipping {skipped} commits already in {dump_dir.name}")
+
+    if not commits:
+        print("All commits already have dumps. Use --regenerate to rebuild the report.")
+        if had_stash:
+            run(["git", "stash", "pop"])
+        return
+
+    print(f"Processing {len(commits)} commits (indices {idx_offset}..{idx_offset + len(commits) - 1})...\n")
 
     # Resolve start/end for the comment (short hashes)
     start_short = short_hash(commits[0])
@@ -1081,11 +1122,12 @@ def main():
     # --- Main loop ---
     dumps = []
     try:
-        for idx, full_hash in enumerate(commits):
+        for i, full_hash in enumerate(commits):
+            idx = idx_offset + i
             h = short_hash(full_hash)
             msg = get_commit_msg(full_hash)
             label = msg[:65] if len(msg) > 65 else msg
-            print(f"  [{idx + 1}/{len(commits)}] {h} {label}", end="  ", flush=True)
+            print(f"  [{i + 1}/{len(commits)}] {h} {label}", end="  ", flush=True)
 
             co = run(["git", "checkout", "--force", full_hash])
             if co.returncode != 0:

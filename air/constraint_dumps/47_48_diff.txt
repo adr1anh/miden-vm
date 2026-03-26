@@ -1,0 +1,25 @@
+16d0a8dd80 -> 9cdaaf575b: refactor: type ACE shared columns into named fields with QuadFeltExpr
+Unchanged: 463 | Updated: 7 | Removed: 0 | Added: 0
+
+UPDATED:
+    src/constraints/chiplets/ace.rs:132 -> src/constraints/chiplets/ace.rs:108
+      - .assert_one(sblock_next.clone());
+      + .assert_zero(f_read_next.clone());
+    src/constraints/chiplets/ace.rs:136 -> src/constraints/ext_field.rs:154
+      - builder.when(ace_flag.clone()).when(f_end.clone()).assert_one(sblock.clone());
+      + self.assert_eq(lhs.1, rhs.1);
+    src/constraints/chiplets/ace.rs:196 -> src/constraints/ext_field.rs:155
+      - builder.assert_eq(expected_1, v0_1.clone());
+      + self.assert_eq(lhs.1, rhs.1);
+    src/constraints/chiplets/ace.rs:197 -> src/constraints/ext_field.rs:154
+      - builder.assert_eq(expected_1, v0_1.clone());
+      + self.assert_eq(lhs.1, rhs.1);
+    src/constraints/chiplets/ace.rs:208 -> src/constraints/ext_field.rs:155
+      - builder.assert_zero(v0_1);
+      + self.assert_eq(lhs.1, rhs.1);
+    src/constraints/chiplets/ace.rs:209 -> src/constraints/chiplets/ace.rs:202
+      - builder.assert_zero(id0);
+      + builder.assert_zero(f_read);
+    src/constraints/chiplets/ace.rs:210 -> src/constraints/chiplets/ace.rs:208
+      - builder.assert_zero(id0);
+      + builder.assert_zero(local.id_0);

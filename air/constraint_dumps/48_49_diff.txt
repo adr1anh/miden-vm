@@ -1,0 +1,19 @@
+9cdaaf575b -> a105bd53e9: refactor: type periodic columns into named structs and simplify chiplet constraints
+Unchanged: 465 | Updated: 5 | Removed: 0 | Added: 0
+
+UPDATED:
+    src/constraints/chiplets/bitwise.rs:146 -> src/constraints/chiplets/bitwise.rs:122
+      - bitwise_builder.when(k_transition).assert_eq(prev_output_next, output.clone());
+      + bitwise_builder.when(k_transition).assert_eq(output, prev_output_next);
+    src/constraints/chiplets/kernel_rom.rs:70 -> src/constraints/chiplets/kernel_rom.rs:62
+      - builder.assert_eq(krom_next.root[1], krom.root[1]);
+      + builder.assert_eq(krom_next.root[1], krom.root[1]);
+    src/constraints/chiplets/kernel_rom.rs:71 -> src/constraints/chiplets/kernel_rom.rs:63
+      - builder.assert_eq(krom_next.root[2], krom.root[2]);
+      + builder.assert_eq(krom_next.root[2], krom.root[2]);
+    src/constraints/chiplets/kernel_rom.rs:72 -> src/constraints/chiplets/kernel_rom.rs:64
+      - builder.assert_eq(krom_next.root[3], krom.root[3]);
+      + builder.assert_eq(krom_next.root[3], krom.root[3]);
+    src/constraints/chiplets/kernel_rom.rs:73 -> src/constraints/chiplets/kernel_rom.rs:65
+      - builder.assert_eq(krom_next.root[3], krom.root[3]);
+      + builder.assert_eq(krom_next.root[3], krom.root[3]);

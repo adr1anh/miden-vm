@@ -73,10 +73,16 @@ air/constraint_dumps/
 1. **Make constraint changes** in one or more commits. Push/finalize them.
    Do NOT amend them after step 2.
 
-2. **Run the tool** to generate dumps and diffs:
+2. **Run the tool** to generate dumps and diffs. Always pass the **full
+   range** from the branch's first commit so the tool can skip already-dumped
+   commits and append new ones with the correct index:
    ```bash
-   python3 scripts/diff_constraints.py <start_commit> HEAD --no-post
+   python3 scripts/diff_constraints.py <branch_base_commit> HEAD --no-post
    ```
+   The tool auto-detects the next file index from existing dumps and skips
+   commits whose hashes already have dump files. This means you can safely
+   re-run with the same range after adding more commits — only new commits
+   are built.
 
 3. **Inspect** the generated diff files and `pr_comment.md` for correctness.
 
@@ -94,6 +100,19 @@ air/constraint_dumps/
    ```bash
    python3 scripts/diff_constraints.py --regenerate --pr-comment <PR_NUMBER>
    ```
+
+### CRITICAL: always append, never restart indexing
+
+Dump files are numbered sequentially (`00_<hash>_dump.txt`, `01_...`, etc.)
+and must form a contiguous series across the branch. When adding new commits:
+
+- **DO** pass the full branch range: `python3 scripts/diff_constraints.py <base> HEAD`
+- **DO NOT** pass only the new commits as a range — this restarts indexing
+  from 00 and creates duplicate indices alongside existing dumps.
+
+The tool skips commits that already have dumps and continues numbering from
+where it left off. If you need to override the starting index, use
+`--start-index N`.
 
 ### CRITICAL: never commit dumps inside the commit being analyzed
 
@@ -172,6 +191,7 @@ build path does. If you need diff files, run a full build.
 | `--no-post` | Generate `pr_comment.md` locally without posting to GitHub |
 | `--no-source` | Skip source expression extraction during full build |
 | `--dump-dir <DIR>` | Custom directory for output files (default: `air/constraint_dumps`) |
+| `--start-index <N>` | Override starting file index (default: auto-detect from existing dumps) |
 
 ## Writing interpretations
 
