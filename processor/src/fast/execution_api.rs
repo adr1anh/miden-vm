@@ -1,9 +1,9 @@
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use core::ops::ControlFlow;
 
 use miden_core::{
     Word,
-    mast::{MastForest, MastNodeId},
+    mast::{MastForest, MastNodeExt, MastNodeId},
     program::{KernelDescriptor, MIN_STACK_DEPTH, Program, StackInputs, StackOutputs},
 };
 use miden_mast_package::debug_info::{
@@ -19,8 +19,8 @@ use super::{
 #[cfg(feature = "std")]
 use crate::PrecompileWitness;
 use crate::{
-    ExecutionError, ExecutionOutput, ExecutionWitness, Host, LoadedMastForest, Stopper, SyncHost,
-    advice::AdviceError,
+    BaseHost, ExecutionError, ExecutionOutput, ExecutionWitness, Host, LoadedMastForest, Stopper,
+    SyncHost,
     continuation_stack::{Continuation, ContinuationStack, SourceInlineCallContext},
     errors::{
         MapExecErr, MapExecErrNoCtx, PackageSourceDebugContext, malformed_mast_forest_with_context,
@@ -32,6 +32,19 @@ use crate::{
     trace::execution_tracer::ExecutionTracer,
     tracer::Tracer,
 };
+
+/// Validated code supply, retained without publishing cache or advice state.
+///
+/// This is separate from environment authentication: possession of a requested body does not
+/// authorize its execution.
+#[derive(Debug)]
+struct PreparedLoadedTarget {
+    root_id: MastNodeId,
+    loaded_mast_forest: LoadedMastForest,
+    package_debug_info: Option<Arc<PackageDebugInfo>>,
+    source_node_id: Option<DebugSourceNodeId>,
+    cache_on_publish: bool,
+}
 
 impl FastProcessor {
     // EXECUTE
@@ -1216,30 +1229,16 @@ impl FastProcessor {
                 }
             })?,
         };
-        let mast_forest = loaded_mast_forest.mast_forest().clone();
-
-        let root_id = mast_forest.find_procedure_root(node_digest).ok_or_else(|| {
-            let context = match (package_debug_info, source_node_id) {
-                (Some(debug_info), Some(source_node_id)) => {
-                    Some(PackageSourceDebugContext::new(debug_info, source_node_id))
-                },
-                _ => None,
-            };
-            malformed_mast_forest_with_context(node_digest, context, host)
-        })?;
-
-        if !was_cached {
-            self.cache_loaded_mast_forest(&loaded_mast_forest);
-        }
-        self.merge_mast_forest_advice(&mast_forest).map_exec_err()?;
-        let (loaded_package_debug_info, loaded_source_node_id) =
-            Self::loaded_package_source_context(
-                &loaded_mast_forest,
-                root_id,
-                source_aware_execution,
-            )?;
-
-        Ok((root_id, mast_forest, loaded_package_debug_info, loaded_source_node_id))
+        let prepared = Self::prepare_loaded_target(
+            loaded_mast_forest,
+            node_digest,
+            !was_cached,
+            package_debug_info,
+            source_node_id,
+            source_aware_execution,
+            host,
+        )?;
+        self.publish_loaded_target(prepared)
     }
 
     async fn load_mast_forest(
@@ -1279,49 +1278,113 @@ impl FastProcessor {
                 }
             },
         };
-        let mast_forest = loaded_mast_forest.mast_forest().clone();
-
-        let root_id = mast_forest.find_procedure_root(node_digest).ok_or_else(|| {
-            let context = match (package_debug_info, source_node_id) {
-                (Some(debug_info), Some(source_node_id)) => {
-                    Some(PackageSourceDebugContext::new(debug_info, source_node_id))
-                },
-                _ => None,
-            };
-            malformed_mast_forest_with_context(node_digest, context, host)
-        })?;
-
-        if !was_cached {
-            self.cache_loaded_mast_forest(&loaded_mast_forest);
-        }
-        self.merge_mast_forest_advice(&mast_forest).map_exec_err()?;
-        let (loaded_package_debug_info, loaded_source_node_id) =
-            Self::loaded_package_source_context(
-                &loaded_mast_forest,
-                root_id,
-                source_aware_execution,
-            )?;
-
-        Ok((root_id, mast_forest, loaded_package_debug_info, loaded_source_node_id))
+        let prepared = Self::prepare_loaded_target(
+            loaded_mast_forest,
+            node_digest,
+            !was_cached,
+            package_debug_info,
+            source_node_id,
+            source_aware_execution,
+            host,
+        )?;
+        self.publish_loaded_target(prepared)
     }
 
-    fn cache_loaded_mast_forest(&mut self, loaded_mast_forest: &LoadedMastForest) {
+    /// Resolves the requested local body and its actual package-owned source context without
+    /// changing processor state. Keyed transitions can retain this result until their remaining
+    /// VM and tracer preflights complete.
+    fn prepare_loaded_target(
+        loaded_mast_forest: LoadedMastForest,
+        node_digest: Word,
+        cache_on_publish: bool,
+        package_debug_info: Option<&PackageDebugInfo>,
+        source_node_id: Option<DebugSourceNodeId>,
+        source_aware_execution: bool,
+        host: &impl BaseHost,
+    ) -> Result<PreparedLoadedTarget, ExecutionError> {
+        let mast_forest = loaded_mast_forest.mast_forest();
+        let root_id = mast_forest
+            .procedure_roots()
+            .iter()
+            .copied()
+            // An External(D) root alone cannot materialize D: loading it would make no progress.
+            .find(|&root_id| {
+                let node = &mast_forest[root_id];
+                !node.is_external() && node.digest() == node_digest
+            })
+            .ok_or_else(|| {
+                let context = match (package_debug_info, source_node_id) {
+                    (Some(debug_info), Some(source_node_id)) => {
+                        Some(PackageSourceDebugContext::new(debug_info, source_node_id))
+                    },
+                    _ => None,
+                };
+                malformed_mast_forest_with_context(node_digest, context, host)
+            })?;
+        let (package_debug_info, source_node_id) = Self::loaded_package_source_context(
+            &loaded_mast_forest,
+            root_id,
+            source_aware_execution,
+        )?;
+
+        Ok(PreparedLoadedTarget {
+            root_id,
+            loaded_mast_forest,
+            package_debug_info,
+            source_node_id,
+            cache_on_publish,
+        })
+    }
+
+    /// Checks advice conflicts and budgets before publishing any loaded-code state. After this
+    /// preflight, publication has no returned execution error; BTree allocation may still abort.
+    fn publish_loaded_target(
+        &mut self,
+        prepared: PreparedLoadedTarget,
+    ) -> Result<
+        (
+            MastNodeId,
+            Arc<MastForest>,
+            Option<Arc<PackageDebugInfo>>,
+            Option<DebugSourceNodeId>,
+        ),
+        ExecutionError,
+    > {
+        let PreparedLoadedTarget {
+            root_id,
+            loaded_mast_forest,
+            package_debug_info,
+            source_node_id,
+            cache_on_publish,
+        } = prepared;
+        let mast_forest = loaded_mast_forest.mast_forest().clone();
+        let commitment = mast_forest.commitment();
+        let advice_extension = if self.merged_mast_forests.contains(&commitment) {
+            None
+        } else {
+            Some(self.advice.prepare_extend_map(mast_forest.advice_map()).map_exec_err()?)
+        };
+
+        if let Some(advice_extension) = advice_extension {
+            advice_extension.commit();
+            self.merged_mast_forests.insert(commitment);
+        }
+        if cache_on_publish {
+            Self::cache_loaded_mast_forest(&mut self.loaded_mast_forests, &loaded_mast_forest);
+        }
+
+        Ok((root_id, mast_forest, package_debug_info, source_node_id))
+    }
+
+    fn cache_loaded_mast_forest(
+        loaded_mast_forests: &mut BTreeMap<Word, LoadedMastForest>,
+        loaded_mast_forest: &LoadedMastForest,
+    ) {
         for procedure_digest in loaded_mast_forest.mast_forest().local_procedure_digests() {
-            self.loaded_mast_forests
+            loaded_mast_forests
                 .entry(procedure_digest)
                 .or_insert_with(|| loaded_mast_forest.clone());
         }
-    }
-
-    fn merge_mast_forest_advice(&mut self, mast_forest: &MastForest) -> Result<(), AdviceError> {
-        let commitment = mast_forest.commitment();
-        if self.merged_mast_forests.contains(&commitment) {
-            return Ok(());
-        }
-
-        self.advice.extend_map(mast_forest.advice_map())?;
-        self.merged_mast_forests.insert(commitment);
-        Ok(())
     }
 
     fn loaded_package_source_context(
@@ -1563,6 +1626,9 @@ impl FastProcessor {
         Self::stack_result_from_flow(flow)
     }
 }
+
+#[cfg(test)]
+mod preparation_tests;
 
 #[cfg(all(test, feature = "std"))]
 mod tests {
