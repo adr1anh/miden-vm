@@ -279,7 +279,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | in-progress | Latest `9ebac7cc1`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, core seed generation, public API and full-feature Clippy pass | Final audit: add explicit structural-cycle/keyed-recursion cases. Processor witness checks await 05/09; fuzz smoke at 16. D2 preserves existing MASM source. |
-| 03 Chiplet foundation | in-progress | Latest `411b22f8b`; base `7602d32ed` | Independent algebra review; 18 chiplet unit +18 generated/capture/ACE tests; source test-inclusive Clippy/format pass | Next: checked logical Controller-address ownership, then final materialization relocation. Processor checks await 05/09. |
+| 03 Chiplet foundation | in-progress | Latest `48896072b`; Memory `411b22f8b`; base `7602d32ed` | Memory checks pass; independent logical-address review; fourteen address tests authored | Next: final materialization relocation. Processor check emits ten known callable-cutover errors; address execution/parallel tests await 05/09. |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
@@ -630,3 +630,23 @@ Passed after successful AC/heavy-work guards:
 
 Logs stay separate under uncommitted `.scratch/librarytree/logs/pr03-*.log`. These checks do not
 establish future packed Library dimensions/degrees/lookup bounds; those remain later measured gates.
+
+### PR 03 Checked logical Controller-address owner
+
+Commit `48896072b` distinguishes nullable one-based logical addresses from zero-based row cursors
+and operation-log indices. Existing trace caps/errors bound checked span arithmetic before
+append/replay/cache mutations. Hasher errors propagate; infallible hook failures reach the existing
+clock-finalization error boundary. Exact-cap end cursors and absent zero remain representable.
+Private row-count invariants and aligned MAX_TRACE_LEN justify infallible padding rounding.
+No physical relocation, saved-state codec or global-clock conversion is activated in this slice.
+
+Independent review found no concrete issue in the eight-file change and fourteen authored
+boundary/atomicity tests. Pinned formatting and staged whitespace checks pass. After successful
+AC/heavy-work guards, `CARGO_NET_OFFLINE=true cargo check --locked -p miden-processor --lib`
+failed with ten known callable-cutover errors: six old callee() uses and four missing Exec arms
+in execution/call.rs, execution/mod.rs, execution_tracer.rs and parallel/tracer/{mod,trace_row}.rs.
+No address-type diagnostic was emitted. This is not a successful processor build or test pass.
+The compiler log stays uncommitted at `.scratch/librarytree/logs/pr03-controller-owner-check.log`.
+
+Address tests/processor Clippy remain deferred until PRs 05/09 close that graph. Final
+materialization conversion is the next PR 03 slice; saved/replayed state must remain logical.
