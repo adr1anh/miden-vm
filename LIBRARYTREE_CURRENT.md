@@ -2,9 +2,9 @@
 
 This brief owns current handoff. [LIBRARYTREE_PLAN.md](LIBRARYTREE_PLAN.md) alone owns backlog, scope, dependencies, acceptance and durable evidence. `PR_DESCRIPTION.md` is final branch review scope, never discovery.
 
-Verified checkpoint on 2 November 2026: branch `adr1anh/librarytree-06-packed-library`, HEAD `87267f9a3` (implementation `59b36d0ec`), base `53acb4837` (final PR05 review-description commit). Documentation commits follow. Recheck Git/status; `.scratch/` stays uncommitted.
+Verified checkpoint on 2 November 2026: branch `adr1anh/librarytree-06-packed-library`, HEAD `18fe08e1a` (implementation `59b36d0ec`), base `53acb4837` (final PR05 review-description commit). Documentation commits follow. Recheck Git/status; `.scratch/` stays uncommitted.
 
-PR06 is active. Controller mode/scoping refactor is committed. Current slice: **coherent packed layout integration and Memory/ACE helper boundaries**. No delegated code ownership remains; bounded read-only research is checking the next file split. Root owns reviews/checks/commits/docs. `ControllerCols` is the sole production mode derivation; the old physical getter/write are removed. Revalidate exact ownership before edits.
+PR06 is active. Controller mode/scoping refactor is committed. Current slice: **coherent packed layout integration and Memory/ACE helper boundaries**. No delegated ownership remains. Boundary research selected final-coordinate Memory/ACE helpers with completion over materialized family bands; retain compact scratch buffers. Use `findings-pr06-memory-ace-helpers.md` before assigning exact files. Root owns reviews/checks/commits/docs. `ControllerCols` is the sole production mode derivation; the old physical getter/write are removed. Revalidate exact ownership before edits.
 
 The future overlay and pure kind/phase/sigma expressions are not active constraints. Active section migration coordinates both selectors, physical views/writers, Controller gates and periodic/generated consumers. Today c[0] means Controller. Legacy Controller global-first initialization and physical next-selector dependencies still need coordinated migration. Keep one shared row schema. Keep checked Controller addresses and code-supply-only semantics.
 
