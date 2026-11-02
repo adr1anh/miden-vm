@@ -34,6 +34,26 @@ fn core_shape_and_degree_match_design() {
 }
 
 #[test]
+fn chiplets_current_relation_shape_and_degree_match_design() {
+    let air = MidenAir::CHIPLETS;
+    let symbolic = ConstraintDegrees::from_air::<Felt, QuadFelt, _>(&air);
+
+    assert_eq!(air.width(), 24);
+    assert_eq!(LiftedAir::<Felt, QuadFelt>::aux_width(&air), 4);
+    assert_eq!(AIRS.len(), 4);
+    assert_eq!(
+        LiftedAir::<Felt, QuadFelt>::constraint_degree(&air),
+        symbolic,
+        "Chiplets' declared degree must match its handwritten constraints",
+    );
+    assert!(symbolic.base <= 9, "Chiplets base constraint degree exceeds nine: {symbolic:?}");
+    assert!(
+        symbolic.ext <= 9,
+        "Chiplets extension constraint degree exceeds nine: {symbolic:?}"
+    );
+}
+
+#[test]
 fn and8_lookup_shape_and_degree_match_design() {
     let air = MidenAir::AND8_LOOKUP;
 

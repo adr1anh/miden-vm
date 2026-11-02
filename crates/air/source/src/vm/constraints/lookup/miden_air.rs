@@ -108,15 +108,12 @@ mod tests {
     };
 
     use crate::vm::{
-        ChipletsAir, EidosCompressionAir, Felt, MidenAir, NUM_EIDOS_COMPRESSION_COLS,
+        EidosCompressionAir, Felt, LiftedAir, MidenAir, NUM_EIDOS_COMPRESSION_COLS,
         NUM_PUBLIC_VALUES,
         constraints::{
-            columns::{NUM_CHIPLETS_COLS, NUM_CORE_COLS},
+            columns::NUM_CORE_COLS,
             eidos_compression::lookup::EIDOS_COMPRESSION_LOOKUP_COLUMN_SHAPE,
-            lookup::{
-                BusId, MIDEN_MAX_MESSAGE_WIDTH, chiplet_air::CHIPLET_COLUMN_SHAPE,
-                main_air::MAIN_COLUMN_SHAPE,
-            },
+            lookup::{BusId, MIDEN_MAX_MESSAGE_WIDTH, main_air::MAIN_COLUMN_SHAPE},
         },
         trace::AUX_TRACE_RAND_CHALLENGES,
     };
@@ -187,17 +184,17 @@ mod tests {
     /// Lookup-structure validation for `ChipletsAir`.
     #[test]
     fn chiplets_air_lookup_validates() {
-        let num_periodic = ChipletsAir.periodic_columns().len();
+        let air = MidenAir::CHIPLETS;
         let layout = ValidateLayout {
-            preprocessed_width: 0,
-            trace_width: NUM_CHIPLETS_COLS,
-            num_public_values: 0,
-            num_periodic_columns: num_periodic,
-            permutation_width: CHIPLET_COLUMN_SHAPE.len(),
-            num_permutation_challenges: AUX_TRACE_RAND_CHALLENGES,
-            num_permutation_values: 1,
+            preprocessed_width: air.preprocessed_width(),
+            trace_width: air.width(),
+            num_public_values: air.num_public_values(),
+            num_periodic_columns: air.periodic_columns().len(),
+            permutation_width: LiftedAir::<Felt, QuadFelt>::aux_width(&air),
+            num_permutation_challenges: LiftedAir::<Felt, QuadFelt>::num_randomness(&air),
+            num_permutation_values: LiftedAir::<Felt, QuadFelt>::num_aux_values(&air),
         };
-        ValidateLookupAir::validate(&MidenAir::Chiplets, layout)
+        ValidateLookupAir::validate(&air, layout)
             .unwrap_or_else(|err| panic!("ChipletsAir LookupAir validation failed: {err}"));
     }
     #[test]
