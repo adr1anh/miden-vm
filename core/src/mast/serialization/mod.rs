@@ -39,6 +39,7 @@
 //! (Counts)
 //! - internal nodes count (`usize`)
 //! - external nodes count (`usize`)
+//! - immediate invocation target count (fixed little-endian `u32`)
 //!
 //! (Procedure roots section)
 //! - procedure roots (`Vec<u32>` as MastNodeId values)
@@ -53,6 +54,10 @@
 //! (External digest section)
 //! - digests for `External` nodes only (`Vec<Word>`, ordered by node index)
 //! - lookup is dense-by-kind: the Nth external node uses slot N in this section
+//!
+//! (Invocation-target section)
+//! - canonical procedure keys for Call/SysCall/Exec in node order
+//! - each immediate entry indexes the next slot exactly once; repeated key values are permitted
 //!
 //! (Node hash section - omitted if FLAGS bit 1 is set)
 //! - digests for all non-external nodes (`Vec<Word>`, ordered by node index)
@@ -100,6 +105,7 @@ use crate::{
     Word,
     advice::AdviceMap,
     mast::node::MastNodeExt,
+    program::ProcedureKey,
     serde::{
         BudgetedReader, ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable,
         SliceReader,
@@ -120,7 +126,8 @@ use layout::{OffsetTrackingReader, TrackingReader, WireFlags, read_header_and_sc
 mod sparse;
 
 mod resolved;
-use resolved::{ResolvedSerializedForest, basic_block_offset_for_node_index};
+use info::invocation_target;
+use resolved::{ResolvedSerializedForest, serialization_indices_for_node};
 
 mod basic_blocks;
 use basic_blocks::{BasicBlockDataBuilder, basic_block_data_len};
@@ -130,6 +137,9 @@ mod seed_gen;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod keyed_tests;
 
 // TYPE ALIASES
 // ================================================================================================
@@ -210,12 +220,15 @@ const FLAGS_RESERVED_MASK: u8 = 0xfd;
 ///   an old serialized node from retaining its stored digest while being executed with the new
 ///   operation semantics on load paths that do not recompute node digests.
 ///
+/// - [0, 0, 6]: Childless keyed CALL/SYSCALL and new EXEC. Added the invocation-target count and
+///   canonical procedure-key section, retained even in hashless payloads.
+///
 /// Legacy wire versions (pre-#3192 decorator terminology):
 ///   [0,0,1] stored metadata as serialized decorator variants in CSR per-node slots.
 ///   [0,0,2] removed AssemblyOp from the decorator enum and stored them separately in DebugInfo.
 ///   [0,0,3] removed the unused decorator-count wire field.
 ///   [0,0,4] eliminated the decorator wire slots entirely.
-const VERSION: [u8; 3] = [0, 0, 5];
+const VERSION: [u8; 3] = [0, 0, 6];
 
 // MAST FOREST SERIALIZATION/DESERIALIZATION
 // ================================================================================================
@@ -240,6 +253,8 @@ impl MastForest {
         let node_count = self.nodes.len();
         let external_count = self.nodes.iter().take_while(|node| node.is_external()).count();
         let internal_count = node_count - external_count;
+        let target_count =
+            self.nodes.iter().filter(|node| invocation_target(node).is_some()).count();
 
         let basic_block_len: usize = self
             .nodes
@@ -263,10 +278,16 @@ impl MastForest {
             .checked_mul(Word::SERIALIZED_SIZE)
             .expect("MAST forest serialized size exceeds usize::MAX");
 
+        let targets_size = target_count
+            .checked_mul(Word::SERIALIZED_SIZE)
+            .expect("MAST forest serialized size exceeds usize::MAX");
+
         [
             MAGIC.len() + size_of::<u8>() + VERSION.len(),
             internal_count.get_size_hint(),
             external_count.get_size_hint(),
+            size_of::<u32>(),
+            targets_size,
             self.roots.len().get_size_hint(),
             roots_size,
             basic_block_len.get_size_hint(),
@@ -305,6 +326,9 @@ impl MastForest {
         let internal_node_count = node_count - external_node_count;
         target.write_usize(internal_node_count);
         target.write_usize(external_node_count);
+        let target_count =
+            self.nodes.iter().filter(|node| invocation_target(node).is_some()).count();
+        target.write_u32(target_count.try_into().expect("invocation target count must fit in u32"));
 
         // roots
         let roots: Vec<u32> = self.roots.iter().copied().map(u32::from).collect();
@@ -313,6 +337,7 @@ impl MastForest {
         let mut mast_node_entries = Vec::with_capacity(self.nodes.len());
         let mut external_digests = Vec::with_capacity(external_node_count);
         let mut node_hashes = Vec::new();
+        let mut invocation_targets = Vec::with_capacity(target_count);
 
         for mast_node in self.nodes.iter() {
             let ops_offset = if let MastNode::Block(basic_block) = mast_node {
@@ -321,7 +346,15 @@ impl MastForest {
                 0
             };
 
-            mast_node_entries.push(MastNodeEntry::new(mast_node, ops_offset));
+            let target_slot = invocation_target(mast_node).map(|key| {
+                let slot = invocation_targets
+                    .len()
+                    .try_into()
+                    .expect("invocation target slot must fit in u32");
+                invocation_targets.push(key);
+                slot
+            });
+            mast_node_entries.push(MastNodeEntry::new(mast_node, ops_offset, target_slot));
             if mast_node.is_external() {
                 external_digests.push(mast_node.digest());
             } else if !hashless {
@@ -338,6 +371,10 @@ impl MastForest {
 
         for digest in external_digests {
             digest.write_into(target);
+        }
+
+        for key in invocation_targets {
+            key.write_into(target);
         }
 
         if !hashless {
@@ -522,10 +559,11 @@ impl<'a> MastForestWireView<'a> {
     /// assert!(view.node_info_at(0).is_ok());
     /// ```
     pub fn node_info_at(&self, index: usize) -> Result<MastNodeInfo, DeserializationError> {
-        Ok(MastNodeInfo::from_entry(
+        MastNodeInfo::from_entry(
             self.node_entry_at(index)?,
             self.node_digest_at(index)?,
-        ))
+            self.node_target_at(index)?,
+        )
     }
 
     /// Returns the fixed-width structural node entry at the specified index.
@@ -533,6 +571,16 @@ impl<'a> MastForestWireView<'a> {
     /// Returns an error if `index >= self.node_count()`.
     pub fn node_entry_at(&self, index: usize) -> Result<MastNodeEntry, DeserializationError> {
         self.layout.read_node_entry_at(self.bytes, index)
+    }
+
+    /// Returns the procedure key for an immediate invocation at `index`.
+    ///
+    /// Target slots and canonical key limbs are validated by the shared layout scanner.
+    pub fn node_target_at(
+        &self,
+        index: usize,
+    ) -> Result<Option<ProcedureKey>, DeserializationError> {
+        self.layout.read_node_target_at(self.bytes, index)
     }
 
     /// Returns the digest for the node at the specified index.
@@ -602,6 +650,10 @@ impl MastForestView for MastForestWireView<'_> {
         MastForestWireView::node_entry_at(self, index)
     }
 
+    fn node_target_at(&self, index: usize) -> Result<Option<ProcedureKey>, DeserializationError> {
+        MastForestWireView::node_target_at(self, index)
+    }
+
     fn node_digest_at(&self, index: usize) -> Result<Word, DeserializationError> {
         MastForestWireView::node_digest_at(self, index)
     }
@@ -633,6 +685,22 @@ impl MastForestView for MastForestReadView<'_> {
                 MastForestView::node_entry_at(forest, index)
             },
             MastForestReadView::WireBacked(view) => view.node_entry_at(index),
+        }
+    }
+
+    fn node_target_at(&self, index: usize) -> Result<Option<ProcedureKey>, DeserializationError> {
+        match self {
+            MastForestReadView::Materialized(forest) => {
+                MastForestView::node_target_at(forest, index)
+            },
+            MastForestReadView::WireBacked(view) => view.node_target_at(index),
+        }
+    }
+
+    fn all_node_infos(&self) -> Result<Vec<MastNodeInfo>, DeserializationError> {
+        match self {
+            MastForestReadView::Materialized(forest) => MastForestView::all_node_infos(forest),
+            MastForestReadView::WireBacked(view) => view.all_node_infos(),
         }
     }
 
@@ -680,13 +748,51 @@ impl MastForestView for MastForest {
         let node = self.nodes.as_slice().get(index).ok_or_else(|| {
             DeserializationError::InvalidValue(format!("node index {index} out of bounds"))
         })?;
-        let ops_offset = if matches!(node, MastNode::Block(_)) {
-            basic_block_offset_for_node_index(self.nodes.as_slice(), index)?
-        } else {
-            0
-        };
+        let (ops_offset, target_slot) =
+            serialization_indices_for_node(self.nodes.as_slice(), index)?;
+        Ok(MastNodeEntry::new(node, ops_offset, target_slot))
+    }
 
-        Ok(MastNodeEntry::new(node, ops_offset))
+    fn node_target_at(&self, index: usize) -> Result<Option<ProcedureKey>, DeserializationError> {
+        self.nodes.as_slice().get(index).map(invocation_target).ok_or_else(|| {
+            DeserializationError::InvalidValue(format!("node index {index} out of bounds"))
+        })
+    }
+
+    fn all_node_infos(&self) -> Result<Vec<MastNodeInfo>, DeserializationError> {
+        let mut infos = Vec::with_capacity(self.nodes.len());
+        let mut ops_offset = 0usize;
+        let mut next_target_slot = 0u32;
+        for node in self.nodes.iter() {
+            let target = invocation_target(node);
+            let target_slot = target.map(|_| {
+                let slot = next_target_slot;
+                next_target_slot += 1;
+                slot
+            });
+            let node_ops_offset = if let MastNode::Block(block) = node {
+                let start = ops_offset.try_into().map_err(|_| {
+                    DeserializationError::InvalidValue(
+                        "basic-block data offset does not fit in u32".into(),
+                    )
+                })?;
+                ops_offset =
+                    ops_offset.checked_add(basic_block_data_len(block)).ok_or_else(|| {
+                        DeserializationError::InvalidValue(
+                            "basic-block data offset overflow".into(),
+                        )
+                    })?;
+                start
+            } else {
+                0
+            };
+            infos.push(MastNodeInfo::from_entry(
+                MastNodeEntry::new(node, node_ops_offset, target_slot),
+                node.digest(),
+                target,
+            )?);
+        }
+        Ok(infos)
     }
 
     fn node_digest_at(&self, index: usize) -> Result<Word, DeserializationError> {

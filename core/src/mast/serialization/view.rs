@@ -9,6 +9,7 @@ use crate::{
     Felt, Word,
     advice::AdviceMap,
     mast::MastNodeId,
+    program::ProcedureKey,
     serde::{ByteReader, Deserializable, DeserializationError, SliceReader},
 };
 
@@ -200,8 +201,17 @@ pub trait MastForestView {
 
     /// Returns fixed-width structural metadata for a node at the specified index.
     ///
+    /// Wire-backed lookup is constant-time. Materialized forests compute serialization-only block
+    /// offsets and target slots by scanning the node prefix; use `all_node_infos` for linear bulk
+    /// collection, or a wire-backed view for repeated random access.
+    ///
     /// Returns an error if `index >= self.node_count()`.
     fn node_entry_at(&self, index: usize) -> Result<MastNodeEntry, DeserializationError>;
+
+    /// Returns the procedure key for an immediate invocation, or `None` for other nodes.
+    ///
+    /// Returns an error if `index >= self.node_count()` or the key cannot be decoded.
+    fn node_target_at(&self, index: usize) -> Result<Option<ProcedureKey>, DeserializationError>;
 
     /// Returns the digest of the node at the specified index.
     ///
@@ -214,10 +224,11 @@ pub trait MastForestView {
     /// Returns an error if `index >= self.node_count()` or the backing representation cannot decode
     /// the node metadata, including its digest.
     fn node_info_at(&self, index: usize) -> Result<MastNodeInfo, DeserializationError> {
-        Ok(MastNodeInfo::from_entry(
+        MastNodeInfo::from_entry(
             self.node_entry_at(index)?,
             self.node_digest_at(index)?,
-        ))
+            self.node_target_at(index)?,
+        )
     }
 
     /// Returns the number of procedure roots in the forest.

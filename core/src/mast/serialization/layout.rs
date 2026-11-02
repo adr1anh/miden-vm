@@ -3,6 +3,7 @@ use alloc::{format, string::ToString, vec::Vec};
 use super::{FLAG_HASHLESS, FLAGS_RESERVED_MASK, MAGIC, MastForest, MastNodeEntry, VERSION};
 use crate::{
     mast::MastNodeId,
+    program::ProcedureKey,
     serde::{ByteReader, Deserializable, DeserializationError, SliceReader},
 };
 
@@ -26,12 +27,14 @@ pub(crate) struct ForestLayout {
     pub(super) node_count: usize,
     pub(super) internal_node_count: usize,
     pub(super) external_node_count: usize,
+    pub(super) target_count: usize,
     pub(super) roots_count: usize,
     roots_offset: usize,
     basic_block_offset: usize,
     basic_block_len: usize,
     node_entry_offset: usize,
     external_digest_offset: usize,
+    target_offset: usize,
     node_hash_offset: Option<usize>,
     advice_map_offset: usize,
 }
@@ -47,10 +50,12 @@ pub(super) struct MastForestHeader {
     node_count: usize,
     internal_node_count: usize,
     external_node_count: usize,
+    target_count: usize,
     roots_count: usize,
     roots_offset: usize,
     basic_block_len: usize,
     external_digests_len: usize,
+    targets_len: usize,
     node_entries_len: usize,
     core_tail_len: usize,
 }
@@ -112,6 +117,38 @@ impl ForestLayout {
         MastNodeEntry::read_from(&mut reader)
     }
 
+    pub(super) fn read_target_at(
+        &self,
+        bytes: &[u8],
+        slot: u32,
+    ) -> Result<ProcedureKey, DeserializationError> {
+        if slot as usize >= self.target_count {
+            return Err(DeserializationError::InvalidValue(format!(
+                "invocation target slot {slot} out of bounds for {} targets",
+                self.target_count
+            )));
+        }
+        let mut reader = SliceReader::new(read_fixed_section_entry(
+            bytes,
+            self.target_offset,
+            ProcedureKey::min_serialized_size(),
+            slot as usize,
+            "invocation target",
+        )?);
+        ProcedureKey::read_from(&mut reader)
+    }
+
+    pub(super) fn read_node_target_at(
+        &self,
+        bytes: &[u8],
+        index: usize,
+    ) -> Result<Option<ProcedureKey>, DeserializationError> {
+        self.read_node_entry_at(bytes, index)?
+            .target_slot()
+            .map(|slot| self.read_target_at(bytes, slot))
+            .transpose()
+    }
+
     pub(super) fn advice_map_offset(&self) -> usize {
         self.advice_map_offset
     }
@@ -135,6 +172,11 @@ impl ForestLayout {
 
     pub(super) fn external_digest_offset(&self) -> usize {
         self.external_digest_offset
+    }
+
+    #[cfg(test)]
+    pub(super) fn target_offset(&self) -> usize {
+        self.target_offset
     }
 
     pub(super) fn node_hash_offset(&self) -> Option<usize> {
@@ -189,6 +231,12 @@ impl MastForestHeader {
     ) -> Result<Self, DeserializationError> {
         let internal_node_count = source.read_usize()?;
         let external_node_count = source.read_usize()?;
+        let target_count = source.read_u32()? as usize;
+        if target_count > internal_node_count {
+            return Err(DeserializationError::InvalidValue(format!(
+                "invocation target count {target_count} exceeds internal node count {internal_node_count}"
+            )));
+        }
         let node_count = internal_node_count
             .checked_add(external_node_count)
             .ok_or_else(|| DeserializationError::InvalidValue("node count overflow".to_string()))?;
@@ -205,6 +253,12 @@ impl MastForestHeader {
             external_node_count,
             crate::Word::min_serialized_size(),
             "external node count",
+        )?;
+        validate_budgeted_count(
+            source,
+            target_count,
+            ProcedureKey::min_serialized_size(),
+            "invocation target count",
         )?;
         if !flags.is_hashless() {
             validate_budgeted_count(
@@ -225,6 +279,10 @@ impl MastForestHeader {
             .checked_mul(crate::Word::min_serialized_size())
             .ok_or_else(|| {
                 DeserializationError::InvalidValue("external digest length overflow".to_string())
+            })?;
+        let targets_len =
+            target_count.checked_mul(ProcedureKey::min_serialized_size()).ok_or_else(|| {
+                DeserializationError::InvalidValue("invocation target length overflow".into())
             })?;
         let node_entries_len =
             node_count.checked_mul(MastNodeEntry::SERIALIZED_SIZE).ok_or_else(|| {
@@ -249,6 +307,7 @@ impl MastForestHeader {
         let core_tail_len = basic_block_len
             .checked_add(node_digest_len)
             .and_then(|len| len.checked_add(node_entries_len))
+            .and_then(|len| len.checked_add(targets_len))
             .ok_or_else(|| {
                 DeserializationError::InvalidValue("core payload length overflow".to_string())
             })?;
@@ -259,10 +318,12 @@ impl MastForestHeader {
             node_count,
             internal_node_count,
             external_node_count,
+            target_count,
             roots_count,
             roots_offset,
             basic_block_len,
             external_digests_len,
+            targets_len,
             node_entries_len,
             core_tail_len,
         })
@@ -380,10 +441,14 @@ fn scan_layout_sections<R: OffsetTrackingReader>(
         node_entry_offset.checked_add(header.node_entries_len).ok_or_else(|| {
             DeserializationError::InvalidValue("external digest offset overflow".to_string())
         })?;
+    let target_offset =
+        external_digest_offset.checked_add(header.external_digests_len).ok_or_else(|| {
+            DeserializationError::InvalidValue("invocation target offset overflow".into())
+        })?;
     let node_hash_offset = if header.is_hashless() {
         None
     } else {
-        Some(external_digest_offset.checked_add(header.external_digests_len).ok_or_else(|| {
+        Some(target_offset.checked_add(header.targets_len).ok_or_else(|| {
             DeserializationError::InvalidValue("node hash offset overflow".to_string())
         })?)
     };
@@ -398,18 +463,39 @@ fn scan_layout_sections<R: OffsetTrackingReader>(
             DeserializationError::InvalidValue("node entries slice offset overflow".to_string())
         })?;
     let node_entries_slice = &core_tail[node_entries_start..node_entries_end];
-    validate_node_entries(node_entries_slice, header.node_count, header.external_node_count)?;
+    validate_node_entries(
+        node_entries_slice,
+        header.node_count,
+        header.external_node_count,
+        header.target_count,
+    )?;
+
+    // Decode every target at the shared parsing boundary, including trusted cache readers. A
+    // procedure key is a canonical field word, not an opaque 32-byte string.
+    let targets_start =
+        node_entries_end.checked_add(header.external_digests_len).ok_or_else(|| {
+            DeserializationError::InvalidValue("invocation target slice offset overflow".into())
+        })?;
+    let targets_end = targets_start.checked_add(header.targets_len).ok_or_else(|| {
+        DeserializationError::InvalidValue("invocation target slice length overflow".into())
+    })?;
+    let mut targets = SliceReader::new(&core_tail[targets_start..targets_end]);
+    for _ in 0..header.target_count {
+        ProcedureKey::read_from(&mut targets)?;
+    }
 
     Ok(ForestLayout {
         node_count: header.node_count,
         internal_node_count: header.internal_node_count,
         external_node_count: header.external_node_count,
+        target_count: header.target_count,
         roots_count: header.roots_count,
         roots_offset: header.roots_offset,
         basic_block_offset,
         basic_block_len: header.basic_block_len,
         node_entry_offset,
         external_digest_offset,
+        target_offset,
         node_hash_offset,
         advice_map_offset,
     })
@@ -419,17 +505,33 @@ fn validate_node_entries(
     node_entries: &[u8],
     node_count: usize,
     external_node_count: usize,
+    target_count: usize,
 ) -> Result<(), DeserializationError> {
     let mut reader = SliceReader::new(node_entries);
     let mut counted_externals = 0usize;
+    let mut next_target_slot = 0usize;
 
     for _ in 0..node_count {
         let node_entry = MastNodeEntry::read_from(&mut reader)?;
+        if let Some(slot) = node_entry.target_slot() {
+            if slot as usize != next_target_slot || next_target_slot >= target_count {
+                return Err(DeserializationError::InvalidValue(format!(
+                    "invocation target slot {slot} is not the next canonical slot {next_target_slot} of {target_count} targets"
+                )));
+            }
+            next_target_slot += 1;
+        }
         if matches!(node_entry, MastNodeEntry::External) {
             counted_externals = counted_externals.checked_add(1).ok_or_else(|| {
                 DeserializationError::InvalidValue("external node count overflow".to_string())
             })?;
         }
+    }
+
+    if next_target_slot != target_count {
+        return Err(DeserializationError::InvalidValue(format!(
+            "header invocation target count {target_count} does not match {next_target_slot} immediate invocation entries"
+        )));
     }
 
     if counted_externals != external_node_count {

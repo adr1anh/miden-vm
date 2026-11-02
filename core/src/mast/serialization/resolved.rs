@@ -7,8 +7,8 @@ use super::{
 use crate::{
     chiplets::hasher,
     mast::{
-        CallNode, DynNode, JoinNode, LoopNode, MastForestParts, MastNode, SplitNode,
-        node::hash_op_batches,
+        CallNode, DynNode, ExecNode, JoinNode, LoopNode, MastForestParts, MastNode, SplitNode,
+        node::{hash_op_batches, invocation_digest},
         serialization::{basic_blocks::BasicBlockDataDecoder, layout::read_fixed_section_entry},
     },
     serde::{Deserializable, DeserializationError, SliceReader},
@@ -147,6 +147,10 @@ impl<'a> ResolvedSerializedForest<'a> {
                 self.node_count(),
                 &basic_block_data_decoder,
                 digest,
+                entry
+                    .target_slot()
+                    .map(|slot| self.layout.read_target_at(self.bytes, slot))
+                    .transpose()?,
             )?;
             let node = mast_node_builder.build_linked().map_err(|e| {
                 DeserializationError::InvalidValue(format!(
@@ -285,10 +289,10 @@ fn forward_reference(entry: MastNodeEntry, node_index: usize) -> Option<u32> {
             .into_iter()
             .find(|&child_id| child_id as usize >= node_index),
         MastNodeEntry::Loop { body_id } => (body_id as usize >= node_index).then_some(body_id),
-        MastNodeEntry::Call { callee_id } | MastNodeEntry::SysCall { callee_id } => {
-            (callee_id as usize >= node_index).then_some(callee_id)
-        },
         MastNodeEntry::Block { .. }
+        | MastNodeEntry::Call { .. }
+        | MastNodeEntry::SysCall { .. }
+        | MastNodeEntry::Exec { .. }
         | MastNodeEntry::Dyn
         | MastNodeEntry::Dyncall
         | MastNodeEntry::External => None,
@@ -411,19 +415,16 @@ fn recompute_hash_table(
                     LoopNode::DOMAIN,
                 )
             },
-            MastNodeEntry::Call { callee_id } => {
-                let callee = checked_child_index(index, callee_id, layout.node_count)?;
-                hasher::merge_in_mast_domain(
-                    &[digests[callee], crate::Word::default()],
-                    CallNode::CALL_DOMAIN,
-                )
-            },
-            MastNodeEntry::SysCall { callee_id } => {
-                let callee = checked_child_index(index, callee_id, layout.node_count)?;
-                hasher::merge_in_mast_domain(
-                    &[digests[callee], crate::Word::default()],
-                    CallNode::SYSCALL_DOMAIN,
-                )
+            MastNodeEntry::Call { target_slot }
+            | MastNodeEntry::SysCall { target_slot }
+            | MastNodeEntry::Exec { target_slot } => {
+                let target = layout.read_target_at(bytes, target_slot)?;
+                let domain = match entry {
+                    MastNodeEntry::Call { .. } => CallNode::CALL_DOMAIN,
+                    MastNodeEntry::SysCall { .. } => CallNode::SYSCALL_DOMAIN,
+                    _ => ExecNode::DOMAIN,
+                };
+                invocation_digest(target, domain)
             },
             MastNodeEntry::Dyn => DynNode::DYN_DEFAULT_DIGEST,
             MastNodeEntry::Dyncall => DynNode::DYNCALL_DEFAULT_DIGEST,
@@ -478,22 +479,44 @@ fn checked_child_index(
     Ok(child_index)
 }
 
-pub(super) fn basic_block_offset_for_node_index(
+/// Computes serialization-only indices for one materialized node lookup. Wire-backed views keep
+/// these indices in their fixed entries. Materialized forests store semantic nodes instead, so
+/// isolated entry lookups scan the prefix; bulk metadata collection uses one pass instead.
+pub(super) fn serialization_indices_for_node(
     nodes: &[MastNode],
     node_index: usize,
-) -> Result<u32, DeserializationError> {
+) -> Result<(u32, Option<u32>), DeserializationError> {
+    if let Some(node) = nodes.get(node_index)
+        && !matches!(node, MastNode::Block(_))
+        && super::info::invocation_target(node).is_none()
+    {
+        return Ok((0, None));
+    }
     let mut offset = 0usize;
+    let mut target_slot = 0u32;
     for node in nodes.iter().take(node_index) {
         if let MastNode::Block(block) = node {
             offset = offset.checked_add(basic_block_data_len(block)).ok_or_else(|| {
                 DeserializationError::InvalidValue("basic-block data offset overflow".to_string())
             })?;
         }
+        if super::info::invocation_target(node).is_some() {
+            target_slot = target_slot.checked_add(1).ok_or_else(|| {
+                DeserializationError::InvalidValue("invocation target slot overflow".into())
+            })?;
+        }
     }
 
-    offset.try_into().map_err(|_| {
-        DeserializationError::InvalidValue(
-            "basic-block data offset does not fit in u32".to_string(),
-        )
-    })
+    let ops_offset = if matches!(nodes.get(node_index), Some(MastNode::Block(_))) {
+        offset.try_into().map_err(|_| {
+            DeserializationError::InvalidValue("basic-block data offset does not fit in u32".into())
+        })?
+    } else {
+        0
+    };
+    let target_slot = nodes
+        .get(node_index)
+        .and_then(super::info::invocation_target)
+        .map(|_| target_slot);
+    Ok((ops_offset, target_slot))
 }
