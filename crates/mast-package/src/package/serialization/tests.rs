@@ -16,12 +16,14 @@ use miden_core::{
     Felt, Word,
     advice::AdviceMap,
     mast::{
-        BasicBlockNodeBuilder, DenseMastForestBuilder, MastForest, MastNode, MastNodeExt,
-        MastNodeId,
+        BasicBlockNodeBuilder, DenseMastForestBuilder, ExecNodeBuilder, MastForest, MastNode,
+        MastNodeEntry, MastNodeExt, MastNodeId,
     },
     operations::Operation,
+    program::ProcedureKey,
     serde::{
-        BudgetedReader, ByteWriter, Deserializable, DeserializationError, Serializable, SliceReader,
+        BudgetedReader, ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable,
+        SliceReader,
     },
     utils::IndexVec,
 };
@@ -988,53 +990,90 @@ fn trusted_kernel_package_deserialisation_accepts_spoofed_mast_hashes() {
     assert_eq!(trusted.mast_forest()[node_id].digest(), spoofed_digest);
 }
 
-fn read_usize_vint64(bytes: &[u8], offset: &mut usize) -> usize {
-    // This test patches raw bytes in place, so it needs byte offsets that
-    // ByteReader::read_usize does not expose.
-    let first_byte = bytes.get(*offset).copied().expect("out-of-bounds vint64 peek");
-    let length = first_byte.trailing_zeros() as usize + 1;
+#[test]
+fn spoofed_mast_hash_with_keyed_target_is_rejected_unless_trusted() {
+    let target = ProcedureKey::new(miden_core::utils::hash_string_to_word("package-exec-target"));
+    let mut builder = DenseMastForestBuilder::new();
+    let node_id = builder.push_node(ExecNodeBuilder::new(target)).unwrap();
+    builder.mark_root(node_id);
+    let forest = builder.build().unwrap();
+    let digest = forest[node_id].digest();
+    let exports = vec![PackageExport::Procedure(ProcedureExport::new(
+        absolute_path("lib::p"),
+        Some(node_id),
+        digest,
+        None,
+    ))];
+    let package = Package::create(
+        PackageId::from("lib"),
+        crate::Version::new(0, 0, 0),
+        TargetType::Library,
+        Arc::new(forest),
+        exports,
+        None,
+    )
+    .unwrap();
 
-    if length == 9 {
-        *offset += 1;
-        let end = (*offset).checked_add(8).expect("offset overflow while reading vint64");
-        let chunk: [u8; 8] = bytes[*offset..end].try_into().expect("out-of-bounds vint64");
-        *offset = end;
-        let value = u64::from_le_bytes(chunk);
-        usize::try_from(value).expect("encoded usize does not fit host usize")
-    } else {
-        let end = (*offset).checked_add(length).expect("offset overflow while reading vint64");
-        let mut encoded = [0u8; 8];
-        encoded[..length].copy_from_slice(&bytes[*offset..end]);
-        *offset = end;
-        let value = u64::from_le_bytes(encoded) >> length;
-        usize::try_from(value).expect("encoded usize does not fit host usize")
-    }
+    let (bytes, spoofed_digest) =
+        build_package_bytes_with_spoofed_first_node_digest(&package, "spoofed-keyed-digest");
+    let trusted = Package::read_from_bytes_trusted(&bytes)
+        .expect("trusted package deserialization should preserve the spoofed hash");
+    let MastNode::Exec(node) = &trusted.mast_forest()[node_id] else {
+        panic!("expected the keyed invocation to be preserved");
+    };
+    assert_eq!(node.target(), target, "the target table must not be patched");
+    assert_eq!(node.digest(), spoofed_digest);
+
+    let err = Package::read_from_bytes(&bytes)
+        .expect_err("untrusted package deserialization should reject the spoofed hash");
+    assert!(
+        err.to_string().contains("invalid untrusted MAST forest"),
+        "expected untrusted-MAST validation failure, got: {err}"
+    );
+    assert!(
+        err.to_string().contains("hash mismatch for node"),
+        "expected digest mismatch failure, got: {err}"
+    );
 }
 
 fn locate_first_node_hash(bytes: &[u8]) -> (usize, usize) {
-    // Header: magic[4] + flags[1] + version[3]
-    let mut offset = 0usize;
-    offset += 4;
-    offset += 1;
-    offset += 3;
+    // Core's public wire view does not expose byte offsets. Use its shared integer codec and
+    // track consumed bytes with the budget, then skip the fixed-width MAST v6 sections.
+    let mut reader = BudgetedReader::new(SliceReader::new(bytes), bytes.len());
+    assert_eq!(
+        reader.read_array::<8>().expect("missing MAST header"),
+        *b"MAST\0\0\0\x06",
+        "expected a hash-bearing MAST v6 fixture"
+    );
 
-    let internal_node_count = read_usize_vint64(bytes, &mut offset);
-    let external_node_count = read_usize_vint64(bytes, &mut offset);
+    let internal_node_count = reader.read_usize().expect("missing internal node count");
+    let external_node_count = reader.read_usize().expect("missing external node count");
+    let target_count = usize::try_from(reader.read_u32().expect("missing invocation target count"))
+        .expect("invocation target count does not fit host usize");
     let node_count = internal_node_count
         .checked_add(external_node_count)
         .expect("node count overflow");
 
     // Roots: len (usize) + elements (u32 LE)
-    let roots_len = read_usize_vint64(bytes, &mut offset);
-    offset += roots_len * 4;
+    let roots_len = reader.read_usize().expect("missing root count");
+    reader
+        .read_slice(roots_len.checked_mul(size_of::<u32>()).expect("root section length overflow"))
+        .expect("truncated root section");
 
     // Basic block data: len (usize) + bytes
-    let bb_len = read_usize_vint64(bytes, &mut offset);
-    offset += bb_len;
+    let bb_len = reader.read_usize().expect("missing basic block data length");
+    reader.read_slice(bb_len).expect("truncated basic block data");
 
-    offset += node_count * 8;
-    offset += external_node_count * 32;
+    for (count, entry_size) in [
+        (node_count, MastNodeEntry::SERIALIZED_SIZE),
+        (external_node_count, Word::SERIALIZED_SIZE),
+        (target_count, ProcedureKey::min_serialized_size()),
+    ] {
+        let section_len = count.checked_mul(entry_size).expect("MAST section length overflow");
+        reader.read_slice(section_len).expect("truncated MAST section");
+    }
 
+    let offset = bytes.len().checked_sub(reader.remaining()).expect("MAST offset overflow");
     (offset, internal_node_count)
 }
 
@@ -1046,7 +1085,9 @@ fn build_package_bytes_with_spoofed_first_node_digest(
 
     // Serialize the MastForest normally so the byte layout is stable.
     let forest = lib.mast_forest().as_ref();
-    let original_digest = forest[MastNodeId::new_unchecked(0)].digest();
+    let first_node = &forest[MastNodeId::new_unchecked(0)];
+    assert!(!first_node.is_external(), "fixture node 0 must have an internal hash");
+    let original_digest = first_node.digest();
     let mut output_bytes = Vec::new();
     lib.write_header_into(&mut output_bytes);
     let forest_offset = output_bytes.len();
@@ -1063,9 +1104,20 @@ fn build_package_bytes_with_spoofed_first_node_digest(
     spoofed_digest.write_into(&mut spoofed_digest_bytes);
     assert_eq!(spoofed_digest_bytes.len(), 32, "Word must serialize to 32 bytes");
 
-    let node0_digest_offset = forest_offset + node_hashes_start;
-    output_bytes[node0_digest_offset..node0_digest_offset + 32]
-        .copy_from_slice(&spoofed_digest_bytes);
+    let node0_digest_offset =
+        forest_offset.checked_add(node_hashes_start).expect("node hash offset overflow");
+    let node0_digest_end = node0_digest_offset
+        .checked_add(Word::SERIALIZED_SIZE)
+        .expect("node hash end offset overflow");
+    let node0_digest_bytes = output_bytes
+        .get_mut(node0_digest_offset..node0_digest_end)
+        .expect("truncated first node hash");
+    assert_eq!(
+        Word::read_from_bytes(node0_digest_bytes).expect("invalid first node hash"),
+        original_digest,
+        "fixture must patch the original node 0 hash"
+    );
+    node0_digest_bytes.copy_from_slice(&spoofed_digest_bytes);
 
     lib.write_trailer_into(&mut output_bytes);
 
