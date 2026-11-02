@@ -255,33 +255,59 @@ runtime digest dispatch or infer an authenticated binding from code availability
 require preserving child-ID invocation nodes, old serialized layouts or digest-based implementation
 lookup. Include existing source and stack/memory regressions in PRs 04/05/09 and final qualification.
 
-**D3 Interface identity, closure and external profile, reviewed with the user on 2 November 2026:**
-Protocol supplies immutable LibraryId I and authenticates its association with the canonical
-publisher-qualified descriptor and declaration commitment. Do not derive I from declarations or
-invent an identity hash. Closure metadata is the complete finite transitive LibraryId set excluding
-self; all direct external requirements are included, with self references implicit. This introduces
-no VM-level interface-cycle prohibition. Completeness needs authenticated contributing declarations.
-Publisher-descriptor canonicalization, permitted complete homes and the Protocol-local numbered-v1
-domain allocation remain **mandatory external profile inputs, with no permissive fallback**.
+**D3 Page-defined interface identity and required external profile, clarified by the user on
+2 November 2026:** this supersedes the earlier Protocol-assigned opaque-I decision and its historical
+wording below. Retain the LibraryTree Space's formulas:
 
-Implement the reviewed generic InterfaceArtifact/Home v1 framing under that required profile:
-canonical Word/label encodings; little-endian u32 lengths; exact EOF; declarations with nonempty
-semantic Text paths and absent/present UTF-8 ABI; strict envelope-byte path order and canonical-Word
-byte order for unique direct/closure sets. Artifact fields are version 1, I, declaration commitment,
-length-prefixed canonical descriptor Q0 and declaration bytes DB. Commit `B(Q0)||DB` using standard
-Eidos FeltSequence over `[1, byte_length, packed_u32_bytes]` in the profile-supplied Protocol domain;
-Q0 excludes I, commitment and association proofs. Home is version 1 plus an explicit complete typed
-path, including explicit empty N0. Require caller budgets and expected I/context; structurally valid
-bytes alone supply no authority. Reuse core label/hash helpers, add no default home/domain/profile,
-and do not activate package9 or a ReleaseRecord codec. Sources: assembly §§3.2, 5–7
-(cached lines 172–211, 347–405, 445–465, 554–562, 720–766), shared §2, vmprotocol §7.
-Production descriptor/domain/home fixtures remain external acceptance gates.
+```text
+LibraryId = H_LIBRARY(publisher_id, name, interface_version)
+interface_comm = CommitLibInterface(publisher_id, name, interface_version,
+    List(proc_exports), List(dynamic_deps), List(dynamic_deps_closure))
+```
+
+Registration permanently associates LibraryId with that interface commitment. LibraryId is derived
+from publisher/name/interface version, independently of implementation bodies, private helpers,
+release revision and pinned dependency choices. Public API or declared dynamic-dependency changes
+require a new interface version. Release revisions may change implementations, private helpers and
+pinned dependencies; retained Latest dependencies remain dynamic. The discussed
+`merge(user_supplied, assembler_derived_interface_or_code_hash)` alternative is rejected.
+
+Generic VM APIs may receive an opaque typed I, but the Protocol profile **must derive or verify the
+Page-defined I**, recognize the canonical publisher-qualified descriptor, and authenticate the permanent
+I/interface_comm registration binding. It may not arbitrarily assign I. Exact canonical identity bytes
+and H_LIBRARY domain allocation remain required Protocol-owner inputs; do not invent a VM identity
+hash, allocator, fallback or code-derived identity.
+
+The Page defines full dynamic closure **L(I), including I itself**; `external(I) = L(I) \ {I}`.
+The generic codec's stored dependency-closure field represents external(I), so its full logical
+closure is `{I} ∪ stored_external`. Document and validate that equivalence; never describe the Page's
+full closure as excluding self. Direct external requirements must be included, and completeness needs
+authenticated contributing declarations. No VM-level interface-cycle prohibition is introduced.
+
+Current generic InterfaceArtifact/Home v1 framing retains canonical Word/label encodings, little-endian
+u32 lengths, exact EOF, nonempty semantic Text declaration paths, exact optional UTF-8 ABI, and strict
+path-envelope/Word-byte ordering. Its transport fields are version 1, I, declaration commitment,
+B(Q0) and B(DB), with Q0 excluding I, commitment and association proofs. Its existing generic
+FeltSequence commitment over `[1, byte_length, packed_u32_bytes]` of `B(Q0)||DB` is not evidence of
+production equivalence to CommitLibInterface: owner-approved canonical encoding/domain and full-closure
+projection fixtures must establish that mapping before adoption. Home is version 1 plus an explicit
+complete typed path, including explicit empty N0. Caller budgets/expected I/context remain mandatory.
+Publisher/home/TypedId/profile validation, allocated domains, immutable registration, closure completeness
+and all security/acceptance gates remain required with **no permissive fallback**. Package9/ReleaseRecord
+activation and production profile fixtures remain separate gates. Audit the existing assigned-I/profile
+Rustdoc and codec projections in a separate implementation checkpoint; this correction changes no code.
+
+Sources: [LibraryTree proposal](https://chatgpt.com/space/page_d5d09034b1e881919a4c425fe6429d0a)
+(identity/interface/registration blocks f83b18f1, 6d71b671, c1b6063f; closure blocks 88b6753b/b8c4a9c4)
+and [compiler/assembler contract](https://chatgpt.com/space/page_ad138e12f6cc8191a0e7af15a751dbf1)
+(block 996d90e2 explicitly retains the formula). Bounded excerpts and Page/block/date/SHA provenance
+are in the uncommitted reference cache; these selected semantics supersede earlier proposal wording.
 
 ## Open decisions and external gates
 
 | Gate | Required decision/evidence | Blocks |
 | --- | --- | --- |
-| Canonical cross-team wire contract | VM node preimages are resolved in D1; generic interface/home v1 and required external profile are recorded in D3. Obtain owner descriptor/domain/home fixtures; confirm remaining release/resource/user/random codecs and provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
+| Canonical cross-team wire contract | VM node preimages are resolved in D1; generic interface/home v1 and required external profile are recorded in D3. Obtain Page-derived identity/CommitLibInterface/full-closure projection and owner descriptor/domain/home fixtures; confirm remaining release/resource/user/random codecs and provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
 | Frontend syntax and eligibility | Preserve existing MASM name/path/word syntax under D2. Agree optional explicit key/inline extensions, fixed-body inline eligibility and diagnostics for genuinely invalid forms; source alias versus published alias versus wrapper semantics. | 04, 09 |
 | Private reusable-instance ABI | Freeze runtime-base handle transport, typed relative suffix/procref lowering and validation. C/D must remain identical across randomized user mounts; no implicit relocation or caller-derived namespace. | 11, private-instance acceptance |
 | Shared/fresh-context ABI | Specify supported value/pointer layouts, global/heap/function-table ownership, initialization and reentrancy for supported libraries. Namespace authentication supplies no RAM isolation. Do not guess a fresh-context-only/stateless-only scope. | 11, 13, final supported launch claim |
@@ -302,8 +328,8 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
-| 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required owner-approved descriptor/domain/home/association/closure fixtures remain external. Generic implementation and local checks are done. Executable lowering at 09; fuzz regeneration/smoke at16. |
-| 05 Runtime | in-progress | Base `722392682` | Bounded opening/Resolve source and existing-API research | First bounded opening verifier, then occurrence ledger/session and real invocation transitions. Inherited processor/fuzz tests remain pending; no runtime/proof completion claim. |
+| 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
+| 05 Runtime | in-progress | Opening `d8972f02c`; base `722392682` | Independent source/test reviews; 17 exact-module isolated tests, isolated Clippy/no_std and formatting pass | Processor check still has the same ten callable-cutover errors. Next occurrence ledger/session, then real invocation transitions; inherited processor/fuzz checks remain pending. |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
@@ -851,3 +877,29 @@ source occurrence and idempotent retries must remain compatible with PRs 06–08
 are uncommitted references, not a second plan. The existing ten callable-cutover processor errors and
 PRs 02/03 deferred checks remain until real transitions/consumers are migrated; do not add digest or
 old child-ID adapters to create an intermediate passing build. Only actual validation clears gates.
+
+### PR 05 Opening checkpoint and superseding identity clarification
+
+Commit `d8972f02c` adds native bounded selective opening verification, immutable private verified
+results and exact retained preimages/slots. Entire-candidate limits cover nodes/depth, per-List and
+aggregate children, encoded lengths, native Vec capacities and maximum sequential hash scratch.
+Core commitments and N/K derivations are reused; membership grants no root/global-uniqueness/code/
+invocation authority. Independent source and test reviews found no issue; pinned formatting passed.
+
+After successful AC/heavy-work guards, the actual processor lib check still fails with the same six
+callee() uses and four missing Exec matches, with no new opening-module diagnostic. The uncommitted
+`.scratch/librarytree/opening-harness/` imports the exact production module/tests, supplying only
+normal alloc/std declarations and reexports, with no resolver implementation or compatibility stubs.
+Its 17 tests, test-inclusive Clippy with `-D warnings`, and no-default-features check passed; these are
+isolated unit evidence, not passing processor integration. The first harness attempt omitted the
+processor's alloc macro import; fixing the harness setup enabled the passing run. Logs remain separate.
+
+At this verified safe checkpoint, the user explicitly superseded the earlier opaque Protocol-assigned
+LibraryId choice with the two cited Pages' deterministic identity/interface formulas, permanent binding
+and full L(I)/external(I) distinction; D3 above is authoritative. Both Pages were read on 2 November
+2026, sequence 0; bounded relevant cache excerpts retain original block hashes and provenance. No
+implementation changes accompany this documentation correction, and PR 05 opening work is preserved.
+The user also directed continuation of the VM stack while production Protocol inputs remain pending;
+this does not authorize arbitrary identity assignment, merge/code-hash alternatives, defaults or gate
+waivers. Continue with occurrence ledger/session and staged invocation work; align profile Rustdoc and
+production codec/fixture equivalence separately before PR 04's external gate is cleared.
