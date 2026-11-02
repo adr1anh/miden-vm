@@ -9,16 +9,27 @@ use super::*;
 use crate::{
     Felt, Word,
     mast::{
-        BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder, ExecutableMastForest,
-        ExternalNodeBuilder, JoinNodeBuilder, LoopNodeBuilder, MastForestError, MastForestView,
-        MastNodeExt, MastNodeId, OP_BATCH_SIZE, OpBatch, SparseMastForest, SparseMastForestBuilder,
-        SplitNodeBuilder, UntrustedMastForest, UntrustedMastForestReadOptions, VisitKind,
-        node::hash_op_batches,
+        BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder, ExecNodeBuilder,
+        ExecutableMastForest, ExternalNodeBuilder, JoinNodeBuilder, LoopNodeBuilder,
+        MastForestError, MastForestView, MastNodeExt, MastNodeId, OP_BATCH_SIZE, OpBatch,
+        SparseMastForest, SparseMastForestBuilder, SplitNodeBuilder, UntrustedMastForest,
+        UntrustedMastForestReadOptions, VisitKind, node::hash_op_batches,
     },
     operations::Operation,
+    program::ProcedureKey,
     serde::{ByteReader, Deserializable, DeserializationError, Serializable, SliceReader},
     utils::Idx,
 };
+
+/// Symbolic targets are independent of local node IDs and implementation digests.
+fn procedure_key(seed: u32) -> ProcedureKey {
+    ProcedureKey::new(Word::new([
+        Felt::from_u32(seed),
+        Felt::from_u32(seed + 1),
+        Felt::from_u32(seed + 2),
+        Felt::from_u32(seed + 3),
+    ]))
+}
 
 struct TestLogger {
     messages: Mutex<Vec<(ThreadId, log::Level, String)>>,
@@ -77,7 +88,7 @@ fn with_captured_logs<T>(
 /// If this test fails to compile, it means that `Operation` was changed. Make sure
 /// that all tests in this file are updated accordingly. For example, if a new `Operation` variant
 /// was added, make sure that you add it in the vector of operations in
-/// [`serialize_deserialize_all_nodes`].
+/// [`sample_basic_block_operations_all_variants`].
 #[test]
 fn confirm_operation_structure() {
     match Operation::Noop {
@@ -167,7 +178,7 @@ fn confirm_operation_structure() {
 
 /// Returns all currently supported basic-block [`Operation`] variants.
 ///
-/// Control-flow instructions (e.g. `join`, `split`, `loop`, `call`) are represented as
+/// Control-flow instructions (e.g. `join`, `split`, `loop`, `call`, `exec`) are represented as
 /// [`MastNode`] variants, not as basic-block [`Operation`] values.
 fn sample_basic_block_operations_all_variants() -> Vec<Operation> {
     vec![
@@ -380,16 +391,29 @@ fn assert_serialized_view_matches_forest(forest: &MastForest) {
     assert_eq!(view.node_count(), forest.nodes().len());
 
     let mut bb_builder = BasicBlockDataBuilder::new();
+    let mut next_target_slot = 0u32;
     for (idx, node) in forest.nodes().iter().enumerate() {
         let ops_offset = if let MastNode::Block(block) = node {
             bb_builder.encode_basic_block(block)
         } else {
             0
         };
-        let expected = MastNodeInfo::new(node, ops_offset);
+        let expected_target = match node {
+            MastNode::Call(call) => Some(call.target()),
+            MastNode::Exec(exec) => Some(exec.target()),
+            _ => None,
+        };
+        let target_slot = expected_target.map(|_| {
+            let slot = next_target_slot;
+            next_target_slot += 1;
+            slot
+        });
+        let expected = MastNodeInfo::new(node, ops_offset, target_slot);
         let actual = view.node_info_at(idx).unwrap();
         assert_eq!(expected.to_bytes(), actual.to_bytes());
+        assert_eq!(view.node_target_at(idx).unwrap(), expected_target);
     }
+    assert_eq!(read_header_counts(&bytes).2, next_target_slot);
 }
 
 fn canonicalized_for_test(forest: &MastForest) -> MastForest {
@@ -619,8 +643,11 @@ fn test_mast_forest_wire_view_random_access_all_node_types() {
     let block_id = BasicBlockNodeBuilder::new(vec![Operation::Add])
         .add_to_forest(&mut forest)
         .unwrap();
-    let call_id = CallNodeBuilder::new(block_id).add_to_forest(&mut forest).unwrap();
-    let syscall_id = CallNodeBuilder::new_syscall(block_id).add_to_forest(&mut forest).unwrap();
+    let call_id = CallNodeBuilder::new(procedure_key(101)).add_to_forest(&mut forest).unwrap();
+    let syscall_id = CallNodeBuilder::new_syscall(procedure_key(201))
+        .add_to_forest(&mut forest)
+        .unwrap();
+    let exec_id = ExecNodeBuilder::new(procedure_key(301)).add_to_forest(&mut forest).unwrap();
     let loop_id = LoopNodeBuilder::new(block_id).add_to_forest(&mut forest).unwrap();
     let join_id = JoinNodeBuilder::new([block_id, call_id]).add_to_forest(&mut forest).unwrap();
     let split_id = SplitNodeBuilder::new([block_id, call_id]).add_to_forest(&mut forest).unwrap();
@@ -630,6 +657,7 @@ fn test_mast_forest_wire_view_random_access_all_node_types() {
 
     forest.make_root(join_id);
     forest.make_root(syscall_id);
+    forest.make_root(exec_id);
     forest.make_root(loop_id);
     forest.make_root(split_id);
     forest.make_root(dyn_id);
@@ -1274,16 +1302,18 @@ fn skip_sparse_node(reader: &mut SliceReader<'_>) {
             let _first = MastNodeId::read_from(reader).unwrap();
             let _second = MastNodeId::read_from(reader).unwrap();
         },
-        3..=5 => {
+        3 => {
             let _child = MastNodeId::read_from(reader).unwrap();
+        },
+        4 | 5 | 9 => {
+            let _target = ProcedureKey::read_from(reader).unwrap();
         },
         6..=8 => {},
         _ => panic!("unexpected sparse test node tag {tag}"),
     }
 }
 
-/// Test that a forest with a node whose child ids are larger than its own id serializes and
-/// deserializes successfully.
+/// Structural builders reject out-of-range child IDs; symbolic invocations need no local body.
 #[test]
 fn mast_forest_invalid_node_id() {
     // Hydrate a forest smaller than the second
@@ -1329,18 +1359,24 @@ fn mast_forest_invalid_node_id() {
         Err(MastForestError::NodeIdOverflow(overflow, 2))
     );
 
-    // Attempt to call with invalid ids
-    assert_eq!(
-        CallNodeBuilder::new(overflow).add_to_forest(&mut forest),
-        Err(MastForestError::NodeIdOverflow(overflow, 2))
-    );
-    assert_eq!(
-        CallNodeBuilder::new_syscall(overflow).add_to_forest(&mut forest),
-        Err(MastForestError::NodeIdOverflow(overflow, 2))
-    );
-
     // Validate normal operations
     JoinNodeBuilder::new([first, second]).add_to_forest(&mut forest).unwrap();
+
+    let mut invocations = MastForest::new();
+    let call = CallNodeBuilder::new(procedure_key(101))
+        .add_to_forest(&mut invocations)
+        .unwrap();
+    let syscall = CallNodeBuilder::new_syscall(procedure_key(201))
+        .add_to_forest(&mut invocations)
+        .unwrap();
+    let exec = ExecNodeBuilder::new(procedure_key(301))
+        .add_to_forest(&mut invocations)
+        .unwrap();
+    for root in [call, syscall, exec] {
+        assert!(!invocations[root].has_children());
+        invocations.make_root(root);
+    }
+    assert_serialized_view_matches_forest(&invocations);
 }
 
 /// Test `MastForest::advice_map` serialization and deserialization.
@@ -1358,6 +1394,7 @@ fn mast_forest_deserialize_invalid_ops_offset_fails() {
     let _: [u8; 8] = reader.read_array().unwrap(); // magic (4) + flags (1) + version (3)
     let _internal_node_count: usize = reader.read().unwrap();
     let _external_node_count: usize = reader.read().unwrap();
+    let _target_count = reader.read_u32().unwrap();
     let _roots: Vec<u32> = Deserializable::read_from(&mut reader).unwrap();
     let _basic_block_data: Vec<u8> = Deserializable::read_from(&mut reader).unwrap();
 
@@ -1379,23 +1416,28 @@ fn mast_forest_deserialize_invalid_ops_offset_fails() {
 
 #[test]
 fn mast_forest_read_from_bytes_rejects_fuzzed_overflow_payload() {
-    // This fuzz payload contains length fields that make deserialization read far past the input
-    // size. If this starts succeeding, the byte-slice path may no longer be enforcing its budget.
-    let payload = [
-        0x4d, 0x41, 0x53, 0x54, 0x00, 0x00, 0x00, 0x03, 0x07, 0x03, 0x0b, 0x00, 0x00, 0x00, 0x00,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x30, 0x01,
-        0x3b, 0x0b, 0x00, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad,
-        0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0x53, 0x4a,
-        0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad,
-        0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0xad, 0x21, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0xad, 0xad, 0xad, 0xad, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30,
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x84, 0x81, 0xc3, 0xbc, 0x72, 0x7f,
-        0x15, 0x30,
-    ];
+    // Preserve the fuzz regression's excessive-length condition in the current wire format.
+    // Merely changing the old payload's version would reject its obsolete layout before reaching
+    // the length checks this test is intended to exercise.
+    let mut payload = serialized_single_block_forest();
+    let mut cursor = OffsetReader::new(&payload);
+    let _header: [u8; 8] = cursor.read_array().unwrap();
+    let _internal_node_count = cursor.read_usize().unwrap();
+    let _external_node_count = cursor.read_usize().unwrap();
+    let _target_count = cursor.read_u32().unwrap();
+    let _roots: Vec<u32> = cursor.read().unwrap();
+    let length_offset = cursor.position();
+    let _original_length = cursor.read_usize().unwrap();
+    let length_end = cursor.position();
+    let mut excessive_length = Vec::new();
+    usize::MAX.write_into(&mut excessive_length);
+    payload.splice(length_offset..length_end, excessive_length);
 
     let result = MastForest::read_from_bytes(&payload);
-    assert!(result.is_err());
+    assert_matches!(
+        result,
+        Err(DeserializationError::InvalidValue(msg)) if msg.contains("core payload length overflow")
+    );
 
     // Wrapped fuzz inputs must use the generic budgeted entry point; otherwise the outer
     // collection length can drive unbounded work before the inner forest fails.
@@ -1643,14 +1685,16 @@ fn test_batched_construction_preserves_structure() {
 fn assert_header_flags(bytes: &[u8], expected_flags: u8) {
     assert_eq!(&bytes[0..4], b"MAST", "Magic should be MAST");
     assert_eq!(bytes[4], expected_flags, "unexpected serialization flags");
-    assert_eq!(&bytes[5..8], &[0, 0, 5], "Version should be [0, 0, 5]");
+    assert_eq!(&bytes[5..8], &[0, 0, 6], "Version should be [0, 0, 6]");
 }
 
-fn read_header_counts(bytes: &[u8]) -> (usize, usize) {
-    let mut offset = 8;
-    let internal_node_count = read_usize_at(bytes, &mut offset).unwrap();
-    let external_node_count = read_usize_at(bytes, &mut offset).unwrap();
-    (internal_node_count, external_node_count)
+fn read_header_counts(bytes: &[u8]) -> (usize, usize, u32) {
+    let mut reader = SliceReader::new(bytes);
+    let _header: [u8; 8] = reader.read_array().unwrap();
+    let internal_node_count = reader.read_usize().unwrap();
+    let external_node_count = reader.read_usize().unwrap();
+    let target_count = reader.read_u32().unwrap();
+    (internal_node_count, external_node_count, target_count)
 }
 
 #[test]
@@ -1682,19 +1726,29 @@ fn test_header_counts_match_node_kinds() {
     let join_id = JoinNodeBuilder::new([block_id, external_id])
         .add_to_forest(&mut forest)
         .unwrap();
+    let call_id = CallNodeBuilder::new(procedure_key(101)).add_to_forest(&mut forest).unwrap();
+    let syscall_id = CallNodeBuilder::new_syscall(procedure_key(201))
+        .add_to_forest(&mut forest)
+        .unwrap();
+    let exec_id = ExecNodeBuilder::new(procedure_key(301)).add_to_forest(&mut forest).unwrap();
     forest.make_root(join_id);
+    forest.make_root(call_id);
+    forest.make_root(syscall_id);
+    forest.make_root(exec_id);
 
     let forest = canonicalized_for_test(&forest);
-    let (internal_node_count, external_node_count) = read_header_counts(&forest.to_bytes());
-    assert_eq!(internal_node_count, 2);
-    assert_eq!(external_node_count, 1);
+    assert_eq!(read_header_counts(&forest.to_bytes()), (5, 1, 3));
+    let mut hashless = Vec::new();
+    forest.write_hashless(&mut hashless);
+    assert_eq!(read_header_counts(&hashless), (5, 1, 3));
 }
 
 /// Version 4 encoded opcode 0x50 as HPERM, while version 5 interprets it as COMPRESS. Every load
-/// path must reject version-4 bytes before it can attach the new semantics to an old stored digest.
+/// path must reject version-4 bytes and the version-5 child-ID invocation layout before it can
+/// attach new semantics to an old stored digest.
 #[test]
-fn test_pre_eidos_wire_version_is_rejected_by_every_load_path() {
-    assert_eq!(VERSION, [0, 0, 5]);
+fn test_legacy_wire_versions_are_rejected_by_every_load_path() {
+    assert_eq!(VERSION, [0, 0, 6]);
 
     let mut forest = MastForest::new();
     let block_id = BasicBlockNodeBuilder::new(vec![Operation::Add])
@@ -1702,19 +1756,22 @@ fn test_pre_eidos_wire_version_is_rejected_by_every_load_path() {
         .unwrap();
     forest.make_root(block_id);
 
-    let mut bytes = forest.to_bytes();
-    bytes[5..8].copy_from_slice(&[0, 0, 4]);
+    for version in [[0, 0, 4], [0, 0, 5]] {
+        let mut bytes = forest.to_bytes();
+        bytes[5..8].copy_from_slice(&version);
 
-    assert_unsupported_version(MastForest::read_from_bytes(&bytes));
-    assert_unsupported_version(MastForest::read_view_from_bytes(
-        &bytes,
-        MastForestReadMode::Materialized,
-    ));
-    assert_unsupported_version(MastForest::read_view_from_bytes(
-        &bytes,
-        MastForestReadMode::WireBacked,
-    ));
-    assert_unsupported_version(UntrustedMastForest::read_from_bytes(&bytes));
+        assert_unsupported_version(MastForest::read_from_bytes(&bytes));
+        assert_unsupported_version(MastForestWireView::new(&bytes));
+        assert_unsupported_version(MastForest::read_view_from_bytes(
+            &bytes,
+            MastForestReadMode::Materialized,
+        ));
+        assert_unsupported_version(MastForest::read_view_from_bytes(
+            &bytes,
+            MastForestReadMode::WireBacked,
+        ));
+        assert_unsupported_version(UntrustedMastForest::read_from_bytes(&bytes));
+    }
 }
 
 fn assert_unsupported_version<T: core::fmt::Debug>(result: Result<T, DeserializationError>) {
@@ -2254,6 +2311,8 @@ fn locate_single_block_indptr_and_digest_offsets(bytes: &[u8]) -> (usize, usize)
     assert_eq!(internal_node_count, 1);
     let external_node_count: usize = cursor.read().unwrap();
     assert_eq!(external_node_count, 0);
+    let target_count = cursor.read_u32().unwrap();
+    assert_eq!(target_count, 0);
 
     let _roots: Vec<u32> = Deserializable::read_from(&mut cursor).unwrap();
 
@@ -2449,10 +2508,15 @@ fn test_untrusted_forest_validates_all_node_types() {
     let loop_id = LoopNodeBuilder::new(block1_id).add_to_forest(&mut forest).unwrap();
 
     // Call node
-    let call_id = CallNodeBuilder::new(block1_id).add_to_forest(&mut forest).unwrap();
+    let call_id = CallNodeBuilder::new(procedure_key(101)).add_to_forest(&mut forest).unwrap();
 
     // Syscall node
-    let syscall_id = CallNodeBuilder::new_syscall(block1_id).add_to_forest(&mut forest).unwrap();
+    let syscall_id = CallNodeBuilder::new_syscall(procedure_key(201))
+        .add_to_forest(&mut forest)
+        .unwrap();
+
+    // Exec node
+    let exec_id = ExecNodeBuilder::new(procedure_key(301)).add_to_forest(&mut forest).unwrap();
 
     // Dyn node
     let dyn_id = DynNodeBuilder::new_dyn().add_to_forest(&mut forest).unwrap();
@@ -2468,20 +2532,20 @@ fn test_untrusted_forest_validates_all_node_types() {
     forest.make_root(loop_id);
     forest.make_root(call_id);
     forest.make_root(syscall_id);
+    forest.make_root(exec_id);
     forest.make_root(dyn_id);
     forest.make_root(dyncall_id);
     forest.make_root(external_id);
 
     let forest = canonicalized_for_test(&forest);
 
-    // Serialize
-    let bytes = forest.to_bytes();
-
-    // Deserialize as untrusted and validate
-    let untrusted = UntrustedMastForest::read_from_bytes(&bytes).unwrap();
-    let validated = untrusted.validate().unwrap();
-
-    assert_eq!(forest, validated);
+    let mut hashless = Vec::new();
+    forest.write_hashless(&mut hashless);
+    for bytes in [forest.to_bytes(), hashless] {
+        let untrusted = UntrustedMastForest::read_from_bytes(&bytes).unwrap();
+        let validated = untrusted.validate().unwrap();
+        assert_eq!(forest, validated);
+    }
 }
 
 /// Test that UntrustedMastForest::validate rejects excessive node counts before validation.
@@ -2499,6 +2563,7 @@ fn test_deserialization_rejects_excessive_node_count() {
     let excessive_count: usize = MastForest::MAX_NODES + 1;
     excessive_count.write_into(&mut bytes);
     0usize.write_into(&mut bytes);
+    0u32.write_into(&mut bytes);
 
     // Attempt to deserialize - should fail before any large allocation
     let result = MastForest::read_from_bytes(&bytes);
@@ -2522,6 +2587,7 @@ fn test_untrusted_deserialization_rejects_node_count_above_budget_bound() {
 
     2usize.write_into(&mut bytes);
     0usize.write_into(&mut bytes);
+    0u32.write_into(&mut bytes);
 
     let result = UntrustedMastForest::read_from_bytes_with_options(
         &bytes,
@@ -2647,24 +2713,20 @@ fn duplicate_advice_map_key_rejected_by_every_reader_path() {
 fn wire_view_defers_internal_digest_validation_until_access() {
     use crate::serde::DeserializationError;
 
-    // Minimized fuzz counterexample (crash-08fc67b9, 173 bytes): 'MAST' magic, version 4,
-    // 3 nodes; the node-hash section at the tail carries 0xf8ffffffffffffff (>= ORDER).
-    const BYTES: [u8; 173] = [
-        0x4d, 0x41, 0x53, 0x54, 0x00, 0x00, 0x00, 0x04, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09,
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7a, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7a,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x01,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x7a, 0x00, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a,
-        0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x5c, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a,
-        0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x8b, 0x85, 0x85, 0x85, 0x85,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x7a, 0x00, 0xff, 0xff,
-        0xfe, 0xf7, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    ];
-    let mut bytes = BYTES;
-    bytes[5..8].copy_from_slice(&VERSION);
+    // Preserve the fuzz regression's invalid internal digest limb in the current layout. The
+    // third node is keyed so this also exercises hash offsets following the target section.
+    let mut forest = MastForest::new();
+    let dyn_id = DynNodeBuilder::new_dyn().add_to_forest(&mut forest).unwrap();
+    let dyncall_id = DynNodeBuilder::new_dyncall().add_to_forest(&mut forest).unwrap();
+    let exec_id = ExecNodeBuilder::new(procedure_key(301)).add_to_forest(&mut forest).unwrap();
+    for root in [dyn_id, dyncall_id, exec_id] {
+        forest.make_root(root);
+    }
+    let mut bytes = forest.to_bytes();
+    let view = MastForestWireView::new(&bytes).unwrap();
+    let digest_offset = node_hash_digest_offset(&view, exec_id.to_usize());
+    drop(view);
+    bytes[digest_offset..digest_offset + 8].copy_from_slice(&u64::MAX.to_le_bytes());
     let view = MastForestWireView::new(&bytes).expect("structure should materialize");
     assert_eq!(view.node_count(), 3);
     for i in 0..2 {
