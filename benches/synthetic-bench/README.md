@@ -102,6 +102,9 @@ and proof size. Outer-proof verification happens outside the timer.
 
 ## Results
 
+These measurements predate the packed Library cutover and remain historical reference data.
+They must be recaptured before making performance claims about the current relation.
+
 Each time is the mean of 20 samples from two separate process runs, excluding warmup.
 Peak RSS is the larger whole-process peak from those runs.
 
@@ -196,7 +199,7 @@ not fail the benchmark if the padded heights match.
 | `decoder_pad` | `swap dup.1 add` | Core rows |
 
 Individual chiplet counts can differ from the snapshot. The memory snippet targets the sum of
-the snapshot's memory, ACE, and kernel-ROM rows, using a different word-aligned address each
+the snapshot's memory and ACE rows, using a different word-aligned address each
 iteration. Bitwise operations fill the remaining chiplet rows.
 
 The And8 table always has 65,536 rows; compression activity changes its lookup multiplicities.
@@ -206,37 +209,19 @@ small compression targets cannot be matched. See [`src/snippets.rs`](src/snippet
 ## Snapshot schema
 
 A snapshot maps scenario names to objects containing a `trace` section with row counts measured
-by executing the producer workload. All four AIR totals and all five `chiplets_shape` fields
+by executing the producer workload. All four AIR totals and all six `chiplets_shape` fields
 are required. Other scenario fields, such as transaction-stage cycle counts, are ignored.
 
 The loader rejects missing or unknown trace fields. Eidos compression counts must be multiples
 of 32, and the And8 height must be 65,536. Counts must fit without overflow when added or padded.
 The chiplet counts must satisfy
-`chiplets_rows == hasher_rows + bitwise_rows + memory_rows + kernel_rom_rows + ace_rows + 1`.
+`chiplets_rows == library_rows + hasher_rows + aead_rows + memory_rows + ace_rows + bitwise_rows + 1`.
+`library_rows` includes the complete aligned Library prefix and its terminal PAD pairs;
+`hasher_rows` counts the aligned Controller band, and `aead_rows` counts the separate AEAD band.
 
-For example, the measured Falcon workload for consuming one P2ID note has:
-
-```json
-{
-  "consume single P2ID note with Falcon signing": {
-    "trace": {
-      "core_rows": 43619,
-      "chiplets_rows": 5559,
-      "eidos_compression_rows": 84320,
-      "byte_pair_lookup_rows": 65536,
-      "chiplets_shape": {
-        "hasher_rows": 3504,
-        "bitwise_rows": 84,
-        "memory_rows": 1969,
-        "kernel_rom_rows": 1,
-        "ace_rows": 0
-      }
-    }
-  }
-}
-```
-
-The checked-in snapshot contains the full producer output. The
+The checked-in snapshot contains pre-cutover producer output and requires a real recapture
+after the producer migrates to the packed Library/AEAD schema. The loader rejects its obsolete
+kernel-ROM field; replacement band counts must come from execution. The
 [capture metadata](snapshots/provenance/bench-tx.json) records the protocol and VM revisions and
 the snapshot hash.
 
