@@ -254,7 +254,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
-| 00 Plan | in-progress | Pending first signed plan-only commit | Read-only design/source assessment | Independent plan review and staged `git diff --cached --check` |
+| 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | planned | — | — | Wire allocation/codec gate |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
