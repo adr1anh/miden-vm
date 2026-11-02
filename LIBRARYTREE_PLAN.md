@@ -960,3 +960,12 @@ committed invocations plus the reserved root demand must obey the necessary shar
 ceiling. This is native checked-integer accounting, not a new AIR frequency range or proof gate waiver.
 Rustdoc-only commit `71bf65973` separately aligned opaque VM I/profile requirements with superseding D3;
 non-Rustdoc lines were unchanged, and owner production projection/registration fixtures remain pending.
+
+Session peak composition additionally needs one private ledger hook: prepare_with_peak_limit applies
+min(stored policy, outer available peak), with no change to stored limits/counters or public prepare's
+accepted behavior. It shares existing sizing/preparation and checks the tighter ceiling before first
+reservation and after returned capacities. Session passes available outer bytes after old session
+buffers, then preflights its staged/replacement/root-reserved buffers against the actual ledger guard
+peak. Reserving the whole configured ledger cap is unnecessary and can falsely reject modest work.
+Commit this independently reviewed hook separately from the coherent native session lifecycle.
+The scratch harness reexports the actual miden-air-definitions RowIndex; no source type is substituted.
