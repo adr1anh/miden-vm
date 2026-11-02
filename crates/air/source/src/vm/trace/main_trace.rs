@@ -523,7 +523,8 @@ impl MainTrace {
         self.chiplet_cols(i).chip_clk
     }
 
-    /// Returns the chiplet stream-mode column at row i.
+    /// Returns the shared column used for stream mode on bitwise rows at row i.
+    /// Memory rows reuse this column for their `e1` element-write helper.
     ///
     /// # Panics
     /// Panics if `i` is past the chiplets-AIR height. See [`Self::chiplet_selector_0`] for
@@ -589,7 +590,8 @@ impl MainTrace {
     }
 
     /// Returns `true` if a row is part of the memory chiplet.
-    /// Active when virtual s0=1 (s_ctrl=0), s1=1, s2=0, and `stream_mode=0`.
+    /// Active when virtual s0=1 (s_ctrl=0), s1=1, and s2=0. The shared c[22] column is
+    /// Memory's `e1` element-write helper and does not participate in classification.
     ///
     /// Short-circuits to `false` past the chiplets-AIR height; see [`Self::is_bitwise_row`].
     pub fn is_memory_row(&self, i: RowIndex) -> bool {
@@ -597,7 +599,6 @@ impl MainTrace {
             return false;
         }
         self.chiplet_selector_0(i) == ZERO
-            && self.chiplet_stream_mode(i) == ZERO
             && self.chiplet_selector_1(i) == ONE
             && self.chiplet_selector_2(i) == ZERO
     }
@@ -865,7 +866,7 @@ mod tests {
     use miden_core::utils::Matrix;
 
     use super::*;
-    use crate::vm::trace::TRACE_WIDTH;
+    use crate::vm::trace::{CHIPLETS_MODE_COL, TRACE_WIDTH};
 
     /// Builds a deterministic Parts-form `MainTrace` with `num_rows` rows where each cell
     /// holds `Felt::from_u32(row * TRACE_WIDTH + col)` for col positions matching the
@@ -918,5 +919,33 @@ mod tests {
         assert_eq!(ref_chip.values, moved_chip.values);
         assert_eq!(ref_eidos.values, moved_eidos.values);
         assert_eq!(ref_and8.values, moved_and8.values);
+    }
+
+    #[test]
+    fn memory_row_classification_ignores_shared_write_helper() {
+        let mut trace = deterministic_parts_trace(4);
+        trace.storage.chiplets_rm.values.fill(ZERO);
+        let (rows, _) = trace.storage.chiplets_rm.values.as_chunks_mut::<CHIPLETS_WIDTH>();
+        for row in &mut rows[..2] {
+            row[1] = ONE;
+        }
+        rows[1][CHIPLETS_MODE_COL] = ONE;
+        rows[3][CHIPLETS_MODE_COL] = ONE;
+
+        for i in [RowIndex::from(0), RowIndex::from(1)] {
+            assert!(trace.is_memory_row(i));
+            assert!(!trace.is_bitwise_row(i));
+            assert_eq!(trace.chiplet_aead_stream_active(i), ZERO);
+        }
+
+        let normal_bitwise = RowIndex::from(2);
+        assert!(!trace.is_memory_row(normal_bitwise));
+        assert!(trace.is_bitwise_row(normal_bitwise));
+        assert_eq!(trace.chiplet_aead_stream_active(normal_bitwise), ZERO);
+
+        let aead_stream = RowIndex::from(3);
+        assert!(!trace.is_memory_row(aead_stream));
+        assert!(!trace.is_bitwise_row(aead_stream));
+        assert_eq!(trace.chiplet_aead_stream_active(aead_stream), ONE);
     }
 }

@@ -52,6 +52,7 @@ pub fn enforce_ace_constraints_all_rows<AB>(
 ) where
     AB: MidenAirBuilder,
 {
+    let op_squared: AB::Expr = local.ace_op_squared().into();
     let local = local.ace();
     let next = next.ace();
 
@@ -163,6 +164,7 @@ pub fn enforce_ace_constraints_all_rows<AB>(
         // op must be -1, 0, or 1: ternary validity
         // op * (op² - 1) = op ( op - 1) ( op + 1 )
         builder.assert_zero(op.clone() * (op_square.clone() - F_1));
+        builder.assert_eq(op_squared.clone(), op_square);
 
         // Compute expected EVAL block output (v0) from op and operands.
         //
@@ -174,17 +176,11 @@ pub fn enforce_ace_constraints_all_rows<AB>(
         let v1: QuadFeltExpr<AB::Expr> = local.v_1.into_expr();
         let v2: QuadFeltExpr<AB::Expr> = local.eval().v_2.into_expr();
 
-        let expected = {
-            // Linear operation: v1 + op * v2 (works for ADD when op=1, SUB when op=-1)
-            let linear = v1.clone() + v2.clone() * op;
-
-            // Non-linear operation: multiplication in extension field (α² = 7)
-            let nonlinear = v1 * v2;
-
-            // Select based on op²: if op² = 1, use linear; if op² = 0, use nonlinear
-            // result = op² * (linear - nonlinear) + nonlinear
-            (linear - nonlinear.clone()) * op_square + nonlinear
-        };
+        // With z = op², z*v1 + op*v2 selects the linear gates and
+        // (1-z)*(v1*v2) selects multiplication. Each coordinate has degree three.
+        let expected = v1.clone() * op_squared.clone()
+            + v2.clone() * op
+            + (v1 * v2) * (AB::Expr::ONE - op_squared);
         builder.assert_eq_quad(v0, expected);
     }
 
@@ -206,5 +202,145 @@ pub fn enforce_ace_constraints_all_rows<AB>(
         builder.assert_eq_quad(v0, QuadFeltExpr::new(AB::Expr::ZERO, AB::Expr::ZERO));
 
         builder.assert_zero(local.id_0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+    use core::borrow::BorrowMut;
+
+    use miden_core::{
+        Felt,
+        field::{BasedVectorSpace, PrimeCharacteristicRing, QuadFelt},
+    };
+
+    use super::enforce_ace_constraints_all_rows;
+    use crate::vm::{
+        AceCols, ChipletCols, QuadFeltExpr,
+        constraints::{
+            chiplets::selectors::build_chiplet_selectors, stack::test_utils::ConstraintEvalBuilder,
+        },
+        trace::CHIPLETS_DATA_WIDTH,
+    };
+
+    fn ace_cols(row: &mut ChipletCols<Felt>) -> &mut AceCols<Felt> {
+        row.chiplets[4..20].borrow_mut()
+    }
+
+    fn quad_expr(value: QuadFelt) -> QuadFeltExpr<Felt> {
+        let coefficients = value.as_basis_coefficients_slice();
+        QuadFeltExpr(coefficients[0], coefficients[1])
+    }
+
+    fn eval_row(op: Felt, inputs: [[u8; 2]; 2]) -> ChipletCols<Felt> {
+        let mut row = ChipletCols {
+            chiplets: [Felt::ZERO; CHIPLETS_DATA_WIDTH],
+            chip_clk: Felt::ONE,
+        };
+        // Current selector hierarchy: non-Controller, past Bitwise and Memory, before ROM.
+        row.chiplets[1] = Felt::ONE;
+        row.chiplets[2] = Felt::ONE;
+        let v1 = QuadFelt::new(inputs[0].map(Felt::from_u8));
+        let v2 = QuadFelt::new(inputs[1].map(Felt::from_u8));
+        let result = if op == -Felt::ONE {
+            v1 - v2
+        } else if op == Felt::ZERO {
+            v1 * v2
+        } else {
+            v1 + v2
+        };
+        let cols = ace_cols(&mut row);
+        cols.s_block = Felt::ONE;
+        cols.eval_op = op;
+        cols.v_0 = quad_expr(result);
+        cols.v_1 = quad_expr(v1);
+        cols.eval_mut().v_2 = quad_expr(v2);
+        *row.ace_op_squared_mut() = op.square();
+        row
+    }
+
+    fn evaluations(row: &ChipletCols<Felt>) -> Vec<QuadFelt> {
+        // Evaluate row-local constraints with the production selectors on full shared rows.
+        let mut builder = ConstraintEvalBuilder::new().with_row_flags(false, false, false);
+        let selectors = build_chiplet_selectors(&mut builder, row, row);
+        enforce_ace_constraints_all_rows(&mut builder, row, row, &selectors.ace);
+        builder.evaluations
+    }
+
+    fn assert_accepts(row: &ChipletCols<Felt>) {
+        let evaluations = evaluations(row);
+        assert!(
+            evaluations.iter().all(|value| *value == QuadFelt::ZERO),
+            "expected ACE constraints to accept: {evaluations:?}",
+        );
+    }
+
+    fn assert_rejects(row: &ChipletCols<Felt>) {
+        assert!(evaluations(row).iter().any(|value| *value != QuadFelt::ZERO));
+    }
+
+    fn recompute_arithmetic(row: &mut ChipletCols<Felt>) {
+        let z = row.ace_op_squared();
+        let cols = ace_cols(row);
+        let v1 = cols.v_1;
+        let v2 = cols.eval().v_2;
+        cols.v_0 = v1 * z + v2 * cols.eval_op + (v1 * v2) * (Felt::ONE - z);
+    }
+
+    #[test]
+    fn ace_eval_binds_square_and_checks_all_three_operations() {
+        for inputs in [[[2, 0], [5, 0]], [[2, 3], [5, 7]]] {
+            for op in [-Felt::ONE, Felt::ZERO, Felt::ONE] {
+                let row = eval_row(op, inputs);
+                assert_accepts(&row);
+
+                // A forged helper cannot choose another operation, even if the result is rebuilt.
+                let mut forged = row.clone();
+                *forged.ace_op_squared_mut() = Felt::ONE - op.square();
+                recompute_arithmetic(&mut forged);
+                assert_rejects(&forged);
+
+                // Rebuilding the helper does not authorize a wrong result in either coordinate.
+                for coordinate in 0..2 {
+                    let mut forged = row.clone();
+                    *forged.ace_op_squared_mut() = forged.ace().eval_op.square();
+                    let result = &mut ace_cols(&mut forged).v_0;
+                    if coordinate == 0 {
+                        result.0 += Felt::ONE;
+                    } else {
+                        result.1 += Felt::ONE;
+                    }
+                    assert_rejects(&forged);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ace_eval_rejects_nonternary_op_with_recomputed_helper_and_result() {
+        let mut row = eval_row(Felt::ONE, [[2, 3], [5, 7]]);
+        ace_cols(&mut row).eval_op = Felt::from_u8(2);
+        *row.ace_op_squared_mut() = row.ace().eval_op.square();
+        recompute_arithmetic(&mut row);
+        assert_rejects(&row);
+    }
+
+    #[test]
+    fn ace_square_constraint_leaves_read_and_other_family_payload_free() {
+        let mut row = eval_row(Felt::from_u8(9), [[2, 3], [5, 7]]);
+        {
+            let cols = ace_cols(&mut row);
+            cols.s_block = Felt::ZERO;
+            cols.id_0 = Felt::ONE;
+            cols.id_1 = Felt::ZERO;
+        }
+        *row.ace_op_squared_mut() = Felt::from_u8(13);
+        assert_accepts(&row);
+
+        // The same physical cells belong to unrelated payloads outside the ACE band.
+        row.chiplets[0] = Felt::ONE;
+        ace_cols(&mut row).s_block = Felt::from_u8(17);
+        assert_accepts(&row);
     }
 }

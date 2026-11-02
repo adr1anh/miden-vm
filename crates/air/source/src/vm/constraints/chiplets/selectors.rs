@@ -8,8 +8,9 @@
 //!
 //! The chiplet system uses `s_ctrl = chiplets[0]` for hasher-controller rows and
 //! the virtual selector `s0 = 1 - s_ctrl` for all remaining chiplets. The `stream_mode`
-//! column is a local mode bit inside the bitwise selector region. The remaining
-//! selectors `s1..s4` subdivide the `s0` region.
+//! column is a local mode bit inside the bitwise selector region. Memory rows reuse
+//! that column for their `e1` element-write helper. The remaining selectors `s1..s4`
+//! subdivide the `s0` region.
 //!
 //! | Chiplet     | Active when                    |
 //! |-------------|--------------------------------|
@@ -22,7 +23,7 @@
 //! ## Selector Transition Rules
 //!
 //! - `s_ctrl` is boolean.
-//! - `stream_mode` is boolean under `s0` and zero after the bitwise region.
+//! - The shared `stream_mode`/`e1` column is boolean under `s0` and zero after Memory.
 //! - `s0 = 1` forces `s_ctrl' = 0` (once in the non-controller region, stay there).
 //!
 //! These force the trace ordering: controller rows first, then non-controller chiplets.
@@ -130,7 +131,7 @@ where
     let s_ctrl: AB::Expr = sel[0].into();
     let s_ctrl_next: AB::Expr = sel_next[0].into();
 
-    // AEAD stream mode slot. It is used only inside the bitwise selector region.
+    // AEAD stream mode slot inside bitwise; Memory reuses this slot for its e1 helper.
     let stream_mode: AB::Expr = local.bitwise_stream_mode().into();
 
     // s1..s4: remaining chiplet selectors.
@@ -170,10 +171,11 @@ where
     let s012 = s01.clone() * s2.clone();
     let s0123 = s012.clone() * s3.clone();
 
-    // `stream_mode` only refines the bitwise region (`s0 = 1, s1 = 0`). Once `s1 = 1`,
-    // the trace has moved past bitwise rows and stream mode must be zero.
+    // `stream_mode` only refines the bitwise region (`s0 = 1, s1 = 0`). Its shared slot
+    // remains Boolean on Memory rows, where it holds the bound e1 helper. Once `s2 = 1`,
+    // the trace has moved past Memory and this slot is unused and must be zero.
     builder.when(s0.clone()).assert_bool(stream_mode.clone());
-    builder.when(s01.clone()).assert_zero(stream_mode.clone());
+    builder.when(s012.clone()).assert_zero(stream_mode.clone());
 
     // s1..s4 booleanity, gated by their prefix under s0.
     builder.when(s0.clone()).assert_bool(s1.clone());
