@@ -291,6 +291,10 @@ impl StackInterface for FastProcessor {
         Ok(())
     }
 
+    fn preflight_decrement_size(&self) -> Result<(), OperationError> {
+        Ok(())
+    }
+
     #[inline(always)]
     fn start_context(&mut self) {
         let overflow_stack = if self.stack_size() > MIN_STACK_DEPTH {

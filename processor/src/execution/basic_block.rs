@@ -3,12 +3,12 @@ use core::ops::ControlFlow;
 use miden_mast_package::debug_info::DebugSourceNodeId;
 
 use crate::{
-    BaseHost, BreakReason, Stopper,
+    BaseHost, BreakReason, ExecutionError, Stopper,
     continuation_stack::{Continuation, ContinuationStack},
     errors::PackageSourceDebugContext,
     execution::{
         ExecutionState, InternalBreakReason, execute_op, finalize_clock_cycle_with_continuation,
-        finalize_clock_cycle_with_continuation_and_op_helpers,
+        finalize_clock_cycle_with_continuation_and_op_helpers, prepare_transition_cycle,
     },
     mast::{BasicBlockNode, ExecutableMastForest, MastNodeId},
     operation::Operation,
@@ -35,6 +35,11 @@ where
     T: Tracer<Processor = P, Forest = F>,
     F: ExecutableMastForest + Clone,
 {
+    prepare_required_end_slot(state, current_forest, &Continuation::StartNode(node_id))
+        .map_or_else(
+            |error| ControlFlow::Break(InternalBreakReason::User(BreakReason::Err(error))),
+            |_| ControlFlow::Continue(()),
+        )?;
     state.tracer.start_clock_cycle(
         state.processor,
         Continuation::StartNode(node_id),
@@ -192,7 +197,12 @@ where
         batch_offset_in_block += op_batch.ops().len();
     }
 
-    finish_basic_block(state, node_id, current_forest).map_break(InternalBreakReason::from)
+    // Retain the actual END so entry completion is prepared before it is selected or traced.
+    state.continuation_stack.push_with_source_node_id(
+        Continuation::FinishBasicBlock(node_id),
+        state.current_source_node_id(),
+    );
+    ControlFlow::Continue(())
 }
 
 /// Execute the finish phase of a basic block node.
@@ -258,6 +268,20 @@ where
     // Execute operations in the batch one by one
     for (op_idx_in_batch, op) in batch.ops().iter().enumerate().skip(start_op_idx) {
         let op_idx_in_block = batch_offset_in_block + op_idx_in_batch;
+
+        if batch_index == basic_block.num_op_batches() - 1
+            && op_idx_in_batch == batch.ops().len() - 1
+        {
+            prepare_required_end_slot(
+                state,
+                current_forest,
+                &Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch },
+            )
+            .map_or_else(
+                |error| ControlFlow::Break(InternalBreakReason::User(BreakReason::Err(error))),
+                |_| ControlFlow::Continue(()),
+            )?;
+        }
 
         state.tracer.start_clock_cycle(
             state.processor,
@@ -335,6 +359,32 @@ where
     }
 
     ControlFlow::Continue(())
+}
+
+/// Reserves the single continuation used by either stopped execution or the retained END.
+///
+/// Run before SPAN (including empty blocks) and before the final operation, including EMIT.
+/// Preparing it does not trace a row, advance the clock or install a second END.
+fn prepare_required_end_slot<P, H, S, T, F>(
+    state: &mut ExecutionState<'_, P, H, S, T, F>,
+    current_forest: &F,
+    continuation: &Continuation<F>,
+) -> Result<(), ExecutionError>
+where
+    P: Processor,
+    H: BaseHost,
+    S: Stopper<Processor = P, Forest = F>,
+    T: Tracer<Processor = P, Forest = F>,
+    F: ExecutableMastForest + Clone,
+{
+    let continuation_len = state
+        .continuation_stack
+        .len()
+        .checked_add(1)
+        .ok_or(ExecutionError::Internal("continuation count overflow"))?;
+    state.continuation_stack.prepare_push(1)?;
+    prepare_transition_cycle(state, current_forest, continuation, continuation_len)?;
+    Ok(())
 }
 
 /// Given the current operation being executed within a basic block, returns the appropriate

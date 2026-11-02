@@ -222,6 +222,9 @@ pub(crate) trait StackInterface {
     /// (since the stack size can never be less than 16).
     fn decrement_size(&mut self) -> Result<(), OperationError>;
 
+    /// Checks a pending pop without mutating registers or consuming overflow replay.
+    fn preflight_decrement_size(&self) -> Result<(), OperationError>;
+
     // CONTEXT MANAGEMENT
     // --------------------------------------------------------------------------------------------
 
