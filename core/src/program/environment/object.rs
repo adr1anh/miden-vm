@@ -6,6 +6,8 @@ use core::alloc::Layout;
 use super::{EnvironmentRoot, ImplementationRoot, LabelCommitment};
 use crate::{Felt, WORD_SIZE, Word, ZERO, chiplets::hasher, program::domain};
 
+mod encoding;
+
 /// An environment object whose children are opaque object or subtree commitments.
 ///
 /// Computing a commitment binds these fields under the object's registered Eidos domain. It
@@ -94,7 +96,7 @@ impl EnvNode {
     }
 }
 
-/// An environment object's hash payload cannot be represented or allocated.
+/// An environment object's hash payload or encoded record cannot be represented or allocated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum EnvNodeError {
     #[error("environment object payload length exceeds the framing or allocation bounds")]
