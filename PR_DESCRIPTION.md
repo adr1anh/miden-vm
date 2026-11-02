@@ -1,17 +1,9 @@
-# Declaration-only interfaces and explicit namespace homes
+Authenticate entry and every retained invocation against one immutable `(K_entry, R_E, N_kernel)` before using implementation D as a code-supply index. EXEC/DYN preserve context and principal; CALL/DYNCALL establish the requested key in a fresh user context; SYSCALL requires the exact full authenticated kernel namespace and preserves principal in root context. Root END discharges entry exactly once.
 
-LibraryTree tooling needs procedure keys before executable bodies or releases are selected. This branch adds validated semantic declaration paths, exact optional UTF-8 ABI metadata, separate tooling signatures, and explicit typed NamespacePlan homes that derive keys with the core label/hash helpers.
+The runtime uses bounded openings, occurrence ledgers and resolution sessions, shared component prepare/commit transitions, retained pending evidence across host waits, and terminal invalidation after publication failures. Source-aware and pure drivers share those transitions. Replay v4 carries mandatory authenticated environment metadata and per-fragment observations, with explicit caller authority and read/export budgets. The executable arbitrary fixture owns its validated environment and covers all retained invocation modes.
 
-InterfaceArtifact v1 and Home v1 codecs require explicit finite budgets and external Protocol profiles/context. Artifacts commit canonical publisher-qualified descriptor/declaration bytes, retain externally assigned immutable LibraryId, and validate association and transitive dependency closure. Decoding rejects malformed framing, noncanonical Words/order/paths, wrong expected identity and commitment before authority callbacks. Encoding revalidates context; tooling signatures are outside wire/hash/authority. Profiles must supply descriptor canonicalization, permitted homes and an allocated Protocol numbered-v1 domain; none has a default.
+Public execution APIs now require an ExecutionEnvironment; proving additionally requires EnvironmentTraceLimits. ResumeContext is borrowed across stepping. Older replay envelopes are rejected. Existing rebuilt MASM syntax and stack/memory conventions remain the migration contract.
 
-Existing MASM invocation grammar is preserved. Word-form procref now prints canonically; the legacy MastRoot AST spelling documents opaque ProcedureKey semantics. Executable assembler lowering and package9 activation remain PR 09. Test fixtures now follow childless keyed MAST and the v6 target table without weakening trusted/untrusted hash checks.
+Validation: actual processor library/default/no-default-features and strict library Clippy; 16 public execution tests including the 40-case mode/API matrix, five public replay/native trace tests and strict all-target harness Clippy; core arbitrary suite 406 passed with one manual seed test ignored; 10 exact-source host/fixture and four overflow tests; independent source reviews. Detailed commit evidence and deferred gates are in LIBRARYTREE_PLAN.md.
 
-Stack base: PR 03, `45be30b96`. Semantic foundation: PR 01 identities and reviewed D3 contract. Implementation is awaiting production Protocol profile evidence; synthetic domains/codecs are test fixtures and claim no allocation or publication authority.
-
-Validation after AC/heavy-work guards:
-
-- Package lib tests: 208 passed; one manual fuzz-seed generator ignored. Focused interface/Home tests: 52 passed.
-- Full Make assembly-syntax suite: 327 passed, including checked-in MASM and printed-corelib parser regressions.
-- Scoped and combined test-inclusive Clippy with `-D warnings`, package no-default-features, pinned formatting and whitespace checks passed.
-
-Required external descriptor/domain/home/immutable-association/authenticated-closure fixtures remain open. Processor/fuzz validation inherited from earlier stack branches and runtime/AIR/statement/recursive integration belong to later PRs; this branch does not activate those execution/proof paths. The existing source-token versus decoded Unicode/backslash distinction is tracked for PR 09. No GitHub PR or push has been created.
+Normal processor unit suites remain blocked by three miden-assembly migration errors; private wire/restoration and remaining legacy source/parallel/address/state checks await their recorded stages. Packed Library/Core AIR, statement activation and production Protocol profile fixtures remain required downstream acceptance gates. Native execution and trace reconstruction do not establish proof acceptance.
