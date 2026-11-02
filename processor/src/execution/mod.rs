@@ -6,14 +6,14 @@ use miden_core::program::{ImplementationRoot, ProcedureKey};
 use miden_mast_package::debug_info::{DebugSourceNodeId, PackageDebugInfo};
 
 use crate::{
-    BaseHost, BreakReason, ContextId, ExecutionError, KernelDescriptor, Stopper, Word,
+    BaseHost, BreakReason, ContextId, ExecutionError, Felt, MapExecErr, Stopper, Word,
     continuation_stack::{Continuation, ContinuationStack, SourceInlineCallContext},
     errors::PackageSourceDebugContext,
     host::default::NoopHost,
     mast::{ExecutableMastForest, MastNode, MastNodeExt, MastNodeId},
     operation::OperationError,
     option_map_break_reason,
-    processor::{Processor, StackInterface, SystemInterface},
+    processor::{MemoryInterface, Processor, StackInterface, SystemInterface},
     tracer::{
         CycleProjection, KeyedEvent, KeyedEventKind, KeyedMode, OperationHelperRegisters, Tracer,
     },
@@ -32,8 +32,7 @@ mod split;
 // RE-EXPORTS
 // ================================================================================================
 pub(crate) use basic_block::finish_emit_op_execution;
-pub(crate) use r#dyn::finish_load_mast_forest_from_dyn_start;
-pub(crate) use exec::{finish_keyed_exec, preflight_keyed_exec};
+pub(crate) use exec::{finish_keyed_invocation, preflight_keyed_invocation};
 pub(crate) use external::finish_load_mast_forest_from_external;
 #[cfg(test)]
 pub(crate) use operations::eval_circuit_impl;
@@ -47,6 +46,15 @@ pub(crate) struct KeyedRequest {
     pub node_id: MastNodeId,
     pub source_node_id: Option<DebugSourceNodeId>,
     pub row: RowIndex,
+    pub dynamic: Option<DynamicKey>,
+}
+
+/// The exact memory observation selecting a dynamic ProcedureKey, retained across host waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DynamicKey {
+    pub context: ContextId,
+    pub address: Felt,
+    pub value: Word,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +64,13 @@ pub(crate) struct RootEndRequest<F> {
     pub principal: ProcedureKey,
     pub row: RowIndex,
     pub source_node_id: Option<DebugSourceNodeId>,
+}
+
+/// Root completion retains every component needed for the actual final END row.
+pub(crate) struct PreparedRootEnd<P: Processor> {
+    pub projection: CycleProjection,
+    return_context: Option<call::PreparedReturn<P>>,
+    loop_pop: Option<<P::Stack as StackInterface>::StackPop>,
 }
 
 /// Code supply validated against an authenticated implementation root.
@@ -78,7 +93,6 @@ pub(crate) struct LoadedTarget<F> {
 pub(crate) struct ExecutionState<'a, P, H, S, T, F> {
     pub processor: &'a mut P,
     pub continuation_stack: &'a mut ContinuationStack<F>,
-    pub kernel: &'a KernelDescriptor,
     pub host: &'a mut H,
     pub tracer: &'a mut T,
     pub stopper: &'a S,
@@ -181,7 +195,6 @@ impl<'a, P, H: BaseHost, S, T, F> ExecutionState<'a, P, H, S, T, F> {
 /// ```ignore
 /// let mut continuation_stack = ...;
 /// let mut current_forest = ...;
-/// let kernel = ...;
 /// let mut host = ...;
 /// let mut tracer = ...;
 /// let stopper = ...;
@@ -199,13 +212,16 @@ impl<'a, P, H: BaseHost, S, T, F> ExecutionState<'a, P, H, S, T, F> {
 ///             // to complete the execution of the Emit operation.
 ///             finish_emit_op_execution(...);
 ///         },
-///         InternalBreakReason::LoadMastForestFromDyn { callee_hash } => {
-///             // load MAST forest containing the callee procedure
-///             let (procedure_id, new_forest) = self.load_mast_forest(...);
-///
-///             // As per `InternalBreakReason::LoadMastForestFromDyn` documentation, we call
-///             // `finish_load_mast_forest_from_dyn_start` to complete the execution of the operation.
-///             finish_load_mast_forest_from_dyn_start(...);
+///         InternalBreakReason::ResolveKey(request) => {
+///             // Authenticate (R_E, K), authorize actual SYSCALL, then prepare D-indexed code.
+///             let (target, event, reservation) = self.resolve_and_prepare(request);
+///             let prepared = preflight_keyed_invocation(...);
+///             finish_keyed_invocation(..., prepared, event, reservation);
+///         },
+///         InternalBreakReason::RootEnd(request) => {
+///             // Prepare the retained actual END and its reserved entry demand before commit.
+///             let prepared = preflight_root_end(...);
+///             finish_root_end(..., prepared, event, reservation);
 ///         },
 ///         InternalBreakReason::LoadMastForestFromExternal { external_node_id, procedure_hash } => {
 ///             // load MAST forest containing the callee procedure
@@ -222,7 +238,6 @@ pub(crate) fn execute_impl<P, S, T, F>(
     processor: &mut P,
     continuation_stack: &mut ContinuationStack<F>,
     current_forest: &mut F,
-    kernel: &KernelDescriptor,
     mut host: &mut dyn BaseHost,
     tracer: &mut T,
     stopper: &S,
@@ -239,7 +254,6 @@ where
         processor,
         continuation_stack,
         current_forest,
-        kernel,
         &mut host,
         tracer,
         stopper,
@@ -252,7 +266,6 @@ pub(crate) fn execute_impl_noop_host<P, S, T, F>(
     processor: &mut P,
     continuation_stack: &mut ContinuationStack<F>,
     current_forest: &mut F,
-    kernel: &KernelDescriptor,
     host: &mut NoopHost,
     tracer: &mut T,
     stopper: &S,
@@ -269,7 +282,6 @@ where
         processor,
         continuation_stack,
         current_forest,
-        kernel,
         host,
         tracer,
         stopper,
@@ -282,7 +294,6 @@ fn execute_impl_inner<P, H, S, T, F>(
     processor: &mut P,
     continuation_stack: &mut ContinuationStack<F>,
     current_forest: &mut F,
-    kernel: &KernelDescriptor,
     host: &mut H,
     tracer: &mut T,
     stopper: &S,
@@ -301,7 +312,6 @@ where
             processor,
             continuation_stack,
             current_forest,
-            kernel,
             host,
             tracer,
             stopper,
@@ -312,7 +322,6 @@ where
             processor,
             continuation_stack,
             current_forest,
-            kernel,
             host,
             tracer,
             stopper,
@@ -327,7 +336,6 @@ fn execute_impl_with_source<P, H, S, T, F>(
     processor: &mut P,
     continuation_stack: &mut ContinuationStack<F>,
     current_forest: &mut F,
-    kernel: &KernelDescriptor,
     host: &mut H,
     tracer: &mut T,
     stopper: &S,
@@ -344,7 +352,6 @@ where
     let mut state = ExecutionState {
         processor,
         continuation_stack,
-        kernel,
         host,
         tracer,
         stopper,
@@ -354,15 +361,18 @@ where
     };
 
     while state.continuation_stack.peek_continuation().is_some() {
-        if let Some(request) = next_keyed_transition(&state, current_forest)
+        if let Some(request) = next_keyed_transition(&mut state, current_forest)
             .map_err(|err| InternalBreakReason::User(BreakReason::Err(err)))
             .map_or_else(ControlFlow::Break, ControlFlow::Continue)?
         {
             return ControlFlow::Break(request);
         }
-        if let Err(err) = preflight_next_end(&mut state, current_forest) {
-            return ControlFlow::Break(InternalBreakReason::User(BreakReason::Err(err)));
-        }
+        let mut prepared_return = match preflight_next_end(&mut state, current_forest) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                return ControlFlow::Break(InternalBreakReason::User(BreakReason::Err(err)));
+            },
+        };
         let (continuation, source_node_id) = state
             .continuation_stack
             .pop_continuation_with_source_node_id()
@@ -397,12 +407,9 @@ where
                         r#loop::start_loop_node(&mut state, loop_node, node_id, current_forest)
                             .map_break(InternalBreakReason::from)?
                     },
-                    MastNode::Exec(_) => unreachable!("EXEC dispatch retains its StartNode"),
-                    MastNode::Call(call_node) => {
-                        call::start_call_node(&mut state, call_node, node_id, current_forest)
-                            .map_break(InternalBreakReason::from)?
+                    MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_) => {
+                        unreachable!("keyed invocation dispatch retains its StartNode")
                     },
-                    MastNode::Dyn(_) => r#dyn::start_dyn_node(&mut state, node_id, current_forest)?,
                     MastNode::External(_) => external::execute_external_node(
                         node_id,
                         state.current_source_node_id(),
@@ -432,12 +439,15 @@ where
                     ExecutionError::Internal("entry boundary reached without its actual root END"),
                 )));
             },
-            Continuation::FinishCall(node_id) => {
-                call::finish_call_node(&mut state, node_id, current_forest)
-                    .map_break(InternalBreakReason::from)?
-            },
+            Continuation::FinishCall(node_id) => call::finish_call_node(
+                &mut state,
+                node_id,
+                current_forest,
+                prepared_return.take().expect("prepared CALL return retains both saved frames"),
+            )
+            .map_break(InternalBreakReason::from)?,
             Continuation::FinishDyn(node_id) => {
-                r#dyn::finish_dyn_node(&mut state, node_id, current_forest)
+                r#dyn::finish_dyn_node(&mut state, node_id, current_forest, prepared_return.take())
                     .map_break(InternalBreakReason::from)?
             },
             Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
@@ -498,7 +508,6 @@ fn execute_impl_pure<P, H, S, T, F>(
     processor: &mut P,
     continuation_stack: &mut ContinuationStack<F>,
     current_forest: &mut F,
-    kernel: &KernelDescriptor,
     host: &mut H,
     tracer: &mut T,
     stopper: &S,
@@ -514,7 +523,6 @@ where
     let mut state = ExecutionState {
         processor,
         continuation_stack,
-        kernel,
         host,
         tracer,
         stopper,
@@ -524,15 +532,18 @@ where
     };
 
     while state.continuation_stack.peek_continuation().is_some() {
-        if let Some(request) = next_keyed_transition(&state, current_forest)
+        if let Some(request) = next_keyed_transition(&mut state, current_forest)
             .map_err(|err| InternalBreakReason::User(BreakReason::Err(err)))
             .map_or_else(ControlFlow::Break, ControlFlow::Continue)?
         {
             return ControlFlow::Break(request);
         }
-        if let Err(err) = preflight_next_end(&mut state, current_forest) {
-            return ControlFlow::Break(InternalBreakReason::User(BreakReason::Err(err)));
-        }
+        let mut prepared_return = match preflight_next_end(&mut state, current_forest) {
+            Ok(prepared) => prepared,
+            Err(err) => {
+                return ControlFlow::Break(InternalBreakReason::User(BreakReason::Err(err)));
+            },
+        };
         let continuation =
             state.continuation_stack.pop_continuation().expect("peeked continuation exists");
         match continuation {
@@ -567,13 +578,8 @@ where
                         r#loop::start_loop_node_pure(&mut state, loop_node, node_id, current_forest)
                             .map_break(InternalBreakReason::from)?
                     },
-                    MastNode::Exec(_) => unreachable!("EXEC dispatch retains its StartNode"),
-                    MastNode::Call(call_node) => {
-                        call::start_call_node_pure(&mut state, call_node, node_id, current_forest)
-                            .map_break(InternalBreakReason::from)?
-                    },
-                    MastNode::Dyn(_) => {
-                        r#dyn::start_dyn_node_pure(&mut state, node_id, current_forest)?
+                    MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_) => {
+                        unreachable!("keyed invocation dispatch retains its StartNode")
                     },
                     MastNode::External(_) => external::execute_external_node(
                         node_id,
@@ -604,12 +610,15 @@ where
                     ExecutionError::Internal("entry boundary reached without its actual root END"),
                 )));
             },
-            Continuation::FinishCall(node_id) => {
-                call::finish_call_node(&mut state, node_id, current_forest)
-                    .map_break(InternalBreakReason::from)?
-            },
+            Continuation::FinishCall(node_id) => call::finish_call_node(
+                &mut state,
+                node_id,
+                current_forest,
+                prepared_return.take().expect("prepared CALL return retains both saved frames"),
+            )
+            .map_break(InternalBreakReason::from)?,
             Continuation::FinishDyn(node_id) => {
-                r#dyn::finish_dyn_node(&mut state, node_id, current_forest)
+                r#dyn::finish_dyn_node(&mut state, node_id, current_forest, prepared_return.take())
                     .map_break(InternalBreakReason::from)?
             },
             Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
@@ -680,18 +689,12 @@ where
 /// [`finish_emit_op_execution`] to complete the execution of the `Emit` operation and resume
 /// execution immediately after the `Emit` operation.
 ///
-/// # LoadMastForestFromDyn
+/// # ResolveKey and RootEnd
 ///
-/// - *Function to call after handling*: [`finish_load_mast_forest_from_dyn_start`]
-///
-/// The `LoadMastForestFromDyn` variant is used to break execution when `DynNode` is encountered
-/// that requires loading a MAST forest containing a given procedure. The associated data includes
-/// the hash of the callee procedure to be loaded.
-///
-/// Handling this operation typically involves loading the MAST forest from the host environment.
-/// After the MAST forest has been loaded, the processor *must* call
-/// [`finish_load_mast_forest_from_dyn_start`] to complete the execution of the operation and resume
-/// execution with the first operation of the called procedure.
+/// Keyed requests retain their original StartNode, row, source occurrence and dynamic memory
+/// observation. The outer driver authenticates fixed-environment evidence before D-indexed supply,
+/// then calls the shared prepared invocation transition. RootEnd retains the actual entry END;
+/// its paired return frames or loop pop are prepared before native completion publishes.
 ///
 /// # LoadMastForestFromExternal
 ///
@@ -712,10 +715,6 @@ pub enum InternalBreakReason<F> {
     Emit {
         op_idx: usize,
         continuation: Continuation<F>,
-        source_node_id: Option<DebugSourceNodeId>,
-    },
-    LoadMastForestFromDyn {
-        callee_hash: Word,
         source_node_id: Option<DebugSourceNodeId>,
     },
     LoadMastForestFromExternal {
@@ -838,18 +837,9 @@ where
     stopper.should_stop(processor, continuation_stack, continuation_after_stop)
 }
 
-/// Returns the next context ID that would be created given the current state.
-///
-/// Note: This only applies to the context created upon a `CALL` or `DYNCALL` operation;
-/// specifically the `SYSCALL` operation doesn't apply as it always goes back to the root
-/// context.
-fn get_next_ctx_id(processor: &impl Processor) -> ContextId {
-    (processor.system().clock() + 1).into()
-}
-
 /// Selects retained keyed work before the generic execution loop pops or starts tracing a row.
 fn next_keyed_transition<P, H, S, T, F>(
-    state: &ExecutionState<'_, P, H, S, T, F>,
+    state: &mut ExecutionState<'_, P, H, S, T, F>,
     current_forest: &F,
 ) -> Result<Option<InternalBreakReason<F>>, ExecutionError>
 where
@@ -863,22 +853,54 @@ where
         return Ok(None);
     };
     let row = state.processor.system().clock();
-    if let Continuation::StartNode(node_id) = continuation
-        && let Some(MastNode::Exec(node)) = current_forest.get_node_by_id(*node_id)
-    {
-        return Ok(Some(InternalBreakReason::ResolveKey(KeyedRequest {
-            key: node.target(),
-            mode: KeyedMode::Exec,
-            node_id: *node_id,
-            source_node_id,
-            row,
-        })));
+    if let Continuation::StartNode(node_id) = continuation {
+        let node_id = *node_id;
+        let selected = match current_forest.get_node_by_id(node_id) {
+            Some(MastNode::Exec(node)) => Some((node.target(), KeyedMode::Exec, None)),
+            Some(MastNode::Call(node)) => Some((
+                node.target(),
+                if node.is_syscall() {
+                    KeyedMode::Syscall
+                } else {
+                    KeyedMode::Call
+                },
+                None,
+            )),
+            Some(MastNode::Dyn(node)) => {
+                let context = state.processor.system().ctx();
+                let address = state.processor.stack().get(0);
+                let value =
+                    state.processor.memory_mut().peek_word(context, address, row).map_exec_err()?;
+                Some((
+                    ProcedureKey::new(value),
+                    if node.is_dyncall() {
+                        KeyedMode::DynCall
+                    } else {
+                        KeyedMode::Dyn
+                    },
+                    Some(DynamicKey { context, address, value }),
+                ))
+            },
+            _ => None,
+        };
+        if let Some((key, mode, dynamic)) = selected {
+            return Ok(Some(InternalBreakReason::ResolveKey(KeyedRequest {
+                key,
+                mode,
+                node_id,
+                source_node_id,
+                row,
+                dynamic,
+            })));
+        }
     }
     let is_end = match continuation {
         Continuation::FinishBasicBlock(_)
         | Continuation::FinishJoin(_)
         | Continuation::FinishSplit(_)
-        | Continuation::FinishExec(_) => true,
+        | Continuation::FinishExec(_)
+        | Continuation::FinishCall(_)
+        | Continuation::FinishDyn(_) => true,
         Continuation::FinishLoop(_) => state.processor.stack().get(0) == crate::ZERO,
         _ => false,
     };
@@ -932,11 +954,40 @@ where
     Ok(projection)
 }
 
+/// Prepares both saved frames for context-return continuations before either frame is consumed.
+fn prepare_end_return<P, H, S, T, F>(
+    state: &ExecutionState<'_, P, H, S, T, F>,
+    current_forest: &F,
+    continuation: &Continuation<F>,
+) -> Result<Option<call::PreparedReturn<P>>, ExecutionError>
+where
+    P: Processor,
+    H: BaseHost,
+    F: ExecutableMastForest + Clone,
+{
+    let returns_context = match continuation {
+        Continuation::FinishCall(id) => match current_forest.get_node_by_id(*id) {
+            Some(MastNode::Call(_)) => true,
+            _ => return Err(ExecutionError::Internal("CALL return node is missing")),
+        },
+        Continuation::FinishDyn(id) => match current_forest.get_node_by_id(*id) {
+            Some(MastNode::Dyn(node)) => node.is_dyncall(),
+            _ => return Err(ExecutionError::Internal("dynamic return node is missing")),
+        },
+        _ => false,
+    };
+    if returns_context {
+        call::preflight_return(state).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 pub(crate) fn preflight_root_end<P, H, S, T, F>(
     state: &mut ExecutionState<'_, P, H, S, T, F>,
     current_forest: &F,
     request: &RootEndRequest<F>,
-) -> Result<CycleProjection, ExecutionError>
+) -> Result<PreparedRootEnd<P>, ExecutionError>
 where
     P: Processor,
     H: BaseHost,
@@ -950,6 +1001,8 @@ where
             | Continuation::FinishJoin(_)
             | Continuation::FinishSplit(_)
             | Continuation::FinishExec(_)
+            | Continuation::FinishCall(_)
+            | Continuation::FinishDyn(_)
             | Continuation::FinishLoop(_)
     ) {
         return Err(ExecutionError::Internal(
@@ -962,7 +1015,6 @@ where
         .ok_or(ExecutionError::Internal("root END is not immediately above the entry boundary"))?;
     if expected != request.implementation
         || principal != request.principal
-        || state.processor.system().caller_hash() != *principal.as_word()
         || state.processor.system().clock() != request.row
     {
         return Err(ExecutionError::Internal(
@@ -988,20 +1040,51 @@ where
     if node.digest() != *expected.as_word() {
         return Err(ExecutionError::Internal("root END body changed before publication"));
     }
-    if matches!(retained, Continuation::FinishLoop(_)) {
+    let return_context = prepare_end_return(state, current_forest, retained)?;
+    let principal_after = return_context.as_ref().map_or_else(
+        || state.processor.system().caller_hash(),
+        |prepared| <P::System as SystemInterface>::restored_caller_hash(&prepared.system),
+    );
+    if principal_after != *principal.as_word() {
+        return Err(ExecutionError::Internal("root END does not restore the entry principal"));
+    }
+    let loop_pop = if matches!(retained, Continuation::FinishLoop(_)) {
         if state.processor.stack().get(0) != crate::ZERO {
             return Err(ExecutionError::Internal("root loop END condition changed"));
         }
-        state.processor.stack().preflight_decrement_size().map_err(|_| {
-            ExecutionError::Internal("root loop END cannot consume its stack condition")
-        })?;
+        Some(
+            state
+                .processor
+                .stack()
+                .prepare_decrement_size()
+                .map_err(|error| state.operation_error_with_current_context(error))?,
+        )
+    } else {
+        None
+    };
+    let output_depth = if let Some(prepared) = &return_context {
+        <P::Stack as StackInterface>::restored_context_depth(&prepared.stack)
+    } else {
+        let depth = state.processor.stack().depth() as usize;
+        if loop_pop.is_some() {
+            depth.saturating_sub(1).max(miden_core::program::MIN_STACK_DEPTH)
+        } else {
+            depth
+        }
+    };
+    if output_depth != miden_core::program::MIN_STACK_DEPTH {
+        return Err(ExecutionError::OutputStackOverflow(
+            output_depth.saturating_sub(miden_core::program::MIN_STACK_DEPTH),
+        ));
     }
     let continuation_len = state
         .continuation_stack
         .len()
         .checked_sub(2)
         .ok_or(ExecutionError::Internal("root END continuation count underflow"))?;
-    prepare_transition_cycle(state, current_forest, &request.continuation, continuation_len)
+    let projection =
+        prepare_transition_cycle(state, current_forest, &request.continuation, continuation_len)?;
+    Ok(PreparedRootEnd { projection, return_context, loop_pop })
 }
 
 /// Executes the actual retained END after its native, VM and tracing work has been prepared.
@@ -1009,6 +1092,7 @@ pub(crate) fn finish_root_end<P, H, S, T, F>(
     state: &mut ExecutionState<'_, P, H, S, T, F>,
     current_forest: &F,
     request: RootEndRequest<F>,
+    prepared: PreparedRootEnd<P>,
     event: KeyedEvent,
     reservation: T::KeyedReservation,
 ) -> ControlFlow<BreakReason<F>>
@@ -1034,12 +1118,34 @@ where
         Continuation::FinishJoin(id) => join::finish_join_node(state, id, current_forest),
         Continuation::FinishSplit(id) => split::finish_split_node(state, id, current_forest),
         Continuation::FinishExec(id) => exec::finish_exec_node(state, id, current_forest),
+        Continuation::FinishCall(id) => call::finish_call_node(
+            state,
+            id,
+            current_forest,
+            prepared.return_context.expect("prepared root CALL retains both saved frames"),
+        ),
+        Continuation::FinishDyn(id) => {
+            r#dyn::finish_dyn_node(state, id, current_forest, prepared.return_context)
+        },
         Continuation::FinishLoop(id) => {
-            if state.source_debug_info.is_some() || state.continuation_stack.tracks_source_nodes() {
-                r#loop::finish_loop_node(state, id, current_forest)
-            } else {
-                r#loop::finish_loop_node_pure(state, id, current_forest)
-            }
+            // The retained zero condition and its exact overflow pop were checked before native
+            // root completion. Do not repeat a fallible pop inside the ordinary loop helper.
+            state.tracer.start_clock_cycle(
+                state.processor,
+                Continuation::FinishLoop(id),
+                state.continuation_stack,
+                current_forest,
+            );
+            state.processor.stack_mut().commit_decrement_size(
+                prepared.loop_pop.expect("prepared root loop END retains its condition pop"),
+            );
+            finalize_clock_cycle(
+                state.processor,
+                state.tracer,
+                state.stopper,
+                state.continuation_stack,
+                current_forest,
+            )
         },
         _ => unreachable!("preflight selected an actual root END continuation"),
     }
@@ -1049,7 +1155,7 @@ where
 fn preflight_next_end<P, H, S, T, F>(
     state: &mut ExecutionState<'_, P, H, S, T, F>,
     current_forest: &F,
-) -> Result<(), ExecutionError>
+) -> Result<Option<call::PreparedReturn<P>>, ExecutionError>
 where
     P: Processor,
     H: BaseHost,
@@ -1060,15 +1166,18 @@ where
     let Some((continuation, source)) =
         state.continuation_stack.peek_continuation_with_source_node_id()
     else {
-        return Ok(());
+        return Ok(None);
     };
     let continuation = continuation.clone();
     let mut length = state.continuation_stack.len() - 1;
+    let prepared_return = prepare_end_return(state, current_forest, &continuation)?;
     match &continuation {
         Continuation::FinishBasicBlock(_)
         | Continuation::FinishJoin(_)
         | Continuation::FinishSplit(_)
-        | Continuation::FinishExec(_) => {},
+        | Continuation::FinishExec(_)
+        | Continuation::FinishCall(_)
+        | Continuation::FinishDyn(_) => {},
         Continuation::FinishLoop(_) => {
             state.processor.stack().preflight_decrement_size().map_err(|_| {
                 ExecutionError::Internal("loop transition cannot consume its stack condition")
@@ -1082,8 +1191,8 @@ where
                     .ok_or(ExecutionError::Internal("continuation count overflow"))?;
             }
         },
-        _ => return Ok(()),
+        _ => return Ok(None),
     }
     prepare_transition_cycle(state, current_forest, &continuation, length)?;
-    Ok(())
+    Ok(prepared_return)
 }

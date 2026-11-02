@@ -57,7 +57,6 @@ impl FastProcessor {
         let resume = ResumeContext {
             current_forest: program.mast_forest().clone(),
             continuation_stack: ContinuationStack::default(),
-            kernel: program.kernel().clone(),
             package_debug_info: None,
             inline_call_contexts: Vec::new(),
             environment,

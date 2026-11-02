@@ -5,7 +5,7 @@ use core::ops::ControlFlow;
 
 use miden_core::{
     mast::{MastForest, MastNodeId},
-    program::{KernelDescriptor, ProcedureKey},
+    program::ProcedureKey,
 };
 use miden_mast_package::debug_info::{DebugSourceNodeId, PackageDebugInfo};
 
@@ -25,7 +25,6 @@ use crate::{
 pub struct ResumeContext {
     pub(crate) current_forest: Arc<MastForest>,
     pub(crate) continuation_stack: ContinuationStack<Arc<MastForest>>,
-    pub(crate) kernel: KernelDescriptor,
     pub(crate) package_debug_info: Option<Arc<PackageDebugInfo>>,
     pub(crate) inline_call_contexts: Vec<Option<SourceInlineCallContext>>,
     pub(crate) environment: ExecutionEnvironment,
@@ -116,7 +115,6 @@ impl ResumeContext {
             self.inline_call_contexts.len(),
             |depth, continuation| match continuation {
                 Continuation::EnterForest { inline_context_depth, .. } => *inline_context_depth,
-                Continuation::FinishDyn(_) => depth.saturating_sub(1),
                 _ => depth,
             },
         );
@@ -124,11 +122,6 @@ impl ResumeContext {
             .iter()
             .rev()
             .filter_map(Option::as_ref)
-    }
-
-    /// Returns a reference to the kernel being currently executed.
-    pub fn kernel(&self) -> &KernelDescriptor {
-        &self.kernel
     }
 }
 

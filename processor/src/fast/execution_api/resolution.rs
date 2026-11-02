@@ -6,12 +6,13 @@ use miden_core::program::{ImplementationRoot, ProcedureKey};
 
 use super::*;
 use crate::{
-    EnvironmentWitnessRequest, InvocationTag, ResolutionWitness, SessionPhase, Stopper,
+    EnvironmentWitnessRequest, InvocationTag, ResolutionWitness, SessionError, SessionPhase,
+    Stopper,
     continuation_stack::Continuation,
     execution::{
         ExecutionState, InternalBreakReason, KeyedRequest, LoadedTarget, RootEndRequest,
-        execute_impl, finish_emit_op_execution, finish_keyed_exec,
-        finish_load_mast_forest_from_external, finish_root_end, preflight_keyed_exec,
+        execute_impl, finish_emit_op_execution, finish_keyed_invocation,
+        finish_load_mast_forest_from_external, finish_root_end, preflight_keyed_invocation,
         preflight_root_end,
     },
     fast::{
@@ -76,7 +77,7 @@ impl FastProcessor {
                 ExecutionError::InvalidEnvironmentOpening {
                     root: request.root,
                     key: request.key,
-                    error,
+                    error: error.into(),
                 }
             })?;
         // This publication is private pending evidence, not a native use or VM transition. In
@@ -96,6 +97,27 @@ impl FastProcessor {
             PendingBinding::Verified(binding) => binding.implementation_root(),
             PendingBinding::Cached(binding) => binding.implementation_root(),
         }
+    }
+
+    /// Authorization uses authenticated namespace evidence before any D-indexed code lookup.
+    fn authorize_pending_mode(resume: &ResumeContext) -> Result<(), ExecutionError> {
+        let pending = resume.pending.as_ref().expect("pending resolution");
+        if !matches!(pending.request, PendingKey::Invoke(request) if request.mode == KeyedMode::Syscall)
+        {
+            return Ok(());
+        }
+        let actual = match pending.binding.as_ref().expect("authenticated pending binding") {
+            PendingBinding::Verified(binding) => binding.namespace(),
+            PendingBinding::Cached(binding) => binding.namespace(),
+        };
+        let expected = resume.environment.descriptor().kernel_namespace();
+        if actual != expected {
+            return Err(ExecutionError::EnvironmentSession(SessionError::UnauthorizedSyscall {
+                expected,
+                actual,
+            }));
+        }
+        Ok(())
     }
 
     fn has_materialized_root(forest: &MastForest, implementation: ImplementationRoot) -> bool {
@@ -209,6 +231,7 @@ impl FastProcessor {
             })?;
             Self::retain_verified_witness(resume, request, witness)?;
         }
+        Self::authorize_pending_mode(resume)?;
         let implementation = Self::pending_implementation(resume);
         let loaded = self
             .local_code_candidate(resume, implementation)
@@ -243,6 +266,7 @@ impl FastProcessor {
             })?;
             Self::retain_verified_witness(resume, request, witness)?;
         }
+        Self::authorize_pending_mode(resume)?;
         let implementation = Self::pending_implementation(resume);
         let loaded = match self.local_code_candidate(resume, implementation) {
             Some(loaded) => loaded,
@@ -276,11 +300,10 @@ impl FastProcessor {
             package_debug_info: prepared.package_debug_info.clone(),
             source_node_id: prepared.source_node_id,
         };
-        let projection = if let PendingKey::Invoke(request) = request {
+        let invocation = if let PendingKey::Invoke(request) = request {
             let mut state = ExecutionState {
                 processor: self,
                 continuation_stack: &mut resume.continuation_stack,
-                kernel: &resume.kernel,
                 host,
                 tracer,
                 stopper,
@@ -288,7 +311,12 @@ impl FastProcessor {
                 current_source_node_id: request.source_node_id,
                 inline_call_contexts: &mut resume.inline_call_contexts,
             };
-            Some(preflight_keyed_exec(&mut state, &resume.current_forest, request, &target)?)
+            Some(preflight_keyed_invocation(
+                &mut state,
+                &resume.current_forest,
+                request,
+                &target,
+            )?)
         } else {
             if self.clk.as_u32() != 0
                 || resume.session.phase() != SessionPhase::Unentered
@@ -346,26 +374,33 @@ impl FastProcessor {
                     Ok(ControlFlow::Continue(()))
                 },
                 PendingKey::Invoke(request) => {
+                    let tag = if request.mode == KeyedMode::Syscall {
+                        InvocationTag::Syscall
+                    } else {
+                        InvocationTag::Normal
+                    };
                     let native = match binding {
-                        PendingBinding::Verified(binding) => resume.session.prepare(
-                            request.key,
-                            binding,
-                            InvocationTag::Normal,
-                            request.row,
-                        ),
-                        PendingBinding::Cached(_) => resume.session.prepare_cached(
-                            request.key,
-                            InvocationTag::Normal,
-                            request.row,
-                        ),
+                        PendingBinding::Verified(binding) => {
+                            resume.session.prepare(request.key, binding, tag, request.row)
+                        },
+                        PendingBinding::Cached(_) => {
+                            resume.session.prepare_cached(request.key, tag, request.row)
+                        },
                     }
                     .map_err(ExecutionError::EnvironmentSession)?;
                     let principal = ProcedureKey::new(self.caller_hash);
                     let event = KeyedEvent {
-                        kind: KeyedEventKind::Invoke(KeyedMode::Exec),
+                        kind: KeyedEventKind::Invoke(request.mode),
                         use_record: native.use_record(),
                         principal_before: principal,
-                        principal_after: principal,
+                        principal_after: if matches!(
+                            request.mode,
+                            KeyedMode::Call | KeyedMode::DynCall
+                        ) {
+                            request.key
+                        } else {
+                            principal
+                        },
                     };
                     let reservation = tracer.prepare_keyed_transition(
                         self,
@@ -375,7 +410,7 @@ impl FastProcessor {
                             root: target.root,
                             implementation,
                         },
-                        projection.expect("prepared invocation projection"),
+                        invocation.as_ref().expect("prepared invocation").projection,
                     )?;
                     self.publish_preflighted_code(&prepared)?;
                     native.commit();
@@ -383,7 +418,6 @@ impl FastProcessor {
                     let mut state = ExecutionState {
                         processor: self,
                         continuation_stack: &mut resume.continuation_stack,
-                        kernel: &resume.kernel,
                         host,
                         tracer,
                         stopper,
@@ -391,15 +425,16 @@ impl FastProcessor {
                         current_source_node_id: request.source_node_id,
                         inline_call_contexts: &mut resume.inline_call_contexts,
                     };
-                    let flow = finish_keyed_exec(
+                    let flow = finish_keyed_invocation(
                         &mut state,
                         &mut resume.current_forest,
                         request,
                         target,
+                        invocation.expect("prepared invocation"),
                         event,
                         reservation,
                     );
-                    // Source ownership switches even when StepStopper stops on the EXEC row.
+                    // Source ownership switches even when stepping stops on the invocation row.
                     resume.package_debug_info = state.source_debug_info.clone();
                     Ok(flow)
                 },
@@ -424,18 +459,10 @@ impl FastProcessor {
         S: Stopper<Processor = Self, Forest = Arc<MastForest>>,
         T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
     {
-        let mut output_depth = self.stack_top_idx - self.stack_bot_idx;
-        if matches!(request.continuation, Continuation::FinishLoop(_)) {
-            output_depth = output_depth.saturating_sub(1).max(MIN_STACK_DEPTH);
-        }
-        if output_depth != MIN_STACK_DEPTH {
-            return Err(ExecutionError::OutputStackOverflow(output_depth - MIN_STACK_DEPTH));
-        }
-        let projection = {
+        let prepared = {
             let mut state = ExecutionState {
                 processor: self,
                 continuation_stack: &mut resume.continuation_stack,
-                kernel: &resume.kernel,
                 host,
                 tracer,
                 stopper,
@@ -454,7 +481,7 @@ impl FastProcessor {
         let event = KeyedEvent {
             kind: KeyedEventKind::RootEnd,
             use_record: native.use_record(),
-            principal_before: request.principal,
+            principal_before: ProcedureKey::new(self.caller_hash),
             principal_after: request.principal,
         };
         let root = request.continuation.exec_node().expect("root preflight checked actual node");
@@ -466,14 +493,13 @@ impl FastProcessor {
                 root,
                 implementation: request.implementation,
             },
-            projection,
+            prepared.projection,
         )?;
         native.commit();
         tracer.commit_environment_completion(completion);
         let mut state = ExecutionState {
             processor: self,
             continuation_stack: &mut resume.continuation_stack,
-            kernel: &resume.kernel,
             host,
             tracer,
             stopper,
@@ -481,7 +507,14 @@ impl FastProcessor {
             current_source_node_id: request.source_node_id,
             inline_call_contexts: &mut resume.inline_call_contexts,
         };
-        Ok(finish_root_end(&mut state, &resume.current_forest, request, event, reservation))
+        Ok(finish_root_end(
+            &mut state,
+            &resume.current_forest,
+            request,
+            prepared,
+            event,
+            reservation,
+        ))
     }
 
     fn completed(&mut self, resume: &mut ResumeContext) -> Result<bool, ExecutionError> {
@@ -566,18 +599,16 @@ impl FastProcessor {
     {
         self.check_resume(resume)?;
         loop {
-            if resume.pending.is_some() {
-                if let ControlFlow::Break(reason) =
+            if resume.pending.is_some()
+                && let ControlFlow::Break(reason) =
                     self.resolve_pending_sync(host, tracer, stopper, resume)?
-                {
-                    return self.stopped(resume, reason);
-                }
+            {
+                return self.stopped(resume, reason);
             }
             let reason = match execute_impl(
                 self,
                 &mut resume.continuation_stack,
                 &mut resume.current_forest,
-                &resume.kernel,
                 host,
                 tracer,
                 stopper,
@@ -664,12 +695,6 @@ impl FastProcessor {
                         return self.stopped(resume, reason);
                     }
                 },
-                InternalBreakReason::LoadMastForestFromDyn { .. } => {
-                    self.invalidate(resume);
-                    return Err(ExecutionError::Internal(
-                        "dynamic keyed invocation integration is pending",
-                    ));
-                },
             }
         }
     }
@@ -687,18 +712,16 @@ impl FastProcessor {
     {
         self.check_resume(resume)?;
         loop {
-            if resume.pending.is_some() {
-                if let ControlFlow::Break(reason) =
+            if resume.pending.is_some()
+                && let ControlFlow::Break(reason) =
                     self.resolve_pending_async(host, tracer, stopper, resume).await?
-                {
-                    return self.stopped(resume, reason);
-                }
+            {
+                return self.stopped(resume, reason);
             }
             let reason = match execute_impl(
                 self,
                 &mut resume.continuation_stack,
                 &mut resume.current_forest,
-                &resume.kernel,
                 host,
                 tracer,
                 stopper,
@@ -794,12 +817,6 @@ impl FastProcessor {
                     ) {
                         return self.stopped(resume, reason);
                     }
-                },
-                InternalBreakReason::LoadMastForestFromDyn { .. } => {
-                    self.invalidate(resume);
-                    return Err(ExecutionError::Internal(
-                        "dynamic keyed invocation integration is pending",
-                    ));
                 },
             }
         }

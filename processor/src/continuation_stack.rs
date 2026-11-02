@@ -376,6 +376,7 @@ impl<F> ContinuationStack<F> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_source_node_id(
         program: &Program,
         source_node_id: DebugSourceNodeId,
@@ -383,6 +384,7 @@ impl<F> ContinuationStack<F> {
         Self::new_with_optional_source_node_id(program, Some(source_node_id))
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_optional_source_node_id(
         program: &Program,
         source_node_id: Option<DebugSourceNodeId>,
@@ -542,6 +544,7 @@ impl<F> ContinuationStack<F> {
         source_node_ids.pop().flatten()
     }
 
+    #[cfg(test)]
     pub(crate) fn start_tracking_source_nodes(
         &mut self,
         next_source_node_id: Option<DebugSourceNodeId>,

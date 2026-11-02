@@ -72,7 +72,7 @@ pub enum ExecutionError {
         root: EnvironmentRoot,
         key: ProcedureKey,
         #[source]
-        error: OpeningError,
+        error: Box<OpeningError>,
     },
     #[error("error during processing of event {}", match event_name {
         Some(name) => format!("'{name}' (ID: {event_id})"),
