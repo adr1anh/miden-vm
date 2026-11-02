@@ -14,7 +14,7 @@ use miden_air_definitions::vm::trace::{
 use miden_core::{field::PrimeCharacteristicRing, mast::OpBatch, program::KernelDescriptor};
 
 use crate::{
-    Felt, ONE, Word, ZERO,
+    ExecutionError, Felt, ONE, Word, ZERO,
     crypto::merkle::MerklePath,
     trace::{ChipletTraceFragment, RowIndex, range::RangeChecker},
 };
@@ -38,6 +38,7 @@ pub use hasher::{
 };
 
 pub(crate) mod layout;
+use layout::{ChipletBand, ChipletsLayout};
 
 pub(crate) fn build_and8_lookup_trace(and8_counts: &[u64]) -> Vec<Felt> {
     hasher::build_and8_lookup_trace(and8_counts)
@@ -198,6 +199,18 @@ impl Chiplets {
     // EXECUTION TRACE
     // --------------------------------------------------------------------------------------------
 
+    /// Checks final physical placement once all buffered or streamed chiplets have converged.
+    pub(crate) fn layout(&self, prefix_len: usize) -> Result<ChipletsLayout, ExecutionError> {
+        ChipletsLayout::new(
+            prefix_len,
+            self.hasher.trace_len(),
+            self.bitwise.trace_len(),
+            self.memory.trace_len(),
+            self.ace.trace_len(),
+            self.kernel_rom.trace_len(),
+        )
+    }
+
     /// Adds all range checks required by the memory chiplet to the provided `RangeChecker`
     /// instance.
     pub fn append_range_checks(&self, range_checker: &mut RangeChecker) {
@@ -215,27 +228,38 @@ impl Chiplets {
     }
 
     /// Returns execution traces for `ChipletsAir` and `EidosCompressionAir`.
-    pub fn into_traces(
+    pub(crate) fn into_traces(
         self,
+        layout: ChipletsLayout,
         trace_len: usize,
         eidos_compression_trace_len: usize,
-    ) -> (ChipletsTrace, EidosCompressionTrace, Vec<u64>) {
-        assert!(self.trace_len() <= trace_len, "target trace length too small");
-        assert!(
-            self.eidos_compression_trace_len() <= eidos_compression_trace_len,
-            "target Eidos compression trace length too small"
-        );
+    ) -> Result<(ChipletsTrace, EidosCompressionTrace, Vec<u64>), ExecutionError> {
+        let padding = layout.padding(trace_len)?;
+        if self.hasher.trace_len() != layout.controller().len()
+            || self.bitwise.trace_len() != layout.bitwise().len()
+            || self.memory.trace_len() != layout.memory().len()
+            || self.ace.trace_len() != layout.ace().len()
+            || self.kernel_rom.trace_len() != layout.kernel_rom().len()
+        {
+            return Err(ExecutionError::Internal("Chiplets layout does not match its trace bands"));
+        }
+        if self.eidos_compression_trace_len() > eidos_compression_trace_len {
+            return Err(ExecutionError::Internal(
+                "target Eidos compression trace length too small",
+            ));
+        }
 
         let mut trace = Felt::zero_vec(CHIPLETS_WIDTH * trace_len);
         let mut eidos_compression_trace =
             Felt::zero_vec(NUM_EIDOS_COMPRESSION_COLS * eidos_compression_trace_len);
-        let and8_counts = self.fill_trace(&mut trace, trace_len, &mut eidos_compression_trace);
+        let and8_counts =
+            self.fill_trace(&mut trace, layout, padding, &mut eidos_compression_trace);
 
-        (
+        Ok((
             ChipletsTrace { trace },
             EidosCompressionTrace { trace: eidos_compression_trace },
             and8_counts,
-        )
+        ))
     }
 
     // HELPER METHODS
@@ -248,26 +272,22 @@ impl Chiplets {
     fn fill_trace(
         self,
         trace: &mut [Felt],
-        trace_len: usize,
+        layout: ChipletsLayout,
+        padding: ChipletBand,
         eidos_compression_trace: &mut [Felt],
     ) -> Vec<u64> {
         const W: usize = CHIPLETS_WIDTH;
-        debug_assert_eq!(trace.len(), W * trace_len);
-
-        let memory_start: usize = self.memory_start().into();
-        let ace_start: usize = self.ace_start().into();
-        let kernel_rom_start: usize = self.kernel_rom_start().into();
-        let padding_start: usize = self.padding_start().into();
+        debug_assert_eq!(trace.len(), W * (padding.start() + padding.len()));
 
         let Chiplets { hasher, bitwise, memory, ace, kernel_rom } = self;
 
         // Per-chiplet row counts. Chiplets are stacked vertically, so each one's region is a
         // contiguous band of rows: hasher [0, h), bitwise [h, h+b), and so on.
-        let hasher_len = hasher.trace_len();
-        let bitwise_len = bitwise.trace_len();
-        let memory_len = memory.trace_len();
-        let ace_len = ace.trace_len();
-        let kernel_rom_len = kernel_rom.trace_len();
+        debug_assert_eq!(hasher.trace_len(), layout.controller().len());
+        debug_assert_eq!(bitwise.trace_len(), layout.bitwise().len());
+        debug_assert_eq!(memory.trace_len(), layout.memory().len());
+        debug_assert_eq!(ace.trace_len(), layout.ace().len());
+        debug_assert_eq!(kernel_rom.trace_len(), layout.kernel_rom().len());
 
         // Chiplets are nested as hasher > bitwise > memory > ace > kernel_rom and begin at columns
         // 1, 2, 3, 4, 5. Each chiplet's `copy_rows_from` writes its prefix selector ONEs and
@@ -275,20 +295,27 @@ impl Chiplets {
         // padding rows are filled directly below.
 
         // Carve `trace` into the per-chiplet contiguous row bands.
-        let (hasher_band, rest) = trace.split_at_mut(hasher_len * W);
-        let (bitwise_band, rest) = rest.split_at_mut(bitwise_len * W);
-        let (memory_band, rest) = rest.split_at_mut(memory_len * W);
-        let (ace_band, rest) = rest.split_at_mut(ace_len * W);
-        let (kernel_band, padding_band) = rest.split_at_mut(kernel_rom_len * W);
+        let (_, rest) = trace.split_at_mut(layout.controller().start() * W);
+        let (hasher_band, rest) = rest.split_at_mut(layout.controller().len() * W);
+        let (bitwise_band, rest) = rest.split_at_mut(layout.bitwise().len() * W);
+        let (memory_band, rest) = rest.split_at_mut(layout.memory().len() * W);
+        let (ace_band, rest) = rest.split_at_mut(layout.ace().len() * W);
+        let (kernel_band, padding_band) = rest.split_at_mut(layout.kernel_rom().len() * W);
 
-        let mut hasher_fragment =
-            ChipletTraceFragment::with_overheads(hasher_band, W, 1, HASHER_WIDTH, 0, &[]);
+        let mut hasher_fragment = ChipletTraceFragment::with_overheads(
+            hasher_band,
+            W,
+            1,
+            HASHER_WIDTH,
+            layout.controller(),
+            &[],
+        );
         let mut bitwise_fragment = ChipletTraceFragment::with_overheads(
             bitwise_band,
             W,
             BITWISE_COL_START,
             BITWISE_FRAGMENT_WIDTH,
-            hasher_len,
+            layout.bitwise(),
             &[],
         );
         let mut memory_fragment = ChipletTraceFragment::with_overheads(
@@ -296,7 +323,7 @@ impl Chiplets {
             W,
             3,
             MEMORY_WIDTH,
-            memory_start,
+            layout.memory(),
             &[1],
         );
         let mut ace_fragment = ChipletTraceFragment::with_overheads(
@@ -304,7 +331,7 @@ impl Chiplets {
             W,
             4,
             ACE_CHIPLET_NUM_COLS,
-            ace_start,
+            layout.ace(),
             &[1, 2],
         );
         let mut kernel_rom_fragment = ChipletTraceFragment::with_overheads(
@@ -312,7 +339,7 @@ impl Chiplets {
             W,
             5,
             KERNEL_ROM_TRACE_WIDTH,
-            kernel_rom_start,
+            layout.kernel_rom(),
             &[1, 2, 3],
         );
 
@@ -337,7 +364,7 @@ impl Chiplets {
                 kernel_rom.fill_trace(&mut kernel_rom_fragment);
             });
             s.spawn(move |_| {
-                fill_padding_rows(padding_band, padding_start);
+                fill_padding_rows(padding_band, padding);
             });
         });
 
@@ -350,7 +377,7 @@ impl Chiplets {
 }
 
 /// Fills padding rows after the kernel ROM region: cols 1..=4 = ONE, chip_clk = row + 1.
-fn fill_padding_rows(band: &mut [Felt], row_offset: usize) {
+fn fill_padding_rows(band: &mut [Felt], physical_band: ChipletBand) {
     const W: usize = CHIPLETS_WIDTH;
     let (rows, _) = band.as_chunks_mut::<W>();
     for (i, row) in rows.iter_mut().enumerate() {
@@ -358,7 +385,7 @@ fn fill_padding_rows(band: &mut [Felt], row_offset: usize) {
         row[2] = ONE;
         row[3] = ONE;
         row[4] = ONE;
-        row[W - 1] = Felt::from_u32((row_offset + i + 1) as u32);
+        row[W - 1] = physical_band.clock_at(i);
     }
 }
 

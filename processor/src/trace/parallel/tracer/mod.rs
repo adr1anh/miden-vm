@@ -19,7 +19,10 @@ use crate::{
     continuation_stack::{Continuation, ContinuationStack},
     errors::MapExecErrNoCtx,
     mast::{ExecutableMastForest, MastNode, MastNodeExt, MastNodeId, SparseMastForest},
-    trace::trace_state::{EndBlockFlags, EndBlockStackEntryKind},
+    trace::{
+        chiplets::layout::ChipletsLayout,
+        trace_state::{EndBlockFlags, EndBlockStackEntryKind},
+    },
     tracer::{OperationHelperRegisters, Tracer},
 };
 
@@ -58,6 +61,8 @@ pub(crate) struct CoreTraceGenerationTracer<'a> {
     writer: RowMajorTraceWriter<'a, Felt>,
     /// The index of the next row to write in the trace fragment.
     row_write_index: usize,
+    /// Shared immutable physical placement, applied only when writing final trace rows.
+    layout: ChipletsLayout,
 
     /// The decoder state being replayed, tracking the current and parent block addresses.
     decoder_state: DecoderState,
@@ -112,10 +117,12 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         decoder_state: DecoderState,
         block_address_replay: BlockAddressReplay,
         block_stack_replay: BlockStackReplay,
+        layout: ChipletsLayout,
     ) -> Self {
         Self {
             writer,
             row_write_index: 0,
+            layout,
             decoder_state,
             block_address_replay,
             block_stack_replay,
@@ -220,9 +227,13 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                         &processor.stack,
                         callee_hash,
                         ctx_info,
-                    );
+                    )?;
                 } else {
-                    self.fill_dyn_start_trace_row(&processor.system, &processor.stack, callee_hash);
+                    self.fill_dyn_start_trace_row(
+                        &processor.system,
+                        &processor.stack,
+                        callee_hash,
+                    )?;
                 }
             },
             MastNode::External(_) => {
@@ -567,9 +578,9 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
                         &processor.stack,
                         operation,
                         op_idx_in_group,
-                        op_helper_registers.to_user_op_helpers(),
+                        op_helper_registers.to_physical_user_op_helpers(self.layout)?,
                         &mut basic_block_context,
-                    );
+                    )?;
                 },
                 Respan { node_id, batch_index } => {
                     let MastNode::Block(basic_block_node) =
@@ -741,9 +752,13 @@ mod tests {
 
         let tracer = CoreTraceGenerationTracer::new(
             writer,
-            DecoderState { current_addr: ZERO, parent_addr: ZERO },
+            DecoderState {
+                current_addr: crate::trace::chiplets::layout::LogicalControllerAddress::ABSENT,
+                parent_addr: crate::trace::chiplets::layout::LogicalControllerAddress::ABSENT,
+            },
             BlockAddressReplay::default(),
             BlockStackReplay::default(),
+            ChipletsLayout::new(0, 0, 0, 0, 0, 0).unwrap(),
         );
 
         // Call the method under test.

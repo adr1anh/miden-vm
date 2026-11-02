@@ -38,7 +38,7 @@ use crate::{
     errors::MapExecErrNoCtx,
     trace::{
         ChipletsLengths, TraceLenSummary, VmTrace, VmWitness,
-        chiplets::{Ace, Bitwise, Hasher, KernelRom, Memory},
+        chiplets::{Ace, Bitwise, Hasher, KernelRom, Memory, layout::ChipletsLayout},
         parallel::{processor::ReplayProcessor, tracer::CoreTraceGenerationTracer},
         range::RangeChecker,
         utils::RowMajorTraceWriter,
@@ -188,6 +188,9 @@ fn build_trace_inner(
         &mast_forest_store,
         max_trace_len,
     )?;
+    // Both buffered and prebuilt Controller producers converge before physical placement.
+    // PR 06 will supply the authenticated Library prefix here.
+    let layout = chiplets.layout(0)?;
 
     let eidos_compression_trace_len = chiplets.eidos_compression_trace_len();
     let eidos_compression_height = pad_to_trace_length(eidos_compression_trace_len);
@@ -200,12 +203,13 @@ fn build_trace_inner(
         fragment_size,
         &mast_forest_store,
         max_stack_depth,
+        layout,
     )?;
 
     let core_trace_len = core_trace_data.len() / CORE_STORAGE_WIDTH;
 
     let core_height = pad_to_trace_length(core_trace_len);
-    let chiplets_height = pad_to_trace_length(chiplets.trace_len());
+    let chiplets_height = pad_to_trace_length(layout.trace_len());
     let byte_pair_lookup_rows = AND8_LOOKUP_TRACE_HEIGHT;
 
     // Exact check against modelled peak prover memory: pad-up can push usage over budget even
@@ -238,11 +242,11 @@ fn build_trace_inner(
     let trace_len_summary = TraceLenSummary::new(
         core_trace_len,
         ChipletsLengths::from_parts(
-            chiplets.bitwise_start().into(),
-            chiplets.memory_start() - chiplets.bitwise_start(),
-            chiplets.ace_start() - chiplets.memory_start(),
-            chiplets.kernel_rom_start() - chiplets.ace_start(),
-            chiplets.padding_start() - chiplets.kernel_rom_start(),
+            layout.controller().len(),
+            layout.bitwise().len(),
+            layout.memory().len(),
+            layout.ace().len(),
+            layout.kernel_rom().len(),
         ),
         eidos_compression_trace_len,
         byte_pair_lookup_rows,
@@ -250,10 +254,11 @@ fn build_trace_inner(
     );
 
     // Each segment is built at its own per-AIR height (no cross-padding to the unified max).
-    let ((chiplets_trace, eidos_compression_trace, mut and8_counts), ()) = rayon::join(
-        || chiplets.into_traces(chiplets_height, eidos_compression_height),
+    let (chiplets_result, ()) = rayon::join(
+        || chiplets.into_traces(layout, chiplets_height, eidos_compression_height),
         || pad_core_row_major(&mut core_trace_data, core_height),
     );
+    let (chiplets_trace, eidos_compression_trace, mut and8_counts) = chiplets_result?;
 
     range_checker.write_range_counts(&mut and8_counts);
     let and8_lookup_trace = chiplets::build_and8_lookup_trace(&and8_counts);
@@ -326,6 +331,7 @@ fn generate_core_trace_row_major(
     fragment_size: usize,
     mast_forest_store: &[Arc<SparseMastForest>],
     max_stack_depth: usize,
+    layout: ChipletsLayout,
 ) -> Result<Vec<Felt>, ExecutionError> {
     let num_fragments = core_trace_contexts.len();
     let total_allocated_rows = num_fragments * fragment_size;
@@ -358,6 +364,7 @@ fn generate_core_trace_row_major(
                     fragment_size,
                     mast_forest_store,
                     max_stack_depth,
+                    layout,
                 )?;
 
             processor.execute(
@@ -999,6 +1006,7 @@ fn split_trace_fragment_context<'a>(
     fragment_size: usize,
     mast_forest_store: &[Arc<SparseMastForest>],
     max_stack_depth: usize,
+    layout: ChipletsLayout,
 ) -> Result<SplitFragmentContext<'a>, ExecutionError> {
     let CoreTraceFragmentContext {
         state: CoreTraceState { system, decoder, stack },
@@ -1036,8 +1044,13 @@ fn split_trace_fragment_context<'a>(
         max_stack_depth,
         fragment_size.into(),
     );
-    let tracer =
-        CoreTraceGenerationTracer::new(writer, decoder, block_address_replay, block_stack_replay);
+    let tracer = CoreTraceGenerationTracer::new(
+        writer,
+        decoder,
+        block_address_replay,
+        block_stack_replay,
+        layout,
+    );
 
     Ok((processor, tracer, translated_continuation, initial_mast_forest))
 }
