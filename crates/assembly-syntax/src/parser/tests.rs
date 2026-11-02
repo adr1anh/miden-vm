@@ -5,8 +5,8 @@ use miden_debug_types::{SourceFile, SourceId, SourceLanguage, Uri};
 
 use super::*;
 use crate::{
-    MAX_CONTROL_FLOW_NESTING,
-    ast::{Form, Immediate, Instruction, MAX_TYPE_EXPR_NESTING, Op, Visibility},
+    Felt, MAX_CONTROL_FLOW_NESTING, Word,
+    ast::{Form, Immediate, Instruction, InvocationTarget, MAX_TYPE_EXPR_NESTING, Op, Visibility},
 };
 
 fn test_source_file(source: &str) -> Arc<SourceFile> {
@@ -922,6 +922,106 @@ end
     assert_parses(source);
 }
 
+fn parse_single_invocation(instruction: &str) -> Instruction {
+    let source = format!("begin\n    {instruction}\nend\n");
+    let forms = parse_forms(test_source_file(&source)).expect("invocation should parse");
+    let [Form::Begin(body)] = forms.as_slice() else {
+        panic!("expected a single begin block, got {forms:?}");
+    };
+    let ops = body.iter().collect::<Vec<_>>();
+    let [Op::Inst(instruction)] = ops.as_slice() else {
+        panic!("expected a single instruction, got {body:?}");
+    };
+    instruction.inner().clone()
+}
+
+fn invocation_target(instruction: &Instruction) -> &InvocationTarget {
+    match instruction {
+        Instruction::Exec(target)
+        | Instruction::Call(target)
+        | Instruction::SysCall(target)
+        | Instruction::ProcRef(target) => target,
+        other => panic!("expected an invocation, got {other:?}"),
+    }
+}
+
+#[test]
+fn invocation_source_compatibility_word_literals_roundtrip() {
+    let key = Word::new([
+        Felt::new_unchecked(0x0807060504030201),
+        Felt::new_unchecked(0x1817161514131211),
+        Felt::new_unchecked(0x2827262524232221),
+        Felt::new_unchecked(0x3837363534333231),
+    ]);
+    let literal = key.to_hex();
+    assert_eq!(literal, "0x0102030405060708111213141516171821222324252627283132333435363738");
+    // Preserve the existing odd-digit spelling: its leading zero is restored before decoding.
+    let short_literal = format!("0x{}", &literal[3..]);
+    for mnemonic in ["exec", "call", "syscall", "procref"] {
+        for spelling in [&literal, &short_literal] {
+            let instruction = parse_single_invocation(&format!("{mnemonic}.{spelling}"));
+            assert_matches!(invocation_target(&instruction), InvocationTarget::MastRoot(value)
+                if *value.inner() == key);
+            let printed = instruction.to_string();
+            assert_eq!(printed, format!("{mnemonic}.{literal}"));
+            let reparsed = parse_single_invocation(&printed);
+            assert_matches!(invocation_target(&reparsed), InvocationTarget::MastRoot(value)
+                if value.as_bytes() == key.as_bytes());
+        }
+    }
+}
+
+#[test]
+fn invocation_source_compatibility_named_targets_roundtrip() {
+    for (spelling, components) in [
+        ("local", vec!["local"]),
+        ("module::procedure", vec!["module", "procedure"]),
+        ("::module::procedure", vec!["::", "module", "procedure"]),
+        (r#""quoted::local""#, vec!["quoted::local"]),
+        (r#""hash#local""#, vec!["hash#local"]),
+        (r#"module::"proc.name""#, vec!["module", "proc.name"]),
+        (r#""mod::segment"::"proc::name""#, vec!["mod::segment", "proc::name"]),
+    ] {
+        for mnemonic in ["exec", "call", "syscall", "procref"] {
+            let instruction = parse_single_invocation(&format!("{mnemonic}.{spelling}"));
+            let target_components = |instruction: &Instruction| match invocation_target(instruction)
+            {
+                InvocationTarget::Symbol(name) => vec![name.as_str().to_string()],
+                InvocationTarget::Path(path) => path
+                    .components()
+                    .map(|component| component.expect("valid component").as_str().to_string())
+                    .collect::<Vec<_>>(),
+                InvocationTarget::MastRoot(_) => panic!("expected a named invocation target"),
+            };
+            assert_eq!(target_components(&instruction), components);
+            let printed = instruction.to_string();
+            let reparsed = parse_single_invocation(&printed);
+            assert_eq!(target_components(&reparsed), components);
+            assert_eq!(reparsed.to_string(), printed);
+        }
+    }
+}
+
+#[test]
+fn invocation_source_compatibility_rejects_malformed_words() {
+    for mnemonic in ["exec", "call", "syscall", "procref"] {
+        for literal in [
+            "0x1234".to_string(),
+            format!("0x{}", "0".repeat(62)),
+            format!("0x{}", "0".repeat(65)),
+            format!("0xffffffffffffffff{}", "0".repeat(48)),
+            format!("0xg{}", "0".repeat(63)),
+            "42".to_string(),
+        ] {
+            let source = format!("begin\n    {mnemonic}.{literal}\nend\n");
+            assert!(
+                parse_forms(test_source_file(&source)).is_err(),
+                "accepted malformed procedure key: {mnemonic}.{literal}"
+            );
+        }
+    }
+}
+
 #[test]
 #[cfg(feature = "std")]
 fn parser_accepts_checked_in_masm_corpus() {
@@ -1182,7 +1282,7 @@ end
 }
 
 #[test]
-fn parser_reports_direct_invalid_mast_roots() {
+fn parser_reports_direct_invalid_procedure_keys() {
     let source = test_source_file(
         "\
 begin
@@ -1191,9 +1291,9 @@ end
 ",
     );
 
-    let err = parse_forms(source).expect_err("expected invalid mast root error");
+    let err = parse_forms(source).expect_err("expected invalid procedure key error");
 
-    assert_matches!(render_diagnostic(&err), diag if diag.contains("invalid MAST root literal"));
+    assert_matches!(render_diagnostic(&err), diag if diag.contains("invalid procedure key literal"));
 }
 
 #[test]
