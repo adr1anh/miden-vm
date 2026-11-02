@@ -56,6 +56,11 @@ pub fn execution_fixture(operations: Vec<Operation>) -> ExecutionFixture {
     forest.make_root(root);
     let program = Program::new(Arc::new(forest), root);
 
+    execution_fixture_for_program(program)
+}
+
+/// Authenticates the entry binding for a program without retained runtime invocations.
+pub fn execution_fixture_for_program(program: Program) -> ExecutionFixture {
     let label = CanonicalLabel::text("entry").unwrap().commitment();
     let entry = Namespace::initial().procedure_key(label);
     let node = EnvNode::Mast {
