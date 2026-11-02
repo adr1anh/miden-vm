@@ -18,6 +18,7 @@ use core::{
 use miden_mast_package::debug_info::DebugSourceNodeId;
 
 mod continuation_stack;
+mod environment;
 mod errors;
 mod execution;
 mod execution_options;
@@ -53,6 +54,10 @@ mod tests;
 // ================================================================================================
 
 pub use continuation_stack::{Continuation, SourceInlineCallContext};
+pub use environment::{
+    OpeningError, OpeningLimits, OpeningResource, OpeningStep, ResolutionWitness, ResolvedBinding,
+    VerifiedOpening,
+};
 pub use errors::{
     AceError, ExecutionError, HostError, MemoryError, PackageSourceDebugContext,
     advice_error_with_package_source_context, event_error_with_package_source_context,
