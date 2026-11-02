@@ -279,7 +279,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | in-progress | Latest `9ebac7cc1`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, core seed generation, public API and full-feature Clippy pass | Final audit: add explicit structural-cycle/keyed-recursion cases. Processor witness checks await 05/09; fuzz smoke at 16. D2 preserves existing MASM source. |
-| 03 Chiplet foundation | in-progress | Base `7602d32ed` | Bounded source/address/test-graph review | First: relation-preserving Memory inverse/delta simplification. Processor checks remain blocked by 05/09 consumer migration. |
+| 03 Chiplet foundation | in-progress | Latest `411b22f8b`; base `7602d32ed` | Independent algebra review; 18 chiplet unit +18 generated/capture/ACE tests; source test-inclusive Clippy/format pass | Next: checked logical Controller-address ownership, then final materialization relocation. Processor checks await 05/09. |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
@@ -607,3 +607,26 @@ required cross-graph checks run. After PRs 05/09 close old invocation consumers,
 and related witness round trips. `tools/miden-core-fuzz/Cargo.toml` directly depends on that
 processor and assembly graph, so its build/smoke remains PR 16, not a claimed current pass.
 The local stack may continue under the workflow's intentional intermediate-build allowance.
+
+### PR 03 Memory inverse and delta simplification
+
+Commit `411b22f8b` constrains the existing same-context/address flag directly and reuses it for
+delta selection. Independent algebra review establishes the same accepted assignments in both
+context cases; the old/new delta difference vanishes under the unchanged flag definition.
+All six inverse/flag/delta emission positions and all other Memory equations remain unchanged.
+The finite 7,560-assignment regression matrix complements that proof; it is not exhaustive field
+enumeration. It retains non-Boolean address ratios on context changes and arbitrary same-key
+read/read clock inverses. No helper columns or trace/writer layout changed.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-air-definitions --lib vm::constraints::chiplets`:
+  eighteen tests.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-air --test constraint_capture --test generated_drift --test ace_codegen`:
+  eighteen tests; one manual timing benchmark ignored. Generated/native values, degrees, capture
+  structure and ACE lowering agree for the current relation.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-air-definitions --lib --tests -- -D warnings`.
+- Pinned-nightly formatting and staged whitespace checks.
+
+Logs stay separate under uncommitted `.scratch/librarytree/logs/pr03-*.log`. These checks do not
+establish future packed Library dimensions/degrees/lookup bounds; those remain later measured gates.
