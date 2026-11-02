@@ -2839,15 +2839,26 @@ fn issue_2818_restore_context_grows_stack_buffer_for_suspended_caller() {
 
     // The active callee context is still at the minimum stack depth and the storage has not grown.
     // Restoring this suspended caller is what requires moving the active stack and growing storage.
-    StackInterface::restore_context(&mut processor)
+    let stack_restore = StackInterface::prepare_restore_context(&processor)
         .expect("restoring a suspended caller should grow the stack buffer when needed");
-    SystemInterface::restore_call_state(&mut processor)
+    let system_restore = SystemInterface::prepare_restore_call_state(&processor)
         .expect("restoring system call state should succeed");
+    assert_eq!(processor.stack.len(), INITIAL_STACK_BUFFER_SIZE);
+    assert_eq!(processor.stack_size(), MIN_STACK_DEPTH);
+    assert_eq!(processor.saved_overflow_len, caller_overflow_len);
+    assert_eq!(processor.stack_overflow_save_stack.len(), 1);
+    assert_eq!(processor.system_call_state_stack.len(), 1);
+
+    StackInterface::commit_restore_context(&mut processor, stack_restore);
+    SystemInterface::commit_restore_call_state(&mut processor, system_restore);
     assert!(
         processor.stack.len() > INITIAL_STACK_BUFFER_SIZE,
         "context restore should have grown the stack buffer"
     );
     assert_eq!(processor.stack_size(), MIN_STACK_DEPTH + caller_overflow_len);
+    assert_eq!(processor.saved_overflow_len, 0);
+    assert!(processor.stack_overflow_save_stack.is_empty());
+    assert!(processor.system_call_state_stack.is_empty());
 }
 
 #[test]
@@ -3318,7 +3329,7 @@ fn test_continuation_stack_limit_exactly_max_continuations_succeeds() {
     processor.execute_sync(&program, &mut host).unwrap();
 }
 
-/// Tests that restore_context returns an error when the stack overflow save stack is empty.
+/// Tests that preparing a context restore fails when the stack overflow save stack is empty.
 #[test]
 fn test_restore_context_empty_stack_overflow_save_stack() {
     let mut processor = FastProcessor::new(StackInputs::default());
@@ -3326,16 +3337,15 @@ fn test_restore_context_empty_stack_overflow_save_stack() {
     // Manually clear the stack overflow save stack to simulate an empty state
     processor.stack_overflow_save_stack.clear();
 
-    let result = StackInterface::restore_context(&mut processor);
+    let result = StackInterface::prepare_restore_context(&processor);
 
-    assert!(result.is_err());
-    assert_matches!(
-        result.unwrap_err(),
-        OperationError::Internal(msg) if msg.contains("stack overflow save stack should never be empty")
-    );
+    assert!(matches!(
+        result,
+        Err(ExecutionError::Internal("saved caller overflow frame is missing"))
+    ));
 }
 
-/// Tests that restore_call_state returns an error when the system call state stack is empty.
+/// Tests that preparing a system restore fails when the system call state stack is empty.
 #[test]
 fn test_restore_call_state_empty_system_call_state_stack() {
     let mut processor = FastProcessor::new(StackInputs::default());
@@ -3343,13 +3353,14 @@ fn test_restore_call_state_empty_system_call_state_stack() {
     // Manually clear the system call state stack to simulate an empty state
     processor.system_call_state_stack.clear();
 
-    let result = SystemInterface::restore_call_state(&mut processor);
+    let result = SystemInterface::prepare_restore_call_state(&processor);
 
-    assert!(result.is_err());
-    assert_matches!(
-        result.unwrap_err(),
-        OperationError::Internal(msg) if msg.contains("system call state stack should never be empty")
-    );
+    assert!(matches!(
+        result,
+        Err(OperationError::Internal(
+            "system call state stack should never be empty when restoring context"
+        ))
+    ));
 }
 
 // TEST HELPERS
