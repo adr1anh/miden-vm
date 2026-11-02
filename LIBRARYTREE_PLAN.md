@@ -257,7 +257,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | in-progress | `bf840bc6d` identities; `ee4e7f937` domains | Independent reviews; canonical bytes/type-confusion checks; five domain/collision/framing/vector tests; no-default-features and scoped rustfmt/Clippy | Next slice: built-in canonical label constructors/preimages/hashing. TypedId/exact decoding, object builders and shared vectors remain. No Protocol policy is chosen. |
+| 01 Identities | in-progress | `bf840bc6d` identities; `ee4e7f937` domains; `6b27da605` built-in labels | Independent reviews; identity/UI, five domain and five label tests; frozen vectors; no-default-features and scoped rustfmt/Clippy | Next slice: exact canonical label decoding and explicit external TypedId-validation boundary. Object builders/shared vectors remain. No Protocol policy is chosen. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
@@ -311,3 +311,18 @@ Passed after successful AC/heavy-work guards:
 - `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
 - `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
 - Pinned-nightly core formatting and whitespace checks.
+
+### PR 01 Built-in canonical labels
+
+Commit `6b27da605` adds retained Text/LibraryId/nonzero Revision preimages and ENV_LABEL hashing,
+reusing the existing LE32 packer. Independent review found no actionable issue. This slice does not
+complete label decoding, TypedId, environment objects or PR 01.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::label`:
+  five tests, including nine independent frozen vectors and allocation-boundary checks without
+  giant allocations.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- `cargo +nightly-2026-10-09 fmt -p miden-core -- --check` and staged whitespace checks.
