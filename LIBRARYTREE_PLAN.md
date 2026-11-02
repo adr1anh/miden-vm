@@ -330,7 +330,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
-| 06 Library | in-progress | Helpers `67390876a`/`3b07ee656`/`57c6f9426`; public test `43b2824f8`; earlier refs below; base `53acb4837` | Independent reviews; AIR321, current degree≤9/exact lookup metadata, native witness6, strict scoped Clippy and no-default-features pass | Packed relation, prefix/relocation, measured degree/capacity and all soundness gates remain |
+| 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
@@ -1436,3 +1436,45 @@ statement shape validation. Core Resolve/root-END and canonical claim/transport/
 remain PR07/12 obligations. Intermediate consumers may break during this selected cutover; that is
 not permission to accept a partial proof relation or clear any inherited/final gate. Exact degree,
 lookup multiset/capacity, prefix/boundary, public-binding and generated/security checks remain required.
+
+
+### PR 06 Packed relation/materialization checkpoint
+
+`b9db78846` selects the shared packed overlays, matching prefix-gated MAIN selectors, periodic9,
+complete Library exit into Controller and relocated Controller initialization. `d5245be2e` migrates
+lookup activity, keeps Library inside the existing hash-kernel group and redistributes AND8 2+2 and
+Memory ranges4+1 without changing raw tuple/frequency multisets. Retired KernelRom messages are
+removed; bus slots0/3 remain reserved, preserving COUNT41 and message width16. `4bbba1e34` requires
+explicit Chiplets8 in MAIN/boundary propagation, validates every AIR public slice before indexing,
+rejects missing/malformed shapes and removes absent-input defaults. Core's old fixed prefix and
+canonical legacy claim carrier remain explicit until PR07/12; they no longer seed kernel authority.
+
+`668f581c4` consumes the retained completed session, registers Library requests into the same checked
+Hasher before Eidos/range/height/memory admission, then writes into the final allocated prefix only.
+It uses six checked bands, separate typed AEAD/Bitwise buffers, Controller c1, checked cell layouts
+and one typed Controller-address relocation. Obsolete native KernelRom files/band/builder are removed.
+`013573703` migrates private band fixtures without claiming their execution. `8ddf89e49` checks real
+Mast/entry frequency1, prefix8, physical Controller address9, three unit compression footers, exact
+budget rejection and live/read/source/async matrix equality.
+
+`c53ea3cc7` migrates CLI/benchmark reports and required measured-breakdown fields to six bands while
+retaining the five calibration dimensions and checked sum+1. Benchmark documentation `a1f94df23`
+identifies pre-cutover metrics as historical. Measured JSON/provenance remain untouched; enabled
+`committed_snapshots_load` still requires genuine producer recapture and updated height pins. Small
+synthetic schema fixtures do not claim new measured results. Reporting/bench checks remain unrun.
+
+After AC/heavy guards all360 AIR tests passed, capturing actual whole MAIN/extension degree≤9,
+public8, periodic9, four AIRs, exact [4,4,3,2] metadata and moved lookup fractions. Nine public witness
+tests passed in default/testing configurations and all16 public execution tests (40-case matrix)
+passed. Strict AIR library/test, processor library and source/public-test Clippy in both configurations
+and no-default-features processor passed. Logs: `pr06-packed-*`. Review/compile/lint found and fixed
+stale imports/width names, a test mutating the newly reserved Controller selector, explicit-public
+fixtures, and fixed-chunk iterator lints. No gate or degree bound was relaxed.
+
+PR06 is implemented-awaiting-validation, not complete. Normal processor/parallel/lookup/streamed and
+old fixture migrations remain behind three assembly errors and deferred toolchain work. Full active
+production forged matrices, complete Range/And8/global Resolve closure, source/generated drift,
+native/MASM/recursive/security and qualification gates remain. Old prove/verify/recursive producers
+omit Chiplets8 and reject at statement construction; their legacy carrier cannot enable the selected
+proof. Proceed to PR07 Core binding, then PR12 canonical claim/public/transport activation without
+defaults or old-authority adapters. No GitHub PR or push was created.
