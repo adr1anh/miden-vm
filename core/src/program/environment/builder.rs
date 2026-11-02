@@ -1,15 +1,18 @@
-//! Bounded storage for an optional complete-preimage environment builder.
+//! Bounded storage and complete occurrence validation for an optional environment builder.
 
 use alloc::vec::Vec;
 use core::alloc::Layout;
 
-use super::{EnvNode, EnvNodeError, EnvironmentRoot};
+use super::{EnvNode, EnvNodeError, EnvironmentRoot, ProcedureKey};
 use crate::{Felt, WORD_SIZE};
 
-/// Explicit resource limits for collecting and, eventually, validating a complete environment.
+mod validation;
+pub use validation::{EnvironmentBinding, ValidatedEnvironment};
+
+/// Explicit resource limits for collecting and validating a complete environment.
 ///
-/// No implicit limits are supplied. Visits, depth and bindings apply to complete traversal,
-/// which storage alone does not perform. Limits on submitted nodes and encoded bytes count
+/// No implicit limits are supplied. Visits, depth and bindings apply when finishing the builder.
+/// Limits on submitted nodes and encoded bytes count
 /// successful submissions, including identical duplicates, rather than just retained records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnvironmentBuildLimits {
@@ -17,7 +20,7 @@ pub struct EnvironmentBuildLimits {
     pub max_submitted_nodes: usize,
     /// Maximum number of physical node occurrences visited during complete traversal.
     pub max_visits: usize,
-    /// Maximum physical path depth during complete traversal.
+    /// Maximum physical path depth during complete traversal, with the selected root at zero.
     pub max_depth: usize,
     /// Maximum immediate child count of any submitted List.
     pub max_list_children: usize,
@@ -25,10 +28,11 @@ pub struct EnvironmentBuildLimits {
     pub max_encoded_bytes: usize,
     /// Maximum number of executable bindings emitted during complete traversal.
     pub max_bindings: usize,
-    /// Maximum requested/logical heap storage, including temporary input and hashing storage.
+    /// Maximum requested/logical heap storage, including temporary input and traversal storage.
     ///
     /// This counts retained List capacities, exact internal Vec requests, List hash scratch,
-    /// and conservative old/new Vec requests during growth. Allocator-provided excess capacity,
+    /// active flags, retained frame/binding requests and conservative old/new Vec growth requests.
+    /// Frame requests remain charged after frames are popped. Allocator-provided excess capacity,
     /// allocator metadata, fixed stack storage and process RSS are outside this bound.
     pub max_storage_bytes: usize,
 }
@@ -45,7 +49,7 @@ pub enum EnvironmentBuildResource {
     StorageBytes,
 }
 
-/// A node cannot be retained within the builder's resource or commitment bounds.
+/// An environment cannot be stored or completely validated within the caller's bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum EnvironmentBuildError {
     #[error("environment builder {resource:?} limit {limit} is below requested {requested}")]
@@ -62,13 +66,20 @@ pub enum EnvironmentBuildError {
     Node(#[from] EnvNodeError),
     #[error("different environment preimages have the same commitment")]
     CommitmentCollision,
+    #[error("environment preimage is missing for {0:?}")]
+    MissingPreimage(EnvironmentRoot),
+    #[error("environment root is already active on the traversal path: {0:?}")]
+    Cycle(EnvironmentRoot),
+    #[error("environment contains a duplicate procedure key: {0:?}")]
+    DuplicateProcedureKey(ProcedureKey),
 }
 
 /// Owned, bounded preimages indexed by internally computed environment commitments.
 ///
-/// This optional utility does not certify completeness or executable-path uniqueness. It grants
-/// no root authority, code availability or protocol admission, and is not a required enumeration
-/// step for mounting externally admitted fragments at runtime.
+/// Insertion alone does not establish completeness or executable-path uniqueness. Finishing
+/// validates these properties locally for the selected root's complete reachable preimages.
+/// This grants no root authority, code availability or protocol admission, and is not a required
+/// enumeration step for mounting externally admitted fragments at runtime.
 ///
 /// Identical submissions reuse the existing record but consume submission and encoded-byte
 /// budgets. Rejected insertions leave records and logical accounting unchanged. Storage limits
@@ -191,6 +202,23 @@ impl EnvironmentBuilder {
         self.list_storage_bytes = list_storage_bytes;
         self.peak_storage_bytes = self.peak_storage_bytes.max(storage_peak);
         Ok(root)
+    }
+
+    /// Validates every physical occurrence reachable from the selected root and derives bindings.
+    ///
+    /// Every reachable environment preimage must have been inserted. Shared subtrees are visited
+    /// separately under each inherited namespace; duplicate procedure keys reject even if their
+    /// implementation roots agree. DATA values and MAST implementation roots are opaque values,
+    /// not environment edges. Validation consumes the builder and returns no partial result.
+    ///
+    /// This establishes local complete-preimage structure and executable-key uniqueness under the
+    /// environment's hash assumptions. It does not authorize the root, provide executable code,
+    /// or validate manifests, account ownership or protocol admission.
+    pub fn finish(
+        self,
+        root: EnvironmentRoot,
+    ) -> Result<ValidatedEnvironment, EnvironmentBuildError> {
+        validation::finish(self, root)
     }
 
     /// Returns the caller's explicit limits, including the limits for later traversal.

@@ -21,7 +21,8 @@ pub use object::{EnvNode, EnvNodeError};
 
 mod builder;
 pub use builder::{
-    EnvironmentBuildError, EnvironmentBuildLimits, EnvironmentBuildResource, EnvironmentBuilder,
+    EnvironmentBinding, EnvironmentBuildError, EnvironmentBuildLimits, EnvironmentBuildResource,
+    EnvironmentBuilder, ValidatedEnvironment,
 };
 
 macro_rules! word_identity {
