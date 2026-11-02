@@ -1353,3 +1353,36 @@ Next reuse the authenticated occurrence ledger and existing compression interner
 prefix planning/writing. D3's Page-defined identity/full-closure correction is committed separately
 as `a477732bc`, with profile Rustdoc in `71bf65973`; it supersedes opaque-assignment history without
 waiving any external Protocol input or acceptance gate. No GitHub PR or push was created.
+
+
+### PR 06 Native writer and checked shared compression admission
+
+`0c619b145` exposes the existing shared LibraryCols view to native consumers. `414647cca` routes
+Controller, AEAD and direct packed requests through one checked interner. Entry/summed multiplicities
+and unique-state cycle growth are checked before registration; direct requests append no Controller
+rows. Review caught an admitted duplicate AEAD state/clock that the materializer requires to have
+unit multiplicity; admission now rejects duplicate/nonunit AEAD without mutation. New single-row
+Controller requests preflight both row capacity and registration before append. Memoized replay can
+already have copied its full row span when registration fails; that materialization failure is
+explicitly terminal and requires discarding the hasher. The raw public external helper remains an
+unchecked separate admission gate, not the native Library path.
+
+`11114a250` adds a borrowed completed-session writer with no allocated row matrix/request vector.
+It reuses ledger counters, validates occurrence/binding associations, writes the caller's exact
+aligned prefix, streams canonical requests, preserves separate normal/SYS frequencies, and computes
+List CVs forward directly into reverse pair destinations. The caller must admit combined height/PCS/
+proving memory before allocation; callback failure leaves disposable partial buffers, never changed
+native authority. Independent reviews found no remaining issue. Library production dispatch remains
+inactive.
+
+After AC/heavy guards all five exact-source writer tests and six public witness tests passed.
+Strict processor library and exact-source/public-test Clippy, plus no-default-features processor,
+passed. Initial import errors and fixed-chunk/parity Clippy suggestions were corrected without new
+dependencies or allowances. The fresh normal private-test attempt stops in miden-assembly at exactly
+three existing keyed-constructor/Exec migration errors; six private interner tests are authored but
+unrun. Logs: `pr06-native-library-*`. No normal processor-suite or proof pass is claimed.
+
+Next relay the existing owned completed session through execution-witness capture and replay
+revalidation, account its actual retained storage, and share one pair/request walker for registration
+before exact admission and final writing afterward. Production packed/public/boundary/Controller/
+lookup/security/generated/recursive gates and all inherited checks remain open; PR06 stays in progress.
