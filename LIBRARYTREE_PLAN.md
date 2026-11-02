@@ -903,3 +903,23 @@ The user also directed continuation of the VM stack while production Protocol in
 this does not authorize arbitrary identity assignment, merge/code-hash alternatives, defaults or gate
 waivers. Continue with occurrence ledger/session and staged invocation work; align profile Rustdoc and
 production codec/fixture equivalence separately before PR 04's external gate is cleared.
+
+### PR 05 Occurrence-ledger boundary and shared trace limit
+
+The next focused slice adds processor `src/environment/ledger.rs` and independent nested tests:
+merge authenticated prefixes by parent occurrence/slot, retain exact preimages/N/C/depth and selected
+unit edges, and stage all fallible work before allocation-free publication. A short-lived exclusive
+borrow guard prevents stale/cross-ledger publication; session/source/use-frequency/host transitions
+remain a later slice. The only opening-verifier change authorized here is a private consuming path
+accessor, preserving authentication and immutable public results.
+
+Reuse the existing MAX_TRACE_LEN safety ceiling through a small separate refactor: move its unchanged
+2^29 value into `processor/src/trace/limits.rs`, expose that module and preserve the parallel module's
+existing crate-private path by reexport. Ledger logical rows must respect this necessary ceiling even
+if caller policy is looser. Logical Library rows and conservative compression-request counts follow
+selected pair formulas; they are neither padded prefix size nor distinct interned Controller work.
+Actual prefix rounding/terminal PAD/combined T/no-wrap/degree/lookup gates remain PRs 06–07/16. Limits
+are explicit, not deployment defaults. Account retained native capacities and conservative prepare
+peak (old/input/staged/replacement overlap), and recheck returned capacities before publication; no
+allocator-excess/RSS guarantee or whole-ledger clone is implied. Commit the shared-owner refactor
+separately from ledger implementation and document actual checks without waiving inherited failures.
