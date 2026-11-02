@@ -468,6 +468,27 @@ fn is_valid_quoted_identifier_char(c: char) -> bool {
     c != '"' && (c.is_alphanumeric() || c.is_ascii_graphic())
 }
 
+// ARBITRARY IMPLEMENTATION
+// ================================================================================================
+
+#[cfg(feature = "arbitrary")]
+impl proptest::prelude::Arbitrary for ProcedureName {
+    type Parameters = ();
+
+    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+        use proptest::prelude::*;
+
+        prop_oneof![
+            1 => crate::arbitrary::ident::ident_any_random_length(),
+            2 => crate::arbitrary::ident::bare_ident_any_random_length(),
+        ]
+        .prop_map(ProcedureName)
+        .boxed()
+    }
+
+    type Strategy = proptest::prelude::BoxedStrategy<Self>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,25 +534,4 @@ mod tests {
             assert!(ProcedureName::new(source).is_err(), "{source:?}");
         }
     }
-}
-
-// ARBITRARY IMPLEMENTATION
-// ================================================================================================
-
-#[cfg(feature = "arbitrary")]
-impl proptest::prelude::Arbitrary for ProcedureName {
-    type Parameters = ();
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        use proptest::prelude::*;
-
-        prop_oneof![
-            1 => crate::arbitrary::ident::ident_any_random_length(),
-            2 => crate::arbitrary::ident::bare_ident_any_random_length(),
-        ]
-        .prop_map(ProcedureName)
-        .boxed()
-    }
-
-    type Strategy = proptest::prelude::BoxedStrategy<Self>;
 }
