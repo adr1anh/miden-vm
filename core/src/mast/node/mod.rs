@@ -255,6 +255,9 @@ fn unwrap_failed(node: &MastNode, expected: &str) -> ! {
 }
 
 #[cfg(test)]
+mod keyed_recursion_tests;
+
+#[cfg(test)]
 mod keyed_invocation_tests {
     use miden_formatting::hex::ToHex;
 

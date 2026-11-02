@@ -235,3 +235,51 @@ pub(super) fn validate_dense_node_order(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Word, mast::LoopNodeBuilder};
+
+    fn assert_structural_cycle_rejected(body_indices: &[u32]) {
+        let mut nodes: IndexVec<MastNodeId, MastNode> = IndexVec::new();
+        for &body_index in body_indices {
+            // Forced digests and linked construction deliberately model corrupted graph data.
+            // These fixtures test the defensive structural guard, not the existence of a
+            // cryptographic hash cycle with self-consistent node digests.
+            let node = LoopNodeBuilder::new(MastNodeId::new_unchecked(body_index))
+                .with_digest(Word::default())
+                .build_linked()
+                .unwrap();
+            nodes.push(node.into()).unwrap();
+        }
+        for node in &nodes {
+            node.for_each_child(|child_id| assert!(child_id.to_usize() < nodes.len()));
+        }
+
+        let first_node = MastNodeId::new_unchecked(0);
+        let parts = MastForestParts {
+            nodes,
+            roots: vec![first_node],
+            advice_map: Default::default(),
+        };
+        validate_mast_forest_parts_bounds(&parts).unwrap();
+        assert_eq!(
+            canonicalize_parts(parts).err(),
+            Some(MastForestError::InvalidNodeOrder {
+                node_id: first_node,
+                reason: "internal nodes must form an acyclic child-before-parent graph".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn canonicalization_rejects_structural_self_cycle() {
+        assert_structural_cycle_rejected(&[0]);
+    }
+
+    #[test]
+    fn canonicalization_rejects_structural_two_node_cycle() {
+        assert_structural_cycle_rejected(&[1, 0]);
+    }
+}
