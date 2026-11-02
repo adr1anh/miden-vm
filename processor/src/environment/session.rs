@@ -266,6 +266,13 @@ impl ResolutionSession {
         self.state.uses.iter().chain(self.state.root_use.iter())
     }
 
+    /// Diagnostic lookup for live execution, whose invocation rows are strictly chronological.
+    /// The returned ordinal refers to `uses()` and never authorizes a transition.
+    pub(crate) fn invocation_use_at_row(&self, row: RowIndex) -> Option<(usize, InvocationUse)> {
+        let index = self.state.uses.binary_search_by_key(&row, |record| record.row).ok()?;
+        Some((index, self.state.uses[index]))
+    }
+
     /// Stages entry authentication and a separately owned normal entry demand/use-record capacity.
     ///
     /// Inspect the binding before transferring it so subsequent host/code preflights can proceed

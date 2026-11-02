@@ -250,6 +250,7 @@ where
     state
         .continuation_stack
         .push_with_source_node_id(finish, request.source_node_id);
+    state.continuation_stack.push_runtime_activation(request.row, request.mode);
     state.continuation_stack.push_enter_forest_with_package_debug_info(
         current_forest.clone(),
         state.source_debug_info.clone(),

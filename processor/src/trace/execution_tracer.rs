@@ -1523,7 +1523,7 @@ impl Tracer for ExecutionTracer {
                         .stack_top()
                         .try_into()
                         .expect("stack_top expected to be MIN_STACK_DEPTH elements"),
-                    continuation_stack.clone(),
+                    continuation_stack.clone_for_trace(),
                     continuation.clone(),
                     current_forest.clone(),
                 );
