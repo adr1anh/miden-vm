@@ -49,6 +49,22 @@ impl ConstraintEvalBuilder {
         self.transition = Felt::from_bool(transition);
         self
     }
+
+    pub(in crate::vm::constraints) fn with_lookup_windows(
+        mut self,
+        main: RowMajorMatrix<Felt>,
+        aux: RowMajorMatrix<QuadFelt>,
+        randomness: Vec<QuadFelt>,
+        permutation_values: Vec<QuadFelt>,
+        periodic_values: Vec<Felt>,
+    ) -> Self {
+        self.main = main;
+        self.aux = aux;
+        self.randomness = randomness;
+        self.permutation_values = permutation_values;
+        self.periodic_values = periodic_values;
+        self
+    }
 }
 
 impl AirBuilder for ConstraintEvalBuilder {
