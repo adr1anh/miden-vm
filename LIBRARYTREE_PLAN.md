@@ -302,7 +302,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
-| 04 Toolchain contracts | in-progress | Encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; semantic `77ba2607a`; base `45be30b96` | Independent reviews; 38 interface-filter tests, full 327-test syntax suite, debug regression, scoped/combined test-inclusive Clippy, no-default-features and pinned formatting pass | Next strict artifact decoding. Production Protocol profile fixtures remain external gates; executable lowering at 09. |
+| 04 Toolchain contracts | in-progress | Decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent production/test reviews; 52 interface-filter tests, full 327-test syntax suite, scoped/combined test-inclusive Clippy, no-default-features and pinned formatting pass | Full package check: 202 passed, five old MAST-offset fixture failures, one ignored. Repair helper separately; production Protocol fixtures remain external gates; executable lowering at 09. |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
@@ -791,3 +791,23 @@ Strict decoding follows as its own commit: exact outer/nested EOF, expected I an
 canonical wire ordering without silently sorting input, bounded parsing and authority callback suppression
 on malformed data. Reuse core labels and shared envelope extraction without invoking TypedId validators
 for disallowed declaration-path tags. Retain production profile fixtures and all later security gates.
+
+### PR 04 Strict decoding validated; package fixture migration pending
+
+Commit `5c9c78799` adds exact profile-bound decoding, canonical raw envelope/Word ordering, expected-I
+and stored-C checks before authority, and shared borrowed label extraction preserving Home behavior.
+Fourteen independently authored adversarial tests recompute malformed raw-DB commitments so unrelated
+hash failures cannot mask missing canonicality checks. Independent production and test reviews found
+no issue. After successful AC/heavy-work guards, the interface filter passed all 52 tests, package
+Clippy with tests and `-D warnings` passed, and package no-default-features passed. Pinned formatting
+and whitespace checks passed. Production descriptor/domain/home/association/closure fixtures remain
+required external acceptance evidence; generic profiles and synthetic vectors do not discharge them.
+
+A broader `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib` check passed 202,
+failed five and ignored one. All five fail in the shared test-only `locate_first_node_hash` helper:
+its old MAST offsets misread v0.0.6's added target count/table, causing an out-of-bounds vint64 peek
+before spoofed-digest assertions. Repair this test helper separately, retaining trusted/untrusted
+hash-validation coverage; do not change executable package serialization to accommodate the fixture.
+The failing full check is not counted as passing. Log: uncommitted
+`.scratch/librarytree/logs/pr04-package-regression.log`. Root will rerun affected/full package checks
+following the repair, then finalize this branch's description and unresolved-gate disposition.
