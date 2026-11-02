@@ -1,10 +1,11 @@
-//! Local expressions for the future packed Library region.
+//! Explicitly scoped constraints for the future packed Library region.
 //!
-//! The shared schema and expressions here do not activate a Library section or enforce its AIR.
+//! These entry points do not activate a Library section in the production Chiplets AIR.
 //! The current `c[0]` selects Controller rows. Library activation must migrate the section
 //! selectors, physical views and writers, Controller gates, and periodic consumers together.
 
 pub mod columns;
+pub(crate) mod constraints;
 
 use miden_core::{
     Felt,
@@ -14,11 +15,25 @@ use miden_core::{
 use self::columns::LibraryCols;
 use crate::vm::constraints::utils::BoolNot;
 
+/// Explicit scope and fixed periodic inputs for the packed Library relation.
+///
+/// `phase` is the fixed period-two column `[0, 1]`; `exit_aligned` is the fixed AEAD
+/// phase-seven column. They must come from the caller's periodic columns, never witness cells.
+/// The current legacy Controller selector must not be passed as `is_active`.
+#[derive(Clone)]
+pub struct LibraryRowContext<E> {
+    pub is_active: E,
+    pub next_is_active: E,
+    pub phase: E,
+    pub exit_aligned: E,
+}
+
 /// Cubic indicators for the little-endian kind bits `(k0, k1, k2)`.
 ///
 /// These expressions have no Library or phase scope. They identify codes 0 through 7 as PAD,
 /// Merkle, Env, Mast, List start, List continue, empty List, and invalid, respectively. Boolean
-/// kind-bit constraints and rejection of the invalid pattern belong to the later Library AIR.
+/// kind-bit constraints and rejection of the invalid pattern are enforced by the scoped entry
+/// point.
 #[derive(Clone)]
 pub struct LibraryKindFlags<E> {
     pub is_pad: E,
@@ -103,8 +118,8 @@ pub fn sigma_hi<E: Algebra<Felt>>(sigma: E) -> E {
 
 /// Quartic validity polynomial, zero exactly at selection values 0, 1, 2, and 3 in Felt.
 ///
-/// The later Library AIR must constrain this expression under the appropriate kind, phase,
-/// and Library scope; evaluating it alone imposes no constraint.
+/// The scoped Library entry point constrains this under the appropriate kind and phase;
+/// evaluating it alone imposes no constraint.
 pub fn sigma_validity<E: PrimeCharacteristicRing>(sigma: E) -> E {
     sigma.clone()
         * (sigma.clone() - E::ONE)
@@ -112,5 +127,7 @@ pub fn sigma_validity<E: PrimeCharacteristicRing>(sigma: E) -> E {
         * (sigma - E::from_u8(3))
 }
 
+#[cfg(test)]
+mod main_tests;
 #[cfg(test)]
 mod tests;
