@@ -6,14 +6,12 @@ use miden_formatting::{
     prettier::{Document, PrettyPrint, const_text, text},
 };
 
-use super::{
-    MastForestContributor, MastNodeContext, MastNodeExt, fingerprint_with_child_fingerprints,
-};
+use super::{MastForestContributor, MastNodeContext, MastNodeExt, invocation_digest};
 use crate::{
     Felt, Word,
-    chiplets::hasher,
     mast::{MastForest, MastForestError, MastNodeId},
     operations::opcodes,
+    program::ProcedureKey,
     utils::LookupByIdx,
 };
 
@@ -26,9 +24,12 @@ use crate::{
 /// A call node can be of two types:
 /// - A simple call: the callee is executed in the new user context.
 /// - A syscall: the callee is executed in the root context.
+///
+/// The target is a procedure key resolved through the execution environment, not a structural
+/// MAST child.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallNode {
-    callee: MastNodeId,
+    target: ProcedureKey,
     is_syscall: bool,
     digest: Word,
 }
@@ -45,9 +46,9 @@ impl CallNode {
 //-------------------------------------------------------------------------------------------------
 /// Public accessors
 impl CallNode {
-    /// Returns the ID of the node to be invoked by this call node.
-    pub fn callee(&self) -> MastNodeId {
-        self.callee
+    /// Returns the procedure key to be invoked by this call node.
+    pub fn target(&self) -> ProcedureKey {
+        self.target
     }
 
     /// Returns true if this call node represents a syscall.
@@ -71,32 +72,27 @@ impl CallNode {
 impl CallNode {
     pub(super) fn to_pretty_print<'a>(
         &'a self,
-        mast_forest: &'a MastForest,
+        _mast_forest: &'a MastForest,
     ) -> impl PrettyPrint + 'a {
-        CallNodePrettyPrint { node: self, mast_forest }
+        CallNodePrettyPrint { node: self }
     }
 
-    pub(super) fn to_display<'a>(&'a self, mast_forest: &'a MastForest) -> impl fmt::Display + 'a {
-        CallNodePrettyPrint { node: self, mast_forest }
+    pub(super) fn to_display<'a>(&'a self, _mast_forest: &'a MastForest) -> impl fmt::Display + 'a {
+        CallNodePrettyPrint { node: self }
     }
 }
 
 struct CallNodePrettyPrint<'a> {
     node: &'a CallNode,
-    mast_forest: &'a MastForest,
 }
 
 impl PrettyPrint for CallNodePrettyPrint<'_> {
     fn render(&self) -> Document {
-        let callee_digest = self.mast_forest[self.node.callee].digest();
+        let target = self.node.target.as_word();
         if self.node.is_syscall {
-            const_text("syscall")
-                + const_text(".")
-                + text(callee_digest.as_bytes().to_hex_with_prefix())
+            const_text("syscall") + const_text(".") + text(target.as_bytes().to_hex_with_prefix())
         } else {
-            const_text("call")
-                + const_text(".")
-                + text(callee_digest.as_bytes().to_hex_with_prefix())
+            const_text("call") + const_text(".") + text(target.as_bytes().to_hex_with_prefix())
         }
     }
 }
@@ -114,22 +110,10 @@ impl fmt::Display for CallNodePrettyPrint<'_> {
 impl MastNodeExt for CallNode {
     /// Returns a commitment to this Call node.
     ///
-    /// The commitment is computed as a hash of the callee and an empty word ([ZERO; 4]) in the
-    /// domain defined by either [Self::CALL_DOMAIN] or [Self::SYSCALL_DOMAIN], depending on
-    /// whether the node represents a simple call or a syscall - i.e.,:
-    /// ```
-    /// # use miden_core::mast::CallNode;
-    /// # use miden_core::{Word, chiplets::hasher};
-    /// # let callee_digest = Word::default();
-    /// hasher::merge_in_mast_domain(&[callee_digest, Word::default()], CallNode::CALL_DOMAIN);
-    /// ```
-    /// or
-    /// ```
-    /// # use miden_core::mast::CallNode;
-    /// # use miden_core::{Word, chiplets::hasher};
-    /// # let callee_digest = Word::default();
-    /// hasher::merge_in_mast_domain(&[callee_digest, Word::default()], CallNode::SYSCALL_DOMAIN);
-    /// ```
+    /// The commitment is computed as a hash of the procedure key and an empty word ([ZERO; 4]) in
+    /// the domain defined by either [Self::CALL_DOMAIN] or [Self::SYSCALL_DOMAIN], depending on
+    /// whether the node represents a simple call or a syscall. The selected implementation's
+    /// digest is not part of this commitment.
     fn digest(&self) -> Word {
         self.digest
     }
@@ -143,18 +127,15 @@ impl MastNodeExt for CallNode {
     }
 
     fn has_children(&self) -> bool {
-        true
+        false
     }
 
-    fn append_children_to(&self, target: &mut Vec<MastNodeId>) {
-        target.push(self.callee());
-    }
+    fn append_children_to(&self, _target: &mut Vec<MastNodeId>) {}
 
-    fn for_each_child<F>(&self, mut f: F)
+    fn for_each_child<F>(&self, _f: F)
     where
         F: FnMut(MastNodeId),
     {
-        f(self.callee());
     }
 
     fn domain(&self) -> Felt {
@@ -165,9 +146,9 @@ impl MastNodeExt for CallNode {
 
     fn to_builder(self, _forest: &MastForest) -> Self::Builder {
         let builder = if self.is_syscall {
-            CallNodeBuilder::new_syscall(self.callee)
+            CallNodeBuilder::new_syscall(self.target)
         } else {
-            CallNodeBuilder::new(self.callee)
+            CallNodeBuilder::new(self.target)
         };
         builder.with_digest(self.digest)
     }
@@ -177,55 +158,38 @@ impl MastNodeExt for CallNode {
 /// Builder for creating [`CallNode`] instances.
 #[derive(Debug)]
 pub struct CallNodeBuilder {
-    callee: MastNodeId,
+    target: ProcedureKey,
     is_syscall: bool,
     digest: Option<Word>,
 }
 
 impl CallNodeBuilder {
-    /// Creates a new builder for a CallNode with the specified callee.
-    pub fn new(callee: MastNodeId) -> Self {
-        Self { callee, is_syscall: false, digest: None }
+    /// Creates a new builder for a CallNode with the specified procedure key.
+    pub fn new(target: ProcedureKey) -> Self {
+        Self { target, is_syscall: false, digest: None }
     }
 
-    /// Creates a new builder for a syscall CallNode with the specified callee.
-    pub fn new_syscall(callee: MastNodeId) -> Self {
-        Self { callee, is_syscall: true, digest: None }
+    /// Creates a new builder for a syscall CallNode with the specified procedure key.
+    pub fn new_syscall(target: ProcedureKey) -> Self {
+        Self { target, is_syscall: true, digest: None }
     }
 
     /// Builds the CallNode.
-    pub fn build(self, context: &impl MastNodeContext) -> Result<CallNode, MastForestError> {
-        let callee = context
-            .get_node_by_id(self.callee)
-            .ok_or_else(|| MastForestError::NodeIdOverflow(self.callee, context.node_count()))?;
-
-        // Use the forced digest if provided, otherwise compute the digest
-        let digest = if let Some(forced_digest) = self.digest {
-            forced_digest
-        } else {
-            let callee_digest = callee.digest();
+    pub fn build(self) -> CallNode {
+        let digest = self.digest.unwrap_or_else(|| {
             let domain = if self.is_syscall {
                 CallNode::SYSCALL_DOMAIN
             } else {
                 CallNode::CALL_DOMAIN
             };
+            invocation_digest(self.target, domain)
+        });
 
-            hasher::merge_in_mast_domain(&[callee_digest, Word::default()], domain)
-        };
-
-        Ok(CallNode {
-            callee: self.callee,
+        CallNode {
+            target: self.target,
             is_syscall: self.is_syscall,
             digest,
-        })
-    }
-
-    pub(in crate::mast) fn build_linked(self) -> Result<CallNode, MastForestError> {
-        Ok(CallNode {
-            callee: self.callee,
-            is_syscall: self.is_syscall,
-            digest: self.digest.ok_or(MastForestError::DigestRequiredForDeserialization)?,
-        })
+        }
     }
 }
 
@@ -233,7 +197,7 @@ impl CallNodeBuilder {
 impl CallNodeBuilder {
     /// Adds this builder to a mutable forest for test and arbitrary data construction.
     pub fn add_to_forest(self, forest: &mut MastForest) -> Result<MastNodeId, MastForestError> {
-        let node = self.build(forest)?;
+        let node = self.build();
         forest.nodes.push(node.into()).map_err(|_| MastForestError::TooManyNodes)
     }
 }
@@ -241,34 +205,22 @@ impl CallNodeBuilder {
 impl MastForestContributor for CallNodeBuilder {
     fn fingerprint_for_node(
         &self,
-        context: &impl MastNodeContext,
-        hash_by_node_id: &impl LookupByIdx<MastNodeId, Word>,
+        _context: &impl MastNodeContext,
+        _hash_by_node_id: &impl LookupByIdx<MastNodeId, Word>,
     ) -> Result<Word, MastForestError> {
-        let node_digest = if let Some(forced_digest) = self.digest {
-            forced_digest
-        } else {
-            let callee_digest = context
-                .get_node_by_id(self.callee)
-                .ok_or_else(|| MastForestError::NodeIdOverflow(self.callee, context.node_count()))?
-                .digest();
+        Ok(self.digest.unwrap_or_else(|| {
             let domain = if self.is_syscall {
                 CallNode::SYSCALL_DOMAIN
             } else {
                 CallNode::CALL_DOMAIN
             };
 
-            hasher::merge_in_mast_domain(&[callee_digest, Word::default()], domain)
-        };
-
-        fingerprint_with_child_fingerprints(node_digest, &[self.callee], context, hash_by_node_id)
+            invocation_digest(self.target, domain)
+        }))
     }
 
-    fn remap_children(self, remapping: &impl LookupByIdx<MastNodeId, MastNodeId>) -> Self {
-        CallNodeBuilder {
-            callee: *remapping.get(self.callee).unwrap_or(&self.callee),
-            is_syscall: self.is_syscall,
-            digest: self.digest,
-        }
+    fn remap_children(self, _remapping: &impl LookupByIdx<MastNodeId, MastNodeId>) -> Self {
+        self
     }
 
     fn with_digest(mut self, digest: Word) -> Self {
@@ -285,12 +237,13 @@ impl proptest::prelude::Arbitrary for CallNodeBuilder {
     fn arbitrary_with(_params: Self::Parameters) -> Self::Strategy {
         use proptest::prelude::*;
 
-        (any::<MastNodeId>(), any::<bool>())
-            .prop_map(|(callee, is_syscall)| {
+        (any::<Word>(), any::<bool>())
+            .prop_map(|(word, is_syscall)| {
+                let target = ProcedureKey::new(word);
                 if is_syscall {
-                    Self::new_syscall(callee)
+                    Self::new_syscall(target)
                 } else {
-                    Self::new(callee)
+                    Self::new(target)
                 }
             })
             .boxed()

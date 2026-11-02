@@ -232,7 +232,7 @@ fn validate_full_node_child_digests(
                     ))
                 })?;
             },
-            MastNode::External(_) | MastNode::Dyn(_) => {},
+            MastNode::External(_) | MastNode::Dyn(_) | MastNode::Exec(_) | MastNode::Call(_) => {},
             MastNode::Join(join) => {
                 require_child_digest(node_id, join.first(), nodes, digests)?;
                 require_child_digest(node_id, join.second(), nodes, digests)?;
@@ -243,9 +243,6 @@ fn validate_full_node_child_digests(
             },
             MastNode::Loop(loop_node) => {
                 require_child_digest(node_id, loop_node.body(), nodes, digests)?;
-            },
-            MastNode::Call(call) => {
-                require_child_digest(node_id, call.callee(), nodes, digests)?;
             },
         }
     }
