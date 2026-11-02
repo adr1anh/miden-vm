@@ -41,6 +41,15 @@ pub use hasher::{
 pub(crate) mod layout;
 use layout::{ChipletBand, ChipletsLayout};
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Library writing remains dormant until the coordinated packed cutover"
+    )
+)]
+mod library;
+
 pub(crate) fn build_and8_lookup_trace(and8_counts: &[u64]) -> Vec<Felt> {
     hasher::build_and8_lookup_trace(and8_counts)
 }
