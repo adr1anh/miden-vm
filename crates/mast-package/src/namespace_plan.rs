@@ -10,6 +10,8 @@ use miden_core::program::{CanonicalLabel, LabelError, Namespace, ProcedureKey};
 
 use crate::PublicProcedurePath;
 
+mod serialization;
+
 /// An explicitly supplied complete home path, independent of code and source import aliases.
 ///
 /// Home components retain their types through [`CanonicalLabel`]: LibraryId words, nonzero
