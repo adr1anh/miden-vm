@@ -4,7 +4,10 @@
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 
 use miden_air_definitions::vm::trace::chiplets::hasher::MAX_MERKLE_DEPTH;
-use miden_core::{deferred::PrecompileError, program::MIN_STACK_DEPTH};
+use miden_core::{
+    deferred::PrecompileError,
+    program::{EnvironmentRoot, MIN_STACK_DEPTH, ProcedureKey},
+};
 use miden_debug_types::{Location, SourceFile, SourceSpan};
 use miden_mast_package::{
     PackageDebugInfoError,
@@ -13,7 +16,7 @@ use miden_mast_package::{
 use miden_utils_diagnostics::{Diagnostic, miette};
 
 use crate::{
-    BaseHost, ContextId, Felt, Word,
+    BaseHost, ContextId, EnvironmentSourceError, Felt, OpeningError, Word,
     advice::AdviceError,
     event::{EventError, EventId, EventName},
     fast::SystemEventError,
@@ -46,6 +49,25 @@ pub enum ExecutionError {
     },
     #[error("exceeded the allowed number of max cycles {0}")]
     CycleLimitExceeded(u32),
+    /// No candidate was supplied; this does not establish authenticated nonmembership.
+    #[error("environment witness unavailable for key {key:?} under root {root:?}")]
+    EnvironmentWitnessUnavailable { root: EnvironmentRoot, key: ProcedureKey },
+    /// Retrieving untrusted evidence failed before opening verification.
+    #[error("environment witness provider failed for key {key:?} under root {root:?}: {error}")]
+    EnvironmentSourceError {
+        root: EnvironmentRoot,
+        key: ProcedureKey,
+        #[source]
+        error: EnvironmentSourceError,
+    },
+    /// A supplied candidate failed authentication or the caller's opening resource limits.
+    #[error("invalid environment opening for key {key:?} under root {root:?}: {error}")]
+    InvalidEnvironmentOpening {
+        root: EnvironmentRoot,
+        key: ProcedureKey,
+        #[source]
+        error: OpeningError,
+    },
     #[error("error during processing of event {}", match event_name {
         Some(name) => format!("'{name}' (ID: {event_id})"),
         None => format!("with ID: {event_id}"),

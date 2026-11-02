@@ -1,5 +1,59 @@
 use miden_air_definitions::vm::trace::MIN_TRACE_LEN;
-use miden_core::{deferred::PrecompileLimits, program::MIN_STACK_DEPTH};
+use miden_core::{
+    deferred::PrecompileLimits,
+    program::{ExecutionDescriptor, MIN_STACK_DEPTH},
+};
+
+use crate::{LedgerLimits, OpeningLimits, SessionLimits};
+
+// EXECUTION ENVIRONMENT
+// ================================================================================================
+
+/// Immutable execution authority and explicit native resolution resource policies.
+///
+/// The descriptor fixes the entry key, environment root and authorized kernel namespace. Its
+/// authority must come from the caller; neither this configuration nor available code authenticates
+/// those identities. Opening verification and the resolution session enforce the supplied policies.
+/// No deployment defaults are provided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExecutionEnvironment {
+    descriptor: ExecutionDescriptor,
+    opening: OpeningLimits,
+    ledger: LedgerLimits,
+    session: SessionLimits,
+}
+
+impl ExecutionEnvironment {
+    /// Creates an immutable configuration without authenticating its descriptor or bindings.
+    pub const fn new(
+        descriptor: ExecutionDescriptor,
+        opening: OpeningLimits,
+        ledger: LedgerLimits,
+        session: SessionLimits,
+    ) -> Self {
+        Self { descriptor, opening, ledger, session }
+    }
+
+    /// Returns the fixed identities defining this execution.
+    pub const fn descriptor(&self) -> ExecutionDescriptor {
+        self.descriptor
+    }
+
+    /// Returns the caller's limits for each candidate environment opening.
+    pub const fn opening_limits(&self) -> OpeningLimits {
+        self.opening
+    }
+
+    /// Returns the caller's limits for retained opening occurrences.
+    pub const fn ledger_limits(&self) -> LedgerLimits {
+        self.ledger
+    }
+
+    /// Returns the caller's limits for descriptor-scoped resolution and invocation accounting.
+    pub const fn session_limits(&self) -> SessionLimits {
+        self.session
+    }
+}
 
 // EXECUTION OPTIONS
 // ================================================================================================
