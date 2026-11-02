@@ -25,6 +25,20 @@ const HEADER_LEN: usize = 2;
 const LIST_HEADER_LEN: usize = HEADER_LEN + size_of::<u32>();
 
 impl EnvNode {
+    /// Returns the v1 preimage's byte length without allocating.
+    ///
+    /// Includes the record header and any List count. Returns an error if a directly
+    /// constructed List exceeds the hash framing or allocation bounds.
+    pub fn encoded_len(&self) -> Result<usize, EnvNodeError> {
+        Ok(match self {
+            Self::Env { .. } | Self::Mast { .. } | Self::Merkle { .. } => {
+                HEADER_LEN + 2 * Word::SERIALIZED_SIZE
+            },
+            Self::Data { .. } => LIST_HEADER_LEN + 2 * Word::SERIALIZED_SIZE,
+            Self::List(children) => checked_list_record_len(children.len())?,
+        })
+    }
+
     /// Encodes one v1 environment-node preimage, preserving the selected commitment payload.
     ///
     /// The record is `1 || kind:u8 || payload`, with Env=0, Mast=1, Data=2, Merkle=3, and
@@ -34,13 +48,7 @@ impl EnvNode {
     /// Returns an error if a directly constructed List exceeds the hash framing or allocation
     /// bounds, if the encoded record exceeds allocation bounds, or if allocation fails.
     pub fn to_bytes(&self) -> Result<Vec<u8>, EnvNodeError> {
-        let byte_len = match self {
-            Self::Env { .. } | Self::Mast { .. } | Self::Merkle { .. } => {
-                HEADER_LEN + 2 * Word::SERIALIZED_SIZE
-            },
-            Self::Data { .. } => LIST_HEADER_LEN + 2 * Word::SERIALIZED_SIZE,
-            Self::List(children) => checked_list_record_len(children.len())?,
-        };
+        let byte_len = self.encoded_len()?;
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(byte_len).map_err(|_| EnvNodeError::AllocationFailed)?;
         bytes.write_u8(VERSION);
@@ -176,6 +184,7 @@ mod tests {
     #[test]
     fn node_bytes_match_frozen_vectors_and_roundtrips_preserve_commitments() {
         for (node, expected) in fixtures() {
+            assert_eq!(node.encoded_len().unwrap(), expected.len() / 2);
             let bytes = node.to_bytes().unwrap();
             assert_eq!(bytes.to_hex(), expected);
             let decoded = EnvNode::from_bytes(&bytes, bytes.len()).unwrap();
