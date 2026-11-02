@@ -340,7 +340,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
     ) -> Result<EndBlockFlags, ExecutionError> {
         let is_loop_body = self.is_loop_body;
 
-        match continuation {
+        let flags = match continuation {
             Continuation::FinishLoop(_) => {
                 // The Loop node itself is ending. With do-while semantics every loop is entered, so
                 // the `is_loop` flag is unconditionally true here.
@@ -378,7 +378,13 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             _ => Err(ExecutionError::Internal(
                 "compute_end_block_flags called for non-END continuation",
             )),
+        }?;
+        let is_root_end = matches!(self.keyed_event, Some(event)
+            if event.kind == KeyedEventKind::RootEnd);
+        if is_root_end && is_loop_body {
+            return Err(ExecutionError::Internal("root END cannot end a loop body"));
         }
+        Ok(flags.with_root_end(is_root_end))
     }
 
     /// Returns the callee hash for a `Dyn` node, or `None` if the continuation is not a
@@ -645,7 +651,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
         use Continuation::*;
 
         let result = (|| -> Result<(), ExecutionError> {
-            if let Some(event) = self.keyed_event.take()
+            if let Some(event) = self.keyed_event
                 && *event.principal_after.as_word() != processor.system.fn_hash
             {
                 return Err(ExecutionError::Internal(
@@ -841,6 +847,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
                 },
             }
 
+            self.keyed_event = None;
             Ok(())
         })();
 

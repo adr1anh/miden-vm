@@ -140,7 +140,7 @@ fn build_trace_inner(
     } = witness;
 
     let TraceReplay {
-        environment: _,
+        environment,
         resolution_session,
         core_trace_contexts,
         mast_forest_store,
@@ -153,6 +153,12 @@ fn build_trace_inner(
         fragment_size,
         max_stack_depth,
     } = trace;
+
+    if core_trace_contexts.first().is_none_or(|context| {
+        context.state.system.fn_hash != environment.descriptor().entry_key().into_word()
+    }) {
+        return Err(ExecutionError::InvalidExecutionState);
+    }
 
     let max_prover_memory_bytes = budget.limit_bytes();
 
@@ -340,11 +346,15 @@ fn generate_core_trace_row_major(
 
     let mut core_trace_data = Felt::zero_vec(total_allocated_rows * CORE_STORAGE_WIDTH);
 
-    // Save the first stack top for initialization
-    let first_stack_top = if let Some(first_context) = core_trace_contexts.first() {
-        first_context.state.stack.stack_top.to_vec()
-    } else {
-        vec![ZERO; MIN_STACK_DEPTH]
+    // The first row has no preceding fragment to supply its pre-execution registers.
+    let first_context = core_trace_contexts
+        .first()
+        .ok_or(ExecutionError::Internal("no trace fragments provided in the trace witness"))?;
+    let first_stack_top = first_context.state.stack.stack_top.to_vec();
+    let first_system = SystemCols {
+        clk: first_context.state.system.clk.into(),
+        ctx: first_context.state.system.ctx.into(),
+        fn_hash: *first_context.state.system.fn_hash,
     };
 
     let writers: Vec<RowMajorTraceWriter<'_, Felt>> = core_trace_data
@@ -393,6 +403,7 @@ fn generate_core_trace_row_major(
         &stack_rows,
         &system_rows,
         &first_stack_top,
+        &first_system,
     );
     set_loop_body_multiplicities(&mut core_trace_data, total_core_trace_rows)?;
 
@@ -518,12 +529,14 @@ fn fixup_stack_and_system_rows(
     stack_rows: &[StackCols<Felt>],
     system_rows: &[SystemCols<Felt>],
     first_stack_top: &[Felt],
+    first_system: &SystemCols<Felt>,
 ) {
     const MIN_STACK_DEPTH_FELT: Felt = Felt::new_unchecked(MIN_STACK_DEPTH as u64);
     let w = CORE_STORAGE_WIDTH;
 
     {
         let row: &mut CoreCols<Felt> = core_trace_data[..w].borrow_mut();
+        row.system = first_system.clone();
 
         // Stack order in the trace is reversed vs `first_stack_top`.
         for (stack_col_idx, &value) in first_stack_top.iter().rev().enumerate() {
@@ -912,11 +925,11 @@ fn pad_core_row_major(core_trace_data: &mut Vec<Felt>, core_height: usize) {
 
     // Safety: per our documented safety guarantees, we know that `total_program_rows > 0`,
     // and row `total_program_rows - 1` is initialized.
-    let (last_hasher_first_half, last_stack): ([Felt; 4], StackCols<Felt>) = {
+    let (last_hasher_first_half, last_stack, last_system) = {
         let last: &CoreCols<Felt> = core_trace_data[last_row_start..last_row_start + w].borrow();
         let hs = &last.decoder.hasher_state;
         let last_hasher: [Felt; 4] = [hs[0], hs[1], hs[2], hs[3]];
-        (last_hasher, last.stack.clone())
+        (last_hasher, last.stack.clone(), last.system.clone())
     };
 
     let mut template_data = [ZERO; CORE_STORAGE_WIDTH];
@@ -946,6 +959,7 @@ fn pad_core_row_major(core_trace_data: &mut Vec<Felt>, core_height: usize) {
 
         // Pad stack columns with the last value in each column (analogous to Stack::into_trace())
         template.stack = last_stack;
+        template.system = last_system;
     }
 
     // System columns
@@ -961,7 +975,7 @@ fn pad_core_row_major(core_trace_data: &mut Vec<Felt>, core_height: usize) {
         .for_each(|(idx, row_buf)| {
             row_buf.copy_from_slice(&template_data);
             let row: &mut CoreCols<Felt> = row_buf.borrow_mut();
-            row.system.clk = Felt::from_u32((total_program_rows + idx) as u32);
+            row.system.clk += Felt::from_u32((idx + 1) as u32);
         });
 }
 
