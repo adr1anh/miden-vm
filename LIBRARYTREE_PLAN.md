@@ -109,11 +109,11 @@ Separate canonical declarations and optional body availability; add validated Na
 
 **Branch:** `adr1anh/librarytree-05-keyed-execution`. **Git base:** PR 04. **Semantic dependencies:** 01, 02; agree resolver/Resolve ledger schema with PRs 06–07.
 
-**Existing files:** `processor/src/execution/{mod,call,dyn,external}.rs`, `processor/src/fast/{mod,operation,execution_api,step}.rs`, processor/executor/options/errors/continuation stack, host/default/forest store and public exports. **New:** small shared resolver/EXEC modules and bounded environment witness provider; focused `processor/src/fast/tests/environment.rs`.
+**Existing files:** `processor/src/execution/{mod,call,dyn,external}.rs`, `processor/src/fast/{mod,operation,execution_api,step}.rs`, processor/executor/options/errors/continuation stack, host/default/forest store and public exports. **New:** small shared resolver/EXEC modules and bounded environment witness provider; focused `processor/src/fast/tests/environment.rs`. Extend the core arbitrary fixture with an authenticated environment and migrate `processor/src/fast/tests/arbitrary_forest.rs` so executable generation covers actual keyed invocations again.
 
 Resolve `(R_E,K)->(N,D,opening)` before typed D-indexed code loading. Share prepare/commit transitions across pure/source-aware and sync/async execution; authenticate before state changes and make retries idempotent. Implement ENTRY/all runtime modes, requested-key caller/principals, context/FMP/overflow/return behavior and checked budgets. Remove kernel-ROM/digest dispatch authority. Cache bindings by `(R_E,K)`, code by D, and preserve code-root checks/advice merge-once.
 
-**Acceptance:** complete mode/context/principal/local/host-loaded matrix; same-D aliases distinct; no fallback; wrong syscall namespace/descendant rejects; unknown key versus unavailable/bad D differ; cache/root/limit boundaries and failures/retries do not double-pop/save/charge. **Checks:** `cargo test -p miden-processor --lib environment`; `cargo test -p miden-processor --lib fast::tests`; focused existing source-debug/cache/aggregate-stack regressions. Runtime success alone is not proof acceptance.
+**Acceptance:** complete mode/context/principal/local/host-loaded matrix; same-D aliases distinct; no fallback; wrong syscall namespace/descendant rejects; unknown key versus unavailable/bad D differ; cache/root/limit boundaries and failures/retries do not double-pop/save/charge. **Checks:** `cargo test -p miden-processor --lib environment`; `cargo test -p miden-processor --lib fast::tests`; focused existing source-debug/cache/aggregate-stack regressions. The environment-aware executable generator must exercise retained keyed invocations with valid bindings and bounded terminating call graphs, rather than leaving the temporary PR 02 structural-only restriction in place. Runtime success alone is not proof acceptance.
 
 ### PR 06 Packed Library witness and authenticated lookup
 
@@ -537,3 +537,14 @@ is uncommitted at `.scratch/librarytree/logs/pr02-core-test-compilation.log`. Mi
 then run the pending focused tests and test-inclusive Clippy. The earlier eight production codec
 errors are resolved. Processor witness tests remain deferred until PRs 05/09 close downstream
 invocation consumers; no processor test pass is claimed.
+
+### Executable arbitrary-fixture integration obligation
+
+The PR 02 generator migration preserves GenerationMode::Executable's runtime guarantee by
+excluding unresolved immediate keyed invocations from that mode during the staged cutover.
+StructureOnly continues to generate all keyed invocation modes with independent keys and explicit
+retained code roots; it makes no executable-environment promise. The existing D-only KernelDescriptor
+is metadata, not key authority. Do not weaken the executable guarantee to caller-supplied bindings.
+PR 05 must supply an environment-aware executable fixture and update its sole processor consumer,
+`processor/src/fast/tests/arbitrary_forest.rs`, restoring meaningful executable invocation coverage.
+This is not a final testing or runtime scope reduction.
