@@ -255,11 +255,33 @@ runtime digest dispatch or infer an authenticated binding from code availability
 require preserving child-ID invocation nodes, old serialized layouts or digest-based implementation
 lookup. Include existing source and stack/memory regressions in PRs 04/05/09 and final qualification.
 
+**D3 Interface identity, closure and external profile, reviewed with the user on 2 November 2026:**
+Protocol supplies immutable LibraryId I and authenticates its association with the canonical
+publisher-qualified descriptor and declaration commitment. Do not derive I from declarations or
+invent an identity hash. Closure metadata is the complete finite transitive LibraryId set excluding
+self; all direct external requirements are included, with self references implicit. This introduces
+no VM-level interface-cycle prohibition. Completeness needs authenticated contributing declarations.
+Publisher-descriptor canonicalization, permitted complete homes and the Protocol-local numbered-v1
+domain allocation remain **mandatory external profile inputs, with no permissive fallback**.
+
+Implement the reviewed generic InterfaceArtifact/Home v1 framing under that required profile:
+canonical Word/label encodings; little-endian u32 lengths; exact EOF; declarations with nonempty
+semantic Text paths and absent/present UTF-8 ABI; strict envelope-byte path order and canonical-Word
+byte order for unique direct/closure sets. Artifact fields are version 1, I, declaration commitment,
+length-prefixed canonical descriptor Q0 and declaration bytes DB. Commit `B(Q0)||DB` using standard
+Eidos FeltSequence over `[1, byte_length, packed_u32_bytes]` in the profile-supplied Protocol domain;
+Q0 excludes I, commitment and association proofs. Home is version 1 plus an explicit complete typed
+path, including explicit empty N0. Require caller budgets and expected I/context; structurally valid
+bytes alone supply no authority. Reuse core label/hash helpers, add no default home/domain/profile,
+and do not activate package9 or a ReleaseRecord codec. Sources: assembly §3 declaration/identity and
+§4 homes (cached lines 172–211, 347–405, 445–465, 554–562, 720–766), shared §2, vmprotocol §7.
+Production descriptor/domain/home fixtures remain external acceptance gates.
+
 ## Open decisions and external gates
 
 | Gate | Required decision/evidence | Blocks |
 | --- | --- | --- |
-| Canonical cross-team wire contract | VM node preimage codec is resolved in D1. Confirm remaining Protocol/user/random wrappers, interface/release/resource codecs and full namespace provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
+| Canonical cross-team wire contract | VM node preimages are resolved in D1; generic interface/home v1 and required external profile are recorded in D3. Obtain owner descriptor/domain/home fixtures; confirm remaining release/resource/user/random codecs and provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
 | Frontend syntax and eligibility | Preserve existing MASM name/path/word syntax under D2. Agree optional explicit key/inline extensions, fixed-body inline eligibility and diagnostics for genuinely invalid forms; source alias versus published alias versus wrapper semantics. | 04, 09 |
 | Private reusable-instance ABI | Freeze runtime-base handle transport, typed relative suffix/procref lowering and validation. C/D must remain identical across randomized user mounts; no implicit relocation or caller-derived namespace. | 11, private-instance acceptance |
 | Shared/fresh-context ABI | Specify supported value/pointer layouts, global/heap/function-table ownership, initialization and reentrancy for supported libraries. Namespace authentication supplies no RAM isolation. Do not guess a fresh-context-only/stateless-only scope. | 11, 13, final supported launch claim |
@@ -278,9 +300,9 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | in-progress | Latest `9ebac7cc1`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, core seed generation, public API and full-feature Clippy pass | Final audit: add explicit structural-cycle/keyed-recursion cases. Processor witness checks await 05/09; fuzz smoke at 16. D2 preserves existing MASM source. |
+| 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
-| 04 Toolchain contracts | in-progress | Base `45be30b96` | Bounded source/frontend/Protocol-domain reviews | First: in-memory declarations and explicit home derivation. User authorized shared-wire draft for review; no format/identity/closure policy adopted yet. |
+| 04 Toolchain contracts | in-progress | Model `5435a9cab`; fixture `ba9f981d5`; base `45be30b96` | Independent review; 13 interface-filter tests, one debug remap test, test-inclusive Clippy, no-default-features and formatting pass | Next semantic-component constructor and D3 profile-bound codecs; syntax acceptance remains. Production Protocol profile fixtures are external gates. |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
@@ -681,17 +703,25 @@ run `cargo test -p miden-processor --lib --features concurrent trace::parallel` 
 Apply the standard AC/heavy-work guards to every command. Final packed shape/degree/lookup/four-AIR,
 D2 source/stack/memory regressions and clean regeneration remain PRs 06/later/16 gates.
 
-### PR 04 Shared-wire draft authorization and independent starting slice
+### PR 04 Declaration model and reviewed profile boundary
 
-The user requested a shared InterfaceArtifact v1/home contract draft for review. This authorizes
-a proposal, not unreviewed serialization, identity derivation, domain allocation or Protocol policy.
-The live assembly paragraph was rechecked: Protocol owns immutable publisher-qualified declaration
-payloads, with no fabricated forest/D. Protocol namespace 0x02 is reserved to its owner; no local
-Protocol registry is present here, and narrow connected-source searches do not prove any local ID
-free. Numeric allocation remains an owner gate.
+Commit `5435a9cab` adds declaration-only paths/ABI/tooling signatures and explicit typed NamespacePlan
+homes, deriving keys with existing core helpers without body/D/forest. Independent review closed a
+forward/reverse quote-parsing discrepancy: validate the exact retained forward local spelling rather
+than a reverse suffix. Commit `ba9f981d5` independently repairs the existing debug-remapping fixture
+with a structural Loop parent, preserving non-root remapping coverage without casting D to K.
 
-Uncommitted `.scratch/librarytree/protocol-interface-v1-draft.txt` is a working proposal, not an
-authoritative specification or handoff. Review must settle I/declaration association, canonical
-publisher descriptor, closure schema and home authority; preserve the single plan's decisions and
-external gates. The in-memory declaration/home-key slice is independent and may proceed using
-existing core labels and parsed source components, without body/D/forest or an adopted wire codec.
+After successful AC/heavy-work guards, these current-tree commands passed:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib interface`: 13 tests.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib test_package_source_debug_merge_remaps_non_root_execution_nodes`: one test.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-mast-package --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-mast-package --no-default-features`.
+- Pinned-nightly package formatting and whitespace checks.
+
+D3 records the user's shared-contract decisions. Protocol namespace 0x02 is reserved to its owner;
+no local Protocol registry is present here, and narrow connected-source searches do not prove an ID
+free. Generic codecs require an explicit validating profile and externally allocated domain, not a
+VM allocation or permissive policy. The uncommitted working draft and research are reference notes;
+this plan owns decisions/acceptance, code owns exact implemented wire behavior, and the current brief
+owns handoff. Actual production descriptor/domain/home fixtures remain external gates.
