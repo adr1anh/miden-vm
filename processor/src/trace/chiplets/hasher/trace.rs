@@ -3,10 +3,7 @@ use core::{borrow::BorrowMut, ops::Range};
 
 use miden_air_definitions::vm::{
     ControllerCols,
-    trace::{
-        CHIPLETS_MODE_COL,
-        chiplets::hasher::{CONTROLLER_TRACE_ALIGNMENT, PADDING, TRACE_WIDTH},
-    },
+    trace::chiplets::hasher::{CONTROLLER_TRACE_ALIGNMENT, PADDING, TRACE_WIDTH},
 };
 use miden_core::chiplets::eidos_compression;
 
@@ -52,13 +49,12 @@ impl HasherOp {
 
 /// Execution trace for hasher controller rows.
 ///
-/// Each controller row writes 22 fragment cells:
+/// Each controller row writes 21 fragment cells:
 /// - 3 row-kind selectors.
 /// - 12 state cells.
 /// - 4 row-kind data cells.
 /// - 1 final-row marker.
 /// - 1 carried MRUPDATE id.
-/// - 1 controller mode cell, written to the chiplets shared mode column.
 #[derive(Debug, Default)]
 pub(super) struct HasherTrace {
     ops: Vec<HasherOp>,
@@ -253,18 +249,11 @@ fn write_controller_row(
     cols.row_data = row_data;
     row[OP_FINAL_OFFSET] = op_final;
     row[MRUPDATE_ID_OFFSET] = mrupdate_id;
-    row[CONTROLLER_MERKLE_OR_PADDING_OFFSET] =
-        if selectors == PADDING || is_merkle_selector(selectors) {
-            ONE
-        } else {
-            ZERO
-        };
 }
 
 const CONTROLLER_OVERLAY_WIDTH: usize = 19;
 const OP_FINAL_OFFSET: usize = 19;
 const MRUPDATE_ID_OFFSET: usize = 20;
-const CONTROLLER_MERKLE_OR_PADDING_OFFSET: usize = CHIPLETS_MODE_COL - 1;
 
 fn is_merkle_selector(selectors: Selectors) -> bool {
     selectors == MP_VERIFY || selectors == MR_UPDATE_OLD || selectors == MR_UPDATE_NEW
@@ -315,6 +304,41 @@ mod tests {
 
     fn assert_limit<T>(result: Result<T, ExecutionError>) {
         assert!(matches!(result, Err(ExecutionError::TraceLenExceeded(MAX_TRACE_LEN))));
+    }
+
+    #[test]
+    fn controller_rows_fit_reduced_width_and_clear_unused_fragment_cells() {
+        let selectors = [
+            super::super::LINEAR_HASH,
+            super::super::HASH_ABSORB,
+            MP_VERIFY,
+            MR_UPDATE_OLD,
+            MR_UPDATE_NEW,
+        ];
+        for width in [TRACE_WIDTH, TRACE_WIDTH + 2] {
+            let mut trace = HasherTrace::default();
+            for selector in selectors {
+                trace
+                    .append_controller_row(selector, &[ONE; STATE_WIDTH], [ONE; 4], ONE, ONE)
+                    .unwrap();
+            }
+            trace.pad_to_controller_boundary(ONE);
+            assert_eq!(trace.trace_len(), CONTROLLER_TRACE_ALIGNMENT);
+
+            let mut rows = vec![ONE; width * trace.trace_len()];
+            let mut fragment = ChipletTraceFragment::row_major(&mut rows, width, 0, width);
+            trace.fill_trace(&mut fragment);
+
+            for (index, row) in rows.chunks(width).enumerate() {
+                let expected_selector = selectors.get(index).copied().unwrap_or(PADDING);
+                assert_eq!(&row[..3], &expected_selector);
+                let expected_payload = if index < selectors.len() { ONE } else { ZERO };
+                assert!(row[3..OP_FINAL_OFFSET].iter().all(|&value| value == expected_payload));
+                assert_eq!(row[OP_FINAL_OFFSET], expected_payload);
+                assert_eq!(row[MRUPDATE_ID_OFFSET], ONE);
+                assert!(row[TRACE_WIDTH..].iter().all(|&value| value == ZERO));
+            }
+        }
     }
 
     #[test]

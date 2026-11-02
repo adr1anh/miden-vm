@@ -59,8 +59,9 @@ pub const NUM_SELECTORS: usize = 3;
 /// to this boundary keeps stream rows phase-aligned.
 pub const CONTROLLER_TRACE_ALIGNMENT: usize = 8;
 
-/// Number of columns in the hasher-controller trace.
-pub const TRACE_WIDTH: usize = NUM_SELECTORS + STATE_WIDTH + 7;
+/// Number of columns in the hasher-controller trace: selectors, state, four row-kind data cells,
+/// the final-row marker, and the carried MRUPDATE id.
+pub const TRACE_WIDTH: usize = NUM_SELECTORS + STATE_WIDTH + 6;
 
 /// Number of controller rows per compression request.
 pub const CONTROLLER_ROWS_PER_HASHER_OP: usize = 1;

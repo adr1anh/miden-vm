@@ -21,7 +21,7 @@ use miden_air_definitions::vm::{
     MidenAir,
     logup::{BusId, HasherCompressionLinkMsg, MIDEN_MAX_MESSAGE_WIDTH},
     trace::{
-        CHIPLETS_MODE_COL, CHIPLETS_STREAM_MODE_COL,
+        CHIPLETS_STREAM_MODE_COL,
         and8_lookup::{
             AND8_TABLE_ROWS, BYTE_PAIR_RELATION_COUNT, BytePairRelation, NUM_AND8_LOOKUP_COLS,
             RANGE_CHECK_LOOKUP_COL,
@@ -79,7 +79,6 @@ const CONTROLLER_ROW_DATA_BASE_COL: usize =
 const CONTROLLER_S0_COL: usize = CONTROLLER_BASE_COL;
 const CONTROLLER_S2_COL: usize = CONTROLLER_BASE_COL + 2;
 const CONTROLLER_IS_START_COL: usize = CONTROLLER_ROW_DATA_BASE_COL + 2;
-const CONTROLLER_MERKLE_OR_PADDING_COL: usize = CHIPLETS_MODE_COL;
 static PANIC_HOOK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Pad/Add/Mul/Drop inside a span — same kind of ops the decoder/stack tests use, with
@@ -832,12 +831,12 @@ fn aead_stream_rows(chip_matrix: &RowMajorMatrix<Felt>) -> Vec<usize> {
 }
 
 fn merkle_start_rows(chip_matrix: &RowMajorMatrix<Felt>) -> Vec<usize> {
+    // Controller s0=s2=1 selects MP/MU; no separate stored mode cell is needed.
     let width = chip_matrix.width();
     (0..chip_matrix.height())
         .filter(|&row| {
             let base = row * width;
             chip_matrix.values[base + CONTROLLER_S_CTRL_COL] == Felt::ONE
-                && chip_matrix.values[base + CONTROLLER_MERKLE_OR_PADDING_COL] == Felt::ONE
                 && chip_matrix.values[base + CONTROLLER_S0_COL] == Felt::ONE
                 && chip_matrix.values[base + CONTROLLER_S2_COL] == Felt::ONE
                 && chip_matrix.values[base + CONTROLLER_IS_START_COL] == Felt::ONE
