@@ -267,7 +267,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | in-progress | Latest `27e100e10`; prior slice SHAs in evidence below | Independent reviews; frozen-vector/encoding checks including seven D1 codec tests; no-default-features and scoped rustfmt/Clippy | Next slice: extract allocation-free encoded-size preflight for bounded builder reuse. Complete builders and verifier contracts remain; Protocol codecs stay external. |
+| 01 Identities | in-progress | Latest `295809479`; prior slice SHAs in evidence below | Independent reviews; frozen-vector/encoding/preflight checks; no-default-features and scoped rustfmt/Clippy | Next slice: bounded owned-node storage and budget preflight, then complete occurrence traversal/uniqueness. Verifier contracts remain; Protocol codecs stay external. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
@@ -391,3 +391,13 @@ Passed after successful AC/heavy-work guards:
 - `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
 - `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
 - Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Shared encoded-size preflight
+
+Commit `295809479` extracts allocation-free EnvNode::encoded_len and makes encoding delegate,
+preserving all size/layout/error semantics. Independent review found no actionable issue. The
+existing frozen-vector test checks all eleven expected lengths without another encoding path.
+
+Passed after successful AC/heavy-work guards: the seven focused codec tests, core Clippy
+(`--lib --tests -- -D warnings`), no-default-features check, pinned-nightly formatting and staged
+whitespace checks, using the exact commands in the preceding D1 evidence section.
