@@ -330,7 +330,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
-| 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
+| 06 Library | in-progress | Base `53acb4837`; schema/local-predicate slice assigned | Two bounded source reviews; no PR06 implementation checks yet | Packed relation, prefix/relocation, measured degree/capacity and all soundness gates remain |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
@@ -1252,3 +1252,14 @@ implemented-awaiting-validation, not complete: normal processor/legacy/parallel/
 private mutation checks remain deferred through the recorded assembly/trace migrations; fuzz smoke
 is at 16. Keep every PR 05 acceptance gate. Continue the linear stack to PR06; native resolution
 and trace reconstruction do not establish the packed AIR or statement relation.
+
+
+### PR 06 Opening boundary
+
+PR05 final review-description commit `53acb4837` is the exact linear base of
+`adr1anh/librarytree-06-packed-library`; no PR or push was created. Start with the one shared
+Library22 view, canonical kind encoding and pure local predicates, reusing existing borrow/field
+conventions. Two independent source reviews agree that the active selector switch must instead
+coordinate both selector implementations, views/writers, Controller mode/boundaries and periodic
+consumers. This first slice does not activate a partial AIR or add another committed matrix.
+All PR06 acceptance gates above remain required; PR05 inherited checks remain open.
