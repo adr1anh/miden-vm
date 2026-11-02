@@ -1,9 +1,13 @@
 use alloc::vec::Vec;
+use core::borrow::BorrowMut;
 use std::collections::HashMap;
 
 use encoder::EncodedCircuit;
 use miden_ace::instruction::{Op, decode_instruction};
-use miden_air_definitions::vm::trace::{RowIndex, chiplets::ace::ACE_CHIPLET_NUM_COLS};
+use miden_air_definitions::vm::{
+    ChipletCols,
+    trace::{CHIPLETS_WIDTH, RowIndex, chiplets::ace::ACE_CHIPLET_NUM_COLS},
+};
 
 // Chiplet-local column indices used by the ACE trace tests.
 const SELECTOR_START_IDX: usize = 0;
@@ -30,7 +34,7 @@ use crate::{
     execution::eval_circuit_impl,
     fast::Memory,
     trace::chiplets::ace::{
-        MAX_EVAL_CIRCUIT_WIRES,
+        Ace, MAX_EVAL_CIRCUIT_WIRES,
         tests::circuit::{Circuit, CircuitLayout, Instruction, NodeID},
         trace::CircuitEvaluation,
     },
@@ -98,8 +102,12 @@ fn test_bool_check() {
 
     let circuit = Circuit::new(2, constants, instructions).unwrap();
     let inputs: Vec<_> = (0u8..20)
-        .map(|x_int| {
-            let x = QuadFelt::from_u8(x_int);
+        .map(QuadFelt::from_u8)
+        .chain([
+            QuadFelt::new([Felt::from_u8(2), Felt::from_u8(3)]),
+            QuadFelt::new([Felt::from_u8(5), Felt::from_u8(7)]),
+        ])
+        .map(|x| {
             let result = x * (x - QuadFelt::ONE);
             [x, result]
         })
@@ -296,9 +304,33 @@ fn verify_trace(context: &CircuitEvaluation, num_read_rows: usize, num_eval_rows
     let num_rows = num_read_rows + num_eval_rows;
     let mut flat = Felt::zero_vec(num_rows * ACE_CHIPLET_NUM_COLS);
     context.fill(0, &mut flat);
-    // Re-expand the row-major buffer into per-column vectors for the assertions below.
+
+    // Complete helpers only after scattering compact ACE payloads into full shared rows.
+    let rows: Vec<[Felt; CHIPLETS_WIDTH]> = flat
+        .as_chunks::<ACE_CHIPLET_NUM_COLS>()
+        .0
+        .iter()
+        .map(|payload| {
+            let mut shared = [Felt::ZERO; CHIPLETS_WIDTH];
+            shared[1] = Felt::ONE;
+            shared[2] = Felt::ONE;
+            shared[4..20].copy_from_slice(payload);
+            let row: &mut ChipletCols<Felt> = shared.as_mut_slice().borrow_mut();
+            Ace::fill_row_helpers(row);
+            let expected = if row.ace().s_block == Felt::ONE {
+                row.ace().eval_op.square()
+            } else {
+                Felt::ZERO
+            };
+            assert_eq!(row.ace_op_squared(), expected);
+            assert_eq!(&shared[4..20], payload.as_slice());
+            shared
+        })
+        .collect();
+
+    // Re-expand the materialized ACE payload into columns for the assertions below.
     let columns: Vec<Vec<Felt>> = (0..ACE_CHIPLET_NUM_COLS)
-        .map(|c| (0..num_rows).map(|r| flat[r * ACE_CHIPLET_NUM_COLS + c]).collect())
+        .map(|c| rows.iter().map(|row| row[4 + c]).collect())
         .collect();
 
     let num_wires = num_read_rows * 2 + num_eval_rows;
@@ -403,4 +435,17 @@ fn verify_trace(context: &CircuitEvaluation, num_read_rows: usize, num_eval_rows
     for (_id, (_v, m)) in bus {
         assert_eq!(m, Felt::ZERO);
     }
+}
+
+#[test]
+fn ace_read_helper_does_not_interpret_payload_as_an_operation() {
+    let mut shared = [Felt::from_u8(37); CHIPLETS_WIDTH];
+    shared[4 + SELECTOR_BLOCK_IDX] = Felt::ZERO;
+    shared[4 + EVAL_OP_IDX] = Felt::from_u8(9);
+    let mut expected = shared;
+    expected[21] = Felt::ZERO;
+
+    let row: &mut ChipletCols<Felt> = shared.as_mut_slice().borrow_mut();
+    Ace::fill_row_helpers(row);
+    assert_eq!(shared, expected);
 }

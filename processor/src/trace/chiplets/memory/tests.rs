@@ -1,11 +1,14 @@
 use alloc::vec::Vec;
 use core::{assert_matches, ops::Range};
 
-use miden_air_definitions::vm::trace::{
-    RowIndex,
-    chiplets::memory::{
-        MEMORY_ACCESS_ELEMENT, MEMORY_ACCESS_WORD, MEMORY_READ, MEMORY_WRITE,
-        TRACE_WIDTH as MEMORY_TRACE_WIDTH,
+use miden_air_definitions::vm::{
+    ChipletCols,
+    trace::{
+        CHIPLETS_DATA_WIDTH, RowIndex,
+        chiplets::memory::{
+            MEMORY_ACCESS_ELEMENT, MEMORY_ACCESS_WORD, MEMORY_READ, MEMORY_WRITE,
+            TRACE_WIDTH as MEMORY_TRACE_WIDTH,
+        },
     },
 };
 use miden_core::{
@@ -43,6 +46,51 @@ fn mem_init() {
     let mem = Memory::default();
     assert_eq!(0, mem.num_accessed_words());
     assert_eq!(0, mem.trace_len());
+}
+
+#[test]
+fn memory_row_helpers_complete_materialized_payload_without_changing_other_cells() {
+    let mut mem = Memory::default();
+    let ctx = ContextId::root();
+    mem.write_word(ctx, ZERO, 1.into(), Word::from([ONE; WORD_SIZE])).unwrap();
+    mem.read_word(ctx, ZERO, 2.into()).unwrap();
+    for index in 0..WORD_SIZE {
+        let addr = Felt::from_u32(index as u32);
+        let clk = (3 + 2 * index) as u32;
+        mem.write(ctx, addr, clk.into(), Felt::from_u32(10 + index as u32)).unwrap();
+        mem.read(ctx, addr, (clk + 1).into()).unwrap();
+    }
+
+    let num_rows = mem.trace_len();
+    let trace = build_trace(mem, num_rows);
+    assert_eq!(MEMORY_TRACE_WIDTH, 17, "helpers must not widen the compact payload");
+    let mut row = ChipletCols {
+        chip_clk: Felt::new_unchecked(123),
+        chiplets: [Felt::new_unchecked(7); CHIPLETS_DATA_WIDTH],
+    };
+    for step in 0..num_rows {
+        for (column, values) in trace.iter().enumerate() {
+            row.chiplets[3 + column] = values[step];
+        }
+        // Stale helpers from a different payload must be replaced on every completed row.
+        *row.memory_write_helpers_mut() = [Felt::new_unchecked(8), Felt::new_unchecked(9)];
+        let mut expected = row.clone();
+        let helpers = if trace[IS_READ_COL_IDX][step] == MEMORY_READ
+            || trace[IS_WORD_ACCESS_COL_IDX][step] == MEMORY_ACCESS_WORD
+        {
+            [ZERO; 2]
+        } else if trace[IDX0_COL_IDX][step] == ZERO {
+            [ONE, ZERO]
+        } else {
+            [ZERO, ONE]
+        };
+        *expected.memory_write_helpers_mut() = helpers;
+
+        Memory::fill_row_helpers(&mut row);
+        assert_eq!(row.memory_write_helpers(), helpers, "memory row {step}");
+        assert_eq!(row.chip_clk, expected.chip_clk);
+        assert_eq!(row.chiplets, expected.chiplets, "memory row {step}");
+    }
 }
 
 #[test]

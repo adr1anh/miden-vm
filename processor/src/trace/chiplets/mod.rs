@@ -1,4 +1,5 @@
 use alloc::vec::Vec;
+use core::borrow::BorrowMut;
 
 use miden_air_definitions::vm::trace::{
     CHIPLETS_CLK_COL, CHIPLETS_WIDTH,
@@ -102,14 +103,16 @@ pub struct EidosCompressionTrace {
 ///   - column 1 (s1): ONE
 ///   - column 2 (s2): ZERO
 ///   - columns 3-19: execution trace of memory chiplet
-///   - columns 20-21: unused columns padded with ZERO
-///   - column 22: ZERO
+///   - column 20: unused, padded with ZERO
+///   - columns 21-22: write helpers e0/e1
 ///
 /// * ACE segment: begins at the end of the memory segment.
 ///   - column 0 (s_ctrl): ZERO
 ///   - column 1-2 (s1, s2): ONE
 ///   - column 3 (s3): ZERO
-///   - columns 4-20: execution trace of ACE chiplet
+///   - columns 4-19: execution trace of ACE chiplet
+///   - column 20: unused, padded with ZERO
+///   - column 21: operation-square helper z
 ///   - column 22: ZERO
 ///
 /// * Kernel ROM segment: begins at the end of the ACE segment.
@@ -319,22 +322,6 @@ impl Chiplets {
             layout.bitwise(),
             &[],
         );
-        let mut memory_fragment = ChipletTraceFragment::with_overheads(
-            memory_band,
-            W,
-            3,
-            MEMORY_WIDTH,
-            layout.memory(),
-            &[1],
-        );
-        let mut ace_fragment = ChipletTraceFragment::with_overheads(
-            ace_band,
-            W,
-            4,
-            ACE_CHIPLET_NUM_COLS,
-            layout.ace(),
-            &[1, 2],
-        );
         let mut kernel_rom_fragment = ChipletTraceFragment::with_overheads(
             kernel_band,
             W,
@@ -356,10 +343,36 @@ impl Chiplets {
                 *bitwise_and8_counts = bitwise.fill_trace(&mut bitwise_fragment);
             });
             s.spawn(move |_| {
-                memory.fill_trace(&mut memory_fragment);
+                {
+                    let mut memory_fragment = ChipletTraceFragment::with_overheads(
+                        memory_band,
+                        W,
+                        3,
+                        MEMORY_WIDTH,
+                        layout.memory(),
+                        &[1],
+                    );
+                    memory.fill_trace(&mut memory_fragment);
+                }
+                for row in memory_band.as_chunks_mut::<W>().0 {
+                    Memory::fill_row_helpers(row.as_mut_slice().borrow_mut());
+                }
             });
             s.spawn(move |_| {
-                ace.fill_trace(&mut ace_fragment);
+                {
+                    let mut ace_fragment = ChipletTraceFragment::with_overheads(
+                        ace_band,
+                        W,
+                        4,
+                        ACE_CHIPLET_NUM_COLS,
+                        layout.ace(),
+                        &[1, 2],
+                    );
+                    ace.fill_trace(&mut ace_fragment);
+                }
+                for row in ace_band.as_chunks_mut::<W>().0 {
+                    Ace::fill_row_helpers(row.as_mut_slice().borrow_mut());
+                }
             });
             s.spawn(move |_| {
                 kernel_rom.fill_trace(&mut kernel_rom_fragment);
@@ -387,6 +400,163 @@ fn fill_padding_rows(band: &mut [Felt], physical_band: ChipletBand) {
         row[3] = ONE;
         row[4] = ONE;
         row[W - 1] = physical_band.clock_at(i);
+    }
+}
+
+#[cfg(test)]
+mod helper_integration_tests {
+    use core::borrow::Borrow;
+
+    use miden_ace::instruction::{Op, encode_instruction};
+    use miden_air_definitions::vm::ChipletCols;
+
+    use super::*;
+    use crate::ContextId;
+
+    #[test]
+    fn completes_helpers_only_in_materialized_memory_and_ace_bands() {
+        const PREFIX_ROWS: usize = 3;
+        const W: usize = CHIPLETS_WIDTH;
+        let sentinel = Felt::from_u32(99);
+
+        for (include_memory, include_ace) in
+            [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let mut chiplets = Chiplets::new(KernelDescriptor::default());
+            chiplets
+                .bitwise
+                .aead_stream(
+                    ZERO,
+                    ONE,
+                    ZERO,
+                    Felt::from_u32(4),
+                    ZERO,
+                    [ZERO; 4],
+                    [ONE; 8],
+                    [ONE; 8],
+                )
+                .unwrap();
+            chiplets.bitwise.u32xor(Felt::from_u32(5), Felt::from_u32(6)).unwrap();
+
+            if include_memory {
+                for index in 0..4_u32 {
+                    chiplets
+                        .memory
+                        .write(
+                            ContextId::root(),
+                            Felt::from_u32(index),
+                            (index + 1).into(),
+                            Felt::from_u32(index + 11),
+                        )
+                        .unwrap();
+                }
+                chiplets.memory.read_word(ContextId::root(), ZERO, 5.into()).unwrap();
+                chiplets
+                    .memory
+                    .write_word(
+                        ContextId::root(),
+                        ZERO,
+                        6.into(),
+                        [21, 22, 23, 24].map(Felt::from_u32).into(),
+                    )
+                    .unwrap();
+                chiplets.memory.read(ContextId::root(), Felt::from_u32(2), 7.into()).unwrap();
+            }
+
+            let mut ace_payload = Vec::new();
+            if include_ace {
+                let clk = 11.into();
+                let mut evaluation = CircuitEvaluation::new(ContextId::root(), clk, 1, 3);
+                evaluation.do_read(Felt::from_u32(100), [2, 1, 3, 1].map(Felt::from_u32).into());
+                for (ptr, left, right, op) in
+                    [(104, 4, 3, Op::Add), (105, 2, 4, Op::Mul), (106, 1, 1, Op::Sub)]
+                {
+                    evaluation
+                        .do_eval(Felt::from_u32(ptr), encode_instruction(left, right, op).unwrap())
+                        .unwrap();
+                }
+                ace_payload = Felt::zero_vec(evaluation.num_rows() * ACE_CHIPLET_NUM_COLS);
+                evaluation.fill(0, &mut ace_payload);
+                chiplets.ace.add_circuit_evaluation(clk, evaluation);
+            }
+
+            let layout = chiplets.layout(PREFIX_ROWS).unwrap();
+            let trace_len = PREFIX_ROWS + chiplets.trace_len() + 1;
+            let padding = layout.padding(trace_len).unwrap();
+            let mut trace = Felt::zero_vec(trace_len * W);
+            trace[..PREFIX_ROWS * W].fill(sentinel);
+            for band in [layout.memory(), layout.ace()] {
+                for row in
+                    trace[band.start() * W..(band.start() + band.len()) * W].as_chunks_mut::<W>().0
+                {
+                    row[20] = sentinel;
+                }
+            }
+            let mut compression_trace =
+                Felt::zero_vec(chiplets.eidos_compression_trace_len() * NUM_EIDOS_COMPRESSION_COLS);
+            let _ = chiplets.fill_trace(&mut trace, layout, padding, &mut compression_trace);
+
+            assert!(trace[..PREFIX_ROWS * W].iter().all(|&cell| cell == sentinel));
+            for (index, row) in trace.as_chunks::<W>().0.iter().enumerate().skip(PREFIX_ROWS) {
+                assert_eq!(row[CHIPLETS_CLK_COL], Felt::from_u32(index as u32 + 1));
+            }
+            for index in 0..AEAD_STREAM_CYCLE_LEN {
+                let start = (layout.bitwise().start() + index) * W;
+                assert_eq!(trace[start + 22], ONE, "AEAD mode must retain its shared cell");
+            }
+            let normal_bitwise = (layout.bitwise().start() + AEAD_STREAM_CYCLE_LEN) * W;
+            assert_eq!(trace[normal_bitwise + 22], ZERO);
+
+            let memory = layout.memory();
+            let memory_rows = trace[memory.start() * W..(memory.start() + memory.len()) * W]
+                .as_chunks::<W>()
+                .0;
+            let expected_helpers = [
+                [ONE, ZERO],
+                [ZERO, ONE],
+                [ONE, ZERO],
+                [ZERO, ONE],
+                [ZERO, ZERO],
+                [ZERO, ZERO],
+                [ZERO, ZERO],
+            ];
+            let expected_values = [
+                [11, 0, 0, 0],
+                [11, 12, 0, 0],
+                [11, 12, 13, 0],
+                [11, 12, 13, 14],
+                [11, 12, 13, 14],
+                [21, 22, 23, 24],
+                [21, 22, 23, 24],
+            ];
+            assert_eq!(memory_rows.len(), if include_memory { 7 } else { 0 });
+            for (index, row) in memory_rows.iter().enumerate() {
+                let cols: &ChipletCols<Felt> = row.as_slice().borrow();
+                assert_eq!(&row[..3], &[ZERO, ONE, ZERO]);
+                assert_eq!(row[20], sentinel);
+                assert_eq!(cols.memory_write_helpers(), expected_helpers[index]);
+                assert_eq!(cols.memory().values, expected_values[index].map(Felt::from_u32));
+                assert_eq!(cols.memory().clk, Felt::from_u32(index as u32 + 1));
+                assert_eq!(cols.memory_word_addr_lo(), ZERO);
+                assert_eq!(cols.memory_word_addr_hi(), ZERO);
+            }
+
+            let ace = layout.ace();
+            let ace_rows = trace[ace.start() * W..(ace.start() + ace.len()) * W].as_chunks::<W>().0;
+            assert_eq!(ace_rows.len(), if include_ace { 4 } else { 0 });
+            for ((index, row), payload) in ace_rows
+                .iter()
+                .enumerate()
+                .zip(ace_payload.as_chunks::<ACE_CHIPLET_NUM_COLS>().0)
+            {
+                let cols: &ChipletCols<Felt> = row.as_slice().borrow();
+                assert_eq!(&row[..4], &[ZERO, ONE, ONE, ZERO]);
+                assert_eq!(&row[4..20], payload.as_slice());
+                assert_eq!(row[20], sentinel);
+                assert_eq!(row[22], ZERO);
+                assert_eq!(cols.ace_op_squared(), [ZERO, ONE, ZERO, ONE][index]);
+            }
+        }
     }
 }
 
