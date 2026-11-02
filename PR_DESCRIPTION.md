@@ -1,23 +1,30 @@
-# LibraryTree VM implementation plan
+# LibraryTree canonical identities and execution contracts
 
-Branch: `adr1anh/librarytree-00-plan`
+Branch: `adr1anh/librarytree-01-identities`
 
-Base: `00b12150715891582864d256ef51c5ea46bfb282`
+Stack base and semantic dependency: `adr1anh/librarytree-00-plan` (`a53c8b1df`).
 
-The LibraryTree design spans execution, authenticated resolution, assembly, packages and proof
-verification. `LIBRARYTREE_PLAN.md` turns it into 17 proposed PR units with branch dependencies,
-source targets, acceptance tests, open decisions and a progress ledger.
+LibraryTree requires callable keys, implementation roots, environment roots, namespaces and labels
+to remain distinct. This branch adds those typed roles, an immutable execution descriptor, exact
+canonical labels, environment commitments and the user-approved budgeted v1 node codec. One bounded
+preimage builder derives namespace-qualified bindings by complete occurrence traversal and rejects
+missing preimages and duplicate executable keys. Typed verifier configuration/identity construction
+binds the selected domains, exact ordering and mandatory accumulated kernel namespace.
 
-The first commit contains the plan alone (`1411d8581`). Subsequent plan updates remain separate
-signed documentation commits. Implementation follows on stacked local branches with small commit
-boundaries chosen during the work, prioritizing refactoring and reuse.
+The builder is an optional local utility. Its result establishes local completeness/uniqueness
+under the hash assumptions; it does not authorize roots or namespaces, supply executable code,
+validate Protocol codecs or establish trusted verifier mounts/resources. Execution/proof integration
+and claim/request activation remain later stack units. Existing Program behavior is unchanged.
 
-Validation: independent execution and proof reviews; current-source path and test-filter checks;
-17 unique branch definitions with dependency, acceptance and check fields; whitespace checks; staged
-`git diff --cached --check`; verified SSH signature on the initial commit.
+Validation: independent implementation/acceptance reviews; 86 program tests including registry
+disjointness; twelve verifier tests rerun after the final fixture-only refactor; all three public
+API compile fixtures; core Clippy with `--lib --tests -- -D warnings`; no-default-features check;
+pinned-nightly formatting and staged whitespace checks. Rust checks ran after successful AC and
+heavy-work guards. The 36-row shared text fixture is consumed by Rust and available to future MASM
+host tests; MASM/recursive execution is not claimed. Exact commands/evidence are in the plan ledger.
 
-This branch changes documentation only. Rust compilation, tests, benchmarks and regeneration were
-not run. ABI, Protocol-policy and packed-AIR feasibility decisions remain explicit implementation
-gates in the plan.
+The user's D2 compatibility requirement preserves existing MASM source after rebuilding, while
+allowing the new serialized MAST format and interpreting digest-shaped invocation words as keys.
+MAST/toolchain changes and their compatibility regressions belong to subsequent branches.
 
 No GitHub PR has been created. Creating any PR requires the user's explicit instruction.
