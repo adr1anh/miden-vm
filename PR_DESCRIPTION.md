@@ -1,30 +1,29 @@
-# LibraryTree canonical identities and execution contracts
+# Keyed MAST invocations and canonical v0.0.6 transport
 
-Branch: `adr1anh/librarytree-01-identities`
+Branch: `adr1anh/librarytree-02-keyed-mast`
 
-Stack base and semantic dependency: `adr1anh/librarytree-00-plan` (`a53c8b1df`).
+Stack base and semantic dependency: `adr1anh/librarytree-01-identities` (`4f6cda599`).
 
-LibraryTree requires callable keys, implementation roots, environment roots, namespaces and labels
-to remain distinct. This branch adds those typed roles, an immutable execution descriptor, exact
-canonical labels, environment commitments and the user-approved budgeted v1 node codec. One bounded
-preimage builder derives namespace-qualified bindings by complete occurrence traversal and rejects
-missing preimages and duplicate executable keys. Typed verifier configuration/identity construction
-binds the selected domains, exact ordering and mandatory accumulated kernel namespace.
+Immediate invocations previously followed callee node IDs and committed the selected implementation.
+Call/SysCall now store typed ProcedureKeys; Exec is a childless same-context invocation node with
+reserved control opcode 0x5f. Structural traversal, remapping and merging preserve keys independently
+of available code. External(D) remains a structural node.
 
-The builder is an optional local utility. Its result establishes local completeness/uniqueness
-under the hash assumptions; it does not authorize roots or namespaces, supply executable code,
-validate Protocol codecs or establish trusted verifier mounts/resources. Execution/proof integration
-and claim/request activation remain later stack units. Existing Program behavior is unchanged.
+Dense MAST v0.0.6 stores one canonical target slot per immediate invocation in a separate key
+section, retained in hashless transport. One shared scanner checks all reader/view paths. Sparse
+replay stores direct keys under ExecutionWitness v3. This branch also migrates generators, malformed
+wire regressions, fuzz oracles/seeds and explicit structural-cycle/keyed-recursion fixtures.
 
-Validation: independent implementation/acceptance reviews; 86 program tests including registry
-disjointness; twelve verifier tests rerun after the final fixture-only refactor; all three public
-API compile fixtures; core Clippy with `--lib --tests -- -D warnings`; no-default-features check;
-pinned-nightly formatting and staged whitespace checks. Rust checks ran after successful AC and
-heavy-work guards. The 36-row shared text fixture is consumed by Rust and available to future MASM
-host tests; MASM/recursive execution is not claimed. Exact commands/evidence are in the plan ledger.
+Validation: independent node/codec/fixture/fuzz/acceptance reviews; 198 default MAST tests; 398
+full-core tests with arbitrary enabled; four final focused cycle/recursion cases; focused core seed
+generation; public API fixtures; full-feature test-inclusive Clippy; core no-default-features check;
+pinned formatting and staged whitespace checks. Rust checks ran after successful power guards.
+Generated corpus output stays local. Exact commands/checkpoints are in the plan ledger.
 
-The user's D2 compatibility requirement preserves existing MASM source after rebuilding, while
-allowing the new serialized MAST format and interpreting digest-shaped invocation words as keys.
-MAST/toolchain changes and their compatibility regressions belong to subsequent branches.
+Status remains implemented-awaiting-validation. Processor witness tests require PRs 05/09 to
+migrate downstream invocation consumers; fuzz compilation/smoke remains PR 16. Existing MASM syntax
+and stack/memory conventions remain requirements for that integration; identities/hash/cycle-count
+expectations and rebuilt MAST formats may change. Environment-backed executable generation is a
+tracked PR 05 obligation. Runtime/proof integration is outside this core branch.
 
 No GitHub PR has been created. Creating any PR requires the user's explicit instruction.

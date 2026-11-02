@@ -176,7 +176,7 @@ The **`debug_info`** target covers debug string tables and CSR structures with t
 cargo +nightly fuzz run debug_info --fuzz-dir tools/miden-core-fuzz
 ```
 
-The **`mast_node_info`** target covers node type discriminants and digests in a fixed 40-byte structure.
+The **`mast_node_info`** target covers fixed-width node entries, digests and separately stored ProcedureKey targets through the MAST wire-view API.
 
 ```bash
 cargo +nightly fuzz run mast_node_info --fuzz-dir tools/miden-core-fuzz
