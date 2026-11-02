@@ -330,7 +330,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
-| 06 Library | in-progress | Schema `441bacb95`; expressions `487a2a51a`; base `53acb4837` | Independent reviews; seven Library tests, strict test-inclusive AIR Clippy and no-default-features pass | Packed relation, prefix/relocation, measured degree/capacity and all soundness gates remain |
+| 06 Library | in-progress | Controller `5c7c9ce26`/`59b36d0ec`; degree tests `4e2158717`; earlier schema refs below; base `53acb4837` | Independent reviews; full AIR308, current degree≤9 and exact lookup metadata, native witness5, strict AIR/processor Clippy and no-default-features pass | Packed relation, prefix/relocation, measured degree/capacity and all soundness gates remain |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
@@ -1280,3 +1280,27 @@ expressions await consumers; remove it during constraint integration. Logs: `pr0
 These local checks do not establish integrated degree, group capacity or soundness. Next simplify
 Controller mode/scoping, then coordinate packed selectors/views/writers/boundaries and Library
 witness/buses. Every PR06 acceptance gate and inherited validation remains open.
+
+
+### PR 06 Controller mode/scoping refactor checkpoint
+
+`5c7c9ce26` derives Controller mode from hs1/hs2, removes the physical getter and off-Controller
+zero shortcut, scopes all generic Merkle equations/lookups, and simplifies the three init gates.
+Unused cubic Controller flag compositions are removed. `59b36d0ec` removes the mode write and
+reduces Controller width from22 to21 without changing rows/alignment/addresses. Independent review
+found a stale mutation-test row locator using sharedc22; it now selects MP/MU by their kind bits.
+`4e2158717` adds actual Chiplets shape/base-extension-degree capture and refactors the existing
+lookup validator to derive its layout from production APIs. Duplicate validation was consolidated.
+`87267f9a3` separately updates the processor trace overview.
+
+After AC/heavy guards the full handwritten AIR suite passed308 tests; exact lookup group/column
+annotations validate and current captured degrees are≤9 at24main/fouraux/fourAIR. Five public
+witness/native trace reconstruction tests passed. Strict AIR library/test and processor library
+Clippy and no-default-features processor checks passed. Logs: `pr06-controller-*`. Processor-only
+materialization/Merkle mutation tests remain authored but unrun behind the existing assembly
+dev-graph blocker; no normal processor-suite or generated-proof pass is claimed.
+
+Next coordinate Memory/ACE helpers and packed views/writers/selectors/prefix/boundaries. Existing
+Controller global-first initialization and physical next-selector dependencies remain legacy until
+that migration. Current degree checks do not clear the full packed, public-input, lookup-capacity,
+forged-matrix or generated/native/recursive gates. All PR06 and inherited acceptance remain open.
