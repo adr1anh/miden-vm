@@ -58,13 +58,16 @@ pub struct TraceTotals {
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TraceBreakdown {
+    /// Complete aligned Library prefix, including its terminal PAD pairs.
+    pub library_rows: u64,
+    /// Hash Controller band, including its alignment rows.
     pub hasher_rows: u64,
-    pub bitwise_rows: u64,
+    /// Separate AEAD stream band.
+    pub aead_rows: u64,
     pub memory_rows: u64,
-    /// Kernel ROM rows. Not driven independently by the synthetic suite.
-    pub kernel_rom_rows: u64,
     /// ACE chiplet rows. Not driven independently by the synthetic suite.
     pub ace_rows: u64,
+    pub bitwise_rows: u64,
 }
 
 /// In-memory bundle used by the solver and verifier; not serialized.
@@ -115,23 +118,24 @@ impl TraceBreakdown {
     }
 
     fn checked_chiplets_sum(&self) -> Option<u64> {
-        self.hasher_rows
-            .checked_add(self.bitwise_rows)?
+        self.library_rows
+            .checked_add(self.hasher_rows)?
+            .checked_add(self.aead_rows)?
             .checked_add(self.memory_rows)?
-            .checked_add(self.kernel_rom_rows)?
             .checked_add(self.ace_rows)?
+            .checked_add(self.bitwise_rows)?
             .checked_add(1)
     }
 
-    /// Advisory memory-like rows: snapshot memory plus ACE and kernel ROM.
+    /// Advisory memory-like rows: snapshot memory plus ACE.
     pub fn memory_target(&self) -> u64 {
-        self.memory_rows + self.kernel_rom_rows + self.ace_rows
+        self.memory_rows + self.ace_rows
     }
 
     /// Rows combined with memory in advisory reporting because this suite does not drive them
     /// independently.
     pub fn substituted_rows(&self) -> u64 {
-        self.kernel_rom_rows + self.ace_rows
+        self.ace_rows
     }
 }
 
@@ -278,10 +282,11 @@ mod tests {
 
     fn sample_shape() -> (TraceTotals, TraceBreakdown) {
         let breakdown = TraceBreakdown {
+            library_rows: 16,
             hasher_rows: 200,
+            aead_rows: 24,
             bitwise_rows: 50,
             memory_rows: 300,
-            kernel_rom_rows: 40,
             ace_rows: 60,
         };
         let totals = TraceTotals {
@@ -291,6 +296,25 @@ mod tests {
             byte_pair_lookup_rows: 100,
         };
         (totals, breakdown)
+    }
+
+    fn sample_scenario_json() -> serde_json::Value {
+        serde_json::json!({
+            "trace": {
+                "core_rows": 64,
+                "chiplets_rows": 27,
+                "eidos_compression_rows": 32,
+                "byte_pair_lookup_rows": 65536,
+                "chiplets_shape": {
+                    "library_rows": 8,
+                    "hasher_rows": 8,
+                    "aead_rows": 4,
+                    "memory_rows": 3,
+                    "ace_rows": 1,
+                    "bitwise_rows": 2
+                }
+            }
+        })
     }
 
     fn load_test_snapshot(
@@ -326,11 +350,11 @@ mod tests {
     }
 
     #[test]
-    fn advisory_memory_target_includes_ace_and_kernel_rom() {
+    fn advisory_memory_target_includes_ace() {
         let (_, b) = sample_shape();
-        assert_eq!(b.memory_target(), 400);
-        assert_eq!(b.substituted_rows(), 100);
-        // 200 + 50 + 300 + 40 + 60 + 1 padding row = 651
+        assert_eq!(b.memory_target(), 360);
+        assert_eq!(b.substituted_rows(), 60);
+        // 16 + 200 + 24 + 300 + 60 + 50 + 1 padding row = 651
         assert_eq!(b.chiplets_sum(), 651);
     }
 
@@ -364,6 +388,8 @@ mod tests {
 
     #[test]
     fn committed_snapshots_load() {
+        // Requires a real protocol recapture after the packed Library/AEAD cutover. The
+        // pre-cutover capture remains unchanged until its producer can measure the new bands.
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("snapshots/bench-tx.json");
         let scenarios = TraceSnapshot::load_all(path).expect("load measured protocol snapshot");
         for &name in DEFAULT_SCENARIOS {
@@ -392,10 +418,9 @@ mod tests {
 
     #[test]
     fn rejects_a_variable_and8_height() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("snapshots/bench-tx.json");
-        let mut json: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        json[DEFAULT_SCENARIOS[0]]["trace"]["byte_pair_lookup_rows"] = 32768.into();
+        let mut scenario = sample_scenario_json();
+        scenario["trace"]["byte_pair_lookup_rows"] = 32768.into();
+        let json = serde_json::json!({ "invalid and8 height": scenario });
         let result = load_test_snapshot("invalid-and8-height", &json.to_string());
         assert!(matches!(
             result,
@@ -413,10 +438,11 @@ mod tests {
                     "eidos_compression_rows": 32,
                     "byte_pair_lookup_rows": 65536,
                     "chiplets_shape": {
+                        "library_rows": 0,
                         "hasher_rows": u64::MAX,
+                        "aead_rows": 0,
                         "bitwise_rows": 0,
                         "memory_rows": 0,
-                        "kernel_rom_rows": 0,
                         "ace_rows": 0
                     }
                 }
@@ -430,10 +456,9 @@ mod tests {
 
     #[test]
     fn rejects_unrepresentable_padded_air_heights() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("snapshots/bench-tx.json");
-        let mut json: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        json[DEFAULT_SCENARIOS[0]]["trace"]["core_rows"] = u64::MAX.into();
+        let mut scenario = sample_scenario_json();
+        scenario["trace"]["core_rows"] = u64::MAX.into();
+        let json = serde_json::json!({ "overflowing air height": scenario });
         assert!(matches!(
             load_test_snapshot("overflowing-air-height", &json.to_string()),
             Err(SnapshotError::InvalidAirRows { field: "core_rows", rows: u64::MAX, .. })
@@ -442,14 +467,13 @@ mod tests {
 
     #[test]
     fn rejects_missing_schema_fields() {
-        let snapshot: serde_json::Value =
-            serde_json::from_str(include_str!("../snapshots/bench-tx.json")).unwrap();
         for (parent, field) in [
             ("", "trace"),
             ("/trace", "eidos_compression_rows"),
-            ("/trace/chiplets_shape", "kernel_rom_rows"),
+            ("/trace/chiplets_shape", "library_rows"),
+            ("/trace/chiplets_shape", "aead_rows"),
         ] {
-            let mut scenario = snapshot[DEFAULT_SCENARIOS[0]].clone();
+            let mut scenario = sample_scenario_json();
             assert!(
                 scenario
                     .pointer_mut(parent)
@@ -470,10 +494,8 @@ mod tests {
 
     #[test]
     fn rejects_unknown_trace_fields() {
-        let snapshot: serde_json::Value =
-            serde_json::from_str(include_str!("../snapshots/bench-tx.json")).unwrap();
         for parent in ["/trace", "/trace/chiplets_shape"] {
-            let mut scenario = snapshot[DEFAULT_SCENARIOS[0]].clone();
+            let mut scenario = sample_scenario_json();
             scenario.pointer_mut(parent).unwrap()["unexpected_rows"] = 0.into();
             let unknown_field = serde_json::json!({ "unknown field": scenario });
             assert_eidos_snapshot_parse_error(
@@ -486,7 +508,7 @@ mod tests {
 
     #[test]
     fn rejects_inconsistent_chiplets_total() {
-        // chiplets_rows says 500 but the breakdown sums to 11 (10 + 0 + 0 + 0 + 0 + 1).
+        // chiplets_rows says 500 but the six-band breakdown sums to 11.
         let mismatched = r#"{
             "broken": {
                 "trace": {
@@ -495,10 +517,11 @@ mod tests {
                     "eidos_compression_rows": 64,
                     "byte_pair_lookup_rows": 65536,
                     "chiplets_shape": {
+                        "library_rows": 0,
                         "hasher_rows": 10,
+                        "aead_rows": 0,
                         "bitwise_rows": 0,
                         "memory_rows": 0,
-                        "kernel_rom_rows": 0,
                         "ace_rows": 0
                     }
                 }
@@ -519,10 +542,11 @@ mod tests {
                     "eidos_compression_rows": 17,
                     "byte_pair_lookup_rows": 65536,
                     "chiplets_shape": {
+                        "library_rows": 0,
                         "hasher_rows": 10,
+                        "aead_rows": 0,
                         "bitwise_rows": 0,
                         "memory_rows": 0,
-                        "kernel_rom_rows": 0,
                         "ace_rows": 0
                     }
                 }
@@ -535,35 +559,20 @@ mod tests {
 
     #[test]
     fn ignores_extra_fields_per_scenario() {
-        // Real bench-tx.json has cycle-count siblings (prologue, epilogue, ...) the loader must
-        // tolerate.
-        let realistic = r#"{
-            "consume single P2ID note": {
-                "prologue": 3501,
-                "notes_processing": 1761,
-                "epilogue": { "total": 72351 },
-                "trace": {
-                    "core_rows": 77699,
-                    "chiplets_rows": 6538,
-                    "eidos_compression_rows": 120352,
-                    "byte_pair_lookup_rows": 65536,
-                    "chiplets_shape": {
-                        "hasher_rows": 3761,
-                        "bitwise_rows": 416,
-                        "memory_rows": 2297,
-                        "kernel_rom_rows": 63,
-                        "ace_rows": 0
-                    }
-                }
-            }
-        }"#;
-        let scenarios =
-            load_test_snapshot("realistic", realistic).expect("load realistic snapshot");
+        // The producer writes cycle-count siblings that the loader must tolerate. These are
+        // synthetic schema-test values, not a measured producer capture.
+        let mut scenario = sample_scenario_json();
+        scenario["prologue"] = 3.into();
+        scenario["notes_processing"] = 5.into();
+        scenario["epilogue"] = serde_json::json!({ "total": 7 });
+        let snapshot = serde_json::json!({ "schema fixture": scenario });
+        let scenarios = load_test_snapshot("extra-scenario-fields", &snapshot.to_string())
+            .expect("load schema fixture");
         assert_eq!(scenarios.len(), 1);
         let (key, snap) = &scenarios[0];
-        assert_eq!(key, "consume single P2ID note");
-        assert_eq!(snap.trace.core_rows, 77_699);
-        assert_eq!(snap.shape.hasher_rows, 3_761);
-        assert_eq!(snap.trace.eidos_compression_rows, 120_352);
+        assert_eq!(key, "schema fixture");
+        assert_eq!(snap.trace.core_rows, 64);
+        assert_eq!(snap.shape.hasher_rows, 8);
+        assert_eq!(snap.trace.eidos_compression_rows, 32);
     }
 }

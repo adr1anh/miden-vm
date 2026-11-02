@@ -16,11 +16,12 @@ pub(super) struct TraceShape {
     byte_pair_lookup_rows: usize,
     chiplets_rows: usize,
     eidos_compression_rows: usize,
-    hash_chiplet_rows: usize,
-    bitwise_rows: usize,
+    library_rows: usize,
+    controller_rows: usize,
+    aead_rows: usize,
     memory_rows: usize,
     ace_rows: usize,
-    kernel_rows: usize,
+    bitwise_rows: usize,
     max_trace_rows: usize,
     max_padded_rows: usize,
 }
@@ -60,11 +61,12 @@ pub(super) fn trace_shape_summary_for(summary: &TraceLenSummary) -> TraceShape {
         byte_pair_lookup_rows: summary.byte_pair_lookup_rows(),
         chiplets_rows: summary.chiplets_rows(),
         eidos_compression_rows: summary.eidos_compression_rows(),
-        hash_chiplet_rows: chiplets.hash_chiplet_len(),
-        bitwise_rows: chiplets.bitwise_chiplet_len(),
+        library_rows: chiplets.library_len(),
+        controller_rows: chiplets.hash_chiplet_len(),
+        aead_rows: chiplets.aead_len(),
         memory_rows: chiplets.memory_chiplet_len(),
         ace_rows: chiplets.ace_chiplet_len(),
-        kernel_rows: chiplets.kernel_rom_len(),
+        bitwise_rows: chiplets.bitwise_chiplet_len(),
         max_trace_rows,
         max_padded_rows,
     }
@@ -275,13 +277,15 @@ pub(super) fn print_case_shape(case: &RecursionCase) -> CaseTraceShape {
     let trace = trace_shape_summary(case);
 
     println!(
-        "    {} core={} and8={} chiplets={} eidos_compression={} hash_ctrl={} max_trace={} max_padded={}",
+        "    {} core={} and8={} chiplets={} eidos_compression={} library={} controller={} aead={} max_trace={} max_padded={}",
         case.composition.label(),
         trace.core_rows,
         trace.byte_pair_lookup_rows,
         trace.chiplets_rows,
         trace.eidos_compression_rows,
-        trace.hash_chiplet_rows,
+        trace.library_rows,
+        trace.controller_rows,
+        trace.aead_rows,
         trace.max_trace_rows,
         trace.max_padded_rows,
     );
@@ -303,7 +307,7 @@ pub(super) fn print_bench_shape(record: &str, shape: &TraceShape) {
         concat!(
             "{} ",
             "core_rows={} byte_pair_lookup_rows={} chiplets_rows={} eidos_compression_rows={} ",
-            "hash_chiplet_rows={} bitwise_rows={} memory_rows={} ace_rows={} kernel_rows={} ",
+            "library_rows={} controller_rows={} aead_rows={} memory_rows={} ace_rows={} bitwise_rows={} ",
             "max_trace_rows={} max_padded_rows={}"
         ),
         record,
@@ -311,11 +315,12 @@ pub(super) fn print_bench_shape(record: &str, shape: &TraceShape) {
         shape.byte_pair_lookup_rows,
         shape.chiplets_rows,
         shape.eidos_compression_rows,
-        shape.hash_chiplet_rows,
-        shape.bitwise_rows,
+        shape.library_rows,
+        shape.controller_rows,
+        shape.aead_rows,
         shape.memory_rows,
         shape.ace_rows,
-        shape.kernel_rows,
+        shape.bitwise_rows,
         shape.max_trace_rows,
         shape.max_padded_rows,
     );
@@ -324,13 +329,13 @@ pub(super) fn print_bench_shape(record: &str, shape: &TraceShape) {
 pub(super) fn print_trace_shape_summary(shapes: &[CaseTraceShape]) {
     println!("\n=== recursive trace summary");
     println!(
-        "| Scenario | MVM proofs | PVM proofs | core | and8 | chiplets | EidosCompression | hash | bitwise | memory | ace | kernel | max_trace | padded |"
+        "| Scenario | MVM proofs | PVM proofs | core | and8 | chiplets | EidosCompression | Library | Controller | AEAD | memory | ace | bitwise | max_trace | padded |"
     );
-    println!("|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+    println!("|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
     for case in shapes {
         let shape = &case.trace;
         println!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             case.scenario,
             case.composition.mvm_count(),
             case.composition.pvm_count(),
@@ -338,11 +343,12 @@ pub(super) fn print_trace_shape_summary(shapes: &[CaseTraceShape]) {
             shape.byte_pair_lookup_rows,
             shape.chiplets_rows,
             shape.eidos_compression_rows,
-            shape.hash_chiplet_rows,
-            shape.bitwise_rows,
+            shape.library_rows,
+            shape.controller_rows,
+            shape.aead_rows,
             shape.memory_rows,
             shape.ace_rows,
-            shape.kernel_rows,
+            shape.bitwise_rows,
             shape.max_trace_rows,
             shape.max_padded_rows,
         );

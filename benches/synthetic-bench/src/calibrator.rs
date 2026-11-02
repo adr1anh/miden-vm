@@ -38,11 +38,12 @@ pub fn measure_program(source: &str) -> Result<TraceShape, MeasurementError> {
     let chiplets = summary.chiplets();
 
     let breakdown = TraceBreakdown {
+        library_rows: chiplets.library_len() as u64,
         hasher_rows: chiplets.hash_chiplet_len() as u64,
-        bitwise_rows: chiplets.bitwise_chiplet_len() as u64,
+        aead_rows: chiplets.aead_len() as u64,
         memory_rows: chiplets.memory_chiplet_len() as u64,
-        kernel_rom_rows: chiplets.kernel_rom_len() as u64,
         ace_rows: chiplets.ace_chiplet_len() as u64,
+        bitwise_rows: chiplets.bitwise_chiplet_len() as u64,
     };
     let totals = TraceTotals {
         core_rows: summary.core_rows() as u64,
