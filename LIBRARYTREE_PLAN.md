@@ -302,7 +302,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
-| 04 Toolchain contracts | in-progress | Home `a4ceb8260`; syntax `8a02bc43c`; semantic `77ba2607a`; model `5435a9cab`; base `45be30b96` | Independent reviews; 29 interface-filter tests, full 327-test syntax suite, debug regression, combined test-inclusive Clippy, no-default-features and pinned formatting pass | Next verified artifact construction/encoding, then strict decoding. Production Protocol profile fixtures remain external gates; executable lowering at 09. |
+| 04 Toolchain contracts | in-progress | Encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; semantic `77ba2607a`; base `45be30b96` | Independent reviews; 38 interface-filter tests, full 327-test syntax suite, debug regression, scoped/combined test-inclusive Clippy, no-default-features and pinned formatting pass | Next strict artifact decoding. Production Protocol profile fixtures remain external gates; executable lowering at 09. |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
@@ -764,3 +764,30 @@ passing. Logs remain separate under uncommitted `.scratch/librarytree/logs/`. Ni
 snapshots match their recorded provenance hashes; the superseded wire draft is archived outside routine
 input. Continue with D3 verified artifact encoding and then exact decoding, retaining external production
 profile fixtures and all later processor/AIR/proof gates.
+
+### PR 04 Verified interface construction and encoding validated
+
+Commit `a70fdc8b1` adds opaque LibraryId/DeclarationCommitment roles and immutable InterfaceArtifactV1
+construction/encoding with required external descriptor, immutable-association and closure validation.
+The typed profile supplies its allocated Protocol numbered-v1 FeltSequence domain; generic namespace/
+version checks do not establish allocation ownership. Encoding recomputes stored C before contextual
+authority callbacks. Exact optional ABI, canonical envelope-vector path ordering and Word-byte ID
+ordering are committed; tooling signatures remain outside wire/hash/authority. No decoder or production
+Protocol profile is claimed. Native ID input order canonicalizes; duplicate IDs reject.
+
+Two independent wire/resource and authority/domain reviews found no correctness issue. Nine new tests
+include literal DB/hash preimages, 255/256-byte envelope ordering and authority short-circuit sequences.
+An independent Python reconstruction agrees with the literal DB/DCL and fourteen-Felt payload; the
+test domain is explicitly synthetic, not a production allocation. Artifact dependency wiring changes
+only one existing Cargo.lock edge. A test-only hex-helper Clippy lint was fixed without a suppression.
+After successful AC/heavy-work guards, final current-tree checks passed:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib interface`: 38 tests.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-mast-package --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-mast-package --no-default-features`.
+- Pinned-nightly targeted formatting and whitespace checks.
+
+Strict decoding follows as its own commit: exact outer/nested EOF, expected I and stored-C checks,
+canonical wire ordering without silently sorting input, bounded parsing and authority callback suppression
+on malformed data. Reuse core labels and shared envelope extraction without invoking TypedId validators
+for disallowed declaration-path tags. Retain production profile fixtures and all later security gates.
