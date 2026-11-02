@@ -21,6 +21,7 @@ fn op_control_flow_opcode_strategy() -> impl Strategy<Value = u8> {
         Just(opcodes::JOIN),
         Just(opcodes::SPLIT),
         Just(opcodes::LOOP),
+        Just(opcodes::EXEC),
         Just(opcodes::CALL),
         Just(opcodes::DYN),
         Just(opcodes::DYNCALL),
@@ -47,6 +48,15 @@ fn compress_wire_opcode_is_pinned() {
     assert_eq!(Operation::Compress.op_code(), 0x50);
     assert_eq!(Operation::Compress.to_bytes(), [0x50]);
     assert_eq!(Operation::read_from_bytes(&[0x50]).unwrap(), Operation::Compress);
+}
+
+#[test]
+fn exec_wire_opcode_is_pinned_and_rejected_as_basic_operation() {
+    assert_eq!(opcodes::EXEC, 0x5f);
+    assert!(matches!(
+        Operation::read_from_bytes(&[opcodes::EXEC]),
+        Err(DeserializationError::InvalidValue(_))
+    ));
 }
 
 proptest! {
