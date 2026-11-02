@@ -331,7 +331,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
-| 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
+| 07 Core resolution | in-progress | Opening Git base `cc6a74742` (final PR06 review description) | Bounded source/spec mapping confirms selected decoder27/Core52/fifth Resolve column and current producer/root gaps; no PR07 implementation/test pass yet | Depends on 02,05,06; production needs12 and all inherited/final acceptance |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; release identity codec |
@@ -1478,3 +1478,15 @@ native/MASM/recursive/security and qualification gates remain. Old prove/verify/
 omit Chiplets8 and reject at statement construction; their legacy carrier cannot enable the selected
 proof. Proceed to PR07 Core binding, then PR12 canonical claim/public/transport activation without
 defaults or old-authority adapters. No GitHub PR or push was created.
+
+
+### PR 07 Opening boundary
+
+`adr1anh/librarytree-07-core-resolution` starts exactly at PR06 final review-description commit
+`cc6a74742722ff9860d34cae20323faf90ee04ee`. PR06 remains implemented-awaiting-validation with every
+recorded gate. Bounded source research confirms the selected four explicit decoder resolved-D lanes
+produce decoder27/Core52, separately from public Core36, and add one dedicated capacity1 Core Resolve
+column. It identifies existing keyed K/D/mode/row evidence for native production, missing EXEC
+classifications, first-row/padding principal gaps and END/root completion changes. Proceed under PR07's
+existing scope/acceptance; no shared semantic ambiguity or new policy/default was selected. No PR07
+code/check pass is claimed at this opening, and no GitHub PR or push was created.
