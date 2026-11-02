@@ -53,6 +53,11 @@ pub(in crate::vm::constraints::lookup) mod chiplet_requests;
 pub(in crate::vm::constraints::lookup) mod chiplet_responses;
 pub(in crate::vm::constraints::lookup) mod hash_kernel;
 pub(in crate::vm::constraints::lookup) mod hasher_returns;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Library lookups await the coordinated packed cutover")
+)]
+pub(crate) mod library;
 pub(in crate::vm::constraints::lookup) mod lookup_op_flags;
 pub(in crate::vm::constraints::lookup) mod stack_overflow;
 pub(in crate::vm::constraints::lookup) mod wiring;

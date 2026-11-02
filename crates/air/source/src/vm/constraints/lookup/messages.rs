@@ -127,12 +127,16 @@ pub enum BusId {
     AeadEidosCompressionInput = 37,
     /// AEAD-XOF Eidos compression output pair: `[clk, first_lane_idx, value0, value1]`.
     AeadEidosCompressionOutputPair = 38,
+    /// Rooted Library authentication: `[depth, commitment[4], namespace[4]]`.
+    LibraryOpen = 39,
+    /// Authenticated callable binding: `[requires_syscall, key[4], implementation[4]]`.
+    LibraryResolve = 40,
 }
 
 impl BusId {
     /// Number of bus-prefix slots through the highest assigned discriminant. Reserved slots remain
     /// part of this prefix layout.
-    pub const COUNT: usize = Self::AeadEidosCompressionOutputPair as usize + 1;
+    pub const COUNT: usize = Self::LibraryResolve as usize + 1;
 }
 
 // Per-variant discriminant locks. `BusId::COUNT` records only the high watermark; a reorder below
@@ -180,6 +184,64 @@ const _: () = assert!(BusId::EidosCompressionMessageWord as usize == 35);
 const _: () = assert!(BusId::AeadStreamRequest as usize == 36);
 const _: () = assert!(BusId::AeadEidosCompressionInput as usize == 37);
 const _: () = assert!(BusId::AeadEidosCompressionOutputPair as usize == 38);
+const _: () = assert!(BusId::LibraryOpen as usize == 39);
+const _: () = assert!(BusId::LibraryResolve as usize == 40);
+const _: () = assert!(BusId::COUNT == 41);
+
+// LIBRARY MESSAGES
+// ================================================================================================
+
+/// A rooted authentication token for one Library opening instance.
+///
+/// Headers consume one token; a selected child supplies one token at the next depth. Open
+/// multiplicities are unit events, never arbitrary witness frequencies.
+#[derive(Clone, Debug)]
+pub struct LibraryOpenMsg<E> {
+    pub depth: E,
+    pub commitment: WordFields<E>,
+    pub namespace: WordFields<E>,
+}
+
+/// A callable binding authenticated by a Mast opening and namespace-qualified key derivation.
+///
+/// `requires_syscall` is a literal zero or one at each emission site. Only these bindings use
+/// arbitrary normal/syscall witness frequencies.
+#[derive(Clone, Debug)]
+pub struct LibraryResolveMsg<E> {
+    pub requires_syscall: E,
+    pub key: WordFields<E>,
+    pub implementation: WordFields<E>,
+}
+
+impl<E, EF> LookupMessage<E, EF> for LibraryOpenMsg<E>
+where
+    E: PrimeCharacteristicRing + Clone,
+    EF: PrimeCharacteristicRing + Clone + Algebra<E>,
+{
+    fn encode(&self, challenges: &Challenges<EF>) -> EF {
+        let payload = core::array::from_fn::<_, 9, _>(|i| match i {
+            0 => self.depth.clone(),
+            1..=4 => self.commitment[i - 1].clone(),
+            _ => self.namespace[i - 5].clone(),
+        });
+        challenges.encode(BusId::LibraryOpen as usize, payload)
+    }
+}
+
+impl<E, EF> LookupMessage<E, EF> for LibraryResolveMsg<E>
+where
+    E: PrimeCharacteristicRing + Clone,
+    EF: PrimeCharacteristicRing + Clone + Algebra<E>,
+{
+    fn encode(&self, challenges: &Challenges<EF>) -> EF {
+        let payload = core::array::from_fn::<_, 9, _>(|i| match i {
+            0 => self.requires_syscall.clone(),
+            1..=4 => self.key[i - 1].clone(),
+            _ => self.implementation[i - 5].clone(),
+        });
+        challenges.encode(BusId::LibraryResolve as usize, payload)
+    }
+}
 
 // HASHER MESSAGES
 // ================================================================================================
