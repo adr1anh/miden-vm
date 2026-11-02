@@ -326,10 +326,10 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
+| 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Environment-aware executable generator restored at 05 (`4bfa6fc94`, `15a9a07c0`). D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
-| 05 Runtime | in-progress | Runtime `7fa01c810`; replay `c22c423ef`; public tests `157ff858e`; earlier slice SHAs below; base `722392682` | Independent reviews; actual processor lib/default/no_std and strict lib Clippy pass; 12 real public API regressions and strict harness Clippy pass; 52 earlier isolated native tests | Restore environment-aware executable generator; migrate old processor context/serde/environment fixtures; inherited processor/parallel/address/state and fuzz gates remain. Proof/AIR/statement activation is later. |
+| 05 Runtime | in-progress | Runtime `7fa01c810`; replay `c22c423ef`; public tests `157ff858e`; fixture `4bfa6fc94`/`15a9a07c0`; overflow tests `d880ef50a`; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 12 public API regressions; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
@@ -1189,3 +1189,27 @@ This is a breaking testing API change, not a runtime or MASM scope reduction. Co
 all modes remain retained and executable, same-D aliases, key stability, remapping and termination.
 Commit fixture implementation, consumer/tests and this boundary separately; do not close PR 05 on
 source generation alone. Existing normal test/assembly and later proof gates remain open.
+
+
+### PR 05 Executable fixture restored; overflow tests migrated
+
+`4bfa6fc94` adds the owned executable core fixture; `15a9a07c0` migrates its processor consumer.
+Every materialized root and invocation alias has a validated binding and actual opening under a
+full nested namespace; IDs are remapped before body commitments are selected. All five modes and
+structural externals execute in bounded acyclic graphs. Bare arbitrary forests now explicitly use
+StructureOnly; they cannot silently discard executable authority. Independent source reviews found
+no actionable issues.
+
+After AC/heavy guards, `cargo test --locked -p miden-core --lib --features arbitrary` passed
+406 tests (one manual seed test ignored); test-inclusive strict core Clippy and the arbitrary-feature
+no-default-features library check passed. The uncommitted runtime harness imports actual processor
+APIs and exact repository test sources: eight host-provider tests and both executable-fixture tests
+passed, including arbitrary canonical 0–16-element stacks and retained-mode coverage. Strict harness
+Clippy passed. These are isolated test results, not a passing normal processor suite.
+
+`d880ef50a` separately migrates overflow restoration tests to prepared tokens. Four exact-source
+tests passed, including stale caller-address rejection at matching frame/element counts without
+mutation; independent review and strict harness Clippy passed. Logs are under
+`.scratch/librarytree/logs/pr05-{executable-fixture-*,overflow-restore-token-*}`. The normal dev-graph
+assembly blocker, remaining advice/loader and legacy witness/context/environment test migrations,
+address/state/parallel/fuzz checks and all D3/packed/proof gates remain open. PR 05 stays in progress.
