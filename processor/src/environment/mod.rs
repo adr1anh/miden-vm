@@ -2,10 +2,16 @@
 //!
 //! An opening authenticates membership under a caller-selected environment root. Root authority,
 //! global executable-key uniqueness, code availability and invocation authorization are separate
-//! obligations. This module selects no witness serialization, execution session or proof ledger.
+//! obligations. This module selects no witness serialization or execution session. Its native
+//! occurrence ledger retains authenticated topology for later proof construction.
 
+mod ledger;
 mod witness;
 
+pub use ledger::{
+    LedgerCounters, LedgerError, LedgerLimits, LedgerResource, OpeningId, OpeningLedger,
+    OpeningOccurrence, OpeningParent, PreparedOpening,
+};
 pub use witness::{
     OpeningError, OpeningLimits, OpeningResource, OpeningStep, ResolutionWitness, ResolvedBinding,
     VerifiedOpening,

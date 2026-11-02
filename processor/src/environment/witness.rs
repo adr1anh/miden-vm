@@ -138,6 +138,11 @@ impl ResolvedBinding {
     pub const fn opening(&self) -> &VerifiedOpening {
         &self.opening
     }
+
+    /// Moves the immutable authenticated path into occurrence accounting without cloning it.
+    pub(super) fn into_path(self) -> Vec<OpeningStep> {
+        self.opening.path
+    }
 }
 
 /// A native candidate cannot authenticate the requested key within the caller's bounds.

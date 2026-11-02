@@ -55,8 +55,9 @@ mod tests;
 
 pub use continuation_stack::{Continuation, SourceInlineCallContext};
 pub use environment::{
-    OpeningError, OpeningLimits, OpeningResource, OpeningStep, ResolutionWitness, ResolvedBinding,
-    VerifiedOpening,
+    LedgerCounters, LedgerError, LedgerLimits, LedgerResource, OpeningError, OpeningId,
+    OpeningLedger, OpeningLimits, OpeningOccurrence, OpeningParent, OpeningResource, OpeningStep,
+    PreparedOpening, ResolutionWitness, ResolvedBinding, VerifiedOpening,
 };
 pub use errors::{
     AceError, ExecutionError, HostError, MemoryError, PackageSourceDebugContext,
