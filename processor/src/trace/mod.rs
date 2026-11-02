@@ -16,6 +16,7 @@ use utils::ChipletTraceFragment;
 
 pub mod chiplets;
 pub(crate) mod execution_tracer;
+pub(crate) mod limits;
 
 mod block_stack;
 mod parallel;

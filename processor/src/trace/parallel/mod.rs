@@ -53,12 +53,12 @@ pub const CORE_STORAGE_WIDTH: usize = CORE_TRACE_WIDTH;
 
 /// `build_trace()` uses this as a hard cap on trace rows, independent of the memory budget.
 ///
-/// The code checks `core_trace_contexts.len() * fragment_size` before allocation. It checks the
-/// same cap again while replaying chiplet activity, and once more against each padded per-AIR
-/// height once they're known (see [`validate_heights_within_max_trace_len`]). Row indices are
-/// `u32`-backed, so this bound must hold regardless of budget; the actual memory bound is the
-/// tiered check in `build_trace_inner` using the supplied [`ProvingBudget`].
-pub(crate) const MAX_TRACE_LEN: usize = 1 << 29;
+/// The code checks `core_trace_contexts.len() * fragment_size` before allocation. It checks
+/// the same cap again while replaying chiplet activity, and once more against each padded
+/// per-AIR height once they're known (see [`validate_heights_within_max_trace_len`]). Row
+/// indices are `u32`-backed, so this bound must hold regardless of budget; the actual memory
+/// bound is the tiered check in `build_trace_inner` using the supplied [`ProvingBudget`].
+pub(crate) use super::limits::MAX_TRACE_LEN;
 
 pub(crate) mod core_trace_fragment;
 
