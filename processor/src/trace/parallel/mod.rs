@@ -141,6 +141,7 @@ fn build_trace_inner(
 
     let TraceReplay {
         environment: _,
+        resolution_session: _,
         core_trace_contexts,
         mast_forest_store,
         range_checker_replay,
