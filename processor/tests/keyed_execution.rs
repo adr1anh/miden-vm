@@ -18,7 +18,7 @@ use miden_core::{
     FMP_ADDR, FMP_INIT_VALUE,
     mast::{
         BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder, ExecNodeBuilder, JoinNodeBuilder,
-        MastForest, MastNodeId,
+        MastForest, MastNodeId, SplitNodeBuilder,
     },
     operations::Operation,
     program::{
@@ -30,10 +30,10 @@ use miden_debug_types::{Location, SourceFile, SourceSpan};
 use miden_processor::{
     BaseHost, ContextId, EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
     ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionWitness, FastProcessor, Felt,
-    FutureMaybeSend, Host, LedgerLimits, LoadedMastForest, OpeningError, OpeningLimits,
-    OpeningResource, OpeningStep, ProcessorState, Program, ReplayReadLimits, ResolutionWitness,
-    SessionError, SessionLimits, SessionPhase, SessionResource, StackInputs, SyncHost, Word,
-    advice::AdviceMutation, event::EventError, operation::OperationError,
+    FutureMaybeSend, Host, InvocationTag, LedgerLimits, LoadedMastForest, OpeningError,
+    OpeningLimits, OpeningResource, OpeningStep, ProcessorState, Program, ReplayReadLimits,
+    ResolutionWitness, SessionError, SessionLimits, SessionPhase, SessionResource, StackInputs,
+    SyncHost, Word, advice::AdviceMutation, event::EventError, operation::OperationError,
 };
 
 const OBSERVE: u32 = 0x8bad_f00d;
@@ -459,6 +459,95 @@ fn same_body_aliases_preserve_exec_principal_and_establish_each_call_key() {
         assert_eq!(bindings.len(), 3, "same D must not merge distinct authenticated keys");
         assert_eq!(resume.resolution_session().uses().count(), 3);
     }
+}
+
+#[test]
+fn bounded_keyed_self_recursion_restores_frames_and_closes_entry_only_at_root_end() {
+    // K is known before the body D exists. CALL refers to K rather than a structural child,
+    // so this finite MAST can resolve back to itself without a structural cycle.
+    let recursive = key(&["app"], "recursive");
+    let mut forest = MastForest::new();
+    let condition = block(&mut forest, vec![Operation::Dup0, Operation::Eqz, Operation::Not]);
+    let decrement = block(&mut forest, vec![Operation::Push(-felt(1)), Operation::Add]);
+    let call_self = invocation(&mut forest, Mode::Call, recursive);
+    let on_nonzero = join(&mut forest, decrement, call_self);
+    let on_zero = block(&mut forest, vec![Operation::Noop]);
+    let branch = SplitNodeBuilder::new([on_nonzero, on_zero]).add_to_forest(&mut forest).unwrap();
+    let recurse = join(&mut forest, condition, branch);
+    // Preserve the terminating numeric counter while observing each frame during unwinding.
+    let mut operations = vec![Operation::Dup0; 4];
+    operations.extend(observe());
+    operations.extend([Operation::Drop; 4]);
+    let returned = block(&mut forest, operations);
+    let root = join(&mut forest, recurse, returned);
+    let program = finish_program(forest, root);
+    program.mast_forest().validate().unwrap();
+    let environment = EnvironmentFixture::new(&[(&["app"], "recursive", program.hash())]);
+    let mut host = CountingHost::new(&environment, &[]);
+    let mut processor = FastProcessor::new(StackInputs::new(&[felt(3)]).unwrap());
+    let mut resume = processor
+        .get_initial_resume_context(
+            &program,
+            environment.configuration(recursive, namespace(&["kernel"])),
+        )
+        .unwrap();
+    let mut restored_before_root_end = false;
+    for _ in 0..512 {
+        if processor.step_sync(&mut host, &mut resume).unwrap() {
+            break;
+        }
+        let session = resume.resolution_session();
+        let counters = session.counters();
+        assert_eq!(session.phase(), SessionPhase::PendingEntry);
+        assert_eq!(counters.reserved_requests, 1);
+        assert!(counters.committed_requests <= 3);
+        if counters.committed_requests == 3 && processor.state().ctx().is_root() {
+            restored_before_root_end = true;
+            assert_eq!(session.uses().count(), 3);
+        }
+    }
+    assert!(resume.is_complete(), "bounded recursion must terminate");
+    assert!(
+        restored_before_root_end,
+        "returning from recursion must retain entry's reservation"
+    );
+    assert!(processor.state().ctx().is_root());
+    assert_eq!(processor.stack_depth(), 16);
+    assert_eq!(processor.stack_get(0), felt(0));
+    assert_eq!(host.observations.len(), 4);
+    assert!(host.observations[..3].iter().all(|observation| !observation.context.is_root()));
+    assert!(host.observations[3].context.is_root());
+    assert_eq!(
+        host.observations
+            .iter()
+            .map(|observation| observation.context)
+            .collect::<BTreeSet<_>>()
+            .len(),
+        4
+    );
+    assert!(
+        host.observations
+            .iter()
+            .all(|observation| observation.principal == recursive.into_word())
+    );
+    assert_eq!(host.requests_for(recursive), 1, "recursive invocations reuse authenticated K");
+    assert!(
+        host.code_requests.borrow().is_empty(),
+        "all activations use the authenticated local D"
+    );
+    let session = resume.resolution_session();
+    assert_eq!(session.phase(), SessionPhase::Completed);
+    assert_eq!(session.bindings().len(), 1);
+    assert_eq!(session.bindings()[0].counts().normal, 4);
+    assert_eq!(session.bindings()[0].counts().syscall, 0);
+    assert_eq!(
+        session.uses().count(),
+        4,
+        "three recursive CALL uses plus actual entry root END"
+    );
+    assert!(session.uses().all(|use_record| use_record.tag() == InvocationTag::Normal));
+    assert_eq!(session.counters().committed_requests, 4);
+    assert_eq!(session.counters().reserved_requests, 0);
 }
 
 #[test]
