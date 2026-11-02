@@ -1429,3 +1429,51 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
         1
     );
 }
+
+#[test]
+fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
+    let fixture = source_dyncall_fixture();
+    let mut inner = CountingHost::new(&fixture.environment, &[]);
+    inner.forests.insert(
+        fixture.callee.hash(),
+        LoadedMastForest::with_package_debug_info(
+            fixture.callee.mast_forest().clone(),
+            Ok(Some(fixture.callee_debug.clone())),
+        ),
+    );
+    let mut host = AsyncCodeHost {
+        inner,
+        suspend_code: AtomicBool::new(false),
+    };
+    let mut processor = source_dyncall_processor();
+    let configuration = ExecutionEnvironment::new(
+        ExecutionDescriptor::new(fixture.entry, fixture.environment.root, namespace(&["kernel"])),
+        opening_limits(),
+        ledger_limits(),
+        SessionLimits { max_requests: 1, ..session_limits() },
+    );
+    let mut resume = processor.get_initial_resume_context(&fixture.program, configuration).unwrap();
+    reach_source_dyncall(&mut processor, &mut host, &mut resume, &fixture);
+    let before = PendingSourceDynCall::capture(&processor, &resume);
+    assert!(matches!(
+        poll_ready(processor.step(&mut host, &mut resume)),
+        Err(ExecutionError::EnvironmentSession(SessionError::LimitExceeded {
+            resource: SessionResource::Requests,
+            limit: 1,
+            requested: 2
+        }))
+    ));
+    before.assert_unchanged(&processor, &resume, &fixture);
+    assert_eq!(host.inner.requests_for(fixture.target), 1);
+    assert_eq!(*host.inner.code_requests.borrow(), vec![fixture.callee.hash()]);
+    // A failed native preparation consumes its witness and invalidates this execution. It does
+    // not turn the rejected request into a retryable host/code-supply failure.
+    assert!(matches!(
+        poll_ready(processor.step(&mut host, &mut resume)),
+        Err(ExecutionError::InvalidExecutionState)
+    ));
+    before.assert_unchanged(&processor, &resume, &fixture);
+    assert_eq!(host.inner.requests_for(fixture.target), 1);
+    assert_eq!(host.inner.code_requests.borrow().len(), 1);
+    assert_eq!(host.inner.observations.len(), 1);
+}
