@@ -53,6 +53,57 @@ fn typed_commitment_preserves_its_word() {
 }
 
 #[test]
+fn identity_matches_frozen_vector_and_exact_field_order() {
+    let relation_id = word([1, 2, 3, 4]);
+    let entry = ProcedureKey::new(word([5, 6, 7, 8]));
+    let config = VerifierConfigurationCommitment::new(word([9, 10, 11, 12]));
+    let payload = VerifierIdentity::preimage_elements(relation_id, entry, config);
+    assert_eq!(payload.len(), 12);
+    assert_eq!(payload, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(Felt::new_unchecked));
+
+    // Frozen independently before the native identity API, alongside the domain vectors.
+    let expected =
+        word([0x70478a6f4d5cee97, 0x3142c3b5ecb6e152, 0x169528d9edd6ce56, 0x096ea99f5a42c4fb]);
+    let identity = VerifierIdentity::derive(relation_id, entry, config);
+    assert_eq!(identity.as_word(), &expected);
+    assert_eq!(identity.into_word(), expected);
+}
+
+#[test]
+fn every_identity_coordinate_changes_the_identity() {
+    let original = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]];
+    let from_words = |values: [[u64; 4]; 3]| {
+        VerifierIdentity::derive(
+            word(values[0]),
+            ProcedureKey::new(word(values[1])),
+            VerifierConfigurationCommitment::new(word(values[2])),
+        )
+    };
+    let expected = from_words(original);
+    for field in 0..original.len() {
+        for coordinate in 0..WORD_SIZE {
+            let mut changed = original;
+            changed[field][coordinate] += 100;
+            assert_ne!(from_words(changed), expected);
+        }
+    }
+}
+
+#[test]
+fn identity_domain_substitutions_change_the_commitment() {
+    let relation_id = word([1, 2, 3, 4]);
+    let entry = ProcedureKey::new(word([5, 6, 7, 8]));
+    let config = VerifierConfigurationCommitment::new(word([9, 10, 11, 12]));
+    let payload = VerifierIdentity::preimage_elements(relation_id, entry, config);
+    let expected = VerifierIdentity::derive(relation_id, entry, config).into_word();
+    assert_ne!(
+        hasher::hash_elements_in_domain(&payload, domain::EXEC_VERIFIER_CONFIG),
+        expected
+    );
+    assert_ne!(hasher::hash_elements_in_domain(&payload, domain::ENV_PROCEDURE), expected);
+}
+
+#[test]
 fn every_mount_permutation_has_the_same_canonical_configuration() {
     let mounts = [
         mount([13, 14, 15, 16], [17, 18, 19, 20]),

@@ -1,9 +1,9 @@
-//! Immutable native verifier configurations and their canonical commitments.
+//! Immutable native verifier configurations, canonical commitments, and derived identities.
 
 use alloc::vec::Vec;
 use core::{alloc::Layout, cmp::Ordering};
 
-use super::{EnvironmentRoot, ImplementationRoot, Namespace, domain};
+use super::{EnvironmentRoot, ImplementationRoot, Namespace, ProcedureKey, domain};
 use crate::{Felt, WORD_SIZE, Word, chiplets::hasher};
 
 /// A required environment fragment under its exact inherited namespace.
@@ -43,6 +43,53 @@ impl VerifierConfigurationCommitment {
     /// Wraps a word without deriving or authenticating its value.
     pub const fn new(word: Word) -> Self {
         Self(word)
+    }
+
+    /// Returns the underlying word.
+    pub const fn as_word(&self) -> &Word {
+        &self.0
+    }
+
+    /// Returns the underlying word by value.
+    pub const fn into_word(self) -> Word {
+        self.0
+    }
+}
+
+/// A verifier's proof relation, entry key, and exact configuration committed as one identity.
+///
+/// Derivation does not authenticate or authorize the relation, entry binding, or configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct VerifierIdentity(Word);
+
+impl VerifierIdentity {
+    /// Derives the identity under the registered v1 Eidos FeltSequence domain.
+    ///
+    /// The configuration describes the verifier's dependencies and resources without embedding
+    /// this identity. Derivation does not establish their trust or availability.
+    pub fn derive(
+        relation_id: Word,
+        entry: ProcedureKey,
+        config: VerifierConfigurationCommitment,
+    ) -> Self {
+        let payload = Self::preimage_elements(relation_id, entry, config);
+        Self(hasher::hash_elements_in_domain(&payload, domain::EXEC_VERIFIER_IDENTITY))
+    }
+
+    /// Returns the exact 12-Felt payload `relation_id[4] || entry[4] || config[4]`.
+    ///
+    /// The payload uses the words' forward coordinate order and requires no allocation.
+    pub fn preimage_elements(
+        relation_id: Word,
+        entry: ProcedureKey,
+        config: VerifierConfigurationCommitment,
+    ) -> [Felt; 3 * WORD_SIZE] {
+        let mut payload = [Felt::ZERO; 3 * WORD_SIZE];
+        payload[..WORD_SIZE].copy_from_slice(relation_id.as_slice());
+        payload[WORD_SIZE..2 * WORD_SIZE].copy_from_slice(entry.as_word().as_slice());
+        payload[2 * WORD_SIZE..].copy_from_slice(config.as_word().as_slice());
+        payload
     }
 
     /// Returns the underlying word.

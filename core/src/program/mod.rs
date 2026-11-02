@@ -28,7 +28,7 @@ pub use request::{PROOF_REQUEST_DOMAIN_TAG, proof_request_key};
 mod verifier;
 pub use verifier::{
     VerifierConfiguration, VerifierConfigurationCommitment, VerifierConfigurationError,
-    VerifierMount,
+    VerifierIdentity, VerifierMount,
 };
 
 mod kernel;
