@@ -1,4 +1,4 @@
-//! Declaration-only public procedure metadata.
+//! Semantic callable paths and declaration-only public procedure metadata.
 //!
 //! These in-memory records do not contain executable bodies or implementation roots. They are
 //! not a serialized interface artifact and do not derive or authenticate a LibraryId, publisher,
@@ -13,6 +13,36 @@ use miden_assembly_syntax::{
 
 pub mod artifact;
 pub mod serialization;
+
+/// A nonempty callable path relative to an explicitly supplied namespace home.
+///
+/// Components contain exact semantic Text values, after source parsing/lowering. This general
+/// path also names entrypoints and implementation-private helpers; it does not admit them to a
+/// public interface. Reserved source roots such as `$exec` and `$kernel` are ordinary Text here,
+/// with no alias expansion or kernel authority. The caller supplies every helper prefix and home.
+/// No code body, implementation root, profile, or default home participates in its construction.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CallableProcedurePath {
+    components: Vec<String>,
+}
+
+impl CallableProcedurePath {
+    /// Validates decoded component text without rendering, escaping, or parsing source spelling.
+    ///
+    /// Uses the same component validation and semantic length limits as
+    /// [`PublicProcedurePath::from_semantic_components`], while permitting reserved source roots
+    /// and the local entrypoint name `$main`. Quoted separators and literal backslashes remain
+    /// inside their components; exact UTF-8 bytes are retained without Unicode normalization.
+    pub fn from_semantic_components(components: Vec<String>) -> Result<Self, DeclarationError> {
+        validate_semantic_components(&components)?;
+        Ok(Self { components })
+    }
+
+    /// Returns the nonempty sequence of exact semantic component values, ending in the local name.
+    pub fn components(&self) -> &[String] {
+        &self.components
+    }
+}
 
 /// A nonempty public procedure path relative to an explicitly supplied namespace home.
 ///
@@ -66,28 +96,8 @@ impl PublicProcedurePath {
     /// The existing component character limit applies. The path byte limit applies to decoded
     /// component bytes plus separators; source quoting does not contribute to this semantic length.
     pub fn from_semantic_components(components: Vec<String>) -> Result<Self, DeclarationError> {
-        let (local, namespaces) = components.split_last().ok_or(PathError::Empty)?;
-        let mut decoded_len = 0usize;
-        for (index, component) in components.iter().enumerate() {
-            if component.is_empty() {
-                return Err(PathError::EmptyComponent.into());
-            }
-            if component.chars().count() > Path::MAX_COMPONENT_LENGTH {
-                return Err(PathError::InvalidComponent(IdentError::InvalidLength {
-                    max: Path::MAX_COMPONENT_LENGTH,
-                })
-                .into());
-            }
-            decoded_len = decoded_len
-                .checked_add(if index == 0 { 0 } else { 2 })
-                .and_then(|len| len.checked_add(component.len()))
-                .filter(|len| *len <= u16::MAX as usize)
-                .ok_or(PathError::TooLong { max: u16::MAX as usize })?;
-        }
-        for namespace in namespaces {
-            Ident::validate(namespace).map_err(PathError::InvalidComponent)?;
-        }
-        ProcedureName::validate_semantic(local).map_err(PathError::InvalidComponent)?;
+        validate_semantic_components(&components)?;
+        let local = components.last().expect("validated paths are nonempty");
         if matches!(components[0].as_str(), Path::KERNEL_PATH | Path::EXEC_PATH)
             || local == ProcedureName::MAIN_PROC_NAME
         {
@@ -101,6 +111,33 @@ impl PublicProcedurePath {
     pub fn components(&self) -> &[String] {
         &self.components
     }
+}
+
+/// Validates semantic names independently of whether they are public declarations or helpers.
+fn validate_semantic_components(components: &[String]) -> Result<(), DeclarationError> {
+    let (local, namespaces) = components.split_last().ok_or(PathError::Empty)?;
+    let mut decoded_len = 0usize;
+    for (index, component) in components.iter().enumerate() {
+        if component.is_empty() {
+            return Err(PathError::EmptyComponent.into());
+        }
+        if component.chars().count() > Path::MAX_COMPONENT_LENGTH {
+            return Err(PathError::InvalidComponent(IdentError::InvalidLength {
+                max: Path::MAX_COMPONENT_LENGTH,
+            })
+            .into());
+        }
+        decoded_len = decoded_len
+            .checked_add(if index == 0 { 0 } else { 2 })
+            .and_then(|len| len.checked_add(component.len()))
+            .filter(|len| *len <= u16::MAX as usize)
+            .ok_or(PathError::TooLong { max: u16::MAX as usize })?;
+    }
+    for namespace in namespaces {
+        Ident::validate(namespace).map_err(PathError::InvalidComponent)?;
+    }
+    ProcedureName::validate_semantic(local).map_err(PathError::InvalidComponent)?;
+    Ok(())
 }
 
 /// One public procedure declaration, independent of code availability.
@@ -179,7 +216,7 @@ impl DeclarationSet {
     }
 }
 
-/// Invalid source paths or duplicate declarations.
+/// Invalid semantic/source paths or duplicate declarations.
 #[derive(Debug, thiserror::Error)]
 pub enum DeclarationError {
     #[error(transparent)]
@@ -194,3 +231,6 @@ pub enum DeclarationError {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod callable_path_tests;

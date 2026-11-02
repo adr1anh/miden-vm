@@ -26,7 +26,8 @@ pub use self::package::arbitrary;
 pub use self::{
     dependency::Dependency,
     interface::{
-        DeclarationError, DeclarationSet, ProcedureDeclaration, PublicProcedurePath,
+        CallableProcedurePath, DeclarationError, DeclarationSet, ProcedureDeclaration,
+        PublicProcedurePath,
         artifact::{
             ArtifactError, ArtifactProfileOperation, DeclarationCommitment, InterfaceArtifactV1,
             InterfaceProfile, LibraryId,
