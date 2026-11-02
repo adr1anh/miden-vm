@@ -1,7 +1,7 @@
 //! Block-hash table and op-group table interactions in one lookup column.
 //!
 //! - Block-hash table rows come from control-flow opcodes: JOIN, SPLIT, LOOP,
-//!   DYN/DYNCALL/CALL/SYSCALL, and END.
+//!   EXEC/DYN/DYNCALL/CALL/SYSCALL, and END.
 //! - Op-group table rows come from SPAN/RESPAN batch setup rows and in-span decode rows.
 //!
 //! These row sets are disjoint. Control-flow opcodes are never in-span, and SPAN/RESPAN
@@ -59,7 +59,11 @@ pub(in crate::vm::constraints::lookup) fn emit_block_hash_and_op_group<LB>(
 
     let f_join = op_flags.join();
     let f_split = op_flags.split();
-    let f_child = op_flags.dyn_op() + op_flags.dyncall() + op_flags.call() + op_flags.syscall();
+    let f_child = op_flags.exec()
+        + op_flags.dyn_op()
+        + op_flags.dyncall()
+        + op_flags.call()
+        + op_flags.syscall();
     let f_end = op_flags.end();
     let f_push = op_flags.push();
 
@@ -145,22 +149,24 @@ pub(in crate::vm::constraints::lookup) fn emit_block_hash_and_op_group<LB>(
                         Deg { v: 6, u: 6 },
                     );
 
-                    // DYN/DYNCALL/CALL/SYSCALL: single child at `h_0`.
+                    // Invocations execute the resolved implementation, while `h_0` holds K.
                     g.add(
-                        "dyn_dyncall_call_syscall",
+                        "exec_dyn_dyncall_call_syscall",
                         f_child,
                         || {
                             let parent = addr_next.into();
-                            let child_hash = h_0.map(LB::Expr::from);
+                            let child_hash = dec.resolved_digest.map(LB::Expr::from);
                             BlockHashMsg::Child { parent, child_hash }
                         },
                         Deg { v: 5, u: 6 },
                     );
 
-                    // END: remove the current child from the block-hash table.
-                    g.remove(
+                    // Preserve the END gate: signed multiplicity r - 1 suppresses only the
+                    // root removal without raising the denominator/transition degree.
+                    g.insert(
                         "end",
                         f_end,
+                        LB::Expr::from(dec.end_block_flags().is_root_end) - LB::Expr::ONE,
                         || {
                             let parent = addr_next.into();
                             let child_hash = h_0.map(LB::Expr::from);
@@ -181,7 +187,7 @@ pub(in crate::vm::constraints::lookup) fn emit_block_hash_and_op_group<LB>(
                                 is_loop_body,
                             }
                         },
-                        Deg { v: 4, u: 8 },
+                        Deg { v: 5, u: 8 },
                     );
 
                     // =================== OP GROUP TABLE ===================

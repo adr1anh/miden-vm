@@ -56,6 +56,7 @@ pub struct LookupOpFlags<E> {
     loop_op: E,
     dyn_op: E,
     dyncall: E,
+    exec: E,
     push: E,
     compress: E,
     mpverify: E,
@@ -155,6 +156,7 @@ where
         let dyn_op = deg5(opcodes::DYN);
         let push = deg5(opcodes::PUSH);
         let dyncall = deg5(opcodes::DYNCALL);
+        let exec = deg5(opcodes::EXEC);
         let evalcircuit = deg5(opcodes::EVALCIRCUIT);
         let log_deferred = deg5(opcodes::LOGDEFERRED);
         let hornerbase = deg5(opcodes::HORNERBASE);
@@ -230,6 +232,7 @@ where
             loop_op,
             dyn_op,
             dyncall,
+            exec,
             push,
             compress,
             mpverify,
@@ -291,6 +294,7 @@ impl LookupOpFlags<Felt> {
             opcodes::LOOP => f.loop_op = Felt::ONE,
             opcodes::DYN => f.dyn_op = Felt::ONE,
             opcodes::DYNCALL => f.dyncall = Felt::ONE,
+            opcodes::EXEC => f.exec = Felt::ONE,
             opcodes::PUSH => f.push = Felt::ONE,
             opcodes::COMPRESS => f.compress = Felt::ONE,
             opcodes::MPVERIFY => f.mpverify = Felt::ONE,
@@ -375,6 +379,7 @@ impl LookupOpFlags<Felt> {
             loop_op: Felt::ZERO,
             dyn_op: Felt::ZERO,
             dyncall: Felt::ZERO,
+            exec: Felt::ZERO,
             push: Felt::ZERO,
             compress: Felt::ZERO,
             mpverify: Felt::ZERO,
@@ -439,6 +444,7 @@ impl LookupOpFlags<Felt> {
             loop_op,
             dyn_op,
             dyncall,
+            exec,
             push,
             compress,
             mpverify,
@@ -516,6 +522,7 @@ accessors!(
     loop_op,
     dyn_op,
     dyncall,
+    exec,
     push,
     compress,
     mpverify,
@@ -601,6 +608,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn resolution_branches_are_opcode_exclusive() {
+        for opcode in valid_opcodes() {
+            let mut row = generate_test_row(opcode);
+            row.decoder.hasher_state[7] = ONE;
+            let next = generate_test_row(opcodes::HALT.into());
+            let flags = LookupOpFlags::<Felt>::from_main_cols(&row.decoder, &row.stack, &next.decoder);
+            let ordinary = flags.exec() + flags.call() + flags.dyn_op() + flags.dyncall();
+            let syscall = flags.syscall();
+            let root = flags.end();
+            let expected = if matches!(
+                opcode as u8,
+                opcodes::EXEC
+                    | opcodes::CALL
+                    | opcodes::SYSCALL
+                    | opcodes::DYN
+                    | opcodes::DYNCALL
+                    | opcodes::END
+            ) {
+                ONE
+            } else {
+                ZERO
+            };
+            assert_eq!(ordinary + syscall + root, expected, "resolution selector {opcode}");
+            assert_eq!(ordinary * syscall + ordinary * root + syscall * root, ZERO);
+        }
+    }
+
     /// Covers the row-disjointness assumption used by the block-hash/op-group merged column.
     #[test]
     fn block_hash_and_op_group_selectors_are_disjoint() {
@@ -610,6 +645,7 @@ mod tests {
             opcodes::LOOP,
             opcodes::DYN,
             opcodes::DYNCALL,
+            opcodes::EXEC,
             opcodes::CALL,
             opcodes::SYSCALL,
             opcodes::END,
@@ -699,6 +735,7 @@ mod tests {
             + flags.loop_op()
             + flags.dyn_op()
             + flags.dyncall()
+            + flags.exec()
             + flags.call()
             + flags.syscall()
             + flags.end()
@@ -758,7 +795,7 @@ mod tests {
     #[test]
     fn boolean_row_matches_polynomial_for_chiplet_request_ops() {
         type FlagAccessor = fn(&LookupOpFlags<Felt>) -> Felt;
-        let cases: [(&str, u8, FlagAccessor); 27] = [
+        let cases: [(&str, u8, FlagAccessor); 28] = [
             ("join", opcodes::JOIN, LookupOpFlags::<Felt>::join),
             ("split", opcodes::SPLIT, LookupOpFlags::<Felt>::split),
             ("loop", opcodes::LOOP, LookupOpFlags::<Felt>::loop_op),
@@ -769,6 +806,7 @@ mod tests {
             ("end", opcodes::END, LookupOpFlags::<Felt>::end),
             ("dyn", opcodes::DYN, LookupOpFlags::<Felt>::dyn_op),
             ("dyncall", opcodes::DYNCALL, LookupOpFlags::<Felt>::dyncall),
+            ("exec", opcodes::EXEC, LookupOpFlags::<Felt>::exec),
             ("compress", opcodes::COMPRESS, LookupOpFlags::<Felt>::compress),
             ("mpverify", opcodes::MPVERIFY, LookupOpFlags::<Felt>::mpverify),
             ("mrupdate", opcodes::MRUPDATE, LookupOpFlags::<Felt>::mrupdate),
@@ -834,6 +872,7 @@ mod tests {
             loop_op,
             dyn_op,
             dyncall,
+            exec,
             push,
             compress,
             mpverify,

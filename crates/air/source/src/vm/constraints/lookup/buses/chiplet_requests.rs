@@ -95,6 +95,22 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_requests<LB>(
                     control_remove("join", op_flags.join(), opcodes::JOIN);
                     control_remove("split", op_flags.split(), opcodes::SPLIT);
                     control_remove("loop", op_flags.loop_op(), opcodes::LOOP);
+                    // Immediate invocation hashes commit K || ZERO, never the selected D.
+                    g.remove(
+                        "exec_ctrl_block",
+                        op_flags.exec(),
+                        move || {
+                            let parent = addr_next.into();
+                            let input =
+                                array::from_fn(
+                                    |i| {
+                                        if i < 4 { h[i].into() } else { LB::Expr::ZERO }
+                                    },
+                                );
+                            HasherMsg::control_block(parent, &input, opcodes::EXEC)
+                        },
+                        Deg { v: 5, u: 6 },
+                    );
                     g.remove(
                         "span",
                         op_flags.span(),
@@ -113,7 +129,12 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_requests<LB>(
                         op_flags.call(),
                         move |b| {
                             let parent = addr_next.into();
-                            let h = h.map(LB::Expr::from);
+                            let h =
+                                array::from_fn(
+                                    |i| {
+                                        if i < 4 { h[i].into() } else { LB::Expr::ZERO }
+                                    },
+                                );
                             b.remove(
                                 "call_ctrl_block",
                                 HasherMsg::control_block(parent, &h, opcodes::CALL),
@@ -133,14 +154,18 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_requests<LB>(
                         Deg { v: 5, u: 6 }, // (V, U) = (1 + 4, 2 + 4)
                     );
 
-                    // SYSCALL retains its structural control-block request. The authenticated
-                    // Library Resolve demand is the coordinated PR07 invocation obligation.
+                    // SYSCALL commits the requested K under its own opcode domain.
                     g.remove(
                         "syscall_ctrl_block",
                         op_flags.syscall(),
                         move || {
                             let parent = addr_next.into();
-                            let h = h.map(LB::Expr::from);
+                            let h =
+                                array::from_fn(
+                                    |i| {
+                                        if i < 4 { h[i].into() } else { LB::Expr::ZERO }
+                                    },
+                                );
                             HasherMsg::control_block(parent, &h, opcodes::SYSCALL)
                         },
                         Deg { v: 4, u: 5 },
