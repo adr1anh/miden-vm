@@ -22,7 +22,10 @@ use crate::{
     processor::{
         AdviceProviderInterface, HasherInterface, MemoryInterface, Processor, SystemInterface,
     },
-    trace::chiplets::{AEAD_STREAM_CYCLE_LEN, CircuitEvaluation, MAX_EVAL_CIRCUIT_INVOCATIONS},
+    trace::chiplets::{
+        AEAD_STREAM_CYCLE_LEN, CircuitEvaluation, MAX_EVAL_CIRCUIT_INVOCATIONS,
+        layout::LogicalControllerAddress,
+    },
     tracer::merkle_index_helper_values,
     utils::Idx,
 };
@@ -141,10 +144,10 @@ impl SystemState {
     miden_test_serialization_macros::serialization_test
 )]
 pub struct DecoderState {
-    /// The value of the decoder's `addr` column.
-    pub current_addr: Felt,
-    /// The address of the current MAST node's parent.
-    pub parent_addr: Felt,
+    /// Logical Controller address of the current node, before final trace placement.
+    pub current_addr: LogicalControllerAddress,
+    /// Logical Controller address of the current MAST node's parent.
+    pub parent_addr: LogicalControllerAddress,
 }
 
 impl DecoderState {
@@ -169,7 +172,7 @@ impl DecoderState {
     pub fn replay_node_end(
         &mut self,
         block_stack_replay: &mut BlockStackReplay,
-    ) -> Result<Felt, ExecutionError> {
+    ) -> Result<LogicalControllerAddress, ExecutionError> {
         let node_end_data = block_stack_replay.replay_node_end()?;
 
         self.current_addr = node_end_data.prev_addr;
@@ -375,14 +378,14 @@ impl ExecutionContextReplay {
 )]
 pub struct BlockStackReplay {
     /// The parent address, recorded when a new node is started (JOIN, SPLIT, etc).
-    node_start_parent_addr: VecDeque<Felt>,
+    node_start_parent_addr: VecDeque<LogicalControllerAddress>,
     /// The data needed to recover the state on an END operation.
     node_end: VecDeque<NodeEndData>,
 }
 
 impl BlockStackReplay {
     /// Records the node's parent address
-    pub fn record_node_start_parent_addr(&mut self, parent_addr: Felt) {
+    pub fn record_node_start_parent_addr(&mut self, parent_addr: LogicalControllerAddress) {
         self.node_start_parent_addr.push_back(parent_addr);
     }
 
@@ -391,9 +394,9 @@ impl BlockStackReplay {
     /// See [NodeEndData] for more details.
     pub fn record_node_end(
         &mut self,
-        ended_node_addr: Felt,
-        prev_addr: Felt,
-        prev_parent_addr: Felt,
+        ended_node_addr: LogicalControllerAddress,
+        prev_addr: LogicalControllerAddress,
+        prev_parent_addr: LogicalControllerAddress,
     ) {
         self.node_end.push_back(NodeEndData {
             ended_node_addr,
@@ -403,7 +406,9 @@ impl BlockStackReplay {
     }
 
     /// Replays the node's parent address
-    pub fn replay_node_start_parent_addr(&mut self) -> Result<Felt, ExecutionError> {
+    pub fn replay_node_start_parent_addr(
+        &mut self,
+    ) -> Result<LogicalControllerAddress, ExecutionError> {
         self.node_start_parent_addr
             .pop_front()
             .ok_or(ExecutionError::Internal("no node start parent address recorded"))
@@ -469,13 +474,13 @@ impl EndBlockFlags {
 )]
 pub struct NodeEndData {
     /// the address of the node that is ending
-    pub ended_node_addr: Felt,
+    pub ended_node_addr: LogicalControllerAddress,
     /// the address of the node sitting on top of the block stack after the END operation (or 0 if
     /// the block stack is empty)
-    pub prev_addr: Felt,
+    pub prev_addr: LogicalControllerAddress,
     /// the parent address of the node sitting on top of the block stack after the END operation
     /// (or 0 if the block stack is empty)
-    pub prev_parent_addr: Felt,
+    pub prev_parent_addr: LogicalControllerAddress,
 }
 
 /// Data required to recover the state of an execution context when restoring it during an END
@@ -1076,19 +1081,19 @@ impl IntoIterator for RangeCheckerReplay {
 )]
 pub struct BlockAddressReplay {
     /// Recorded hasher addresses from operations like hash_control_block, hash_basic_block, etc.
-    block_addresses: VecDeque<Felt>,
+    block_addresses: VecDeque<LogicalControllerAddress>,
 }
 
 impl BlockAddressReplay {
     /// Records the address associated with a `Hasher::hash_control_block` or
     /// `Hasher::hash_basic_block` operation.
-    pub fn record_block_address(&mut self, addr: Felt) {
+    pub fn record_block_address(&mut self, addr: LogicalControllerAddress) {
         self.block_addresses.push_back(addr);
     }
 
     /// Replays a `Hasher::hash_control_block` or `Hasher::hash_basic_block` operation, returning
     /// the pre-recorded address
-    pub fn replay_block_address(&mut self) -> Result<Felt, ExecutionError> {
+    pub fn replay_block_address(&mut self) -> Result<LogicalControllerAddress, ExecutionError> {
         self.block_addresses
             .pop_front()
             .ok_or(ExecutionError::Internal("no block address operations recorded"))
@@ -1112,17 +1117,17 @@ pub struct HasherResponseReplay {
     /// Recorded hasher operations from Compress requests.
     ///
     /// Each entry contains (address, output_state)
-    compression_operations: VecDeque<(Felt, [Felt; 12])>,
+    compression_operations: VecDeque<(LogicalControllerAddress, [Felt; 12])>,
 
     /// Recorded hasher operations from Merkle path verification operations.
     ///
     /// Each entry contains (address, computed_root)
-    build_merkle_root_operations: VecDeque<(Felt, Word)>,
+    build_merkle_root_operations: VecDeque<(LogicalControllerAddress, Word)>,
 
     /// Recorded hasher operations from Merkle root update operations.
     ///
     /// Each entry contains (address, old_root, new_root)
-    mrupdate_operations: VecDeque<(Felt, Word, Word)>,
+    mrupdate_operations: VecDeque<(LogicalControllerAddress, Word, Word)>,
 }
 
 impl HasherResponseReplay {
@@ -1130,17 +1135,26 @@ impl HasherResponseReplay {
     // --------------------------------------------------------------------------------------------
 
     /// Records a `Hasher::compress` operation with its address and compressed state.
-    pub fn record_compression(&mut self, addr: Felt, hashed_state: [Felt; 12]) {
+    pub fn record_compression(&mut self, addr: LogicalControllerAddress, hashed_state: [Felt; 12]) {
         self.compression_operations.push_back((addr, hashed_state));
     }
 
     /// Records a Merkle path verification with its address and computed root
-    pub fn record_build_merkle_root(&mut self, addr: Felt, computed_root: Word) {
+    pub fn record_build_merkle_root(
+        &mut self,
+        addr: LogicalControllerAddress,
+        computed_root: Word,
+    ) {
         self.build_merkle_root_operations.push_back((addr, computed_root));
     }
 
     /// Records a Merkle root update with its address, old root, and new root
-    pub fn record_update_merkle_root(&mut self, addr: Felt, old_root: Word, new_root: Word) {
+    pub fn record_update_merkle_root(
+        &mut self,
+        addr: LogicalControllerAddress,
+        old_root: Word,
+        new_root: Word,
+    ) {
         self.mrupdate_operations.push_back((addr, old_root, new_root));
     }
 
@@ -1148,21 +1162,27 @@ impl HasherResponseReplay {
     // --------------------------------------------------------------------------------------------
 
     /// Replays a `Hasher::compress` operation, returning its address and compressed state.
-    pub fn replay_compression(&mut self) -> Result<(Felt, [Felt; 12]), OperationError> {
+    pub fn replay_compression(
+        &mut self,
+    ) -> Result<(LogicalControllerAddress, [Felt; 12]), OperationError> {
         self.compression_operations
             .pop_front()
             .ok_or(OperationError::Internal("no compression operations recorded"))
     }
 
     /// Replays a Merkle path verification, returning the pre-recorded address and computed root
-    pub fn replay_build_merkle_root(&mut self) -> Result<(Felt, Word), OperationError> {
+    pub fn replay_build_merkle_root(
+        &mut self,
+    ) -> Result<(LogicalControllerAddress, Word), OperationError> {
         self.build_merkle_root_operations
             .pop_front()
             .ok_or(OperationError::Internal("no build merkle root operations recorded"))
     }
 
     /// Replays a Merkle root update, returning the pre-recorded address, old root, and new root
-    pub fn replay_update_merkle_root(&mut self) -> Result<(Felt, Word, Word), OperationError> {
+    pub fn replay_update_merkle_root(
+        &mut self,
+    ) -> Result<(LogicalControllerAddress, Word, Word), OperationError> {
         self.mrupdate_operations
             .pop_front()
             .ok_or(OperationError::Internal("no mrupdate operations recorded"))
@@ -1171,7 +1191,8 @@ impl HasherResponseReplay {
 
 impl HasherInterface for HasherResponseReplay {
     fn compress(&mut self, _state: HasherState) -> Result<(Felt, HasherState), OperationError> {
-        self.replay_compression()
+        let (address, state) = self.replay_compression()?;
+        Ok((address.to_felt(), state))
     }
 
     fn compress_aead_xof(
@@ -1194,7 +1215,7 @@ impl HasherInterface for HasherResponseReplay {
     ) -> Result<Felt, OperationError> {
         let (addr, computed_root) = self.replay_build_merkle_root()?;
         if claimed_root == computed_root {
-            Ok(addr)
+            Ok(addr.to_felt())
         } else {
             // If the hasher doesn't compute the same root (using the same path),
             // then it means that `node` is not the value currently in the tree at `index`
@@ -1214,7 +1235,7 @@ impl HasherInterface for HasherResponseReplay {
         let (address, old_root, new_root) = self.replay_update_merkle_root()?;
 
         if claimed_old_root == old_root {
-            Ok((address, new_root))
+            Ok((address.to_felt(), new_root))
         } else {
             Err(on_err())
         }
@@ -1692,10 +1713,25 @@ mod arbitrary {
     use super::{
         AdviceReplay, BitwiseOp, BitwiseReplay, BlockAddressReplay, BlockStackReplay,
         CoreTraceState, DecoderState, ExecutionContextReplay, ExecutionContextSystemInfo,
-        KernelReplay, MIN_STACK_DEPTH, MemoryReadsReplay, MemoryWritesReplay, NodeEndData,
-        RangeCheckReplayValues, RangeCheckerReplay, StackState, SystemState,
+        KernelReplay, LogicalControllerAddress, MIN_STACK_DEPTH, MemoryReadsReplay,
+        MemoryWritesReplay, NodeEndData, RangeCheckReplayValues, RangeCheckerReplay, StackState,
+        SystemState,
     };
     use crate::{ContextId, Felt, Word};
+
+    impl Arbitrary for LogicalControllerAddress {
+        type Parameters = ();
+        type Strategy = BoxedStrategy<Self>;
+
+        fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
+            // Includes absent, row zero, and the exact-cap end cursor, without allocating rows.
+            (0..=crate::trace::parallel::MAX_TRACE_LEN as u32 + 1)
+                .prop_filter_map("within Controller trace cap", |encoded| {
+                    Self::from_felt(Felt::from_u32(encoded)).ok()
+                })
+                .boxed()
+        }
+    }
 
     impl Arbitrary for SystemState {
         type Parameters = ();
@@ -1719,7 +1755,7 @@ mod arbitrary {
         type Strategy = BoxedStrategy<Self>;
 
         fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            (any::<Felt>(), any::<Felt>())
+            (any::<LogicalControllerAddress>(), any::<LogicalControllerAddress>())
                 .prop_map(|(current_addr, parent_addr)| Self { current_addr, parent_addr })
                 .boxed()
         }
@@ -1750,7 +1786,11 @@ mod arbitrary {
         type Strategy = BoxedStrategy<Self>;
 
         fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            (any::<Felt>(), any::<Felt>(), any::<Felt>())
+            (
+                any::<LogicalControllerAddress>(),
+                any::<LogicalControllerAddress>(),
+                any::<LogicalControllerAddress>(),
+            )
                 .prop_map(|(ended_node_addr, prev_addr, prev_parent_addr)| Self {
                     ended_node_addr,
                     prev_addr,
@@ -1796,8 +1836,15 @@ mod arbitrary {
         fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
             // Populated through the public recording API (fields are private).
             (
-                proptest::collection::vec(any::<Felt>(), 0..=4),
-                proptest::collection::vec((any::<Felt>(), any::<Felt>(), any::<Felt>()), 0..=4),
+                proptest::collection::vec(any::<LogicalControllerAddress>(), 0..=4),
+                proptest::collection::vec(
+                    (
+                        any::<LogicalControllerAddress>(),
+                        any::<LogicalControllerAddress>(),
+                        any::<LogicalControllerAddress>(),
+                    ),
+                    0..=4,
+                ),
             )
                 .prop_map(|(parent_addrs, node_ends)| {
                     let mut replay = Self::default();
@@ -1993,7 +2040,7 @@ mod arbitrary {
         type Strategy = BoxedStrategy<Self>;
 
         fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            proptest::collection::vec(any::<Felt>(), 0..=4)
+            proptest::collection::vec(any::<LogicalControllerAddress>(), 0..=4)
                 .prop_map(|addresses| {
                     let mut replay = Self::default();
                     for addr in addresses {
@@ -2029,8 +2076,8 @@ mod arbitrary_replays {
     use super::{
         AdviceReplay, BlockAddressReplay, BlockStackReplay, CoreTraceFragmentContext,
         CoreTraceState, ExecutionContextReplay, ExecutionReplay, HasherOp, HasherRequestReplay,
-        HasherResponseReplay, MastForestResolutionReplay, MemoryReadsReplay, STATE_WIDTH,
-        StackOverflowReplay,
+        HasherResponseReplay, LogicalControllerAddress, MastForestResolutionReplay,
+        MemoryReadsReplay, STATE_WIDTH, StackOverflowReplay,
     };
     use crate::{ContextId, Felt, RowIndex, Word, crypto::merkle::MerklePath};
 
@@ -2097,9 +2144,18 @@ mod arbitrary_replays {
 
         fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
             (
-                proptest::collection::vec((any::<Felt>(), any::<[Felt; 12]>()), 0..=4),
-                proptest::collection::vec((any::<Felt>(), any::<Word>()), 0..=4),
-                proptest::collection::vec((any::<Felt>(), any::<Word>(), any::<Word>()), 0..=4),
+                proptest::collection::vec(
+                    (any::<LogicalControllerAddress>(), any::<[Felt; 12]>()),
+                    0..=4,
+                ),
+                proptest::collection::vec(
+                    (any::<LogicalControllerAddress>(), any::<Word>()),
+                    0..=4,
+                ),
+                proptest::collection::vec(
+                    (any::<LogicalControllerAddress>(), any::<Word>(), any::<Word>()),
+                    0..=4,
+                ),
             )
                 .prop_map(|(compressions, merkle_roots, mrupdates)| {
                     let mut replay = Self::default();

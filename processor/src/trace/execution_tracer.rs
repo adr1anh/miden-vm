@@ -483,7 +483,10 @@ impl ExecutionTracer {
         // Start a new snapshot
         let decoder_state = {
             if self.block_stack.is_empty() {
-                DecoderState { current_addr: ZERO, parent_addr: ZERO }
+                DecoderState {
+                    current_addr: LogicalControllerAddress::ABSENT,
+                    parent_addr: LogicalControllerAddress::ABSENT,
+                }
             } else {
                 let block_info = self.block_stack.peek();
 
@@ -671,7 +674,7 @@ impl ExecutionTracer {
     #[inline(always)]
     fn record_node_end(&mut self, block_info: &BlockInfo) {
         let (prev_addr, prev_parent_addr) = if self.block_stack.is_empty() {
-            (ZERO, ZERO)
+            (LogicalControllerAddress::ABSENT, LogicalControllerAddress::ABSENT)
         } else {
             let prev_block = self.block_stack.peek();
             (prev_block.addr, prev_block.parent_addr)
@@ -858,10 +861,13 @@ impl Tracer for ExecutionTracer {
                 ),
             },
             Continuation::Respan { node_id: _, batch_index: _ } => {
-                let result = LogicalControllerAddress::from_felt(self.block_stack.peek().addr)
-                    .and_then(|address| address.checked_advance(CONTROLLER_ROWS_PER_HASHER_OP));
+                let result = self
+                    .block_stack
+                    .peek()
+                    .addr
+                    .checked_advance(CONTROLLER_ROWS_PER_HASHER_OP);
                 if let Some(address) = self.record_address_result(result) {
-                    self.block_stack.peek_mut().addr = address.to_felt();
+                    self.block_stack.peek_mut().addr = address;
                 }
             },
             Continuation::FinishLoop(_) if processor.stack_get(0) == ONE => {
@@ -1282,7 +1288,9 @@ impl HasherChipletShim {
     }
 
     /// Records the address returned from a call to `Hasher::hash_control_block()`.
-    pub fn record_hash_control_block(&mut self) -> Result<Felt, ExecutionError> {
+    pub fn record_hash_control_block(
+        &mut self,
+    ) -> Result<LogicalControllerAddress, ExecutionError> {
         let block_addr = self.reserve_rows(1, CONTROLLER_ROWS_PER_HASHER_OP)?;
         self.block_addr_replay.record_block_address(block_addr);
         Ok(block_addr)
@@ -1292,7 +1300,7 @@ impl HasherChipletShim {
     pub fn record_hash_basic_block(
         &mut self,
         basic_block_node: &BasicBlockNode,
-    ) -> Result<Felt, ExecutionError> {
+    ) -> Result<LogicalControllerAddress, ExecutionError> {
         let block_addr =
             self.reserve_rows(basic_block_node.num_op_batches(), CONTROLLER_ROWS_PER_HASHER_OP)?;
         self.block_addr_replay.record_block_address(block_addr);
@@ -1332,9 +1340,13 @@ impl HasherChipletShim {
         Ok(())
     }
 
-    fn reserve_rows(&mut self, count: usize, rows_per_item: usize) -> Result<Felt, ExecutionError> {
+    fn reserve_rows(
+        &mut self,
+        count: usize,
+        rows_per_item: usize,
+    ) -> Result<LogicalControllerAddress, ExecutionError> {
         let end = self.next_row.checked_advance_many(count, rows_per_item)?;
-        let address = self.next_row.logical_address().to_felt();
+        let address = self.next_row.logical_address();
         self.next_row = end;
         Ok(address)
     }
@@ -1365,16 +1377,20 @@ mod controller_address_tests {
     #[test]
     fn shim_preserves_logical_addresses_across_fragment_drains() {
         let mut shim = HasherChipletShim::new();
-        assert_eq!(shim.record_hash_control_block().unwrap(), ONE);
-        let (_, mut first_blocks) = shim.extract_replay();
-        assert_eq!(first_blocks.replay_block_address().unwrap(), ONE);
+        assert_eq!(shim.record_hash_control_block().unwrap().to_felt(), ONE);
+        let (_, first_blocks) = shim.extract_replay();
+        let mut first_blocks =
+            BlockAddressReplay::read_from_bytes(&first_blocks.to_bytes()).unwrap();
+        assert_eq!(first_blocks.replay_block_address().unwrap().to_felt(), ONE);
 
         let state = [ONE; STATE_WIDTH];
         shim.record_compression_output(state).unwrap();
-        let (mut responses, blocks) = shim.extract_replay();
-        assert_eq!(responses.replay_compression().unwrap(), (Felt::from_u32(2), state));
+        let (responses, blocks) = shim.extract_replay();
+        let mut responses = HasherResponseReplay::read_from_bytes(&responses.to_bytes()).unwrap();
+        let (address, output) = responses.replay_compression().unwrap();
+        assert_eq!((address.to_felt(), output), (Felt::from_u32(2), state));
         assert_eq!(blocks, BlockAddressReplay::default());
-        assert_eq!(shim.record_hash_control_block().unwrap(), Felt::from_u32(3));
+        assert_eq!(shim.record_hash_control_block().unwrap().to_felt(), Felt::from_u32(3));
     }
 
     #[test]
@@ -1396,10 +1412,16 @@ mod controller_address_tests {
             (HasherResponseReplay::default(), BlockAddressReplay::default())
         );
 
-        assert_eq!(shim.record_hash_control_block().unwrap(), Felt::from_u32(MAX_TRACE_LEN as u32),);
+        assert_eq!(
+            shim.record_hash_control_block().unwrap().to_felt(),
+            Felt::from_u32(MAX_TRACE_LEN as u32),
+        );
         assert_eq!(shim.next_row.position(), MAX_TRACE_LEN);
         let (_, mut blocks) = shim.extract_replay();
-        assert_eq!(blocks.replay_block_address().unwrap(), Felt::from_u32(MAX_TRACE_LEN as u32));
+        assert_eq!(
+            blocks.replay_block_address().unwrap().to_felt(),
+            Felt::from_u32(MAX_TRACE_LEN as u32)
+        );
         assert_limit(shim.record_compression_output([ZERO; STATE_WIDTH]));
         assert_limit(shim.record_build_merkle_root(&path, [ZERO; 4].into()));
         assert_limit(shim.record_hash_control_block());
@@ -1472,7 +1494,10 @@ mod serialization_tests {
                 fn_hash: Word::default(),
                 deferred_root: Word::default(),
             },
-            decoder: DecoderState { current_addr: ZERO, parent_addr: ZERO },
+            decoder: DecoderState {
+                current_addr: LogicalControllerAddress::ABSENT,
+                parent_addr: LogicalControllerAddress::ABSENT,
+            },
             stack: StackState::new([ZERO; MIN_STACK_DEPTH], MIN_STACK_DEPTH, ZERO),
         }
     }

@@ -11,6 +11,28 @@ use super::*;
 // SERIALIZATION
 // ================================================================================================
 
+// Persist the existing nullable one-based logical Felt encoding. Physical Controller placement is
+// a final-materialization concern and is never part of saved state or replay records.
+impl Serializable for LogicalControllerAddress {
+    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+        self.to_felt().write_into(target);
+    }
+}
+
+impl Deserializable for LogicalControllerAddress {
+    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+        Self::from_felt(Felt::read_from(source)?).map_err(|error| {
+            DeserializationError::InvalidValue(format!(
+                "invalid logical Controller address: {error}"
+            ))
+        })
+    }
+
+    fn min_serialized_size() -> usize {
+        Felt::min_serialized_size()
+    }
+}
+
 impl Serializable for SystemState {
     fn write_into<W: ByteWriter>(&self, target: &mut W) {
         self.clk.write_into(target);
@@ -41,8 +63,8 @@ impl Serializable for DecoderState {
 impl Deserializable for DecoderState {
     fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
         Ok(Self {
-            current_addr: Felt::read_from(source)?,
-            parent_addr: Felt::read_from(source)?,
+            current_addr: LogicalControllerAddress::read_from(source)?,
+            parent_addr: LogicalControllerAddress::read_from(source)?,
         })
     }
 }
@@ -108,6 +130,21 @@ impl Deserializable for CoreTraceFragmentContext {
             initial_mast_forest_id: MastForestId::read_from(source)?,
         })
     }
+
+    fn min_serialized_size() -> usize {
+        // A wire-derived lower bound for the fixed state and forest ID. Replay queues and the
+        // continuation contribute additional bytes; omit them rather than use their in-memory
+        // sizes. In particular, logical addresses retain the Felt wire size despite the larger
+        // nullable in-memory representation.
+        RowIndex::min_serialized_size()
+            + ContextId::min_serialized_size()
+            + 2 * Word::min_serialized_size()
+            + 2 * LogicalControllerAddress::min_serialized_size()
+            + <[Felt; MIN_STACK_DEPTH]>::min_serialized_size()
+            + usize::min_serialized_size()
+            + Felt::min_serialized_size()
+            + MastForestId::min_serialized_size()
+    }
 }
 
 impl Serializable for NodeEndData {
@@ -121,10 +158,14 @@ impl Serializable for NodeEndData {
 impl Deserializable for NodeEndData {
     fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
         Ok(Self {
-            ended_node_addr: Felt::read_from(source)?,
-            prev_addr: Felt::read_from(source)?,
-            prev_parent_addr: Felt::read_from(source)?,
+            ended_node_addr: LogicalControllerAddress::read_from(source)?,
+            prev_addr: LogicalControllerAddress::read_from(source)?,
+            prev_parent_addr: LogicalControllerAddress::read_from(source)?,
         })
+    }
+
+    fn min_serialized_size() -> usize {
+        3 * LogicalControllerAddress::min_serialized_size()
     }
 }
 
@@ -677,7 +718,10 @@ mod tests {
         }
 
         let mut replay = HasherResponseReplay::default();
-        replay.record_compression(Felt::new_unchecked(14), [Felt::new_unchecked(15); STATE_WIDTH]);
+        replay.record_compression(
+            LogicalControllerAddress::from_felt(Felt::new_unchecked(14)).unwrap(),
+            [Felt::new_unchecked(15); STATE_WIDTH],
+        );
         assert_round_trip(replay);
     }
 
