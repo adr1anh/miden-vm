@@ -16,7 +16,7 @@ Read the linked design chapters when implementing their contracts. This plan sel
 
 ## Scope and invariants
 
-Breaking changes are accepted. Implement one new callable/statement model and rebuild its consumers; do not create a permanent dual-target executor or digest fallback to ease the transition.
+Breaking changes are accepted subject to D2: existing MASM programs must remain usable after rebuilding, with digest-shaped invocation targets interpreted as keys. New serialized MAST formats are allowed. Implement one new callable/statement model and rebuild its consumers; do not create a permanent dual-target executor or runtime digest fallback to ease the transition.
 
 1. **Environment authority:** execution is defined by immutable `(K_entry, R_E, N_kernel)`. Entry and every retained runtime invocation authenticate a binding in R_E. Code availability at implementation root D does not authorize execution. The environment root never switches on account/library calls.
 2. **Uniform callable keys:** EXEC/CALL/SYSCALL and dynamic targets use ProcedureKey K; `procref` produces K. Separate newtypes distinguish K, D, R_E, N and label commitment L. Structural JOIN/SPLIT/LOOP/SPAN and `ExternalNode(D)` remain structural code commitments. Immediate keyed nodes have no callee child.
@@ -81,7 +81,7 @@ Define distinct K/D/R_E/N/L types, typed label bytes, canonical environment obje
 
 Add EXEC control opcode 0x5f and target-only Exec/Call/SysCall nodes that hash K/mode without a structural callee. Replace dead callee-ID traversal assumptions directly. Preserve real structural External(D). Bump dense MAST 0.0.5 → 0.0.6 across safe/trusted/view/hashless/sparse readers/writers together.
 
-**Acceptance:** canonical round trips and malformed count/offset/version rejection; changing environment D leaves caller MAST unchanged; equal-D/different-K remains distinct; runtime recursion is representable and structural cycles reject. **Checks:** `cargo test -p miden-core --lib mast`; `cargo test -p miden-core --lib operations`; run affected fuzz smoke checks at final qualification with explicit bounds.
+**Acceptance:** canonical round trips and malformed count/offset/version rejection; changing environment D leaves caller MAST unchanged; equal-D/different-K remains distinct; runtime recursion is representable and structural cycles reject. Preserve existing MASM syntax through later lowering under D2; old serialized MAST compatibility is not required. **Checks:** `cargo test -p miden-core --lib mast`; `cargo test -p miden-core --lib operations`; run affected fuzz smoke checks at final qualification with explicit bounds.
 
 ### PR 03 Chiplet refactor and address ownership
 
@@ -101,7 +101,7 @@ Extract logical Controller-address handling and checked relocation/sentinel rule
 
 Separate canonical declarations and optional body availability; add validated NamespacePlan/interface-only artifact and explicit key/inline forms. Preserve exact-byte optional ABI metadata separately from tooling FunctionType. Do not invent placeholder D/forest or activate a partially migrated package9 executable. Reuse existing parsed Path components and core hashes.
 
-**Acceptance:** declaration-only Latest keys need no D; quoted `::`, exact Unicode bytes, typed labels and absent/present-empty ABI differ correctly; unknown versions/malformed homes reject; old bare digest syntax gets migration diagnostics. **Checks:** `make test-assembly-syntax`; `cargo test -p miden-mast-package --lib interface`; CST tests only if changed.
+**Acceptance:** declaration-only Latest keys need no D; quoted `::`, exact Unicode bytes, typed labels and absent/present-empty ABI differ correctly; unknown versions/malformed homes reject; existing name/path/word invocation syntax remains accepted, with digest-shaped words interpreted as keys under D2. Explicit inline opt-in is an optional extension. **Checks:** `make test-assembly-syntax`; `cargo test -p miden-mast-package --lib interface`; CST tests only if changed.
 
 ## Stage 2 Authenticated execution and relation
 
@@ -155,7 +155,7 @@ Extend the existing versioned execution witness with immutable descriptor, entry
 
 Split identity resolution from body supply, runtime reachability/SCCs from acyclic inline dependencies, and retain all public/helper/address-taken roots. Emit K for every retained invocation/procref; explicit inline alone composes a body. Activate validated namespaced package9 metadata and MAST0.0.6 together across trusted/safe readers, commitments and strip-debug. Replace root-centric Program/kernel reconstruction, root-call lowering and hardcoded `$kernel` authority rather than wrap them.
 
-**Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old callable formats reject and required metadata survives debug stripping. **Checks:** `make test-assembly test=namespaced_execution`; `cargo test -p miden-mast-package --lib package::serialization`; then `make test-assembly` and package lib tests after focused failures resolve.
+**Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old serialized callable formats reject and required metadata survives debug stripping. Existing MASM invocation/procref source rebuilds under D2, using K and real EXEC without digest fallback. **Checks:** `make test-assembly test=namespaced_execution`; `cargo test -p miden-mast-package --lib package::serialization`; then `make test-assembly` and package lib tests after focused failures resolve.
 
 ### PR 10 Revision-aware projects and code supply
 
@@ -245,12 +245,20 @@ by child words. Decoding requires exact input and a caller-supplied resource bud
 header/count encoding does not change the selected node hashes. Implement and test this codec
 separately from hash-only constructors. Protocol-specific codecs remain outside this decision.
 
+**D2 Existing MASM compatibility, clarified with the user on 2 November 2026:** existing MASM
+programs must keep working after rebuilding; serialized MAST files may use the new format.
+Preserve existing invocation/procref syntax, interpreting digest-shaped target words as keys.
+The new keyed execution semantics and optional explicit inline opt-in still apply. Do not retain
+runtime digest dispatch or infer an authenticated binding from code availability. Source syntax
+compatibility does not require preserving old child-ID nodes, serialized layouts or digest-based
+implementation lookup. Include existing source regressions in PRs 04/09 and final qualification.
+
 ## Open decisions and external gates
 
 | Gate | Required decision/evidence | Blocks |
 | --- | --- | --- |
 | Canonical cross-team wire contract | VM node preimage codec is resolved in D1. Confirm remaining Protocol/user/random wrappers, interface/release/resource codecs and full namespace provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
-| Frontend syntax and eligibility | Agree explicit key/inline grammar, fixed-body inline eligibility and migration diagnostics; source alias versus published alias versus wrapper semantics. | 04, 09 |
+| Frontend syntax and eligibility | Preserve existing MASM name/path/word syntax under D2. Agree optional explicit key/inline extensions, fixed-body inline eligibility and diagnostics for genuinely invalid forms; source alias versus published alias versus wrapper semantics. | 04, 09 |
 | Private reusable-instance ABI | Freeze runtime-base handle transport, typed relative suffix/procref lowering and validation. C/D must remain identical across randomized user mounts; no implicit relocation or caller-derived namespace. | 11, private-instance acceptance |
 | Shared/fresh-context ABI | Specify supported value/pointer layouts, global/heap/function-table ownership, initialization and reentrancy for supported libraries. Namespace authentication supplies no RAM isolation. Do not guess a fresh-context-only/stateless-only scope. | 11, 13, final supported launch claim |
 | Protocol authority and admission | Agree canonical homes, user U reconstruction, root binding on public input stack, uniqueness checks, exact N_kernel authorization, release/resource admission and inclusion freshness evidence. | Protocol integration fixtures and release adoption |
@@ -267,7 +275,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | in-progress | Latest `d79a6c34c`; prior slice SHAs in evidence below | Independent reviews; frozen vectors/codec and thirty builder tests; no-default-features and scoped rustfmt/Clippy | Next: verifier identity derivation and shared test-vector fixtures, then PR acceptance checks. Protocol codecs stay external. |
+| 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
@@ -445,3 +453,29 @@ Passed after successful AC/heavy-work guards:
 - `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
 - `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
 - Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Identity derivation and shared-vector closure
+
+Commit `f02a64403` adds allocation-free typed verifier identity derivation with the exact
+12-Felt preimage and registered v1 domain. Commits `649bb327e` and `8152f9a34` move frozen
+expectations into `core/tests/fixtures/librarytree-vectors.txt`: 36 unique rows, with a small
+test-only parser and no production codec/dependency. Future MASM host tests can consume the
+same bytes/Felts/digests. All 32 previous environment/domain tests and production prefixes
+were preserved. Independent identity, acceptance and fixture reviews found no actionable issue.
+No MASM execution, recursive trust, claim/request cutover or root authority is claimed here.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program`: 86 tests, including
+  registry disjointness, all environment slices and twelve verifier tests.
+- After the final test-only verifier fixture migration:
+  `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::verifier`: twelve tests.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --test public_api`: all three
+  compile fixtures passed, including the D-versus-K compile failure.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`:
+  passed again after the final fixture migration.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+PR 01 acceptance is complete. D2 governs the following MAST/toolchain work; its source-compatibility
+regressions remain PRs 04/09/final gates rather than an unimplemented PR 01 runtime claim.
