@@ -302,7 +302,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
-| 04 Toolchain contracts | in-progress | Decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent production/test reviews; 52 interface-filter tests, full 327-test syntax suite, scoped/combined test-inclusive Clippy, no-default-features and pinned formatting pass | Full package check: 202 passed, five old MAST-offset fixture failures, one ignored. Repair helper separately; production Protocol fixtures remain external gates; executable lowering at 09. |
+| 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required owner-approved descriptor/domain/home/association/closure fixtures remain external. Generic implementation and local checks are done. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
@@ -811,3 +811,26 @@ hash-validation coverage; do not change executable package serialization to acco
 The failing full check is not counted as passing. Log: uncommitted
 `.scratch/librarytree/logs/pr04-package-regression.log`. Root will rerun affected/full package checks
 following the repair, then finalize this branch's description and unresolved-gate disposition.
+
+### PR 04 Generic implementation closed; production profile evidence remains open
+
+Commit `2a3f608e3` repairs the package spoof-fixture locator using shared ByteReader/
+BudgetedReader<SliceReader> rather than a custom vint64 parser. It checks v6 framing, skips the
+fixed target count/table, and verifies the original node hash before patching. A keyed Exec fixture
+proves the target table is untouched while trusted decoding retains and untrusted decoding rejects
+the spoofed hash. Independent static review and pinned formatting passed; production package bytes
+and trust boundaries were not changed.
+
+After successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib spoofed`: all six passed.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib`: 208 passed, zero failed; only the manual `package::seed_gen::generate_fuzz_seeds` is ignored. This includes all 52 interface/Home tests and closes the five previous offset failures.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-mast-package --lib --tests -- -D warnings` passed on the repaired tree.
+- Pinned-nightly formatting and whitespace checks passed. The decoder no-default-features check and 327-test syntax evidence above remain applicable; the subsequent repair changes only tests.
+
+PR 04 is **implemented-awaiting-validation**, not complete. Its generic implementation/local checks
+are done; Protocol must still provide authoritative descriptor bytes, allocated domain, permitted
+complete homes and immutable association/authenticated closure fixtures. The pending source question
+does not authorize defaults or waive evidence. Validate accepted/rejected owner fixtures through both
+artifact and Home codecs and record provenance before clearing this gate. Continue the local stack
+with this unresolved validation owner explicit; no GitHub PR or push is authorized.
