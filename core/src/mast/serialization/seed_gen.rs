@@ -9,9 +9,9 @@ use crate::{
     Felt, Word,
     advice::{AdviceInputs, AdviceMap},
     deferred::{DEFERRED_AND_FRAME, Node, PrecompileWitness, PrecompileWitnessEntry, TRUE_DIGEST},
-    mast::{BasicBlockNodeBuilder, JoinNodeBuilder, MastForest},
+    mast::{BasicBlockNodeBuilder, CallNodeBuilder, ExecNodeBuilder, JoinNodeBuilder, MastForest},
     operations::Operation,
-    program::{KernelDescriptor, Program, StackInputs, StackOutputs},
+    program::{KernelDescriptor, ProcedureKey, Program, StackInputs, StackOutputs},
     proof::{
         ExecutionProof, ExecutionProofCompatibility, HashFunction, PrecompileProof,
         PrecompileStatus, StarkProof, VmProof,
@@ -124,6 +124,42 @@ fn generate_fuzz_seeds() {
             &["mast_forest_validate", "mast_node_info", "mast_forest_wire_view_new"],
             "hashless.bin",
             &bytes,
+        );
+    }
+
+    // Keyed invocations: all immediate modes, repeated keys, and a distinct Exec target.
+    {
+        let mut forest = MastForest::new();
+        let block = BasicBlockNodeBuilder::new(vec![Operation::Add])
+            .add_to_forest(&mut forest)
+            .unwrap();
+        let shared = ProcedureKey::new(Word::from([1, 2, 3, 4].map(Felt::from_u32)));
+        let distinct = ProcedureKey::new(Word::from([5, 6, 7, 8].map(Felt::from_u32)));
+        let call = CallNodeBuilder::new(shared).add_to_forest(&mut forest).unwrap();
+        let syscall = CallNodeBuilder::new_syscall(shared).add_to_forest(&mut forest).unwrap();
+        let exec = ExecNodeBuilder::new(shared).add_to_forest(&mut forest).unwrap();
+        let other_exec = ExecNodeBuilder::new(distinct).add_to_forest(&mut forest).unwrap();
+        for root in [block, call, syscall, exec, other_exec] {
+            forest.make_root(root);
+        }
+        write_mast_seed(
+            &[
+                "mast_forest_deserialize",
+                "mast_forest_validate",
+                "mast_node_info",
+                "mast_forest_wire_view_new",
+                "basic_block_data",
+                "debug_info",
+            ],
+            "keyed_invocations.bin",
+            &forest.to_bytes(),
+        );
+        let mut hashless = Vec::new();
+        forest.write_hashless(&mut hashless);
+        write_mast_seed(
+            &["mast_forest_validate", "mast_node_info", "mast_forest_wire_view_new"],
+            "keyed_invocations_hashless.bin",
+            &hashless,
         );
     }
 

@@ -1,15 +1,23 @@
 //! Fuzz target for MastForestWireView trusted wire-backed access.
 //!
 //! This target focuses on the trusted inspection path exposed by
-//! `MastForestWireView::new()`. It exercises layout scanning and cheap random-access helpers
-//! without going through full trusted or untrusted materialization.
+//! `MastForestWireView::new()`. Arbitrary input exercises layout scanning and random access;
+//! bounded generated fixtures also check keyed full and hashless materialization.
 //!
 //! Run with: cargo +nightly fuzz run mast_forest_wire_view_new --fuzz-dir tools/miden-core-fuzz
 
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use miden_core::mast::MastForestWireView;
+use miden_core::{
+    Felt, Word,
+    mast::{
+        CallNodeBuilder, ExecNodeBuilder, MastForestView, MastForestWireView, MastNodeEntry,
+        UntrustedMastForest,
+    },
+    program::ProcedureKey,
+    serde::{Deserializable, Serializable},
+};
 use miden_core_fuzz::select_roots;
 
 fuzz_target!(|data: &[u8]| {
@@ -40,6 +48,36 @@ fuzz_target!(|data: &[u8]| {
             .add_to_forest(&mut forest)
             .expect("join should add");
         node_ids.push(join);
+
+        // Keep the original five-node root-selection oracle, and independently capture every
+        // target before writing. All modes share one key; another Exec uses a distinct key.
+        let seed = u32::from(data.get(1).copied().unwrap_or(0));
+        let shared =
+            ProcedureKey::new(Word::from([seed, seed + 1, seed + 2, seed + 3].map(Felt::from_u32)));
+        let distinct = ProcedureKey::new(Word::from(
+            [seed + 4, seed + 5, seed + 6, seed + 7].map(Felt::from_u32),
+        ));
+        let exec = ExecNodeBuilder::new(shared).add_to_forest(&mut forest).unwrap();
+        let call = CallNodeBuilder::new(shared).add_to_forest(&mut forest).unwrap();
+        let syscall = CallNodeBuilder::new_syscall(shared).add_to_forest(&mut forest).unwrap();
+        let other_exec = ExecNodeBuilder::new(distinct).add_to_forest(&mut forest).unwrap();
+        let expected_targets = [
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(shared),
+            Some(shared),
+            Some(shared),
+            Some(distinct),
+        ];
+        let expected_modes = [
+            (exec, MastNodeEntry::Exec { target_slot: 0 }),
+            (call, MastNodeEntry::Call { target_slot: 1 }),
+            (syscall, MastNodeEntry::SysCall { target_slot: 2 }),
+            (other_exec, MastNodeEntry::Exec { target_slot: 3 }),
+        ];
 
         // Root selection from fuzz data: k in 0..=5 (k == 0 exercises ROOTLESS forests —
         // a constructor rejecting them must fail here), then distinct
@@ -76,9 +114,7 @@ fuzz_target!(|data: &[u8]| {
             for id in [ids[255], ids[256], ids[0]] {
                 forest.make_root(id);
             }
-            let expected: Vec<miden_core::mast::MastNodeId> =
-                forest.procedure_roots().to_vec();
-            use miden_core::serde::Serializable;
+            let expected: Vec<miden_core::mast::MastNodeId> = forest.procedure_roots().to_vec();
             (forest.to_bytes(), expected)
         });
         let large_view = MastForestWireView::new(large_bytes)
@@ -99,9 +135,7 @@ fuzz_target!(|data: &[u8]| {
         }
         // Expected roots captured BEFORE serialization: decoding the writer's own
         // output would cancel consistent disagreement.
-        let expected_roots: Vec<miden_core::mast::MastNodeId> =
-            forest.procedure_roots().to_vec();
-        use miden_core::serde::Serializable;
+        let expected_roots: Vec<miden_core::mast::MastNodeId> = forest.procedure_roots().to_vec();
         let bytes = forest.to_bytes();
 
         let known_view = MastForestWireView::new(&bytes)
@@ -120,6 +154,39 @@ fuzz_target!(|data: &[u8]| {
                 "root {i} swapped, sorted, or mispaired against writer ground truth"
             );
         }
+
+        let check_targets = |view: &dyn MastForestView| {
+            assert_eq!(view.node_count(), expected_targets.len());
+            for (i, expected) in expected_targets.iter().copied().enumerate() {
+                assert_eq!(view.node_target_at(i).unwrap(), expected);
+                let info = view.node_info_at(i).unwrap();
+                assert_eq!(info.target(), expected);
+                assert_eq!(info.node_entry().target_slot().is_some(), expected.is_some());
+                if let Some(key) = info.target() {
+                    let bytes = key.to_bytes();
+                    let word = Word::read_from_bytes(&bytes).unwrap();
+                    assert_eq!(word, key.into_word());
+                    assert_eq!(word.to_bytes(), bytes);
+                    assert_eq!(ProcedureKey::read_from_bytes(&bytes).unwrap(), key);
+                }
+            }
+            for (id, entry) in expected_modes {
+                assert_eq!(view.node_entry_at(u32::from(id) as usize).unwrap(), entry);
+            }
+            assert!(view.node_target_at(view.node_count()).is_err());
+        };
+        check_targets(&known_view);
+
+        // Hashless payloads rebuild digests through the untrusted path; trusted wire views
+        // require the full hash section. Compare against the same pre-serialization keys/modes.
+        let mut hashless = Vec::new();
+        forest.write_hashless(&mut hashless);
+        assert!(MastForestWireView::new(&hashless).is_err());
+        let rebuilt = UntrustedMastForest::read_from_bytes(&hashless)
+            .expect("generated hashless forest must decode")
+            .validate()
+            .expect("generated hashless forest must validate");
+        check_targets(&rebuilt);
     }
 
     let Ok(view) = MastForestWireView::new(data) else {
@@ -128,6 +195,13 @@ fuzz_target!(|data: &[u8]| {
 
     let root_count = view.procedure_root_count();
     let node_count = view.node_count();
+
+    for i in 0..node_count {
+        let entry = view.node_entry_at(i).expect("in-range entry must decode");
+        let target = view.node_target_at(i).expect("in-range target must decode");
+        assert_eq!(entry.target_slot().is_some(), target.is_some());
+    }
+    assert!(view.node_target_at(node_count).is_err());
 
     if root_count > 0 {
         let last_root = root_count - 1;
@@ -156,9 +230,8 @@ fuzz_target!(|data: &[u8]| {
                     u32::from(root)
                 );
                 // Determinism: re-reading the same index must return the same id.
-                let again = view
-                    .procedure_root_at(i)
-                    .expect("in-range root must materialize consistently");
+                let again =
+                    view.procedure_root_at(i).expect("in-range root must materialize consistently");
                 assert_eq!(again, root, "root {i} must be stable across accesses");
             },
             Err(miden_core::serde::DeserializationError::InvalidValue(msg))
@@ -172,9 +245,9 @@ fuzz_target!(|data: &[u8]| {
                 // externally detectable; the bound + determinism checks are the reachable
                 // subset.
             },
-            Err(e) => panic!(
-                "in-range root {i}/{root_count} failed with an UNEXPECTED error: {e:?}"
-            ),
+            Err(e) => {
+                panic!("in-range root {i}/{root_count} failed with an UNEXPECTED error: {e:?}")
+            },
         }
     }
     // Bounds contract for EVERY view, including empty root lists (the
