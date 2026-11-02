@@ -330,7 +330,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
-| 06 Library | in-progress | Base `53acb4837`; schema/local-predicate slice assigned | Two bounded source reviews; no PR06 implementation checks yet | Packed relation, prefix/relocation, measured degree/capacity and all soundness gates remain |
+| 06 Library | in-progress | Schema `441bacb95`; expressions `487a2a51a`; base `53acb4837` | Independent reviews; seven Library tests, strict test-inclusive AIR Clippy and no-default-features pass | Packed relation, prefix/relocation, measured degree/capacity and all soundness gates remain |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
@@ -1263,3 +1263,20 @@ conventions. Two independent source reviews agree that the active selector switc
 coordinate both selector implementations, views/writers, Controller mode/boundaries and periodic
 consumers. This first slice does not activate a partial AIR or add another committed matrix.
 All PR06 acceptance gates above remain required; PR05 inherited checks remain open.
+
+
+### PR 06 Shared schema/local expressions checkpoint
+
+`441bacb95` defines the shared 22-cell Library overlay, canonical kind bits and zero-copy accessor.
+`487a2a51a` separately adds cubic kind flags, explicit Library/phase scope and compact sigma
+selection/validity expressions. No live section selector, writer, periodic layout, lookup or AIR
+evaluation is activated by these commits. Independent implementation review found no actionable
+issue.
+
+After AC/heavy guards, `cargo test --locked -p miden-air-definitions --lib library` passed all seven
+layout/mutation/truth-table tests. Strict library/test Clippy and no-default-features library check
+passed. Production-only `expect(dead_code)` is limited to the new Library module while its
+expressions await consumers; remove it during constraint integration. Logs: `pr06-library-schema-*`.
+These local checks do not establish integrated degree, group capacity or soundness. Next simplify
+Controller mode/scoping, then coordinate packed selectors/views/writers/boundaries and Library
+witness/buses. Every PR06 acceptance gate and inherited validation remains open.
