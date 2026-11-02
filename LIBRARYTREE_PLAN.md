@@ -245,13 +245,15 @@ by child words. Decoding requires exact input and a caller-supplied resource bud
 header/count encoding does not change the selected node hashes. Implement and test this codec
 separately from hash-only constructors. Protocol-specific codecs remain outside this decision.
 
-**D2 Existing MASM compatibility, clarified with the user on 2 November 2026:** existing MASM
-programs must keep working after rebuilding; serialized MAST files may use the new format.
-Preserve existing invocation/procref syntax, interpreting digest-shaped target words as keys.
-The new keyed execution semantics and optional explicit inline opt-in still apply. Do not retain
-runtime digest dispatch or infer an authenticated binding from code availability. Source syntax
-compatibility does not require preserving old child-ID nodes, serialized layouts or digest-based
-implementation lookup. Include existing source regressions in PRs 04/09 and final qualification.
+**D2 Existing MASM compatibility, clarified with the user on 2 November 2026:** preserve existing
+MASM syntax and stack/memory calling conventions. Recompilation and new serialized MAST formats
+are allowed. Callable references and `caller` use ProcedureKeys; `exec` becomes a same-context
+runtime invocation. Migration may update hardcoded digest identities and hash/cycle-count
+expectations without requiring new syntax for existing programs. Existing digest-shaped target
+words use the key interpretation. Optional inline syntax remains an extension. Do not retain
+runtime digest dispatch or infer an authenticated binding from code availability. This does not
+require preserving child-ID invocation nodes, old serialized layouts or digest-based implementation
+lookup. Include existing source and stack/memory regressions in PRs 04/05/09 and final qualification.
 
 ## Open decisions and external gates
 
@@ -276,7 +278,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | in-progress | Latest `66c94030b`; base `4f6cda599` | Independent review; 13 focused operation tests, scoped rustfmt/Clippy | Next: childless keyed nodes, then complete v0.0.6 codecs/tests. D2 preserves existing MASM source. |
+| 02 MAST | in-progress | Latest `7be0e06c0`; base `4f6cda599` | Independent node review and formatting; opcode tests/Clippy passed | Core check currently fails at eight stale dense/sparse codec sites; close v0.0.6 codecs/tests next. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
@@ -491,3 +493,21 @@ including the deterministic pin/rejection, control strategy and exhaustive wire 
 The following node/API refactor intentionally precedes codec/test migration. Any observed
 intermediate failure must be recorded before deferring its closure to the next PR 02 slice;
 processor/assembler semantic migration remains PRs 05/09. No old digest authority is retained.
+
+### PR 02 Childless keyed invocation nodes
+
+Commit `7be0e06c0` directly replaces Call/SysCall child IDs with ProcedureKey targets, adds Exec,
+and shares opcode-domain K||0 hashing. Traversal/remapping/fingerprints, forest recomputation and
+sparse structural validation no longer treat invocations as structural edges. External(D) remains
+structural. Independent review found no actionable issue; three calibrated frozen mode vectors
+join the shared fixture (39 rows total). Five focused node tests are present but not yet runnable.
+
+Pinned-nightly core formatting and staged whitespace checks passed. After successful AC/heavy-work
+guards, `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --lib` failed with eight errors
+in `serialization/info.rs` (old callee accessor/constructor types) and `serialization/sparse.rs`
+(old callee accessor/constructor/build_linked). Raw log is uncommitted at
+`.scratch/librarytree/logs/pr02-keyed-node-check.log`; short findings are separate.
+
+This is intentional intermediate breakage allowed by the workflow, not passed acceptance. Complete
+these codecs next in PR 02; then migrate old core tests/arbitrary constructors and run the pending
+node/MAST/serialization checks and Clippy. Processor/assembler semantic consumers remain PRs 05/09.
