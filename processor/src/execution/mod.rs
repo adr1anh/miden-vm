@@ -15,8 +15,7 @@ use crate::{
     option_map_break_reason,
     processor::{Processor, StackInterface, SystemInterface},
     tracer::{
-        CycleProjection, KeyedEvent, KeyedEventKind, KeyedMode, KeyedTarget,
-        OperationHelperRegisters, Tracer,
+        CycleProjection, KeyedEvent, KeyedEventKind, KeyedMode, OperationHelperRegisters, Tracer,
     },
 };
 

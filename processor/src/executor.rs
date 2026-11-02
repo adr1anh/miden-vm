@@ -1,8 +1,8 @@
 use miden_mast_package::debug_info::{DebugSourceNodeId, PackageDebugInfo};
 
 use crate::{
-    ExecutionError, ExecutionOptions, ExecutionOutput, FastProcessor, FutureMaybeSend, Host,
-    Program, StackInputs,
+    ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionOutput, FastProcessor,
+    FutureMaybeSend, Host, Program, StackInputs,
     advice::{AdviceError, AdviceInputs},
 };
 
@@ -41,6 +41,7 @@ pub trait ProgramExecutor {
     fn execute<H: Host + Send>(
         self,
         program: &Program,
+        environment: ExecutionEnvironment,
         host: &mut H,
     ) -> impl FutureMaybeSend<Result<ExecutionOutput, ExecutionError>>;
 }
@@ -70,6 +71,7 @@ impl ProgramExecutor for FastProcessor {
     fn execute<H: Host + Send>(
         self,
         program: &Program,
+        environment: ExecutionEnvironment,
         host: &mut H,
     ) -> impl FutureMaybeSend<Result<ExecutionOutput, ExecutionError>> {
         async move {
@@ -78,6 +80,7 @@ impl ProgramExecutor for FastProcessor {
                     FastProcessor::execute_with_package_debug_info_at_source_node(
                         self,
                         program,
+                        environment,
                         &package_debug_info,
                         entrypoint_source_node,
                         host,
@@ -88,12 +91,13 @@ impl ProgramExecutor for FastProcessor {
                     FastProcessor::execute_with_package_debug_info(
                         self,
                         program,
+                        environment,
                         &package_debug_info,
                         host,
                     )
                     .await
                 },
-                (None, _) => FastProcessor::execute(self, program, host).await,
+                (None, _) => FastProcessor::execute(self, program, environment, host).await,
             }
         }
     }
