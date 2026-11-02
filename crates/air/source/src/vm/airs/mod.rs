@@ -16,7 +16,7 @@ use crate::vm::{
             main_air::MainLookupBuilder,
         },
     },
-    inputs::{AUX_KERNEL_DIGESTS, NUM_PUBLIC_VALUES},
+    inputs::{AUX_KERNEL_DIGESTS, NUM_CHIPLETS_PUBLIC_VALUES, NUM_PUBLIC_VALUES},
     trace,
 };
 
@@ -111,23 +111,30 @@ impl MidenAir {
     pub(super) fn boundary_correction<EF: ExtensionField<Felt>>(
         self,
         challenges: &Challenges<EF>,
+        public_inputs: &[Felt],
         aux_inputs: &[Felt],
     ) -> Result<EF, ReductionError> {
-        if aux_inputs.len() < AUX_KERNEL_DIGESTS {
+        let expected_public = <Self as BaseAir<Felt>>::num_public_values(&self);
+        if public_inputs.len() != expected_public {
             return Err(format!(
-                "aux_inputs length {} is shorter than the fixed prefix {AUX_KERNEL_DIGESTS}",
-                aux_inputs.len()
+                "{} expects {expected_public} public values, got {}",
+                self.name(),
+                public_inputs.len()
             )
             .into());
         }
-
         match self {
             Self::Core => {
+                if aux_inputs.len() < AUX_KERNEL_DIGESTS {
+                    return Err(format!(
+                        "aux_inputs length {} is shorter than the fixed prefix {AUX_KERNEL_DIGESTS}",
+                        aux_inputs.len()
+                    )
+                    .into());
+                }
                 CoreAir.boundary_correction(challenges, &[&aux_inputs[..AUX_KERNEL_DIGESTS]])
             },
-            Self::Chiplets => {
-                ChipletsAir.boundary_correction(challenges, &[&aux_inputs[AUX_KERNEL_DIGESTS..]])
-            },
+            Self::Chiplets => ChipletsAir.boundary_correction(challenges, &[public_inputs]),
             Self::EidosCompression => EidosCompressionAir.boundary_correction(challenges, &[]),
             Self::And8Lookup => And8LookupAir.boundary_correction(challenges, &[]),
         }
@@ -161,7 +168,8 @@ impl BaseAir<Felt> for MidenAir {
     fn num_public_values(&self) -> usize {
         match self {
             Self::Core => NUM_PUBLIC_VALUES,
-            Self::Chiplets | Self::EidosCompression | Self::And8Lookup => 0,
+            Self::Chiplets => NUM_CHIPLETS_PUBLIC_VALUES,
+            Self::EidosCompression | Self::And8Lookup => 0,
         }
     }
 

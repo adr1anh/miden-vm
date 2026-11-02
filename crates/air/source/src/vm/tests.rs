@@ -34,13 +34,18 @@ fn core_shape_and_degree_match_design() {
 }
 
 #[test]
-fn chiplets_current_relation_shape_and_degree_match_design() {
+fn chiplets_packed_relation_shape_and_degree_match_design() {
     let air = MidenAir::CHIPLETS;
     let symbolic = ConstraintDegrees::from_air::<Felt, QuadFelt, _>(&air);
 
     assert_eq!(air.width(), 24);
     assert_eq!(LiftedAir::<Felt, QuadFelt>::aux_width(&air), 4);
     assert_eq!(AIRS.len(), 4);
+    assert_eq!(air.num_public_values(), 8);
+    assert_eq!(air.column_shape(), &[4, 4, 3, 2]);
+    let periodic = air.periodic_columns();
+    assert_eq!(periodic.len(), 9);
+    assert_eq!(periodic[8], [Felt::ZERO, Felt::ONE]);
     assert_eq!(
         LiftedAir::<Felt, QuadFelt>::constraint_degree(&air),
         symbolic,
@@ -69,9 +74,67 @@ fn and8_lookup_shape_and_degree_match_design() {
 }
 
 #[test]
+fn packed_statement_rejects_missing_and_malformed_air_public_inputs() {
+    let challenges = [QuadFelt::from_u32(7), QuadFelt::from_u32(11)];
+    let aux = vec![Felt::ZERO; AUX_KERNEL_DIGESTS];
+    let sum = [QuadFelt::ZERO];
+    let sums = [sum.as_slice(); MIDEN_AIR_COUNT];
+    let valid = vec![
+        vec![Felt::ZERO; NUM_PUBLIC_VALUES],
+        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
+        vec![],
+        vec![],
+    ];
+    for count in [0, 1, 3, 5] {
+        let mut public = valid.clone();
+        public.resize(count, vec![]);
+        assert!(
+            statement::eval_external(&challenges, &public, &aux, &sums, &[6, 6, 6, 16]).is_err()
+        );
+    }
+    for count in [0, 4, 7, 9] {
+        let mut public = valid.clone();
+        public[1].resize(count, Felt::ZERO);
+        let error = statement::eval_external(&challenges, &public, &aux, &sums, &[6, 6, 6, 16])
+            .unwrap_err();
+        assert!(error.to_string().contains("Chiplets expects 8 public values"));
+    }
+}
+
+#[test]
+fn chiplets_open_boundary_uses_public_root_without_legacy_aux_authority() {
+    let challenges = Challenges::new(
+        QuadFelt::from_u32(7),
+        QuadFelt::from_u32(11),
+        MIDEN_MAX_MESSAGE_WIDTH,
+        BusId::COUNT,
+    );
+    let public: Vec<_> = (1..=8).map(Felt::from_u32).collect();
+    let expected = MidenAir::CHIPLETS.boundary_correction(&challenges, &public, &[]).unwrap();
+    let unrelated_aux = vec![Felt::from_u32(91); 12];
+    assert_eq!(
+        MidenAir::CHIPLETS
+            .boundary_correction(&challenges, &public, &unrelated_aux)
+            .unwrap(),
+        expected
+    );
+    let mut wrong_root = public.clone();
+    wrong_root[0] += Felt::ONE;
+    assert_ne!(
+        MidenAir::CHIPLETS.boundary_correction(&challenges, &wrong_root, &[]).unwrap(),
+        expected
+    );
+}
+
+#[test]
 fn eval_external_weights_normalized_sums_by_trace_length() {
     let raw_challenges = [QuadFelt::from_u32(7), QuadFelt::from_u32(11)];
-    let air_inputs = [vec![Felt::ZERO; NUM_PUBLIC_VALUES], vec![], vec![], vec![]];
+    let air_inputs = [
+        vec![Felt::ZERO; NUM_PUBLIC_VALUES],
+        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
+        vec![],
+        vec![],
+    ];
     let aux_inputs = vec![Felt::ZERO; AUX_KERNEL_DIGESTS];
     let normalized_sums = [
         QuadFelt::from_u32(13),
@@ -94,8 +157,9 @@ fn eval_external_weights_normalized_sums_by_trace_length() {
         BusId::COUNT,
     );
     let mut boundary_correction = QuadFelt::ZERO;
-    for air in AIRS {
-        boundary_correction += air.boundary_correction(&lookup_challenges, &aux_inputs).unwrap();
+    for (air, public) in AIRS.iter().zip(&air_inputs) {
+        boundary_correction +=
+            air.boundary_correction(&lookup_challenges, public, &aux_inputs).unwrap();
     }
 
     let result = statement::eval_external(
@@ -119,7 +183,12 @@ fn eval_external_weights_normalized_sums_by_trace_length() {
 fn eval_external_rejects_partial_kernel_digest() {
     let challenges =
         [QuadFelt::from(Felt::new_unchecked(3)), QuadFelt::from(Felt::new_unchecked(5))];
-    let air_inputs = [vec![Felt::ZERO; NUM_PUBLIC_VALUES], vec![], vec![], vec![]];
+    let air_inputs = [
+        vec![Felt::ZERO; NUM_PUBLIC_VALUES],
+        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
+        vec![],
+        vec![],
+    ];
     let mut aux_inputs = vec![Felt::ZERO; AUX_KERNEL_DIGESTS];
     aux_inputs.push(Felt::ONE);
     let zero = QuadFelt::from(Felt::ZERO);
@@ -143,14 +212,19 @@ fn eval_external_rejects_partial_kernel_digest() {
     )
     .unwrap_err();
 
-    assert!(err.to_string().contains("kernel digest felts length 1 is not a multiple of 4"));
+    assert!(err.to_string().contains("legacy kernel digest inputs must contain whole words"));
 }
 
 #[test]
 fn eval_external_rejects_too_many_kernel_digests() {
     let challenges =
         [QuadFelt::from(Felt::new_unchecked(3)), QuadFelt::from(Felt::new_unchecked(5))];
-    let air_inputs = [vec![Felt::ZERO; NUM_PUBLIC_VALUES], vec![], vec![], vec![]];
+    let air_inputs = [
+        vec![Felt::ZERO; NUM_PUBLIC_VALUES],
+        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
+        vec![],
+        vec![],
+    ];
     let max_aux_inputs = AUX_KERNEL_DIGESTS + KernelDescriptor::MAX_NUM_PROCEDURES * WORD_SIZE;
     let actual_aux_inputs = max_aux_inputs + WORD_SIZE;
     let aux_inputs = vec![Felt::ZERO; actual_aux_inputs];
@@ -251,7 +325,12 @@ fn observe_matches_execution_claim_commitment() {
     let mut air_inputs = [Felt::ZERO; NUM_PUBLIC_VALUES];
     air_inputs[0..MIN_STACK_DEPTH].copy_from_slice(&stack_inputs[..]);
     air_inputs[MIN_STACK_DEPTH..].copy_from_slice(&stack_outputs[..]);
-    let air_inputs = [air_inputs.to_vec(), vec![], vec![], vec![]];
+    let air_inputs = [
+        air_inputs.to_vec(),
+        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
+        vec![],
+        vec![],
+    ];
     let mut aux_inputs: Vec<Felt> = Vec::new();
     aux_inputs.extend(program_hash.as_elements());
     aux_inputs.extend(deferred_root.as_elements());
@@ -280,7 +359,12 @@ fn observe_rejects_short_aux_inputs() {
     }
 
     let mut challenger = FeltSink::default();
-    let air_inputs = [vec![Felt::ZERO; NUM_PUBLIC_VALUES], vec![], vec![], vec![]];
+    let air_inputs = [
+        vec![Felt::ZERO; NUM_PUBLIC_VALUES],
+        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
+        vec![],
+        vec![],
+    ];
 
     statement::observe(&mut challenger, &air_inputs, &[], &[8, 8, 8, 16]);
 }

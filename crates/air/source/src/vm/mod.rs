@@ -26,7 +26,7 @@ pub use constraints::{
         columns::{
             AceCols, AceEvalCols, AceReadCols, AeadStreamCols, AeadStreamHighFirstCols,
             AeadStreamHighSecondCols, AeadStreamLowSecondCols, AeadStreamReadCols, BitwiseCols,
-            ControllerCols, KernelRomCols, MemoryCols,
+            ControllerCols, MemoryCols,
         },
         library::columns::LibraryCols,
     },
@@ -39,7 +39,7 @@ pub use constraints::{
     system::columns::SystemCols,
 };
 pub use execution_trace::{ChipletsLengths, TraceLenSummary, VmTrace};
-pub use inputs::{NUM_PUBLIC_VALUES, PublicInputs};
+pub use inputs::{NUM_CHIPLETS_PUBLIC_VALUES, NUM_PUBLIC_VALUES, PublicInputs};
 pub use miden_core::{
     Felt,
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},

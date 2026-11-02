@@ -1,4 +1,7 @@
-//! VM public inputs, their wire encoding, and statement-input layout.
+//! Legacy VM public-input carrier awaiting the canonical claim/statement cutover.
+//!
+//! Its projection does not include the mandatory packed Chiplets public values. It cannot alone
+//! construct the packed statement; PR12 must supply the caller's complete execution descriptor.
 
 use alloc::vec::Vec;
 
@@ -69,7 +72,10 @@ impl PublicInputs {
         self.program_info.kernel_commitment()
     }
 
-    /// Returns the AIR public values (`air_inputs`) and statement inputs (`aux_inputs`).
+    /// Returns the legacy Core public values and statement-input carrier.
+    ///
+    /// This projection omits mandatory Chiplets8 and is incomplete for the packed statement.
+    /// Producers must migrate with the canonical claim; missing values are never inferred.
     ///
     /// `air_inputs` (read by Core; all other AIRs have empty slices) layout:
     ///   [0..16]  stack inputs
@@ -149,6 +155,12 @@ impl Deserializable for PublicInputs {
 /// are carried as `aux_inputs` and consumed only by [`crate::vm::statement::observe`] and
 /// [`crate::vm::statement::eval_external`].
 pub const NUM_PUBLIC_VALUES: usize = MIN_STACK_DEPTH + MIN_STACK_DEPTH;
+
+/// Mandatory Chiplets public values: `R_E[4] || N_kernel[4]`.
+///
+/// This count does not supply the values. Statement producers must pass them explicitly;
+/// the claim/Core public-input cutover remains a separate integration requirement.
+pub const NUM_CHIPLETS_PUBLIC_VALUES: usize = 2 * WORD_SIZE;
 
 // `aux_inputs` layout offsets — statement inputs that the AIRs do not read. The fixed program
 // hash and final deferred root occupy the first two words; the variable-length kernel-procedure
