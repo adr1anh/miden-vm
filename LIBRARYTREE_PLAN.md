@@ -255,7 +255,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | in-progress | — | Source/newtype conventions inspected; no implementation checks yet | Next slice: opaque typed Word roles and execution descriptor using existing Word serialization. Hash/label/object vectors and collision audit follow; no Protocol policy is chosen. |
+| 01 Identities | in-progress | `bf840bc6d` typed identities | Independent review; canonical bytes/rejection test; public API type-confusion fixtures; no-default-features check; scoped rustfmt/Clippy | Next slice: register the selected environment/verifier domains. Label/object hashing, shared vectors and bounded builders remain. No Protocol policy is chosen. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
@@ -271,3 +271,27 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 16 Qualification | planned | — | — | Entire stack and release gates |
+
+## Implementation evidence
+
+### PR 01 Typed execution identities
+
+Commit `bf840bc6d` adds the five opaque Word roles and `ExecutionDescriptor`, reusing canonical
+Word serialization. An independent reviewer found no actionable issue. Existing Program and claim
+activation remain assigned to the later cutover.
+
+Passed on Rust 1.99.0 after successful AC/heavy-work guards:
+
+- `cargo test --locked -p miden-core --lib program::environment`: one test, including all truncated
+  lengths and a noncanonical value in each coordinate across all five roles.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --test public_api`: all three fixtures,
+  including rejection of an implementation root in the descriptor's procedure-key slot. The new
+  stderr was generated, inspected for the intended type mismatch, then verified without overwrite.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib -- -D warnings`.
+- `cargo +nightly-2026-10-09 fmt -p miden-core -- --check` and staged whitespace checks.
+
+The domain audit found the selected environment/verifier allocations free in the current registry.
+Verifier configuration mounts require explicit forward-coordinate lexicographic ordering; existing
+`Word::Ord` compares coordinates in reverse and must not supply that canonical order. Add a vector
+that distinguishes those orders when implementing the configuration codec.
