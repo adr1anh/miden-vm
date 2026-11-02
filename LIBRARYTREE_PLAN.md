@@ -329,7 +329,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Environment-aware executable generator restored at 05 (`4bfa6fc94`, `15a9a07c0`). D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
-| 05 Runtime | in-progress | Runtime `7fa01c810`; replay `c22c423ef`; public tests `157ff858e`; fixture `4bfa6fc94`/`15a9a07c0`; overflow tests `d880ef50a`; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 12 public API regressions; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
+| 05 Runtime | in-progress | Source retry `542b8f9de`; wire tests `9d083316a`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 14 public execution and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
@@ -1213,3 +1213,24 @@ mutation; independent review and strict harness Clippy passed. Logs are under
 `.scratch/librarytree/logs/pr05-{executable-fixture-*,overflow-restore-token-*}`. The normal dev-graph
 assembly blocker, remaining advice/loader and legacy witness/context/environment test migrations,
 address/state/parallel/fuzz checks and all D3/packed/proof gates remain open. PR 05 stays in progress.
+
+
+### PR 05 Source-aware retries and explicit witness test migration
+
+`0906c91fe` migrates three fast restoration unit tests to checked component preparations before
+either commit; independent review and formatting passed, normal-graph execution remains deferred.
+`a4ae9b224` adds a shared native single-Mast fixture and five public witness tests; `9d083316a`
+separately migrates nine private continuation/AEAD/precompile mutation cases to bounded replay v4.
+The five public tests passed through actual processor APIs, including identical native AEAD trace
+matrices after byte-stable roundtrip; strict test-target Clippy passed. The nine private cases
+remain unrun behind the known three-error assembly dev-graph blocker.
+
+`2d8a3adf1` adds retained source-aware DYNCALL cancellation and unavailable/malformed-code retries.
+`542b8f9de` separately covers post-entry request exhaustion: requested 2 with limit 1 preserves
+full caller stack/RAM, source ownership and native demand state, then rejects further stepping.
+Independent review's full-memory snapshot finding was addressed. The fixture's explicit advice
+budget was corrected from 8 KiB to 64 KiB after observing the empty provider's 24,480-byte retained
+allocation; no production policy changed. All 14 public execution regressions and strict Clippy
+passed after AC/heavy guards. Logs: `pr05-{keyed-witness-*,source-dyncall-*}` under the scratch log
+directory. Next finish the native five-mode/local-host/source-aware/sync-async matrix and terminal
+late-callback regression; normal test, D3, packed/proof and subsequent stage gates remain open.
