@@ -16,7 +16,7 @@ use miden_mast_package::{
 use miden_utils_diagnostics::{Diagnostic, miette};
 
 use crate::{
-    BaseHost, ContextId, EnvironmentSourceError, Felt, OpeningError, Word,
+    BaseHost, ContextId, EnvironmentSourceError, Felt, OpeningError, SessionError, Word,
     advice::AdviceError,
     event::{EventError, EventId, EventName},
     fast::SystemEventError,
@@ -49,6 +49,12 @@ pub enum ExecutionError {
     },
     #[error("exceeded the allowed number of max cycles {0}")]
     CycleLimitExceeded(u32),
+    #[error("execution is no longer in a state that permits transitions or successful export")]
+    InvalidExecutionState,
+    #[error("keyed tracing requires explicit environment trace limits")]
+    MissingEnvironmentTraceLimits,
+    #[error("environment resolution session failed: {0}")]
+    EnvironmentSession(#[source] SessionError),
     /// No candidate was supplied; this does not establish authenticated nonmembership.
     #[error("environment witness unavailable for key {key:?} under root {root:?}")]
     EnvironmentWitnessUnavailable { root: EnvironmentRoot, key: ProcedureKey },

@@ -55,6 +55,27 @@ impl ExecutionEnvironment {
     }
 }
 
+/// Explicit policies for keyed trace capture and replay validation. No defaults are provided.
+///
+/// These account new keyed trace storage, separately from the native opening/session policies.
+/// They do not bound allocator metadata, fixed stack storage, process RSS or prior host
+/// allocations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnvironmentTraceLimits {
+    /// Total invocation and root-END records; zero-cycle entry metadata is separate.
+    pub max_events: usize,
+    /// Accounted capacities of keyed queues, entry metadata and the compact occurrence snapshot.
+    pub max_retained_bytes: usize,
+    /// Trace-owned preparation peak, including old and staged keyed buffers and node encodings.
+    ///
+    /// Native session preparation is independently bounded by ExecutionEnvironment. This is not
+    /// a combined native/tracer cap; reporting a combined ceiling requires checked addition.
+    pub max_prepare_peak_bytes: usize,
+    /// Cumulative parent links and canonical node bytes processed during capture or validation,
+    /// plus conservative native metadata visits and copied bytes during replay validation.
+    pub max_validation_work: usize,
+}
+
 // EXECUTION OPTIONS
 // ================================================================================================
 
@@ -67,6 +88,9 @@ pub struct ExecutionOptions {
     max_cycles: u32,
     expected_cycles: u32,
     core_trace_fragment_size: usize,
+    /// Explicit keyed trace policies; proving requires them, while execution without tracing does
+    /// not.
+    environment_trace_limits: Option<EnvironmentTraceLimits>,
     /// Maximum combined logical size, in bytes, of the advice stack, map, and Merkle store.
     max_advice_size_bytes: usize,
     /// Whether the synchronous prover may overlap hasher-chiplet trace building with program
@@ -101,6 +125,7 @@ impl Default for ExecutionOptions {
             max_cycles: Self::MAX_CYCLES,
             expected_cycles: MIN_TRACE_LEN as u32,
             core_trace_fragment_size: Self::DEFAULT_CORE_TRACE_FRAGMENT_SIZE,
+            environment_trace_limits: None,
             max_advice_size_bytes: Self::DEFAULT_MAX_ADVICE_SIZE_BYTES,
             max_hash_len_bytes: Self::DEFAULT_MAX_HASH_LEN_BYTES,
             max_num_continuations: Self::DEFAULT_MAX_NUM_CONTINUATIONS,
@@ -205,6 +230,7 @@ impl ExecutionOptions {
             max_cycles,
             expected_cycles,
             core_trace_fragment_size,
+            environment_trace_limits: None,
             max_advice_size_bytes: Self::DEFAULT_MAX_ADVICE_SIZE_BYTES,
             max_hash_len_bytes: Self::DEFAULT_MAX_HASH_LEN_BYTES,
             max_num_continuations: Self::DEFAULT_MAX_NUM_CONTINUATIONS,
@@ -252,6 +278,20 @@ impl ExecutionOptions {
     /// Returns the fragment size for core trace generation.
     pub fn core_trace_fragment_size(&self) -> usize {
         self.core_trace_fragment_size
+    }
+
+    /// Returns the caller's keyed trace policies, if explicitly configured.
+    pub const fn environment_trace_limits(&self) -> Option<EnvironmentTraceLimits> {
+        self.environment_trace_limits
+    }
+
+    /// Configures keyed tracing without supplying deployment defaults.
+    ///
+    /// Proving validates this policy before entry authentication or host calls. Native execution
+    /// without a trace does not require it.
+    pub fn with_environment_trace_limits(mut self, limits: EnvironmentTraceLimits) -> Self {
+        self.environment_trace_limits = Some(limits);
+        self
     }
 
     /// Returns the maximum combined logical size, in bytes, of the advice provider.
