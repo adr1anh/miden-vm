@@ -255,7 +255,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | planned | — | — | Wire allocation/codec gate |
+| 01 Identities | in-progress | — | Source/newtype conventions inspected; no implementation checks yet | Next slice: opaque typed Word roles and execution descriptor using existing Word serialization. Hash/label/object vectors and collision audit follow; no Protocol policy is chosen. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
