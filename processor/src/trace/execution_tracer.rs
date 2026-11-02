@@ -1,7 +1,7 @@
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 
 use miden_air_definitions::vm::trace::chiplets::hasher::{
-    CONTROLLER_ROWS_PER_HASHER_OP, CONTROLLER_ROWS_PER_HASHER_OP_FELT, STATE_WIDTH,
+    CONTROLLER_ROWS_PER_HASHER_OP, STATE_WIDTH,
 };
 use miden_core::{
     FMP_ADDR, FMP_INIT_VALUE,
@@ -31,7 +31,10 @@ use crate::{
         MastNodeId, SparseMastForest, SparseMastForestBuilder, SplitNode, VisitKind,
     },
     processor::{Processor, StackInterface, SystemInterface},
-    trace::chiplets::{CircuitEvaluation, PTR_OFFSET_ELEM, PTR_OFFSET_WORD},
+    trace::chiplets::{
+        CircuitEvaluation, PTR_OFFSET_ELEM, PTR_OFFSET_WORD,
+        layout::{ControllerRow, LogicalControllerAddress},
+    },
     tracer::{OperationHelperRegisters, Tracer},
     utils::Idx,
 };
@@ -297,6 +300,9 @@ pub struct ExecutionTracer {
     /// Flag set in `start_clock_cycle` when an `EvalCircuit` operation is encountered, consumed
     /// in `finalize_clock_cycle` to record the memory reads performed by the operation.
     is_eval_circuit_op: bool,
+
+    /// Infallible Tracer hooks report checked address failures at cycle finalization.
+    pending_address_error: Option<ExecutionError>,
 }
 
 impl ExecutionTracer {
@@ -341,6 +347,7 @@ impl ExecutionTracer {
             max_stack_depth,
             pending_restore_context: false,
             is_eval_circuit_op: false,
+            pending_address_error: None,
         }
     }
 
@@ -519,6 +526,10 @@ impl ExecutionTracer {
         processor: &P,
         current_forest: &MastForest,
     ) {
+        let result = self.hasher_chiplet_shim.record_hash_control_block();
+        let Some(block_addr) = self.record_address_result(result) else {
+            return;
+        };
         let ctx_info = match node {
             MastNode::Join(node) => {
                 let child1_hash = current_forest
@@ -642,9 +653,18 @@ impl ExecutionTracer {
             ),
         };
 
-        let block_addr = self.hasher_chiplet_shim.record_hash_control_block();
         let parent_addr = self.block_stack.push(block_addr, ctx_info);
         self.block_stack_replay.record_node_start_parent_addr(parent_addr);
+    }
+
+    fn record_address_result<T>(&mut self, result: Result<T, ExecutionError>) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(error) => {
+                self.pending_address_error.get_or_insert(error);
+                None
+            },
+        }
     }
 
     /// Records the block address for an END operation based on the block being popped.
@@ -819,14 +839,17 @@ impl Tracer for ExecutionTracer {
                     }
                 },
                 MastNode::Block(basic_block_node) => {
+                    let result =
+                        self.hasher_chiplet_shim.record_hash_basic_block(basic_block_node);
+                    let Some(block_addr) = self.record_address_result(result) else {
+                        return;
+                    };
                     let forest_id = self.forest_id(current_forest);
                     self.hasher_for_chiplet.record_hash_basic_block(
                         forest_id,
                         mast_node_id,
                         basic_block_node,
                     );
-                    let block_addr =
-                        self.hasher_chiplet_shim.record_hash_basic_block(basic_block_node);
                     let parent_addr = self.block_stack.push(block_addr, None);
                     self.block_stack_replay.record_node_start_parent_addr(parent_addr);
                 },
@@ -835,7 +858,11 @@ impl Tracer for ExecutionTracer {
                 ),
             },
             Continuation::Respan { node_id: _, batch_index: _ } => {
-                self.block_stack.peek_mut().addr += CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+                let result = LogicalControllerAddress::from_felt(self.block_stack.peek().addr)
+                    .and_then(|address| address.checked_advance(CONTROLLER_ROWS_PER_HASHER_OP));
+                if let Some(address) = self.record_address_result(result) {
+                    self.block_stack.peek_mut().addr = address.to_felt();
+                }
             },
             Continuation::FinishLoop(_) if processor.stack_get(0) == ONE => {
                 // This is a REPEAT operation, which drops the condition (top element) off the stack
@@ -899,8 +926,10 @@ impl Tracer for ExecutionTracer {
         input_state: [Felt; STATE_WIDTH],
         output_state: [Felt; STATE_WIDTH],
     ) {
-        self.hasher_for_chiplet.record_compress_input(input_state);
-        self.hasher_chiplet_shim.record_compression_output(output_state);
+        let result = self.hasher_chiplet_shim.record_compression_output(output_state);
+        if self.record_address_result(result).is_some() {
+            self.hasher_for_chiplet.record_compress_input(input_state);
+        }
     }
 
     #[inline(always)]
@@ -923,7 +952,10 @@ impl Tracer for ExecutionTracer {
         output_root: Word,
     ) {
         let path = path.expect("execution tracer expects a valid Merkle path");
-        self.hasher_chiplet_shim.record_build_merkle_root(path, output_root);
+        let result = self.hasher_chiplet_shim.record_build_merkle_root(path, output_root);
+        if self.record_address_result(result).is_none() {
+            return;
+        }
         self.hasher_for_chiplet.record_build_merkle_root(node, path.clone(), index);
         self.range_checker.record_merkle_depth(depth);
         self.range_checker.record_merkle_index(index);
@@ -941,7 +973,10 @@ impl Tracer for ExecutionTracer {
         new_root: Word,
     ) {
         let path = path.expect("execution tracer expects a valid Merkle path");
-        self.hasher_chiplet_shim.record_update_merkle_root(path, old_root, new_root);
+        let result = self.hasher_chiplet_shim.record_update_merkle_root(path, old_root, new_root);
+        if self.record_address_result(result).is_none() {
+            return;
+        }
         self.hasher_for_chiplet.record_update_merkle_root(
             old_value,
             new_value,
@@ -1137,6 +1172,9 @@ impl Tracer for ExecutionTracer {
         _op_helper_registers: OperationHelperRegisters,
         _current_forest: &Arc<MastForest>,
     ) -> Result<(), ExecutionError> {
+        if let Some(error) = self.pending_address_error.take() {
+            return Err(error);
+        }
         // Restore the overflow table context for Call/Syscall/Dyncall END. This is deferred
         // from start_clock_cycle because finalize_clock_cycle is only called when the operation
         // succeeds (i.e., the stack depth check in processor.restore_context() passes).
@@ -1218,9 +1256,6 @@ fn node_id_for_visit<F>(continuation: &Continuation<F>) -> Option<MastNodeId> {
 // HASHER CHIPLET SHIM
 // ================================================================================================
 
-/// The number of controller rows per hasher request, as u32.
-const NUM_HASHER_ROWS_PER_OP: u32 = CONTROLLER_ROWS_PER_HASHER_OP as u32;
-
 /// Implements a shim for the hasher chiplet, where the responses of the hasher chiplet are emulated
 /// and recorded for later replay.
 ///
@@ -1229,10 +1264,8 @@ const NUM_HASHER_ROWS_PER_OP: u32 = CONTROLLER_ROWS_PER_HASHER_OP as u32;
 /// then replayed during core trace generation.
 #[derive(Debug)]
 pub struct HasherChipletShim {
-    /// The address of the next MAST node encountered during execution. This field is used to keep
-    /// track of the number of rows in the hasher chiplet, from which the address of the next MAST
-    /// node is derived.
-    addr: u32,
+    /// Zero-based position of the next Controller row, retained across replay fragment drains.
+    next_row: ControllerRow,
     /// Replay for the hasher chiplet responses, recording only the hasher chiplet responses.
     hasher_replay: HasherResponseReplay,
     block_addr_replay: BlockAddressReplay,
@@ -1242,51 +1275,68 @@ impl HasherChipletShim {
     /// Creates a new [HasherChipletShim].
     pub fn new() -> Self {
         Self {
-            addr: 1,
+            next_row: ControllerRow::default(),
             hasher_replay: HasherResponseReplay::default(),
             block_addr_replay: BlockAddressReplay::default(),
         }
     }
 
     /// Records the address returned from a call to `Hasher::hash_control_block()`.
-    pub fn record_hash_control_block(&mut self) -> Felt {
-        let block_addr = Felt::from_u32(self.addr);
-
+    pub fn record_hash_control_block(&mut self) -> Result<Felt, ExecutionError> {
+        let block_addr = self.reserve_rows(1, CONTROLLER_ROWS_PER_HASHER_OP)?;
         self.block_addr_replay.record_block_address(block_addr);
-        self.addr += NUM_HASHER_ROWS_PER_OP;
-
-        block_addr
+        Ok(block_addr)
     }
 
     /// Records the address returned from a call to `Hasher::hash_basic_block()`.
-    pub fn record_hash_basic_block(&mut self, basic_block_node: &BasicBlockNode) -> Felt {
-        let block_addr = Felt::from_u32(self.addr);
-
+    pub fn record_hash_basic_block(
+        &mut self,
+        basic_block_node: &BasicBlockNode,
+    ) -> Result<Felt, ExecutionError> {
+        let block_addr =
+            self.reserve_rows(basic_block_node.num_op_batches(), CONTROLLER_ROWS_PER_HASHER_OP)?;
         self.block_addr_replay.record_block_address(block_addr);
-        self.addr += NUM_HASHER_ROWS_PER_OP * basic_block_node.num_op_batches() as u32;
-
-        block_addr
+        Ok(block_addr)
     }
     /// Records the output of one Eidos compression request.
-    pub fn record_compression_output(&mut self, hashed_state: [Felt; 12]) {
-        self.hasher_replay.record_compression(Felt::from_u32(self.addr), hashed_state);
-        self.addr += NUM_HASHER_ROWS_PER_OP;
+    pub fn record_compression_output(
+        &mut self,
+        hashed_state: [Felt; 12],
+    ) -> Result<(), ExecutionError> {
+        let address = self.reserve_rows(1, CONTROLLER_ROWS_PER_HASHER_OP)?;
+        self.hasher_replay.record_compression(address, hashed_state);
+        Ok(())
     }
 
     /// Records the result of a call to `Hasher::build_merkle_root()`.
-    pub fn record_build_merkle_root(&mut self, path: &MerklePath, computed_root: Word) {
-        self.hasher_replay
-            .record_build_merkle_root(Felt::from_u32(self.addr), computed_root);
-        self.addr += NUM_HASHER_ROWS_PER_OP * path.depth() as u32;
+    pub fn record_build_merkle_root(
+        &mut self,
+        path: &MerklePath,
+        computed_root: Word,
+    ) -> Result<(), ExecutionError> {
+        let address = self.reserve_rows(path.len(), CONTROLLER_ROWS_PER_HASHER_OP)?;
+        self.hasher_replay.record_build_merkle_root(address, computed_root);
+        Ok(())
     }
 
     /// Records the result of a call to `Hasher::update_merkle_root()`.
-    pub fn record_update_merkle_root(&mut self, path: &MerklePath, old_root: Word, new_root: Word) {
-        self.hasher_replay
-            .record_update_merkle_root(Felt::from_u32(self.addr), old_root, new_root);
-
+    pub fn record_update_merkle_root(
+        &mut self,
+        path: &MerklePath,
+        old_root: Word,
+        new_root: Word,
+    ) -> Result<(), ExecutionError> {
         // The Merkle path is verified twice: once for the old root and once for the new root.
-        self.addr += 2 * NUM_HASHER_ROWS_PER_OP * path.depth() as u32;
+        let address = self.reserve_rows(path.len(), 2 * CONTROLLER_ROWS_PER_HASHER_OP)?;
+        self.hasher_replay.record_update_merkle_root(address, old_root, new_root);
+        Ok(())
+    }
+
+    fn reserve_rows(&mut self, count: usize, rows_per_item: usize) -> Result<Felt, ExecutionError> {
+        let end = self.next_row.checked_advance_many(count, rows_per_item)?;
+        let address = self.next_row.logical_address().to_felt();
+        self.next_row = end;
+        Ok(address)
     }
 
     pub fn extract_replay(&mut self) -> (HasherResponseReplay, BlockAddressReplay) {
@@ -1300,6 +1350,84 @@ impl HasherChipletShim {
 impl Default for HasherChipletShim {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod controller_address_tests {
+    use super::*;
+    use crate::{StackInputs, trace::parallel::MAX_TRACE_LEN};
+
+    fn assert_limit<T>(result: Result<T, ExecutionError>) {
+        assert!(matches!(result, Err(ExecutionError::TraceLenExceeded(MAX_TRACE_LEN))));
+    }
+
+    #[test]
+    fn shim_preserves_logical_addresses_across_fragment_drains() {
+        let mut shim = HasherChipletShim::new();
+        assert_eq!(shim.record_hash_control_block().unwrap(), ONE);
+        let (_, mut first_blocks) = shim.extract_replay();
+        assert_eq!(first_blocks.replay_block_address().unwrap(), ONE);
+
+        let state = [ONE; STATE_WIDTH];
+        shim.record_compression_output(state).unwrap();
+        let (mut responses, blocks) = shim.extract_replay();
+        assert_eq!(responses.replay_compression().unwrap(), (Felt::from_u32(2), state));
+        assert_eq!(blocks, BlockAddressReplay::default());
+        assert_eq!(shim.record_hash_control_block().unwrap(), Felt::from_u32(3));
+    }
+
+    #[test]
+    fn shim_exact_cap_and_span_overflow_are_atomic() {
+        let mut shim = HasherChipletShim {
+            next_row: ControllerRow::new(MAX_TRACE_LEN - 1).unwrap(),
+            ..Default::default()
+        };
+        let block = crate::mast::BasicBlockNodeBuilder::new(vec![Operation::Noop; 73])
+            .build()
+            .unwrap();
+        assert_limit(shim.record_hash_basic_block(&block));
+        assert_limit(shim.reserve_rows(usize::MAX, 2));
+        let path = MerklePath::new(vec![[ZERO; 4].into()]);
+        assert_limit(shim.record_update_merkle_root(&path, [ZERO; 4].into(), [ONE; 4].into()));
+        assert_eq!(shim.next_row.position(), MAX_TRACE_LEN - 1);
+        assert_eq!(
+            shim.extract_replay(),
+            (HasherResponseReplay::default(), BlockAddressReplay::default())
+        );
+
+        assert_eq!(shim.record_hash_control_block().unwrap(), Felt::from_u32(MAX_TRACE_LEN as u32),);
+        assert_eq!(shim.next_row.position(), MAX_TRACE_LEN);
+        let (_, mut blocks) = shim.extract_replay();
+        assert_eq!(blocks.replay_block_address().unwrap(), Felt::from_u32(MAX_TRACE_LEN as u32));
+        assert_limit(shim.record_compression_output([ZERO; STATE_WIDTH]));
+        assert_limit(shim.record_build_merkle_root(&path, [ZERO; 4].into()));
+        assert_limit(shim.record_hash_control_block());
+        assert_eq!(shim.next_row.position(), MAX_TRACE_LEN);
+        assert_eq!(
+            shim.extract_replay(),
+            (HasherResponseReplay::default(), BlockAddressReplay::default())
+        );
+    }
+
+    #[test]
+    fn infallible_hook_reports_address_error_at_cycle_finalization() {
+        let mut tracer = ExecutionTracer::new(64, MIN_STACK_DEPTH);
+        tracer.hasher_chiplet_shim.next_row = ControllerRow::new(MAX_TRACE_LEN).unwrap();
+        tracer.record_hasher_compress([ZERO; STATE_WIDTH], [ZERO; STATE_WIDTH]);
+        assert!(tracer.pending_address_error.is_some());
+        assert_eq!(
+            tracer.hasher_chiplet_shim.extract_replay(),
+            (HasherResponseReplay::default(), BlockAddressReplay::default()),
+        );
+        let forest = Arc::new(MastForest::new());
+        let processor = FastProcessor::new(StackInputs::default());
+        assert_limit(tracer.finalize_clock_cycle(
+            &processor,
+            OperationHelperRegisters::Empty,
+            &forest,
+        ));
+        assert!(tracer.pending_address_error.is_none());
     }
 }
 

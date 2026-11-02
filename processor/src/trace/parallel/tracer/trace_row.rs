@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 use miden_air_definitions::vm::{
     CoreCols, DecoderCols, StackCols, SystemCols,
     trace::{
-        chiplets::hasher::CONTROLLER_ROWS_PER_HASHER_OP_FELT,
+        chiplets::hasher::CONTROLLER_ROWS_PER_HASHER_OP,
         decoder::{NUM_OP_BATCH_ENCODING_COLS, NUM_OP_BITS, NUM_USER_OP_HELPERS},
     },
 };
@@ -22,7 +22,10 @@ use miden_core::{
 use super::{ExecutionContextInfo, StackState, SystemState, get_digest_in_forest};
 use crate::{
     ExecutionError,
-    trace::parallel::{core_trace_fragment::BasicBlockContext, tracer::CoreTraceGenerationTracer},
+    trace::{
+        chiplets::layout::LogicalControllerAddress,
+        parallel::{core_trace_fragment::BasicBlockContext, tracer::CoreTraceGenerationTracer},
+    },
 };
 
 // DECODER ROW
@@ -205,6 +208,8 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         op_batch: &OpBatch,
         basic_block_context: &mut BasicBlockContext,
     ) -> Result<(), ExecutionError> {
+        let next_address = LogicalControllerAddress::from_felt(self.decoder_state.current_addr)?
+            .checked_advance(CONTROLLER_ROWS_PER_HASHER_OP)?;
         // Add RESPAN trace row
         {
             let decoder_row = DecoderRow::new_basic_block_batch(
@@ -217,7 +222,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         }
 
         // Update block address for the upcoming block
-        self.decoder_state.current_addr += CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+        self.decoder_state.current_addr = next_address.to_felt();
 
         // Update basic block context
         basic_block_context.group_count_in_block -= ONE;
@@ -580,5 +585,120 @@ fn get_op_batch_encoding(
         _ => Err(ExecutionError::Internal(
             "invalid number of groups in a batch, must be 1, 2, 4, or 8",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::borrow::Borrow;
+
+    use miden_core::mast::BasicBlockNodeBuilder;
+
+    use super::*;
+    use crate::{
+        ContextId,
+        trace::{
+            parallel::{CORE_TRACE_WIDTH, MAX_TRACE_LEN},
+            trace_state::{BlockAddressReplay, BlockStackReplay, DecoderState},
+            utils::RowMajorTraceWriter,
+        },
+    };
+
+    fn respan_batch() -> OpBatch {
+        BasicBlockNodeBuilder::new(alloc::vec![Operation::Pad])
+            .build()
+            .unwrap()
+            .op_batches()[0]
+            .clone()
+    }
+
+    fn tracer(buffer: &mut [Felt], current_addr: Felt) -> CoreTraceGenerationTracer<'_> {
+        CoreTraceGenerationTracer::new(
+            RowMajorTraceWriter::new(buffer, CORE_TRACE_WIDTH),
+            DecoderState {
+                current_addr,
+                parent_addr: Felt::from_u8(7),
+            },
+            BlockAddressReplay::default(),
+            BlockStackReplay::default(),
+        )
+    }
+
+    fn system() -> SystemState {
+        SystemState {
+            clk: 0u32.into(),
+            ctx: ContextId::root(),
+            fn_hash: Word::default(),
+            deferred_root: Word::default(),
+        }
+    }
+
+    #[test]
+    fn respan_advances_row_zero_and_exact_cap_while_preserving_absence() {
+        let batch = respan_batch();
+        let stack = StackState::new([ZERO; MIN_STACK_DEPTH], MIN_STACK_DEPTH, ZERO);
+        for (address, next_address) in [
+            (ONE, Felt::from_u32(1 + CONTROLLER_ROWS_PER_HASHER_OP as u32)),
+            (ZERO, ZERO),
+            (
+                Felt::from_u32((MAX_TRACE_LEN - CONTROLLER_ROWS_PER_HASHER_OP + 1) as u32),
+                Felt::from_u32(MAX_TRACE_LEN as u32 + 1),
+            ),
+        ] {
+            let mut buffer = [ZERO; CORE_TRACE_WIDTH];
+            {
+                let mut tracer = tracer(&mut buffer, address);
+                let mut context = BasicBlockContext {
+                    current_op_group: Felt::from_u8(99),
+                    group_count_in_block: ONE,
+                };
+                tracer.fill_respan_trace_row(&system(), &stack, &batch, &mut context).unwrap();
+
+                assert_eq!(tracer.row_write_index, 1);
+                assert_eq!(tracer.decoder_state.current_addr, next_address);
+                assert_eq!(tracer.decoder_state.parent_addr, Felt::from_u8(7));
+                assert_eq!(context.current_op_group, batch.groups()[0]);
+                assert_eq!(context.group_count_in_block, ZERO);
+            }
+            let row: &CoreCols<Felt> = buffer.as_slice().borrow();
+            assert_eq!(row.decoder.addr, address);
+            assert_eq!(row.decoder.group_count, ONE);
+        }
+    }
+
+    #[test]
+    fn respan_overflow_preserves_trace_decoder_and_block_context() {
+        let batch = respan_batch();
+        let stack = StackState::new([ZERO; MIN_STACK_DEPTH], MIN_STACK_DEPTH, ZERO);
+        for address in [
+            Felt::from_u32(MAX_TRACE_LEN as u32 + 1),
+            Felt::from_u32(MAX_TRACE_LEN as u32 + 2),
+        ] {
+            let untouched = [Felt::from_u8(99); CORE_TRACE_WIDTH];
+            let mut buffer = untouched;
+            {
+                let mut tracer = tracer(&mut buffer, address);
+                let mut context = BasicBlockContext {
+                    current_op_group: Felt::from_u8(11),
+                    group_count_in_block: ONE,
+                };
+
+                let result = tracer.fill_respan_trace_row(&system(), &stack, &batch, &mut context);
+                assert!(matches!(result, Err(ExecutionError::TraceLenExceeded(MAX_TRACE_LEN))));
+                assert_eq!(tracer.row_write_index, 0);
+                assert_eq!(
+                    tracer.decoder_state,
+                    DecoderState {
+                        current_addr: address,
+                        parent_addr: Felt::from_u8(7)
+                    },
+                );
+                assert!(tracer.system_cols.is_none());
+                assert!(tracer.stack_cols.is_none());
+                assert_eq!(context.current_op_group, Felt::from_u8(11));
+                assert_eq!(context.group_count_in_block, ONE);
+            }
+            assert_eq!(buffer, untouched);
+        }
     }
 }

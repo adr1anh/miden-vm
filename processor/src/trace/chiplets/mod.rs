@@ -37,6 +37,8 @@ pub use hasher::{
     build_external_eidos_compression_traces, build_ordered_external_eidos_compression_traces,
 };
 
+pub(crate) mod layout;
+
 pub(crate) fn build_and8_lookup_trace(and8_counts: &[u64]) -> Vec<Felt> {
     hasher::build_and8_lookup_trace(and8_counts)
 }

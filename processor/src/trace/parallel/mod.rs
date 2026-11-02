@@ -736,27 +736,27 @@ pub(crate) fn build_hasher_chiplet<'a>(
     for hasher_op in ops {
         match hasher_op? {
             ResolvedHasherOp::Compress(input_state) => {
-                let _ = hasher.compress(input_state);
+                let _ = hasher.compress(input_state)?;
             },
             ResolvedHasherOp::AeadXof(ctx, clk, input_state) => {
                 let _ = hasher.compress_aead_xof(ctx, clk, input_state);
             },
             ResolvedHasherOp::HashControlBlock((h1, h2, domain, expected_hash)) => {
-                let _ = hasher.hash_control_block(h1, h2, domain, expected_hash);
+                let _ = hasher.hash_control_block(h1, h2, domain, expected_hash)?;
             },
             ResolvedHasherOp::HashBasicBlock((batches, expected_hash)) => match batches {
                 ResolvedBasicBlockGroups::Borrowed(op_batches) => {
-                    let _ = hasher.hash_basic_block(op_batches, expected_hash);
+                    let _ = hasher.hash_basic_block(op_batches, expected_hash)?;
                 },
                 ResolvedBasicBlockGroups::Owned(op_batches) => {
-                    let _ = hasher.hash_basic_block(&op_batches, expected_hash);
+                    let _ = hasher.hash_basic_block(&op_batches, expected_hash)?;
                 },
             },
             ResolvedHasherOp::BuildMerkleRoot((value, path, index)) => {
-                let _ = hasher.build_merkle_root(value, &path, index);
+                let _ = hasher.build_merkle_root(value, &path, index)?;
             },
             ResolvedHasherOp::UpdateMerkleRoot((old_value, new_value, path, index)) => {
-                hasher.update_merkle_root(old_value, new_value, &path, index);
+                hasher.update_merkle_root(old_value, new_value, &path, index)?;
             },
         }
         if hasher.trace_len() > max_controller_trace_len

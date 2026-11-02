@@ -23,7 +23,7 @@ use super::{
     ChipletTraceFragment, Felt, HasherState, MerklePath, MerkleRootUpdate, ONE, OpBatch,
     RangeChecker, Word as Digest, ZERO,
 };
-use crate::{ContextId, RowIndex};
+use crate::{ContextId, ExecutionError, RowIndex, trace::chiplets::layout::ControllerRow};
 
 mod trace;
 use trace::HasherTrace;
@@ -177,12 +177,12 @@ impl Hasher {
     // --------------------------------------------------------------------------------------------
 
     /// Applies one packed Eidos compression.
-    pub fn compress(&mut self, state: HasherState) -> (Felt, HasherState) {
-        let addr = self.trace.next_row_addr();
+    pub fn compress(&mut self, state: HasherState) -> Result<(Felt, HasherState), ExecutionError> {
+        let addr = self.trace.next_row_addr()?;
 
-        let compressed = self.append_hash_compression(LINEAR_HASH, state, true);
+        let compressed = self.append_hash_compression(LINEAR_HASH, state, true)?;
 
-        (addr, compressed)
+        Ok((addr, compressed))
     }
 
     /// Applies one Eidos compression and returns all 16 raw output lanes.
@@ -208,19 +208,19 @@ impl Hasher {
         h2: Digest,
         domain: Felt,
         expected_hash: Digest,
-    ) -> (Felt, Digest) {
-        if let Some(memoized) = self.replay_memoized_trace(expected_hash) {
-            return memoized;
+    ) -> Result<(Felt, Digest), ExecutionError> {
+        if let Some(memoized) = self.replay_memoized_trace(expected_hash)? {
+            return Ok(memoized);
         }
 
-        let addr = self.trace.next_row_addr();
+        let addr = self.trace.next_row_addr()?;
         let op_start = self.trace.next_op_index();
         let init_state = init_state_from_words_with_domain(&h1, &h2, domain);
-        let compressed = self.append_hash_compression(LINEAR_HASH, init_state, true);
+        let compressed = self.append_hash_compression(LINEAR_HASH, init_state, true)?;
 
         self.insert_to_memoized_trace_map(op_start, expected_hash);
         let result = get_digest(&compressed);
-        (addr, result)
+        Ok((addr, result))
     }
 
     /// Computes a sequential hash of all operation batches and returns the result.
@@ -230,38 +230,38 @@ impl Hasher {
         &mut self,
         op_batches: &[OpBatch],
         expected_hash: Digest,
-    ) -> (Felt, Digest) {
-        if let Some(memoized) = self.replay_memoized_trace(expected_hash) {
-            return memoized;
+    ) -> Result<(Felt, Digest), ExecutionError> {
+        if let Some(memoized) = self.replay_memoized_trace(expected_hash)? {
+            return Ok(memoized);
         }
 
-        let addr = self.trace.next_row_addr();
+        self.trace.check_rows(op_batches.len())?;
+        let addr = self.trace.next_row_addr()?;
         let op_start = self.trace.next_op_index();
         let num_batches = op_batches.len();
-        let n = u32::try_from(num_basic_block_hash_groups(op_batches))
-            .expect("felt length must fit in u32");
+        let n = num_basic_block_hash_groups(op_batches)?;
         let init_state = init_state(op_batches[0].groups(), n);
 
         if num_batches == 1 {
-            let compressed = self.append_hash_compression(LINEAR_HASH, init_state, true);
+            let compressed = self.append_hash_compression(LINEAR_HASH, init_state, true)?;
             self.insert_to_memoized_trace_map(op_start, expected_hash);
             let result = get_digest(&compressed);
-            return (addr, result);
+            return Ok((addr, result));
         }
 
-        let mut state = self.append_hash_compression(LINEAR_HASH, init_state, false);
+        let mut state = self.append_hash_compression(LINEAR_HASH, init_state, false)?;
 
         for batch in op_batches.iter().take(num_batches - 1).skip(1) {
             absorb_into_state(&mut state, batch.groups());
-            state = self.append_hash_compression(HASH_ABSORB, state, false);
+            state = self.append_hash_compression(HASH_ABSORB, state, false)?;
         }
 
         absorb_into_state(&mut state, op_batches[num_batches - 1].groups());
-        let compressed = self.append_hash_compression(HASH_ABSORB, state, true);
+        let compressed = self.append_hash_compression(HASH_ABSORB, state, true)?;
 
         self.insert_to_memoized_trace_map(op_start, expected_hash);
         let result = get_digest(&compressed);
-        (addr, result)
+        Ok((addr, result))
     }
 
     /// Performs Merkle path verification computation and records its execution trace.
@@ -272,15 +272,16 @@ impl Hasher {
         value: Digest,
         path: &MerklePath,
         index: Felt,
-    ) -> (Felt, Digest) {
-        let addr = self.trace.next_row_addr();
+    ) -> Result<(Felt, Digest), ExecutionError> {
+        self.trace.check_rows(path.len())?;
+        let addr = self.trace.next_row_addr()?;
         let root = self.verify_merkle_path(
             value,
             path,
             index.as_canonical_u64(),
             MerklePathContext::MpVerify,
-        );
-        (addr, root)
+        )?;
+        Ok((addr, root))
     }
 
     /// Performs Merkle root update computation and records its execution trace.
@@ -292,18 +293,19 @@ impl Hasher {
         new_value: Digest,
         path: &MerklePath,
         index: Felt,
-    ) -> MerkleRootUpdate {
+    ) -> Result<MerkleRootUpdate, ExecutionError> {
+        ControllerRow::new(self.trace.trace_len())?.checked_advance_many(path.len(), 2)?;
         self.mrupdate_id += ONE;
 
-        let address = self.trace.next_row_addr();
+        let address = self.trace.next_row_addr()?;
         let index = index.as_canonical_u64();
 
         let old_root =
-            self.verify_merkle_path(old_value, path, index, MerklePathContext::MrUpdateOld);
+            self.verify_merkle_path(old_value, path, index, MerklePathContext::MrUpdateOld)?;
         let new_root =
-            self.verify_merkle_path(new_value, path, index, MerklePathContext::MrUpdateNew);
+            self.verify_merkle_path(new_value, path, index, MerklePathContext::MrUpdateNew)?;
 
-        MerkleRootUpdate { address, old_root, new_root }
+        Ok(MerkleRootUpdate { address, old_root, new_root })
     }
 
     // TRACE GENERATION
@@ -354,18 +356,19 @@ impl Hasher {
         selectors: Selectors,
         state: HasherState,
         is_final: bool,
-    ) -> HasherState {
+    ) -> Result<HasherState, ExecutionError> {
+        self.trace.check_rows(1)?;
         let mut compressed = state;
         compress_state(&mut compressed);
 
         let digest = get_digest(&compressed).into();
         let op_final = if is_final { ONE } else { ZERO };
         self.trace
-            .append_controller_row(selectors, &state, digest, op_final, self.mrupdate_id);
+            .append_controller_row(selectors, &state, digest, op_final, self.mrupdate_id)?;
 
         self.record_compression_request(&state, CompressionOutput::Packed);
 
-        compressed
+        Ok(compressed)
     }
 
     /// Appends a Merkle-controller compression row and records the Eidos compression request.
@@ -378,7 +381,8 @@ impl Hasher {
         level: usize,
         is_start: bool,
         is_final: bool,
-    ) -> HasherState {
+    ) -> Result<HasherState, ExecutionError> {
+        self.trace.check_rows(1)?;
         let mut compressed = input_state;
         compress_state(&mut compressed);
 
@@ -397,11 +401,11 @@ impl Hasher {
             row_data,
             op_final,
             self.mrupdate_id,
-        );
+        )?;
 
         self.record_compression_request(&input_state, CompressionOutput::Packed);
 
-        compressed
+        Ok(compressed)
     }
 
     // MERKLE PATH HELPERS
@@ -414,7 +418,7 @@ impl Hasher {
         path: &MerklePath,
         mut index: u64,
         context: MerklePathContext,
-    ) -> Digest {
+    ) -> Result<Digest, ExecutionError> {
         assert!(!path.is_empty(), "path is empty");
         assert!(
             index.checked_shr(path.len() as u32).unwrap_or(0) == 0,
@@ -436,13 +440,13 @@ impl Hasher {
                 i,
                 i == 0,
                 i == last_idx,
-            );
+            )?;
 
             root = get_digest(&compressed);
             index >>= 1;
         }
 
-        root
+        Ok(root)
     }
 
     // COMPRESSION DEDUPLICATION
@@ -462,22 +466,25 @@ impl Hasher {
     /// If a memoized trace exists, re-pushes the source ops with the current `mrupdate_id`,
     /// re-registers compression requests from copied controller rows, and returns
     /// `Some((addr, digest))`. Otherwise returns `None`.
-    fn replay_memoized_trace(&mut self, expected_hash: Digest) -> Option<(Felt, Digest)> {
+    fn replay_memoized_trace(
+        &mut self,
+        expected_hash: Digest,
+    ) -> Result<Option<(Felt, Digest)>, ExecutionError> {
         let (op_start, op_end) = match self.get_memoized_trace(expected_hash) {
             Some(&(s, e)) => (s, e),
-            None => return None,
+            None => return Ok(None),
         };
 
-        let addr = self.trace.next_row_addr();
+        let addr = self.trace.next_row_addr()?;
         let (last_state, input_states) =
-            self.trace.replay_ops_range(op_start..op_end, self.mrupdate_id);
+            self.trace.replay_ops_range(op_start..op_end, self.mrupdate_id)?;
 
         for input_state in input_states {
             self.record_compression_request(&input_state, CompressionOutput::Packed);
         }
 
         let result = get_digest(&last_state);
-        Some((addr, result))
+        Ok(Some((addr, result)))
     }
 
     /// Returns the start and end op indices of a memoized block trace, if it exists.
@@ -787,11 +794,16 @@ fn append_zero_message_row_range_checks(block_count: usize, range: &mut RangeChe
     range.add_value_repeated(0, BLOCK_LEN * 4 * block_count);
 }
 
-fn num_basic_block_hash_groups(op_batches: &[OpBatch]) -> usize {
+fn num_basic_block_hash_groups(op_batches: &[OpBatch]) -> Result<u32, ExecutionError> {
     let Some((last, prefix)) = op_batches.split_last() else {
-        return 0;
+        return Ok(0);
     };
-    prefix.len() * BLOCK_LEN + last.num_groups().next_power_of_two()
+    prefix
+        .len()
+        .checked_mul(BLOCK_LEN)
+        .and_then(|prefix_groups| prefix_groups.checked_add(last.num_groups().next_power_of_two()))
+        .and_then(|groups| u32::try_from(groups).ok())
+        .ok_or(ExecutionError::TraceLenExceeded(crate::trace::parallel::MAX_TRACE_LEN))
 }
 
 fn write_eidos_compression_block(

@@ -14,6 +14,9 @@ use super::{
     ChipletTraceFragment, Felt, HasherState, MP_VERIFY, MR_UPDATE_NEW, MR_UPDATE_OLD, ONE,
     STATE_WIDTH, Selectors, ZERO,
 };
+use crate::{ExecutionError, trace::chiplets::layout::ControllerRow};
+
+const _: () = assert!(crate::trace::parallel::MAX_TRACE_LEN % CONTROLLER_TRACE_ALIGNMENT == 0);
 
 // HASHER OPERATION
 // ================================================================================================
@@ -58,6 +61,8 @@ impl HasherOp {
 #[derive(Debug, Default)]
 pub(super) struct HasherTrace {
     ops: Vec<HasherOp>,
+    /// Always at most MAX_TRACE_LEN: appends/replay check the entire span, and alignment
+    /// rounding stays within the cap because the cap is itself aligned.
     row_count: usize,
 }
 
@@ -71,8 +76,14 @@ impl HasherTrace {
     }
 
     /// Returns the next row address. Row addresses start at ONE.
-    pub fn next_row_addr(&self) -> Felt {
-        Felt::new_unchecked(self.row_count as u64 + 1)
+    pub fn next_row_addr(&self) -> Result<Felt, ExecutionError> {
+        Ok(ControllerRow::new(self.row_count)?.logical_address().to_felt())
+    }
+
+    /// Checks a whole request before any rows or compression requests are appended.
+    pub(super) fn check_rows(&self, count: usize) -> Result<(), ExecutionError> {
+        ControllerRow::new(self.row_count)?.checked_advance(count)?;
+        Ok(())
     }
 
     /// Returns the index that the next op pushed will occupy.
@@ -91,7 +102,8 @@ impl HasherTrace {
         row_data: [Felt; 4],
         op_final: Felt,
         mrupdate_id: Felt,
-    ) {
+    ) -> Result<(), ExecutionError> {
+        let end = ControllerRow::new(self.row_count)?.checked_advance(1)?;
         self.ops.push(HasherOp::Controller {
             selectors,
             state: *state,
@@ -99,7 +111,8 @@ impl HasherTrace {
             op_final,
             mrupdate_id,
         });
-        self.row_count += 1;
+        self.row_count = end.position();
+        Ok(())
     }
 
     // CONTROLLER PADDING
@@ -111,7 +124,9 @@ impl HasherTrace {
         if remainder != 0 {
             let count = CONTROLLER_TRACE_ALIGNMENT - remainder;
             self.ops.push(HasherOp::Padding { count, mrupdate_id });
-            self.row_count += count;
+            // MAX_TRACE_LEN is a multiple of the controller alignment, so rounding an
+            // already checked row count cannot exceed the cap or overflow usize.
+            self.row_count = self.row_count.next_multiple_of(CONTROLLER_TRACE_ALIGNMENT);
         }
     }
 
@@ -125,7 +140,11 @@ impl HasherTrace {
         &mut self,
         range: Range<usize>,
         new_mrupdate_id: Felt,
-    ) -> (HasherState, Vec<HasherState>) {
+    ) -> Result<(HasherState, Vec<HasherState>), ExecutionError> {
+        let mut end = ControllerRow::new(self.row_count)?;
+        for op in &self.ops[range.clone()] {
+            end = end.checked_advance(op.row_count())?;
+        }
         let mut last_state = [ZERO; STATE_WIDTH];
         let mut input_states = Vec::with_capacity(range.len() / 2);
         for idx in range {
@@ -144,10 +163,10 @@ impl HasherTrace {
                     *mrupdate_id = new_mrupdate_id;
                 },
             }
-            self.row_count += op.row_count();
             self.ops.push(op);
         }
-        (last_state, input_states)
+        self.row_count = end.position();
+        Ok((last_state, input_states))
     }
 
     // EXECUTION TRACE GENERATION
@@ -274,4 +293,131 @@ fn output_state_from_row(
         output[8..12].copy_from_slice(row_data);
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_core::{mast::BasicBlockNodeBuilder, operations::Operation};
+
+    use super::{super::Hasher, *};
+    use crate::trace::parallel::MAX_TRACE_LEN;
+
+    fn controller_op() -> HasherOp {
+        HasherOp::Controller {
+            selectors: super::super::LINEAR_HASH,
+            state: [ZERO; STATE_WIDTH],
+            row_data: [ZERO; 4],
+            op_final: ONE,
+            mrupdate_id: ZERO,
+        }
+    }
+
+    fn assert_limit<T>(result: Result<T, ExecutionError>) {
+        assert!(matches!(result, Err(ExecutionError::TraceLenExceeded(MAX_TRACE_LEN))));
+    }
+
+    #[test]
+    fn append_accepts_exact_cap_then_rejects_atomically() {
+        // A synthetic count exercises the cap without allocating a cap-sized trace.
+        let mut trace = HasherTrace {
+            row_count: MAX_TRACE_LEN - 1,
+            ..Default::default()
+        };
+        trace
+            .append_controller_row(
+                super::super::LINEAR_HASH,
+                &[ZERO; STATE_WIDTH],
+                [ZERO; 4],
+                ONE,
+                ZERO,
+            )
+            .unwrap();
+        assert_eq!(trace.trace_len(), MAX_TRACE_LEN);
+        assert_eq!(trace.next_row_addr().unwrap(), Felt::from_u32(MAX_TRACE_LEN as u32 + 1));
+        assert_limit(trace.append_controller_row(
+            super::super::LINEAR_HASH,
+            &[ZERO; STATE_WIDTH],
+            [ZERO; 4],
+            ONE,
+            ZERO,
+        ));
+        assert_eq!(trace.next_op_index(), 1);
+        assert_eq!(trace.trace_len(), MAX_TRACE_LEN);
+        trace.pad_to_controller_boundary(ZERO);
+        assert_eq!(trace.next_op_index(), 1);
+    }
+
+    #[test]
+    fn replay_counts_rows_instead_of_operation_indices() {
+        let mut trace = HasherTrace {
+            ops: vec![controller_op(), HasherOp::Padding { count: 7, mrupdate_id: ZERO }],
+            row_count: MAX_TRACE_LEN - 8,
+        };
+        let (_, inputs) = trace.replay_ops_range(0..2, ONE).unwrap();
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(trace.trace_len(), MAX_TRACE_LEN);
+        assert_eq!(trace.next_op_index(), 4);
+        match (&trace.ops[1], &trace.ops[3]) {
+            (
+                HasherOp::Padding { mrupdate_id: original, .. },
+                HasherOp::Padding { mrupdate_id: copied, .. },
+            ) => {
+                assert_eq!(*original, ZERO);
+                assert_eq!(*copied, ONE);
+            },
+            _ => panic!("replay must preserve padding ops"),
+        }
+        assert_limit(trace.replay_ops_range(0..1, ONE));
+        assert_eq!(trace.trace_len(), MAX_TRACE_LEN);
+        assert_eq!(trace.next_op_index(), 4);
+    }
+
+    #[test]
+    fn replay_rejects_the_entire_span_before_copying() {
+        let mut trace = HasherTrace {
+            ops: vec![controller_op(), controller_op()],
+            row_count: MAX_TRACE_LEN - 1,
+        };
+        assert_limit(trace.replay_ops_range(0..2, ONE));
+        assert_eq!(trace.trace_len(), MAX_TRACE_LEN - 1);
+        assert_eq!(trace.next_op_index(), 2);
+    }
+
+    #[test]
+    fn hasher_preflights_basic_block_and_both_merkle_legs() {
+        let mut hasher = Hasher {
+            trace: HasherTrace {
+                row_count: MAX_TRACE_LEN - 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let block = BasicBlockNodeBuilder::new(vec![Operation::Noop; 73]).build().unwrap();
+        assert_eq!(block.num_op_batches(), 2);
+        assert_limit(hasher.hash_basic_block(block.op_batches(), [ZERO; 4].into()));
+
+        let path = super::super::MerklePath::new(vec![[ZERO; 4].into()]);
+        assert_limit(hasher.update_merkle_root([ZERO; 4].into(), [ONE; 4].into(), &path, ZERO));
+        assert_eq!(hasher.mrupdate_id, ZERO);
+        assert_eq!(hasher.trace.trace_len(), MAX_TRACE_LEN - 1);
+        assert_eq!(hasher.trace.next_op_index(), 0);
+        assert!(hasher.compression_request_map.is_empty());
+        assert!(hasher.memoized_trace_map.is_empty());
+    }
+
+    #[test]
+    fn memoized_replay_overflow_leaves_caches_and_rows_unchanged() {
+        let mut hasher = Hasher::default();
+        let digest = [ONE; 4].into();
+        hasher.hash_control_block(digest, digest, ZERO, digest).unwrap();
+        let requests = hasher.compression_request_map.clone();
+        let memoized = hasher.memoized_trace_map.clone();
+        hasher.trace.row_count = MAX_TRACE_LEN;
+
+        assert_limit(hasher.hash_control_block(digest, digest, ZERO, digest));
+        assert_eq!(hasher.trace.trace_len(), MAX_TRACE_LEN);
+        assert_eq!(hasher.trace.next_op_index(), 1);
+        assert_eq!(hasher.compression_request_map, requests);
+        assert_eq!(hasher.memoized_trace_map, memoized);
+    }
 }
