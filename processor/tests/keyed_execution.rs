@@ -18,7 +18,7 @@ use miden_core::{
     FMP_ADDR, FMP_INIT_VALUE,
     mast::{
         BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder, ExecNodeBuilder, JoinNodeBuilder,
-        MastForest, MastNodeId, SplitNodeBuilder,
+        MastForest, MastNodeExt, MastNodeId, SplitNodeBuilder,
     },
     operations::Operation,
     program::{
@@ -233,6 +233,7 @@ struct Observation {
     depth: u32,
     value: Option<Felt>,
     fmp: Option<Felt>,
+    stack: Vec<Felt>,
 }
 
 struct CountingHost {
@@ -310,6 +311,7 @@ impl SyncHost for CountingHost {
             depth: process.stack_depth(),
             value: process.get_mem_value(process.ctx(), VALUE_ADDR),
             fmp: process.get_mem_value(process.ctx(), FMP_ADDR.as_canonical_u64() as u32),
+            stack: process.get_stack_state(),
         });
         Ok(Vec::new())
     }
@@ -1476,4 +1478,427 @@ fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
     assert_eq!(host.inner.requests_for(fixture.target), 1);
     assert_eq!(host.inner.code_requests.borrow().len(), 1);
     assert_eq!(host.inner.observations.len(), 1);
+}
+
+struct ModeMatrixFixture {
+    entry: ProcedureKey,
+    user: ProcedureKey,
+    target: ProcedureKey,
+    program: Program,
+    debug: PackageDebugInfo,
+    callee: Program,
+    callee_debug: PackageDebugInfo,
+    // Entry setup, local user entry, target entry, user return, ENTRY return.
+    points: [(MastNodeId, DebugSourceNodeId, &'static str); 5],
+    environment: EnvironmentFixture,
+}
+
+fn preserved_observation() -> Vec<Operation> {
+    let mut operations = vec![Operation::Dup0; 4];
+    operations.extend(observe());
+    operations.extend([Operation::Drop; 4]);
+    operations
+}
+
+fn mode_matrix_fixture(mode: Mode, local_target: bool) -> ModeMatrixFixture {
+    // Synthetic names and explicit finite budgets exercise native execution only.
+    let entry = key(&["native_fixture"], "entry");
+    let user = key(&["native_fixture"], "user");
+    let target = key(&["native_fixture", "kernel", "v7"], "target");
+    let mut target_ops = preserved_observation();
+    store_element(&mut target_ops, felt(VALUE_ADDR), felt(111));
+    store_element(&mut target_ops, FMP_ADDR, felt(222));
+    let target_op_end = u32::try_from(target_ops.len()).unwrap();
+    let remote_callee = body(target_ops.clone());
+    let mut forest = MastForest::new();
+    let target_root = if local_target {
+        let root = block(&mut forest, target_ops);
+        forest.make_root(root);
+        root
+    } else {
+        remote_callee.entrypoint()
+    };
+    let mut user_ops = if matches!(mode, Mode::Dyn | Mode::DynCall) {
+        dynamic_prefix(target)
+    } else {
+        Vec::new()
+    };
+    store_element(&mut user_ops, felt(VALUE_ADDR), felt(77));
+    store_element(&mut user_ops, FMP_ADDR, felt(88));
+    user_ops.extend((40..44).map(|value| Operation::Push(felt(value))));
+    user_ops.extend(preserved_observation());
+    if matches!(mode, Mode::Dyn | Mode::DynCall) {
+        user_ops.push(Operation::Push(felt(KEY_ADDR)));
+    }
+    let user_op_end = u32::try_from(user_ops.len()).unwrap();
+    let user_setup = block(&mut forest, user_ops);
+    let tested = invocation(&mut forest, mode, target);
+    let mut returned_ops = preserved_observation();
+    returned_ops.extend([Operation::Drop; 4]);
+    let returned_op_end = u32::try_from(returned_ops.len()).unwrap();
+    let user_return = block(&mut forest, returned_ops);
+    let user_tail = join(&mut forest, tested, user_return);
+    let user_root = join(&mut forest, user_setup, user_tail);
+    forest.make_root(user_root);
+    let mut entry_ops = Vec::new();
+    store_element(&mut entry_ops, felt(VALUE_ADDR), felt(17));
+    store_element(&mut entry_ops, FMP_ADDR, felt(18));
+    entry_ops.extend(preserved_observation());
+    let entry_op_end = u32::try_from(entry_ops.len()).unwrap();
+    let entry_setup = block(&mut forest, entry_ops);
+    let outer_call = invocation(&mut forest, Mode::Call, user);
+    let entry_return_ops = preserved_observation();
+    let entry_return_op_end = u32::try_from(entry_return_ops.len()).unwrap();
+    let entry_return = block(&mut forest, entry_return_ops);
+    let entry_tail = join(&mut forest, outer_call, entry_return);
+    let entry_root = join(&mut forest, entry_setup, entry_tail);
+    let program = finish_program(forest, entry_root);
+    let callee = if local_target {
+        Program::new(program.mast_forest().clone(), target_root)
+    } else {
+        remote_callee
+    };
+
+    let mut builder = PackageDebugInfoBuilder::default();
+    let remote_source =
+        source_node(&mut builder, target_root, Vec::new(), target_op_end, "matrix::target");
+    builder.add_root(remote_source);
+    let remote_debug = *builder.build();
+    let mut builder = PackageDebugInfoBuilder::default();
+    let target_source = if local_target {
+        let source =
+            source_node(&mut builder, target_root, Vec::new(), target_op_end, "matrix::target");
+        builder.add_root(source);
+        source
+    } else {
+        remote_source
+    };
+    let user_setup_source =
+        source_node(&mut builder, user_setup, Vec::new(), user_op_end, "matrix::user_setup");
+    let tested_source = source_node(&mut builder, tested, Vec::new(), 1, "matrix::invoke");
+    let user_return_source =
+        source_node(&mut builder, user_return, Vec::new(), returned_op_end, "matrix::user_return");
+    let user_tail_source = source_node(
+        &mut builder,
+        user_tail,
+        vec![tested_source, user_return_source],
+        1,
+        "matrix::user_tail",
+    );
+    let user_source = source_node(
+        &mut builder,
+        user_root,
+        vec![user_setup_source, user_tail_source],
+        1,
+        "matrix::user",
+    );
+    builder.add_root(user_source);
+    let entry_setup_source =
+        source_node(&mut builder, entry_setup, Vec::new(), entry_op_end, "matrix::entry_setup");
+    let outer_source = source_node(&mut builder, outer_call, Vec::new(), 1, "matrix::outer_call");
+    let entry_return_source = source_node(
+        &mut builder,
+        entry_return,
+        Vec::new(),
+        entry_return_op_end,
+        "matrix::entry_return",
+    );
+    let entry_tail_source = source_node(
+        &mut builder,
+        entry_tail,
+        vec![outer_source, entry_return_source],
+        1,
+        "matrix::entry_tail",
+    );
+    let entry_source = source_node(
+        &mut builder,
+        entry_root,
+        vec![entry_setup_source, entry_tail_source],
+        1,
+        "matrix::entry",
+    );
+    builder.add_root(entry_source);
+    let debug = *builder.build();
+    let callee_debug = if local_target { debug.clone() } else { remote_debug };
+    let environment = EnvironmentFixture::new(&[
+        (&["native_fixture"], "entry", program.hash()),
+        (&["native_fixture"], "user", program.mast_forest()[user_root].digest()),
+        (&["native_fixture", "kernel", "v7"], "target", callee.hash()),
+    ]);
+    ModeMatrixFixture {
+        entry,
+        user,
+        target,
+        program,
+        debug,
+        callee,
+        callee_debug,
+        points: [
+            (entry_setup, entry_setup_source, "matrix::entry_setup"),
+            (user_root, user_source, "matrix::user"),
+            (target_root, target_source, "matrix::target"),
+            (user_return, user_return_source, "matrix::user_return"),
+            (entry_return, entry_return_source, "matrix::entry_return"),
+        ],
+        environment,
+    }
+}
+
+fn mode_matrix_host(fixture: &ModeMatrixFixture, local_target: bool) -> AsyncCodeHost {
+    let mut inner = CountingHost::new(&fixture.environment, &[]);
+    if !local_target {
+        inner.forests.insert(
+            fixture.callee.hash(),
+            LoadedMastForest::with_package_debug_info(
+                fixture.callee.mast_forest().clone(),
+                Ok(Some(fixture.callee_debug.clone())),
+            ),
+        );
+    }
+    AsyncCodeHost {
+        inner,
+        suspend_code: AtomicBool::new(false),
+    }
+}
+
+#[test]
+fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
+    let mut cases = 0;
+    for mode in [Mode::Exec, Mode::Call, Mode::Syscall, Mode::Dyn, Mode::DynCall] {
+        for local_target in [true, false] {
+            let fixture = mode_matrix_fixture(mode, local_target);
+            for source_aware in [false, true] {
+                for asynchronous in [false, true] {
+                    let mut host = mode_matrix_host(&fixture, local_target);
+                    let mut processor = source_dyncall_processor();
+                    let original = processor.state().get_stack_state();
+                    let mut user_stack = (40..44).rev().map(felt).collect::<Vec<_>>();
+                    user_stack.extend_from_slice(&original);
+                    assert!(user_stack[16..].iter().all(|value| *value != felt(0)));
+                    let configuration = fixture.environment.configuration(
+                        fixture.entry,
+                        namespace(&["native_fixture", "kernel", "v7"]),
+                    );
+                    let mut resume = processor
+                        .get_initial_resume_context(&fixture.program, configuration)
+                        .unwrap();
+                    let mut seen = [false; 5];
+                    let mut entry_debug = None;
+                    let mut user_debug = None;
+                    for _ in 0..1024 {
+                        if source_aware {
+                            for (index, &(exec, source, label)) in fixture.points.iter().enumerate()
+                            {
+                                let target_owner = index == 2 && !local_target;
+                                let owner = if target_owner {
+                                    fixture.callee.mast_forest()
+                                } else {
+                                    fixture.program.mast_forest()
+                                };
+                                if seen[index]
+                                    || !Arc::ptr_eq(resume.current_forest(), owner)
+                                    || resume.next_source_node_id() != Some(source)
+                                {
+                                    continue;
+                                }
+                                assert!(matches!(
+                                    resume.continuation_stack().peek_continuation(),
+                                    Some(Continuation::StartNode(node)) if *node == exec
+                                ));
+                                let debug = resume.debug_info().unwrap();
+                                assert_eq!(debug.source_node(source).unwrap().exec_node, exec);
+                                assert_eq!(
+                                    debug[debug
+                                        .first_asm_op_for_source_node(source)
+                                        .unwrap()
+                                        .context_name_idx]
+                                        .as_ref(),
+                                    label
+                                );
+                                assert_eq!(
+                                    debug.as_ref(),
+                                    if target_owner {
+                                        &fixture.callee_debug
+                                    } else {
+                                        &fixture.debug
+                                    }
+                                );
+                                match index {
+                                    0 => entry_debug = Some(debug.clone()),
+                                    1 => user_debug = Some(debug.clone()),
+                                    2 if target_owner => {
+                                        let supplied = host.inner.forests[&fixture.callee.hash()]
+                                            .package_debug_info()
+                                            .unwrap()
+                                            .unwrap();
+                                        assert!(Arc::ptr_eq(&debug, &supplied));
+                                        assert!(!Arc::ptr_eq(&debug, user_debug.as_ref().unwrap()));
+                                    },
+                                    3 => assert!(Arc::ptr_eq(&debug, user_debug.as_ref().unwrap())),
+                                    4 => {
+                                        assert!(Arc::ptr_eq(&debug, entry_debug.as_ref().unwrap()))
+                                    },
+                                    _ => {},
+                                }
+                                seen[index] = true;
+                            }
+                        }
+                        let complete = match (source_aware, asynchronous) {
+                            (false, false) => processor.step_sync(&mut host.inner, &mut resume),
+                            (false, true) => poll_ready(processor.step(&mut host, &mut resume)),
+                            (true, false) => processor.step_with_package_debug_info_sync(
+                                &mut host.inner,
+                                &mut resume,
+                                &fixture.debug,
+                            ),
+                            (true, true) => poll_ready(processor.step_with_package_debug_info(
+                                &mut host,
+                                &mut resume,
+                                &fixture.debug,
+                            )),
+                        }
+                        .unwrap();
+                        if complete {
+                            break;
+                        }
+                    }
+                    assert!(
+                        resume.is_complete(),
+                        "{mode:?}/{local_target}/{source_aware}/{asynchronous}"
+                    );
+                    if source_aware {
+                        assert!(seen.into_iter().all(|point| point));
+                    }
+                    assert_eq!(processor.state().get_stack_state(), original);
+                    assert_eq!(processor.stack_depth(), 16);
+                    assert!(processor.state().ctx().is_root());
+                    let observations = &host.inner.observations;
+                    assert_eq!(observations.len(), 5);
+                    let user_context = observations[1].context;
+                    assert!(!user_context.is_root());
+                    let shared = matches!(mode, Mode::Exec | Mode::Dyn);
+                    let syscall = matches!(mode, Mode::Syscall);
+                    let target_context = observations[2].context;
+                    if shared {
+                        assert_eq!(target_context, user_context);
+                    } else if syscall {
+                        assert!(target_context.is_root());
+                    } else {
+                        assert!(!target_context.is_root());
+                        assert_ne!(target_context, user_context);
+                    }
+                    let target_stack = if shared { &user_stack[..] } else { &user_stack[..16] };
+                    let expected = [
+                        (fixture.entry, ContextId::root(), Some(felt(17)), felt(18), &original[..]),
+                        (fixture.user, user_context, Some(felt(77)), felt(88), &user_stack[..]),
+                        (
+                            if shared || syscall {
+                                fixture.user
+                            } else {
+                                fixture.target
+                            },
+                            target_context,
+                            if shared {
+                                Some(felt(77))
+                            } else if syscall {
+                                Some(felt(17))
+                            } else {
+                                None
+                            },
+                            if shared {
+                                felt(88)
+                            } else if syscall {
+                                felt(18)
+                            } else {
+                                FMP_INIT_VALUE
+                            },
+                            target_stack,
+                        ),
+                        (
+                            fixture.user,
+                            user_context,
+                            Some(felt(if shared { 111 } else { 77 })),
+                            felt(if shared { 222 } else { 88 }),
+                            &user_stack[..],
+                        ),
+                        (
+                            fixture.entry,
+                            ContextId::root(),
+                            Some(felt(if syscall { 111 } else { 17 })),
+                            felt(if syscall { 222 } else { 18 }),
+                            &original[..],
+                        ),
+                    ];
+                    for (observed, (principal, context, value, fmp, stack)) in
+                        observations.iter().zip(expected)
+                    {
+                        assert_eq!(observed.principal, principal.into_word());
+                        assert_eq!(observed.context, context);
+                        assert_eq!(observed.value, value);
+                        assert_eq!(observed.fmp, Some(fmp));
+                        assert_eq!(observed.depth as usize, stack.len() + 5);
+                        assert_eq!(
+                            &observed.stack[5..],
+                            stack,
+                            "{mode:?}: dynamic address consumed once and operands preserved"
+                        );
+                    }
+                    assert_eq!(
+                        processor.state().get_mem_value(target_context, VALUE_ADDR),
+                        Some(felt(111))
+                    );
+                    assert_eq!(
+                        processor
+                            .state()
+                            .get_mem_value(target_context, FMP_ADDR.as_canonical_u64() as u32),
+                        Some(felt(222))
+                    );
+                    for key in [fixture.entry, fixture.user, fixture.target] {
+                        assert_eq!(host.inner.requests_for(key), 1);
+                    }
+                    assert_eq!(host.inner.witness_requests.len(), 3);
+                    assert!(
+                        host.inner
+                            .witness_requests
+                            .iter()
+                            .all(|request| request.root == fixture.environment.root
+                                && request.limits == opening_limits())
+                    );
+                    assert_eq!(
+                        *host.inner.code_requests.borrow(),
+                        if local_target {
+                            Vec::new()
+                        } else {
+                            vec![fixture.callee.hash()]
+                        }
+                    );
+                    let session = resume.resolution_session();
+                    assert_eq!(session.phase(), SessionPhase::Completed);
+                    assert_eq!(session.bindings().len(), 3);
+                    assert_eq!(
+                        session
+                            .uses()
+                            .map(|use_record| (use_record.procedure_key(), use_record.tag()))
+                            .collect::<Vec<_>>(),
+                        vec![
+                            (fixture.user, InvocationTag::Normal),
+                            (
+                                fixture.target,
+                                if syscall {
+                                    InvocationTag::Syscall
+                                } else {
+                                    InvocationTag::Normal
+                                }
+                            ),
+                            (fixture.entry, InvocationTag::Normal)
+                        ]
+                    );
+                    assert_eq!(session.counters().committed_requests, 3);
+                    assert_eq!(session.counters().reserved_requests, 0);
+                    cases += 1;
+                }
+            }
+        }
+    }
+    assert_eq!(cases, 40);
 }
