@@ -25,7 +25,13 @@ pub use miden_core::{Word, mast::MastForest, program::Program};
 pub use self::package::arbitrary;
 pub use self::{
     dependency::Dependency,
-    interface::{DeclarationError, DeclarationSet, ProcedureDeclaration, PublicProcedurePath},
+    interface::{
+        DeclarationError, DeclarationSet, ProcedureDeclaration, PublicProcedurePath,
+        artifact::{
+            ArtifactError, ArtifactProfileOperation, DeclarationCommitment, InterfaceArtifactV1,
+            InterfaceProfile, LibraryId,
+        },
+    },
     namespace_plan::NamespacePlan,
     package::{
         ConstantExport, EventHandlerManifestEntry, EventHandlerSection, EventHandlerSectionError,

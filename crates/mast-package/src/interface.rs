@@ -11,6 +11,7 @@ use miden_assembly_syntax::{
     ast::{Ident, IdentError, ProcedureName, types::FunctionType},
 };
 
+pub mod artifact;
 pub mod serialization;
 
 /// A nonempty public procedure path relative to an explicitly supplied namespace home.
