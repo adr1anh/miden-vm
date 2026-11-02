@@ -6,10 +6,11 @@ use miden_core::{
     crypto::merkle::MerklePath,
     field::{BasedVectorSpace, Field, PrimeCharacteristicRing, PrimeField64, QuadFelt},
     mast::{ExecutableMastForest, MastNodeId},
+    program::{ExecutionDescriptor, ImplementationRoot, ProcedureKey},
 };
 
 use crate::{
-    AceError, ContextId, ExecutionError,
+    AceError, ContextId, ExecutionError, InvocationUse, SessionBinding,
     continuation_stack::{Continuation, ContinuationStack},
     trace::{
         chiplets::{
@@ -19,6 +20,56 @@ use crate::{
         utils::split_u32_into_u16,
     },
 };
+
+/// The context and principal semantics of an authenticated runtime invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyedMode {
+    Exec,
+    Call,
+    Syscall,
+    Dyn,
+    DynCall,
+}
+
+/// A runtime invocation, or the actual END discharging the reserved entry demand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyedEventKind {
+    Invoke(KeyedMode),
+    RootEnd,
+}
+
+/// One authenticated demand bound to its original global execution row and principals.
+///
+/// The native session constructs `use_record`; debug metadata and loaded code cannot construct
+/// or authorize it. The surrounding invocation node commits to its requested key, while the
+/// separately supplied [`KeyedTarget`] identifies the body that is actually executed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyedEvent {
+    pub kind: KeyedEventKind,
+    pub use_record: InvocationUse,
+    pub principal_before: ProcedureKey,
+    pub principal_after: ProcedureKey,
+}
+
+/// The actual loaded body associated with a keyed transition.
+///
+/// These are borrowed code-supply observations, not an alternative source of execution authority.
+pub struct KeyedTarget<'a, F: ExecutableMastForest> {
+    pub forest: &'a F,
+    pub root: MastNodeId,
+    pub implementation: ImplementationRoot,
+}
+
+/// Checked effects of a clock cycle, before VM, native-session or tracer publication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CycleProjection {
+    /// Original global row of the operation being prepared.
+    pub row: RowIndex,
+    /// Clock after the operation completes.
+    pub next_clock: RowIndex,
+    /// Continuation count after the complete transition, including required finish frames.
+    pub continuation_len: usize,
+}
 
 // TRACER TRAIT
 // ================================================================================================
@@ -37,14 +88,13 @@ use crate::{
 ///
 /// # Methods overview
 ///
-/// The main methods of this trait are [`start_clock_cycle`] and [`finalize_clock_cycle`], which are
-/// called at the start and end of each clock cycle, respectively. These methods are the only
-/// methods for which a reference to the processor is passed in, due to the fact that the state that
-/// the processor is in at that point is completely unambiguous (i.e. either before all mutations
-/// for the clock cycle, or after all mutations except the clock register for the clock cycle).
+/// [`start_clock_cycle`] and [`finalize_clock_cycle`] bracket each clock cycle and inspect its
+/// unambiguous before/after processor state. Preparation hooks inspect the unchanged pre-cycle
+/// processor and reserve work before publication. Environment and keyed commit hooks consume those
+/// reservations separately from the ordinary in-cycle recording hooks.
 ///
-/// We refer to all other methods as "in-cycle methods". These methods are called at some point
-/// during the execution of the clock cycle, with the following guarantee:
+/// The remaining recording methods are "in-cycle methods", subject to the resolution exceptions
+/// below. They are called with the following guarantee:
 ///
 /// *At most one in-cycle method is called between [`start_clock_cycle`] and
 /// [`finalize_clock_cycle`] for each clock cycle.*
@@ -73,6 +123,60 @@ pub trait Tracer {
     /// `Arc<SparseMastForest>`. Continuation stacks and continuations carrying forest references
     /// (e.g. `Continuation::EnterForest`) use the same type.
     type Forest: ExecutableMastForest + Clone;
+
+    /// Owned, unpublished tracing work for environment initialization or one keyed transition.
+    ///
+    /// The token must not borrow the processor, session, forest or tracer across host waits.
+    /// Dropping it must not publish an event or consume a replay record. Implementations can use
+    /// an enum to distinguish initialization from invocation/root-END reservations.
+    type KeyedReservation;
+
+    /// Prepares entry metadata without fabricating an invocation use or changing trace state.
+    ///
+    /// Entry initializes the principal without consuming a clock cycle. Its reserved demand is
+    /// recorded only at the actual root END. All returned errors precede native/VM publication.
+    fn prepare_environment(
+        &mut self,
+        descriptor: &ExecutionDescriptor,
+        entry: SessionBinding,
+    ) -> Result<Self::KeyedReservation, ExecutionError>;
+
+    /// Publishes successfully prepared entry metadata without a recoverable failure.
+    fn commit_environment(&mut self, reservation: Self::KeyedReservation);
+
+    /// Checks known clock-cycle failures before [`Self::start_clock_cycle`] or publication.
+    ///
+    /// During keyed invocation/root-END preparation, `continuation_stack` still contains the
+    /// retained `continuation`. `projection.continuation_len` is the final count after the entire
+    /// transition. Other callers may pass the stack after selecting their continuation. This hook
+    /// must not consume replay data or publish tracing changes. Unexpected errors from later
+    /// custom callbacks terminally invalidate execution and prohibit successful output/export.
+    fn prepare_clock_cycle(
+        &mut self,
+        _processor: &Self::Processor,
+        _continuation: &Continuation<Self::Forest>,
+        _continuation_stack: &ContinuationStack<Self::Forest>,
+        _current_forest: &Self::Forest,
+        _projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
+    /// Reserves one keyed event after host work and before any native/VM/tracer publication.
+    ///
+    /// The caller also invokes [`Self::prepare_clock_cycle`] and the stopper preflight. The
+    /// reservation must cover the actual target and original global row, including fragment and
+    /// replay capacity checks. The corresponding commit occurs without intervening host work.
+    fn prepare_keyed_transition(
+        &mut self,
+        processor: &Self::Processor,
+        event: &KeyedEvent,
+        target: KeyedTarget<'_, Self::Forest>,
+        projection: CycleProjection,
+    ) -> Result<Self::KeyedReservation, ExecutionError>;
+
+    /// Publishes exactly the prepared event; no returned execution failure is permitted.
+    fn commit_keyed_transition(&mut self, reservation: Self::KeyedReservation, event: KeyedEvent);
 
     /// Signals the start of a new clock cycle, guaranteed to be called at the start of the clock
     /// cycle, before any mutations to the processor state is made. For example, it is safe to

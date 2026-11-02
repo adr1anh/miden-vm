@@ -88,6 +88,7 @@ pub use miden_core::{
     serde, utils,
 };
 pub use trace::{ExecutionWitness, PrecompileWitness, VmWitness};
+pub use tracer::{CycleProjection, KeyedEvent, KeyedEventKind, KeyedMode, KeyedTarget};
 
 pub mod advice {
     pub use miden_core::advice::{AdviceInputs, AdviceMap, AdviceStack};
@@ -290,6 +291,19 @@ pub trait Stopper {
     ///
     /// For live execution this is `Arc<MastForest>`; for replay it is `Arc<SparseMastForest>`.
     type Forest: ExecutableMastForest + Clone;
+
+    /// Checks known cycle limits before any VM, native-session or tracer publication.
+    ///
+    /// The projected clock and continuation count describe the entire prepared transition.
+    /// Implementations must not advance stop state here. An unexpected error from a later custom
+    /// callback terminally invalidates execution rather than making that transition retryable.
+    fn preflight_cycle(
+        &self,
+        _processor: &Self::Processor,
+        _projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
 
     /// Determines whether execution should be stopped at the end of each clock cycle.
     ///
