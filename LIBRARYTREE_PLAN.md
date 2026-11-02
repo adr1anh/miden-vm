@@ -278,7 +278,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | in-progress | Latest `9d80e8eaf`; sparse `85171ecad`; base `4f6cda599` | Independent node/dense/sparse reviews; core lib check, production Clippy and no-default-features pass | Test compilation has 42 legacy fixture/arbitrary errors in five files; migrate next, then run pending node/codec/MAST checks. D2 preserves existing MASM source. |
+| 02 MAST | in-progress | Latest `90ef69d6d`; generator `91d52f92c`; base `4f6cda599` | Independent implementation/migration reviews; 198 MAST tests pass (manual seed test ignored), test-inclusive Clippy, core/no_std checks and formatting | Fuzz oracle/seed update and final PR audit next. Processor witness tests await PRs 05/09 downstream consumers; bounded fuzz smoke at 16. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
@@ -548,3 +548,20 @@ is metadata, not key authority. Do not weaken the executable guarantee to caller
 PR 05 must supply an environment-aware executable fixture and update its sole processor consumer,
 `processor/src/fast/tests/arbitrary_forest.rs`, restoring meaningful executable invocation coverage.
 This is not a final testing or runtime scope reduction.
+
+### PR 02 Fixture and generator migration validated
+
+Commit `91d52f92c` migrates merger/traversal fixtures to independent symbolic keys and explicit
+body roots, preserves structural replacement/error-code/ordering coverage, and adds all keyed
+modes to structural generation. The executable-mode restriction and PR 05 restoration obligation
+remain as documented above. Commit `90ef69d6d` migrates canonical v0.0.6 serialization expectations,
+including malformed overflow/lazy-digest regressions, sparse keys and old-version rejection.
+Independent review found no concrete issue. The previous 42 test-compilation errors are resolved.
+
+After successful AC/heavy-work guards,
+`CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib mast` passed 198 tests; one manual
+fuzz-seed generator is intentionally ignored. This runs the five keyed-node, thirteen dense and
+seven sparse tests for the first time, alongside existing MAST regressions. Test-inclusive Clippy
+(`CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`),
+pinned-nightly core formatting and staged whitespace checks passed. Full test log stays separate
+at uncommitted `.scratch/librarytree/logs/pr02-mast-tests.log`.
