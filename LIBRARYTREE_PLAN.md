@@ -279,7 +279,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | in-progress | Latest `9ebac7cc1`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, core seed generation, public API and full-feature Clippy pass | Final audit: add explicit structural-cycle/keyed-recursion cases. Processor witness checks await 05/09; fuzz smoke at 16. D2 preserves existing MASM source. |
-| 03 Chiplet foundation | planned | — | — | Address/layout contract |
+| 03 Chiplet foundation | in-progress | Base `7602d32ed` | Bounded source/address/test-graph review | First: relation-preserving Memory inverse/delta simplification. Processor checks remain blocked by 05/09 consumer migration. |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
