@@ -20,6 +20,13 @@ pub mod aead_stream;
 pub mod bitwise;
 pub mod columns;
 pub mod hasher_control;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Library expressions await the coordinated packed constraints"
+    )
+)]
 pub mod library;
 pub mod memory;
 pub mod selectors;

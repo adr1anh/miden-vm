@@ -3,7 +3,7 @@ use core::{
     mem::{align_of, size_of},
 };
 
-use super::columns::LibraryCols;
+use super::*;
 use crate::vm::{
     constraints::columns::{ChipletCols, NUM_CHIPLETS_COLS},
     trace::{CHIPLETS_CLK_COL, CHIPLETS_WIDTH, chiplets::library::*},
@@ -61,4 +61,77 @@ fn library_mutable_borrow_preserves_selector_and_clock() {
     let chiplets: &ChipletCols<usize> = row.as_slice().borrow();
     assert_eq!(chiplets.library().k, [120, 121, 122]);
     assert_eq!(chiplets.chip_clk, 888);
+}
+
+#[test]
+fn canonical_kind_bits_are_little_endian() {
+    let patterns = [PAD, MERKLE, ENV, MAST, LIST_START, LIST_CONTINUE, EMPTY_LIST, INVALID];
+    for (code, bits) in patterns.into_iter().enumerate() {
+        let expected: [Felt; 3] = core::array::from_fn(|i| Felt::from_u8(((code >> i) & 1) as u8));
+        assert_eq!(bits, expected, "kind code {code}");
+    }
+}
+
+#[test]
+fn kind_and_phase_predicates_cover_all_patterns_and_scopes() {
+    for code in 0_u8..8 {
+        let mut cells = [Felt::ZERO; TRACE_WIDTH];
+        let cols: &mut LibraryCols<Felt> = cells.as_mut_slice().borrow_mut();
+        cols.k = core::array::from_fn(|i| Felt::from_u8((code >> i) & 1));
+        let flags = LibraryKindFlags::<Felt>::new(cols);
+        let indicators = [
+            flags.is_pad,
+            flags.is_merkle,
+            flags.is_env,
+            flags.is_mast,
+            flags.is_list_start,
+            flags.is_list_continue,
+            flags.is_empty_list,
+            flags.is_invalid,
+        ];
+
+        for (kind, indicator) in indicators.into_iter().enumerate() {
+            let expected = Felt::from_u8(u8::from(kind == usize::from(code)));
+            assert_eq!(indicator, expected, "code {code}, kind {kind}");
+            for s_lib in [Felt::ZERO, Felt::ONE] {
+                for phase in [Felt::ZERO, Felt::ONE] {
+                    let scoped = LibraryPhaseFlags::new(s_lib, phase);
+                    assert_eq!(scoped.phase_a, s_lib * (Felt::ONE - phase));
+                    assert_eq!(scoped.phase_b, s_lib * phase);
+                    assert_eq!(scoped.kind_a(indicator), expected * s_lib * (Felt::ONE - phase));
+                    assert_eq!(scoped.kind_b(indicator), expected * s_lib * phase);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sigma_selection_truth_table() {
+    for sigma in 0_u8..4 {
+        let value = Felt::from_u8(sigma);
+        assert_eq!(sigma_lo(value), Felt::from_u8(sigma & 1), "sigma {sigma}");
+        assert_eq!(sigma_hi(value), Felt::from_u8(sigma >> 1), "sigma {sigma}");
+        assert_eq!(sigma_validity(value), Felt::ZERO, "sigma {sigma}");
+    }
+}
+
+#[test]
+fn sigma_validity_rejects_values_outside_selection_set() {
+    for sigma in [
+        Felt::from_u8(4),
+        Felt::from_u8(5),
+        Felt::from_u8(17),
+        Felt::from_u16(256),
+        -Felt::ONE,
+        -Felt::from_u8(2),
+    ] {
+        assert_ne!(sigma_validity(sigma), Felt::ZERO, "sigma {sigma}");
+    }
+}
+
+#[test]
+fn sigma_constants_are_base_field_inverses() {
+    assert_eq!(INV_THREE * Felt::from_u8(3), Felt::ONE);
+    assert_eq!(INV_SIX * Felt::from_u8(6), Felt::ONE);
 }
