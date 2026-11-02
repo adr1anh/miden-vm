@@ -267,7 +267,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | in-progress | Latest `3d389cf58`; prior slice SHAs in evidence below | Independent reviews; identity/UI, five domain and eleven label tests; frozen vectors; no-default-features and scoped rustfmt/Clippy | Next slice: typed initial/child namespace and procedure-key derivation. Objects, D1 node codec and bounded builders remain; Protocol codecs stay external. |
+| 01 Identities | in-progress | Latest `ed50330fc`; prior slice SHAs in evidence below | Independent reviews; identity/UI, domain/label/namespace frozen-vector tests; no-default-features and scoped rustfmt/Clippy | Next slice: owned EnvNode hash commitments. D1 node codec and bounded builders remain; Protocol codecs stay external. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
@@ -286,6 +286,11 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 
 ## Implementation evidence
 
+The domain audit found the selected environment/verifier allocations free in the current registry.
+Verifier configuration mounts require explicit forward-coordinate lexicographic ordering; existing
+`Word::Ord` compares coordinates in reverse and must not supply that canonical order. Add a vector
+that distinguishes those orders when implementing the configuration codec.
+
 ### PR 01 Typed execution identities
 
 Commit `bf840bc6d` adds the five opaque Word roles and `ExecutionDescriptor`, reusing canonical
@@ -302,25 +307,6 @@ Passed on Rust 1.99.0 after successful AC/heavy-work guards:
 - `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
 - `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib -- -D warnings`.
 - `cargo +nightly-2026-10-09 fmt -p miden-core -- --check` and staged whitespace checks.
-
-### PR 01 Exact labels and external TypedId validation
-
-Commit `3d389cf58` adds exact built-in decoding and explicit caller validation for opaque TypedIds,
-including a synthetic-codec frozen vector. No AccountId codec or unknown-codec recognition is
-assumed. Independent review found no actionable issue.
-
-Passed after successful AC/heavy-work guards:
-
-- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::label`:
-  all eleven tests, including malformed framing/payloads, EOF and callback validation boundaries.
-- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
-- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
-- Pinned-nightly core formatting and staged whitespace checks.
-
-The domain audit found the selected environment/verifier allocations free in the current registry.
-Verifier configuration mounts require explicit forward-coordinate lexicographic ordering; existing
-`Word::Ord` compares coordinates in reverse and must not supply that canonical order. Add a vector
-that distinguishes those orders when implementing the configuration codec.
 
 ### PR 01 Environment and verifier domains
 
@@ -350,3 +336,30 @@ Passed after successful AC/heavy-work guards:
 - `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
 - `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
 - `cargo +nightly-2026-10-09 fmt -p miden-core -- --check` and staged whitespace checks.
+
+### PR 01 Exact labels and external TypedId validation
+
+Commit `3d389cf58` adds exact built-in decoding and explicit caller validation for opaque TypedIds,
+including a synthetic-codec frozen vector. No AccountId codec or unknown-codec recognition is
+assumed. Independent review found no actionable issue.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::label`:
+  all eleven tests, including malformed framing/payloads, EOF and callback validation boundaries.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Namespace and procedure-key derivation
+
+Commit `ed50330fc` adds allocation-free typed initial/child namespace and procedure-key helpers.
+Independent review found no actionable issue; frozen vectors cover direct and accumulated parents.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::tests`:
+  four tests, including three new derivation tests and the existing identity encoding test.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
