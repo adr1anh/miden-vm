@@ -1490,3 +1490,21 @@ column. It identifies existing keyed K/D/mode/row evidence for native production
 classifications, first-row/padding principal gaps and END/root completion changes. Proceed under PR07's
 existing scope/acceptance; no shared semantic ambiguity or new policy/default was selected. No PR07
 code/check pass is claimed at this opening, and no GitHub PR or push was created.
+
+
+### PR 07 Initial Core validation checkpoint
+
+At branch `adr1anh/librarytree-07-core-resolution`, verified HEAD
+`66c8dd135e4356607e0087e8c8bd18977610be64`, the reviewed Core MAIN/Resolve/native sources
+remain uncommitted. After AC/heavy guards the actual AIR and processor libraries compile.
+AIR tests pass382/fail2: actual Core52/decoder27/aux5/Core36, degree9 and new Core binding tests
+pass; the expected column-map snapshot is now updated but not rerun. The legacy claim fixture's
+32-public assumption remains an explicit PR12 integration gate, with no dropped principal or
+compatibility fallback. Public execution passes17/fails1: the new all-mode native fixture reaches
+OutputStackOverflow(12); the strengthened mutation-rejection test passes. Logs `pr07-core-*`.
+These scoped results do not establish full proof acceptance or clear inherited gates.
+
+The user's repeated identity clarification reaffirms authoritative D3 and separate correction
+`a477732bc`; profile Rustdoc alignment is `71bf65973`. Both exact Page formulas, permanent binding,
+full L(I)/external(I) projection and required external Protocol inputs remain unchanged. This
+checkpoint updates documentation only, preserving all in-flight implementation. No GitHub PR or push.
