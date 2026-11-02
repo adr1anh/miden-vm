@@ -22,6 +22,7 @@ use pretty_assertions::assert_eq;
 use rstest::{fixture, rstest};
 
 use super::*;
+use crate as processor;
 use crate::{
     AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor, HostLibrary,
     trace::trace_state::MemoryReadsReplay,
@@ -1106,13 +1107,14 @@ fn chiplet_preflight_caps_combined_trace_len() {
     let mut memory_writes = MemoryWritesReplay::default();
     memory_writes.record_write_element(ZERO, ZERO, ContextId::root(), RowIndex::from(0));
 
-    let kernel = KernelDescriptor::default();
+    let library_len = 8;
     let ace = AceReplay::default();
-    let combined_len = bitwise.trace_len().expect("single bitwise operation length fits") + 2;
+    let combined_len =
+        library_len + bitwise.trace_len().expect("single bitwise operation length fits") + 2;
 
     assert!(matches!(
         non_hasher_trace_len(
-            &kernel,
+            library_len,
             &[],
             &memory_writes,
             &bitwise,
@@ -1122,7 +1124,8 @@ fn chiplet_preflight_caps_combined_trace_len() {
         Err(ExecutionError::TraceLenExceeded(limit)) if limit == combined_len - 1
     ));
     assert_eq!(
-        non_hasher_trace_len(&kernel, &[], &memory_writes, &bitwise, &ace, combined_len).unwrap(),
+        non_hasher_trace_len(library_len, &[], &memory_writes, &bitwise, &ace, combined_len)
+            .unwrap(),
         combined_len
     );
 }
@@ -1178,14 +1181,14 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
 
     for root_block in [false, true] {
         let logical = core(0, 3, root_block);
-        let physical = core(17, 3, root_block);
-        assert_eq!(physical, core(17, 32, root_block));
+        let physical = core(16, 3, root_block);
+        assert_eq!(physical, core(16, 32, root_block));
         assert_eq!(logical.len(), physical.len());
         let relocate = |address| {
             if address == ZERO {
                 ZERO
             } else {
-                address + Felt::from_u8(17)
+                address + Felt::from_u8(16)
             }
         };
         let mut saw_absent_parent = false;
@@ -1222,71 +1225,75 @@ fn buffered_and_prebuilt_controllers_share_the_checked_physical_writer() {
 
     use crate::trace::chiplets::layout::ControllerRow;
 
-    for prefix in [0, 11] {
-        let mut results = Vec::new();
-        for prebuilt in [false, true] {
-            let state = [Felt::from_u8(3); 12];
-            let mut hasher_requests = HasherRequestReplay::default();
-            hasher_requests.record_compress_input(state);
-            let prebuilt_hasher = if prebuilt {
-                let mut hasher = Hasher::default();
-                assert_eq!(hasher.compress(state).unwrap().0, ONE);
-                Some(hasher)
-            } else {
-                None
-            };
-            let mut bitwise = BitwiseReplay::default();
-            bitwise.record_u32xor(ONE, ONE);
-            let mut memory = MemoryWritesReplay::default();
-            memory.record_write_element(
-                ONE,
-                Felt::from_u8(4),
-                ContextId::root(),
-                RowIndex::from(0),
-            );
-            let chiplets = initialize_chiplets(
-                KernelDescriptor::default(),
-                &[],
-                memory,
-                bitwise,
-                KernelReplay::default(),
-                hasher_requests,
-                prebuilt_hasher,
-                AceReplay::default(),
-                &[],
-                MAX_TRACE_LEN,
-            )
-            .unwrap();
-            let layout = chiplets.layout(prefix).unwrap();
-            let eidos_height = pad_to_trace_length(chiplets.eidos_compression_trace_len());
-            let (chiplets, eidos, counts) = chiplets
-                .into_traces(layout, pad_to_trace_length(layout.trace_len()), eidos_height)
-                .unwrap();
-            for row in layout.controller().start()..layout.trace_len() {
-                assert_eq!(
-                    chiplets.trace[row * CHIPLETS_WIDTH + CHIPLETS_CLK_COL],
-                    Felt::from_u32(row as u32 + 1)
-                );
-            }
-            let row_zero = ControllerRow::default().logical_address();
-            assert_eq!(
-                layout.controller_address(row_zero).unwrap().to_felt(),
-                chiplets.trace[prefix * CHIPLETS_WIDTH + CHIPLETS_CLK_COL]
-            );
-            assert_eq!(
-                layout
-                    .controller_address(
-                        crate::trace::chiplets::layout::LogicalControllerAddress::ABSENT
-                    )
-                    .unwrap()
-                    .to_felt(),
-                ZERO
-            );
-            assert!(chiplets.trace[..prefix * CHIPLETS_WIDTH].iter().all(|&cell| cell == ZERO));
-            results.push((chiplets.trace, eidos.trace, counts));
-        }
-        assert_eq!(results[0], results[1]);
+    #[allow(dead_code)]
+    mod common {
+        include!("../../../tests/common/keyed_witness.rs");
     }
+    let fixture = common::execution_witness(vec![Operation::Noop], StackInputs::default());
+    let session = fixture.witness.into_parts().0.trace.resolution_session;
+    let library = LibraryTrace::new(&session).unwrap();
+    let prefix = library.prefix_len();
+    let mut results = Vec::new();
+    for prebuilt in [false, true] {
+        let state = [Felt::from_u8(3); 12];
+        let mut hasher_requests = HasherRequestReplay::default();
+        hasher_requests.record_compress_input(state);
+        let prebuilt_hasher = if prebuilt {
+            let mut hasher = Hasher::default();
+            assert_eq!(hasher.compress(state).unwrap().0, ONE);
+            Some(hasher)
+        } else {
+            None
+        };
+        let mut bitwise = BitwiseReplay::default();
+        bitwise.record_u32xor(ONE, ONE);
+        let mut memory = MemoryWritesReplay::default();
+        memory.record_write_element(ONE, Felt::from_u8(4), ContextId::root(), RowIndex::from(0));
+        let chiplets = initialize_chiplets(
+            &library,
+            &[],
+            memory,
+            bitwise,
+            hasher_requests,
+            prebuilt_hasher,
+            AceReplay::default(),
+            &[],
+            MAX_TRACE_LEN,
+        )
+        .unwrap();
+        let layout = chiplets.layout(prefix).unwrap();
+        let eidos_height = pad_to_trace_length(chiplets.eidos_compression_trace_len());
+        let (chiplets, eidos, counts) = chiplets
+            .into_traces(&library, layout, pad_to_trace_length(layout.trace_len()), eidos_height)
+            .unwrap();
+        for row in 0..layout.trace_len() {
+            assert_eq!(
+                chiplets.trace[row * CHIPLETS_WIDTH + CHIPLETS_CLK_COL],
+                Felt::from_u32(row as u32 + 1)
+            );
+        }
+        let row_zero = ControllerRow::default().logical_address();
+        assert_eq!(
+            layout.controller_address(row_zero).unwrap().to_felt(),
+            chiplets.trace[prefix * CHIPLETS_WIDTH + CHIPLETS_CLK_COL]
+        );
+        assert_eq!(
+            layout
+                .controller_address(
+                    crate::trace::chiplets::layout::LogicalControllerAddress::ABSENT
+                )
+                .unwrap()
+                .to_felt(),
+            ZERO
+        );
+        for row in 0..prefix {
+            assert_eq!(chiplets.trace[row * CHIPLETS_WIDTH], ONE);
+        }
+        assert_eq!(chiplets.trace[prefix * CHIPLETS_WIDTH], ZERO);
+        assert_eq!(chiplets.trace[prefix * CHIPLETS_WIDTH + 1], ONE);
+        results.push((chiplets.trace, eidos.trace, counts));
+    }
+    assert_eq!(results[0], results[1]);
 }
 
 /// Verifies that `validate_heights_within_max_trace_len` rejects any padded per-AIR height above
