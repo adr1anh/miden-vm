@@ -741,7 +741,7 @@ pub(crate) fn build_hasher_chiplet<'a>(
                 let _ = hasher.compress(input_state)?;
             },
             ResolvedHasherOp::AeadXof(ctx, clk, input_state) => {
-                let _ = hasher.compress_aead_xof(ctx, clk, input_state);
+                let _ = hasher.compress_aead_xof(ctx, clk, input_state)?;
             },
             ResolvedHasherOp::HashControlBlock((h1, h2, domain, expected_hash)) => {
                 let _ = hasher.hash_control_block(h1, h2, domain, expected_hash)?;
