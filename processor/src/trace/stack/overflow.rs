@@ -282,11 +282,12 @@ mod tests {
 
     #[test]
     fn restore_context_rejects_root_only_table() {
-        let mut table = OverflowTable::new();
+        let table = OverflowTable::new();
         // Table has only the root stack (len == 1), restore should fail.
-        let result = table.restore_context();
-        assert!(result.is_err(), "restore_context should reject root-only table");
+        let result = table.prepare_restore_context();
+        assert!(result.is_err(), "prepare_restore_context should reject root-only table");
         // Table should be unchanged: still has 1 stack.
+        assert_eq!(table.overflow.len(), 1);
         assert_eq!(table.num_elements_in_current_ctx(), 0);
     }
 
@@ -296,10 +297,13 @@ mod tests {
         table.start_context();
         table.push(Felt::new(42).unwrap(), RowIndex::from(1));
         // Child stack is not empty, restore should fail.
-        let result = table.restore_context();
-        assert!(result.is_err(), "restore_context should reject non-empty child stack");
+        let result = table.prepare_restore_context();
+        assert!(result.is_err(), "prepare_restore_context should reject non-empty child stack");
         // Table should be unchanged: child stack still has 1 element.
+        assert_eq!(table.overflow.len(), 2);
         assert_eq!(table.num_elements_in_current_ctx(), 1);
+        assert_eq!(table.last_update_clk_in_current_ctx(), Felt::new(1).unwrap());
+        assert_eq!(table.overflow[1].last().unwrap().value(), Felt::new(42).unwrap());
     }
 
     #[test]
@@ -307,13 +311,42 @@ mod tests {
         let mut table = OverflowTable::new();
         table.start_context();
         // Child stack is empty, restore should succeed.
-        let result = table.restore_context();
-        assert!(result.is_ok(), "restore_context should succeed with empty child stack");
+        let prepared = table
+            .prepare_restore_context()
+            .expect("prepare_restore_context should succeed with empty child stack");
+        assert_eq!(table.overflow.len(), 2);
+        assert!(table.commit_restore_context(prepared));
         // Back to root stack.
+        assert_eq!(table.overflow.len(), 1);
         assert_eq!(table.num_elements_in_current_ctx(), 0);
 
         // Second call should fail — only root stack remains.
-        let result2 = table.restore_context();
-        assert!(result2.is_err(), "restore_context on root stack should fail");
+        let result2 = table.prepare_restore_context();
+        assert!(result2.is_err(), "prepare_restore_context on root stack should fail");
+    }
+
+    #[test]
+    fn restore_context_rejects_stale_parent_address_without_mutation() {
+        let mut table = OverflowTable::new();
+        table.push(Felt::new(42).unwrap(), RowIndex::from(1));
+        table.start_context();
+        let stale = table.prepare_restore_context().unwrap();
+
+        // Replace the caller entry while retaining the original context and element counts.
+        let current = table.prepare_restore_context().unwrap();
+        assert!(table.commit_restore_context(current));
+        assert_eq!(table.pop(), Some(Felt::new(42).unwrap()));
+        let replacement = Felt::new(43).unwrap();
+        table.push(replacement, RowIndex::from(2));
+        table.start_context();
+
+        assert!(!table.commit_restore_context(stale));
+        assert_eq!(table.overflow.len(), 2);
+        assert_eq!(table.num_elements_in_current_ctx(), 0);
+        let parent = &table.overflow[0];
+        assert_eq!(parent.num_elements(), 1);
+        let entry = parent.last().unwrap();
+        assert_eq!(entry.value(), replacement);
+        assert_eq!(entry.clk, RowIndex::from(2));
     }
 }
