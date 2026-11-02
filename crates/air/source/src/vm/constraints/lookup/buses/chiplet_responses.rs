@@ -1,6 +1,6 @@
 //! Chiplet responses lookup column.
 //!
-//! Chiplet-side responses from the hasher, bitwise, memory, ACE, and kernel ROM chiplets,
+//! Chiplet-side responses from the hasher, bitwise, memory, and ACE chiplets,
 //! all sharing one LogUp column.
 //!
 //! Hasher operation-init responses are gated on the single-row controller selector encoding.
@@ -10,22 +10,19 @@
 //!
 //! Memory uses the runtime-muxed [`MemoryResponseMsg`] encoding (label + is_word mux)
 //! rather than splitting into four per-label variants. This keeps the response-column
-//! transition degree at 8; a per-variant split would bump it to 9.
+//! transition degree at 9 with the packed Memory selector.
 
 use core::{array, borrow::Borrow};
 
 use miden_core::field::PrimeCharacteristicRing;
-use miden_stark::lookup::{Deg, LookupBatch, LookupColumn, LookupGroup};
+use miden_stark::lookup::{Deg, LookupColumn, LookupGroup};
 
 use super::super::operations::{aead_stream, merkle};
 use crate::vm::constraints::{
     chiplets::{columns::PeriodicCols, hasher_control::flags::ControllerFlags},
     lookup::{
         chiplet_air::{ChipletBusContext, ChipletLookupBuilder},
-        messages::{
-            AceInitMsg, BitwiseMsg, BusId, HasherMsg, HasherPayload, KernelRomMsg,
-            MemoryResponseMsg,
-        },
+        messages::{AceInitMsg, BitwiseMsg, BusId, HasherMsg, HasherPayload, MemoryResponseMsg},
     },
     utils::{BoolNot, pack_u32_bytes_le},
 };
@@ -34,10 +31,8 @@ use crate::vm::constraints::{
 ///
 /// All adds gate on per-chiplet `chiplet_active.*` flags which are mutually exclusive (at
 /// most one chiplet runs per row). Within the hasher branch, init variants are gated by
-/// mutually exclusive selector/start combinations. The kernel-ROM branch
-/// emits two fractions per active row: an INIT-labeled remove (multiplicity 1) plus a
-/// CALL-labeled add with multiplicity equal to the row's `multiplicity` column. Every
-/// other chiplet emits exactly one fraction when active. AEAD stream rows emit four
+/// mutually exclusive selector/start combinations. Other responding chiplets emit one fraction
+/// when active. AEAD stream rows emit four
 /// byte-pair removals. Per-row max: 4.
 pub(in crate::vm::constraints::lookup) const MAX_INTERACTIONS_PER_ROW: usize = 4;
 
@@ -61,7 +56,6 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_responses<LB>(
     let bw = local.bitwise();
     let mem = local.memory();
     let ace = local.ace();
-    let krom = local.kernel_rom();
 
     // Hash-start and continuation flags on controller rows.
     let hs0: LB::Expr = ctrl.s0.into();
@@ -149,12 +143,12 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_responses<LB>(
                             let result = and.clone() + bw_op.clone() * (xor - and);
                             BitwiseMsg { op: bw_op, a, b, result }
                         },
-                        Deg { v: 3, u: 5 },
+                        Deg { v: 6, u: 8 },
                     );
 
                     aead_stream::emit_byte_checks::<LB, _>(g, ctx, &aead_phase);
 
-                    // Memory response: runtime (is_read, is_word) mux keeps column transition at 8.
+                    // Memory response: runtime (is_read, is_word) mux and degree-four scope.
                     g.add(
                         "memory",
                         ctx.chiplet_active.memory.clone(),
@@ -184,7 +178,7 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_responses<LB>(
                                 word,
                             }
                         },
-                        Deg { v: 3, u: 7 },
+                        Deg { v: 4, u: 8 },
                     );
 
                     // ACE init.
@@ -202,33 +196,7 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_responses<LB>(
                                 num_eval,
                             }
                         },
-                        Deg { v: 5, u: 6 },
-                    );
-
-                    // Kernel ROM: two fractions per active row.
-                    // INIT remove (multiplicity 1) is balanced by the boundary correction.
-                    // CALL add carries the syscall multiplicity.
-                    let kernel_gate = ctx.chiplet_active.kernel_rom.clone();
-                    g.batch(
-                        "kernel_rom",
-                        kernel_gate,
-                        |b| {
-                            let krom_mult: LB::Expr = krom.multiplicity.into();
-                            let digest: [LB::Expr; 4] = krom.root.map(LB::Expr::from);
-
-                            b.remove(
-                                "kernel_rom_init",
-                                KernelRomMsg::init(digest.clone()),
-                                Deg { v: 5, u: 6 },
-                            );
-                            b.insert(
-                                "kernel_rom_call",
-                                krom_mult,
-                                KernelRomMsg::call(digest),
-                                Deg { v: 6, u: 6 },
-                            );
-                        },
-                        Deg { v: 7, u: 7 }, // (V, U) = (2 + 5, 2 + 5); kernel_rom flag deg 5
+                        Deg { v: 6, u: 7 },
                     );
                 },
                 COLUMN_DEG,

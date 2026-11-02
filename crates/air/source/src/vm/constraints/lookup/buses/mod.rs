@@ -53,10 +53,6 @@ pub(in crate::vm::constraints::lookup) mod chiplet_requests;
 pub(in crate::vm::constraints::lookup) mod chiplet_responses;
 pub(in crate::vm::constraints::lookup) mod hash_kernel;
 pub(in crate::vm::constraints::lookup) mod hasher_returns;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Library lookups await the coordinated packed cutover")
-)]
 pub(crate) mod library;
 pub(in crate::vm::constraints::lookup) mod lookup_op_flags;
 pub(in crate::vm::constraints::lookup) mod stack_overflow;
@@ -78,18 +74,18 @@ pub(in crate::vm::constraints::lookup) use lookup_op_flags::LookupOpFlags;
 /// `build_chiplet_selectors` but does NOT emit any `when` / `assert_*` calls, so it is
 /// safe to run in parallel with the constraint-path chiplet selector pass.
 pub(crate) struct ChipletActiveFlags<E> {
-    /// `is_active` for the hasher controller sub-chiplet (= `s_ctrl`).
+    /// Direct scope for the Library prefix.
+    pub library: E,
+    /// `is_active` for the hasher controller sub-chiplet.
     pub controller: E,
     /// `is_active` for normal bitwise rows.
     pub bitwise: E,
-    /// `is_active` for AEAD stream rows inside the bitwise selector region.
+    /// `is_active` for the separate AEAD stream section.
     pub aead_stream: E,
-    /// `is_active` for the memory chiplet (= `s01 - s012`).
+    /// `is_active` for the memory chiplet.
     pub memory: E,
-    /// `is_active` for the ACE chiplet (= `s012 - s0123`).
+    /// `is_active` for the ACE chiplet.
     pub ace: E,
-    /// `is_active` for the kernel ROM chiplet (= `s0123 - s01234`).
-    pub kernel_rom: E,
 }
 
 impl<E> ChipletActiveFlags<E>
@@ -100,47 +96,38 @@ where
     ///
     /// Mirrors the active-flag block of
     /// [`build_chiplet_selectors`](super::super::chiplets::selectors::build_chiplet_selectors):
-    /// - `s_ctrl = chiplets[0]`
-    /// - virtual `s0 = 1 - s_ctrl`
-    /// - prefix chain `s01 / s012 / s0123 / s01234`
-    /// - `is_bitwise = s0 - s01`
-    /// - `aead_stream = is_bitwise * stream_mode`
-    /// - `normal_bitwise = is_bitwise - aead_stream`
-    /// - `is_memory = s01 - s012`, `is_ace = s012 - s0123`, `is_kernel_rom = s0123 - s01234`
+    /// The six shared selector cells are `S_lib, C, A, m, a, b`. Prefix products
+    /// scope the later selectors so payload cells in earlier sections cannot activate them.
     pub fn from_chiplet_cols<V>(local: &ChipletCols<V>) -> Self
     where
         V: Copy,
         E: Algebra<V>,
     {
-        let s_ctrl: E = local.chiplets[0].into();
-        let s1: E = local.chiplets[1].into();
-        let s2: E = local.chiplets[2].into();
-        let s3: E = local.chiplets[3].into();
-        let s4: E = local.chiplets[4].into();
-        let stream_mode: E = local.bitwise_stream_mode().into();
+        let library: E = local.chiplets[0].into();
+        let controller_selector: E = local.chiplets[1].into();
+        let aead_selector: E = local.chiplets[2].into();
+        let memory_end: E = local.chiplets[3].into();
+        let ace_end: E = local.chiplets[4].into();
+        let bitwise_end: E = local.chiplets[5].into();
 
-        // Virtual non-hasher selector and prefix products.
-        let s0 = E::ONE - s_ctrl.clone();
-        let s01 = s0.clone() * s1;
-        let s012 = s01.clone() * s2;
-        let s0123 = s012.clone() * s3;
-        let s01234 = s0123.clone() * s4;
-
-        // Active flags via the subtraction trick.
-        let is_bitwise = s0 - s01.clone();
-        let aead_stream = is_bitwise.clone() * stream_mode;
-        let bitwise = is_bitwise - aead_stream.clone();
-        let memory = s01 - s012.clone();
-        let ace = s012 - s0123.clone();
-        let kernel_rom = s0123 - s01234;
+        let after_library = E::ONE - library.clone();
+        let controller = after_library.clone() * controller_selector.clone();
+        let after_controller = after_library * (E::ONE - controller_selector);
+        let aead_stream = after_controller.clone() * aead_selector.clone();
+        let after_aead = after_controller * (E::ONE - aead_selector);
+        let after_memory = after_aead.clone() * memory_end;
+        let memory = after_aead - after_memory.clone();
+        let after_ace = after_memory.clone() * ace_end;
+        let ace = after_memory - after_ace.clone();
+        let bitwise = after_ace * (E::ONE - bitwise_end);
 
         Self {
-            controller: s_ctrl,
+            library,
+            controller,
             bitwise,
             aead_stream,
             memory,
             ace,
-            kernel_rom,
         }
     }
 }

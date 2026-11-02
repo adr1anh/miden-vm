@@ -24,6 +24,7 @@ use crate::{
 };
 
 /// Mast B simultaneously requests key compression and supplies both Resolve demand types.
+#[cfg(test)]
 pub(crate) const MAX_INTERACTIONS_PER_ROW: usize = 3;
 
 /// Emit Library interactions into an existing exclusive lookup group.

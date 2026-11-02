@@ -58,15 +58,16 @@ const _: () = assert!(
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum BusId {
     // --- Out-of-circuit (boundary correction / reduced_aux_values) ---
-    /// Kernel ROM init: kernel procedure digests from variable-length public inputs.
-    KernelRomInit = 0,
+    /// Retired Kernel ROM initialization slot. No interaction is emitted on this bus.
+    ReservedKernelRomInit = 0,
     /// Block hash table (decoder p2): root program hash boundary correction.
     BlockHashTable = 1,
     /// Log-deferred state: initial/final deferred-root boundary correction.
     LogDeferredRoot = 2,
 
     // --- In-circuit buses ---
-    KernelRomCall = 3,
+    /// Retired digest-based kernel call slot. No interaction is emitted on this bus.
+    ReservedKernelRomCall = 3,
     HasherLinearHashInit = 4,
     /// Reserved hasher bus id. One-row controller rows use `HasherReturnHash`.
     ReservedHasherBus5 = 5,
@@ -145,10 +146,10 @@ impl BusId {
 //
 // If a new bus is added: append it after the current tail and add a matching assert for the new
 // variant. Renumbering existing entries is a protocol change and requires regenerated bindings.
-const _: () = assert!(BusId::KernelRomInit as usize == 0);
+const _: () = assert!(BusId::ReservedKernelRomInit as usize == 0);
 const _: () = assert!(BusId::BlockHashTable as usize == 1);
 const _: () = assert!(BusId::LogDeferredRoot as usize == 2);
-const _: () = assert!(BusId::KernelRomCall as usize == 3);
+const _: () = assert!(BusId::ReservedKernelRomCall as usize == 3);
 const _: () = assert!(BusId::HasherLinearHashInit as usize == 4);
 const _: () = assert!(BusId::ReservedHasherBus5 as usize == 5);
 const _: () = assert!(BusId::HasherAbsorption as usize == 6);
@@ -737,32 +738,6 @@ pub struct AeadEidosCompressionOutputPairMsg<E> {
     pub value1: E,
 }
 
-// KERNEL ROM MESSAGE
-// ================================================================================================
-
-/// Kernel ROM message (4 elements): `bus_prefix[bus] + [digest[4]]`.
-///
-/// Two bus domains: INIT (one remove per declared procedure, balanced by the boundary
-/// correction from public inputs) and CALL (one insert per SYSCALL, carrying the
-/// multiplicity from kernel ROM column 0; balanced by decoder-emitted SYSCALL removes).
-#[derive(Clone, Debug)]
-pub struct KernelRomMsg<E> {
-    bus: BusId,
-    pub digest: WordFields<E>,
-}
-
-impl<E: PrimeCharacteristicRing + Clone> KernelRomMsg<E> {
-    /// Kernel procedure call message (SYSCALL request side + chiplet CALL response).
-    pub fn call(digest: WordFields<E>) -> Self {
-        Self { bus: BusId::KernelRomCall, digest }
-    }
-
-    /// Kernel procedure init message (public-input boundary + chiplet INIT response).
-    pub fn init(digest: WordFields<E>) -> Self {
-        Self { bus: BusId::KernelRomInit, digest }
-    }
-}
-
 // ACE MESSAGE
 // ================================================================================================
 
@@ -1101,18 +1076,6 @@ where
             BusId::StackOverflowTable as usize,
             [self.clk.clone(), self.val.clone(), self.prev.clone()],
         )
-    }
-}
-
-// --- KernelRomMsg --------------------------------------------------------------------------------
-
-impl<E, EF> LookupMessage<E, EF> for KernelRomMsg<E>
-where
-    E: PrimeCharacteristicRing + Clone,
-    EF: PrimeCharacteristicRing + Clone + Algebra<E>,
-{
-    fn encode(&self, challenges: &Challenges<EF>) -> EF {
-        challenges.encode(self.bus as usize, self.digest.clone())
     }
 }
 

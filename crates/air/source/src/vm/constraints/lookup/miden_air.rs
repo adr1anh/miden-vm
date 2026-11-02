@@ -1,12 +1,13 @@
 //! Boundary corrections and normalized committed-sum metadata for the Miden VM LogUp argument.
 
-use alloc::vec::Vec;
-
-use miden_core::{WORD_SIZE, field::PrimeCharacteristicRing};
+use miden_core::{Felt, WORD_SIZE, field::PrimeCharacteristicRing};
 use miden_stark::lookup::BoundaryBuilder;
 
-use super::messages::{BlockHashMsg, KernelRomMsg, LogDeferredMsg};
-use crate::vm::MIDEN_AIR_COUNT;
+use super::{
+    buses::library::emit_open_seed,
+    messages::{BlockHashMsg, LogDeferredMsg},
+};
+use crate::vm::{MIDEN_AIR_COUNT, NUM_CHIPLETS_PUBLIC_VALUES};
 
 // COMMITTED NORMALIZED SUM COUNT
 // ================================================================================================
@@ -26,14 +27,14 @@ pub const NUM_LOGUP_COMMITTED_FINALS: usize = MIDEN_AIR_COUNT;
 /// - `LogDeferredRoot` lives on `MAIN_COLUMN_SHAPE[0]` (block_stack + range + log-cap merged
 ///   column).
 pub(crate) fn emit_core_boundary<B: BoundaryBuilder>(boundary: &mut B) {
-    // The core boundary's statement inputs arrive as the single var-len slice
-    // `[program_hash (4) | deferred_root (4)]`. Absent inputs (debug walker on a bare trace)
-    // default to zero, mirroring `emit_chiplets_boundary`'s handling of an empty digest group.
-    let stmt = boundary.var_len_public_inputs().first().copied().unwrap_or_default();
-    let program_hash: [B::F; 4] =
-        core::array::from_fn(|i| stmt.get(i).copied().unwrap_or(B::F::ZERO));
-    let final_state: [B::F; 4] =
-        core::array::from_fn(|i| stmt.get(WORD_SIZE + i).copied().unwrap_or(B::F::ZERO));
+    // Core's legacy program-hash/deferred prefix stays explicit until the root/claim cutover.
+    // Bare-trace tools must supply statement data rather than silently invent zero authority.
+    let inputs = boundary.var_len_public_inputs();
+    assert_eq!(inputs.len(), 1, "Core boundary requires one explicit input slice");
+    let stmt = inputs[0];
+    assert_eq!(stmt.len(), 2 * WORD_SIZE, "Core boundary requires its complete fixed prefix");
+    let program_hash: [B::F; 4] = core::array::from_fn(|i| stmt[i]);
+    let final_state: [B::F; 4] = core::array::from_fn(|i| stmt[WORD_SIZE + i]);
 
     // Block-hash seed: +1 / encode(BLOCK_HASH_TABLE, [ph, 0, 0, 0]).
     //
@@ -65,25 +66,16 @@ pub(crate) fn emit_core_boundary<B: BoundaryBuilder>(boundary: &mut B) {
 }
 
 /// Emit boundary corrections for Chiplets lookup columns.
-pub(crate) fn emit_chiplets_boundary<B: BoundaryBuilder>(boundary: &mut B) {
-    #[allow(clippy::chunks_exact_to_as_chunks)]
-    let kernel_digests: Vec<[B::F; 4]> = boundary
-        .var_len_public_inputs()
-        .first()
-        .map(|felts| {
-            felts
-                .as_chunks::<WORD_SIZE>()
-                .0
-                .iter()
-                .map(|d| [d[0], d[1], d[2], d[3]])
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Kernel ROM init: one contribution per kernel procedure digest.
-    for digest in kernel_digests {
-        boundary.add("kernel_rom_init", KernelRomMsg::init(digest));
-    }
+///
+/// The caller supplies exactly the Chiplets public vector `R_E || N_kernel` through the
+/// existing boundary carrier. No auxiliary kernel list or absent-input default is accepted.
+pub(crate) fn emit_chiplets_boundary<B: BoundaryBuilder<F = Felt>>(boundary: &mut B) {
+    let [public_values] = boundary.var_len_public_inputs() else {
+        panic!("Chiplets boundary requires its validated public input slice");
+    };
+    assert_eq!(public_values.len(), NUM_CHIPLETS_PUBLIC_VALUES);
+    let environment_root = core::array::from_fn(|i| public_values[i]);
+    emit_open_seed(boundary, environment_root);
 }
 
 // TESTS

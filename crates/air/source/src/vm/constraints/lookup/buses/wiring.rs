@@ -11,9 +11,8 @@
 //! selector, folded into a single `ace_flag`-gated batch with `sblock`-muxed multiplicities:
 //! `wire_0` fires with the same multiplicity `m_0` on both READ and EVAL rows, so it
 //! factors out; `wire_1` and `wire_2` get `sblock`-parameterized multiplicities that recover
-//! the original rational at every row. This drops the outer selector from degree 5
-//! (`is_read`/`is_eval`) to degree 4 (`ace_flag`), bringing the batch's contribution to
-//! `(deg(U_g), deg(V_g)) = (7, 8)`.
+//! the original rational at every row. The packed ACE scope has degree five; this mux keeps
+//! the batch's contribution at `(deg(U_g), deg(V_g)) = (8, 9)`.
 //!
 //! Algebraic equivalence:
 //!
@@ -46,8 +45,8 @@
 //! The Eidos compression AIR emits the matching receive on the final footer row of the
 //! standalone block.
 //!
-//! The compression-link gate has degree `(5, 6)`, below the ACE batch's `(8, 7)`.
-//! Merging into the same group therefore leaves the column's transition at `(8, 7)`.
+//! The compression-link contribution has degree `(5, 6)`, below the ACE batch's `(9, 8)`.
+//! Merging into the same group therefore leaves the column at `(9, 8)`.
 //!
 //! AEAD stream output and request interactions are defined in
 //! [`super::super::operations::aead_stream`]. Merkle compression interactions are defined in
@@ -155,7 +154,7 @@ pub(in crate::vm::constraints::lookup) fn emit_v_wiring<LB>(
                                 v0: v_0.0.into(),
                                 v1: v_0.1.into(),
                             };
-                            b.insert("wire_0", m_0, wire_0, Deg { v: 5, u: 5 });
+                            b.insert("wire_0", m_0, wire_0, Deg { v: 6, u: 6 });
 
                             let wire_1 = AceWireMsg {
                                 clk: ace_clk.into(),
@@ -164,7 +163,7 @@ pub(in crate::vm::constraints::lookup) fn emit_v_wiring<LB>(
                                 v0: v_1.0.into(),
                                 v1: v_1.1.into(),
                             };
-                            b.insert("wire_1", wire_1_mult, wire_1, Deg { v: 6, u: 5 });
+                            b.insert("wire_1", wire_1_mult, wire_1, Deg { v: 7, u: 6 });
 
                             let wire_2 = AceWireMsg {
                                 clk: ace_clk.into(),
@@ -173,14 +172,15 @@ pub(in crate::vm::constraints::lookup) fn emit_v_wiring<LB>(
                                 v0: v_2.0.into(),
                                 v1: v_2.1.into(),
                             };
-                            b.insert("wire_2", wire_2_mult, wire_2, Deg { v: 5, u: 5 });
+                            b.insert("wire_2", wire_2_mult, wire_2, Deg { v: 6, u: 6 });
                         },
-                        Deg { v: 8, u: 7 }, // (V, U) = (4 + 4, 3 + 4); ace_flag deg 4
+                        Deg { v: 9, u: 8 }, /* Numerator four / denominator three plus ACE gate
+                                             * five. */
                     );
 
                     // ---- Hasher compression link (BusId::HasherCompressionLink) ----
 
-                    // Hash compression: +1 / encode(block, cv_in, cv_out).
+                    // Hash compression: degree-four gate with a linear compression message.
                     g.add(
                         "hash_compression",
                         f_hash_compression,
@@ -190,16 +190,16 @@ pub(in crate::vm::constraints::lookup) fn emit_v_wiring<LB>(
                             let cv_out = array::from_fn(|i| ctrl_row_data[i].into());
                             HasherCompressionLinkMsg { block, cv_in, cv_out }
                         },
-                        Deg { v: 5, u: 6 },
+                        Deg { v: 4, u: 5 },
                     );
 
                     merkle::emit_compression::<LB, _>(g, ctx);
 
                     aead_stream::emit_wiring::<LB, _>(g, ctx, &aead_phase);
                 },
-                Deg { v: 8, u: 7 },
+                Deg { v: 9, u: 8 },
             );
         },
-        Deg { v: 8, u: 7 },
+        Deg { v: 9, u: 8 },
     );
 }

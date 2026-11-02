@@ -109,11 +109,11 @@ pub(in crate::vm::constraints::lookup) fn emit_byte_checks<LB, G>(
                             bytes[4 + idx].into(),
                             bytes[8 + idx].into(),
                         ),
-                        Deg { v: 2, u: 3 },
+                        Deg { v: 4, u: 5 },
                     );
                 }
             },
-            Deg { v: 3, u: 4 },
+            Deg { v: 7, u: 8 }, // Four linear byte denominators and degree-four AEAD phase gate.
         );
     };
     remove_stream_row("aead_stream_row0", 0);
@@ -192,7 +192,7 @@ pub(in crate::vm::constraints::lookup) fn emit_wiring<LB, G>(
             name,
             stream_gate.clone() * aead_phase[phase_idx].clone(),
             || aead_stream_pair_msg::<LB>(stream, stream_next, phase_idx, first_lane_offset),
-            Deg { v: 3, u: 4 },
+            Deg { v: 4, u: 5 },
         );
     };
     add_stream_pair("aead_stream_pair0", 0, 0);
@@ -205,15 +205,15 @@ pub(in crate::vm::constraints::lookup) fn emit_wiring<LB, G>(
             b.add(
                 "aead_stream_pair1",
                 aead_stream_pair_msg::<LB>(stream, stream_next, 2, 2),
-                Deg { v: 3, u: 4 },
+                Deg { v: 4, u: 5 },
             );
             b.add(
                 "aead_stream_request",
                 aead_stream_request_msg::<LB>(stream, 0),
-                Deg { v: 3, u: 4 },
+                Deg { v: 4, u: 5 },
             );
         },
-        Deg { v: 4, u: 7 },
+        Deg { v: 5, u: 6 }, // Two linear denominators and degree-four AEAD phase gate.
     );
 
     g.batch(
@@ -223,15 +223,15 @@ pub(in crate::vm::constraints::lookup) fn emit_wiring<LB, G>(
             b.add(
                 "aead_stream_pair3",
                 aead_stream_pair_msg::<LB>(stream, stream_next, 6, 2),
-                Deg { v: 3, u: 4 },
+                Deg { v: 4, u: 5 },
             );
             b.add(
                 "aead_stream_request",
                 aead_stream_request_msg::<LB>(stream, 4),
-                Deg { v: 3, u: 4 },
+                Deg { v: 4, u: 5 },
             );
         },
-        Deg { v: 4, u: 7 },
+        Deg { v: 5, u: 6 },
     );
 }
 

@@ -285,7 +285,8 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_inits<LB, G>(
                     payload: HasherPayload::MerkleWord { direction_bit: bit, word },
                 }
             },
-            Deg { v: 5, u: 7 },
+            Deg { v: 6, u: 8 }, /* Simplified Merkle-init gate degree six; selected leaf degree
+                                 * two. */
         );
     }
 }
@@ -341,9 +342,9 @@ pub(in crate::vm::constraints::lookup) fn emit_siblings<LB, G>(
             }
         };
         if is_add {
-            g.add(op_name, gate, build, Deg { v: 5, u: 6 });
+            g.add(op_name, gate, build, Deg { v: 6, u: 7 });
         } else {
-            g.remove(op_name, gate, build, Deg { v: 5, u: 6 });
+            g.remove(op_name, gate, build, Deg { v: 6, u: 7 });
         }
     }
 }
@@ -395,6 +396,6 @@ where
         "merkle_return",
         merkle_return,
         || HasherMsg::return_hash(addr.clone(), merkle_digest.map(LB::Expr::from)),
-        Deg { v: 5, u: 6 },
+        Deg { v: 6, u: 7 },
     );
 }
