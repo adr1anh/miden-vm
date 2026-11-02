@@ -333,7 +333,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Fresh normal private attempt stops at exactly3 assembly migration errors; relocation/sidecar unit tests unrun, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
+| 09 Assembly/packages | in-progress | Opening base `82935d673` (final PR08 review scope) | Bounded assembler/package research identifies old body-based invocation model and existing explicit NamespacePlan; no PR09 implementation/check pass | Depends on 02,04,05; real keys/prebinding/retention/package9 reader activation and required external profile gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; release identity codec |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -1588,3 +1588,16 @@ PR08 is implemented-awaiting-validation. Full relation rejection for omitted/dou
 normal private/parallel/lookup fixtures, production forged matrices, generated/MASM/recursive/security
 and inherited gates remain. No proof acceptance or measured diagnostic-overhead claim. Proceed to
 PR09 keyed assembly/package cutover, preserving D2/D3, required external production inputs and all gates.
+
+
+### PR 09 Opening boundary
+
+Branch `adr1anh/librarytree-09-keyed-packages` starts at final PR08 review-scope commit
+`82935d6733278d871ab1f3f5a7e94f88b6e468d9`. Bounded source research confirms three assembly
+errors reflect child-based pending/finalized calls, while exec still inlines and procref emits D.
+Reuse PR04 NamespacePlan for declaration/key prebinding independent of optional bodies; then
+thread typed K through real Exec/Call/SYS builders and retain independently callable roots.
+Private/entry callable representation is distinct from the public-interface path restriction.
+Package9 requires coordinated required metadata and explicit profile-aware admission; no version-only
+bump, default home/profile, digest key, arbitrary I or old-format reinterpretation is selected.
+PR08 and all inherited/external acceptance gates remain. No PR09 code/check pass is claimed.
