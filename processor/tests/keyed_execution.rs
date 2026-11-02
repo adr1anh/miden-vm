@@ -36,7 +36,9 @@ use miden_processor::{
     ExecutionWitness, FastProcessor, Felt, FutureMaybeSend, Host, InvocationTag, LedgerLimits,
     LoadedMastForest, OpeningError, OpeningLimits, OpeningResource, OpeningStep, ProcessorState,
     Program, ReplayReadLimits, ResolutionWitness, SessionError, SessionLimits, SessionPhase,
-    SessionResource, StackInputs, SyncHost, Word, advice::AdviceMutation, event::EventError,
+    SessionResource, StackInputs, SyncHost, Word,
+    advice::AdviceMutation,
+    event::{EventError, EventId},
     operation::OperationError,
 };
 
@@ -245,6 +247,7 @@ struct CountingHost {
     unavailable_code: BTreeSet<Word>,
     substitute_witness: Option<ProcedureKey>,
     observations: Vec<Observation>,
+    fail_event: bool,
 }
 
 impl CountingHost {
@@ -265,6 +268,7 @@ impl CountingHost {
             unavailable_code: BTreeSet::new(),
             substitute_witness: None,
             observations: Vec::new(),
+            fail_event: false,
         }
     }
 
@@ -313,6 +317,9 @@ impl SyncHost for CountingHost {
             fmp: process.get_mem_value(process.ctx(), FMP_ADDR.as_canonical_u64() as u32),
             stack: process.get_stack_state(),
         });
+        if self.fail_event {
+            return Err(std::io::Error::other("fixture callback failure").into());
+        }
         Ok(Vec::new())
     }
 }
@@ -1901,4 +1908,95 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
         }
     }
     assert_eq!(cases, 40);
+}
+
+#[test]
+fn source_async_host_call_event_error_invalidates_the_published_target() {
+    let fixture = mode_matrix_fixture(Mode::Call, false);
+    let mut host = mode_matrix_host(&fixture, false);
+    let mut processor = source_dyncall_processor();
+    let mut resume = processor
+        .get_initial_resume_context(
+            &fixture.program,
+            fixture
+                .environment
+                .configuration(fixture.entry, namespace(&["native_fixture", "kernel", "v7"])),
+        )
+        .unwrap();
+    for _ in 0..256 {
+        if resume.resolution_session().uses().count() == 2 {
+            break;
+        }
+        assert!(
+            !poll_ready(processor.step_with_package_debug_info(
+                &mut host,
+                &mut resume,
+                &fixture.debug,
+            ))
+            .unwrap()
+        );
+    }
+    assert_eq!(resume.resolution_session().uses().count(), 2);
+    assert!(Arc::ptr_eq(resume.current_forest(), fixture.callee.mast_forest()));
+    let (target_exec, target_source, _) = fixture.points[2];
+    assert_eq!(resume.next_source_node_id(), Some(target_source));
+    let debug = resume.debug_info().unwrap();
+    assert_eq!(debug.source_node(target_source).unwrap().exec_node, target_exec);
+    assert_eq!(
+        debug[debug.first_asm_op_for_source_node(target_source).unwrap().context_name_idx].as_ref(),
+        "matrix::target"
+    );
+    let target_context = processor.state().ctx();
+    assert!(!target_context.is_root());
+    assert_ne!(target_context, host.inner.observations[1].context);
+    assert_eq!(processor.stack_depth(), 16);
+    assert_eq!(processor.state().get_mem_value(target_context, VALUE_ADDR), None);
+    assert_eq!(
+        processor
+            .state()
+            .get_mem_value(target_context, FMP_ADDR.as_canonical_u64() as u32),
+        Some(FMP_INIT_VALUE)
+    );
+    host.inner.fail_event = true;
+    let mut failed = false;
+    for _ in 0..64 {
+        match poll_ready(processor.step(&mut host, &mut resume)) {
+            Ok(false) => {},
+            Err(ExecutionError::EventError { event_id, error, .. }) => {
+                assert_eq!(event_id, EventId::from_felt(felt(OBSERVE)));
+                assert_eq!(error.to_string(), "fixture callback failure");
+                failed = true;
+                break;
+            },
+            result => panic!("expected late target callback failure: {result:?}"),
+        }
+    }
+    assert!(failed);
+    assert_eq!(host.inner.observations.len(), 3);
+    assert_eq!(host.inner.observations[2].principal, fixture.target.into_word());
+    assert_eq!(host.inner.observations[2].context, target_context);
+    assert_eq!(host.inner.observations[2].value, None);
+    assert_eq!(host.inner.observations[2].fmp, Some(FMP_INIT_VALUE));
+    assert_eq!(host.inner.witness_requests.len(), 3);
+    assert_eq!(*host.inner.code_requests.borrow(), vec![fixture.callee.hash()]);
+    let stack = processor.state().get_stack_state();
+    let clock = processor.state().clock();
+    let requests = host.inner.witness_requests.len();
+    let code_requests = host.inner.code_requests.borrow().len();
+    for _ in 0..2 {
+        assert!(matches!(
+            poll_ready(processor.step(&mut host, &mut resume)),
+            Err(ExecutionError::InvalidExecutionState)
+        ));
+        assert_eq!(processor.state().get_stack_state(), stack);
+        assert_eq!(processor.state().clock(), clock);
+        assert_eq!(processor.state().ctx(), target_context);
+        assert!(Arc::ptr_eq(resume.current_forest(), fixture.callee.mast_forest()));
+        assert!(Arc::ptr_eq(&resume.debug_info().unwrap(), &debug));
+        assert_eq!(resume.resolution_session().uses().count(), 2);
+        assert_eq!(host.inner.witness_requests.len(), requests);
+        assert_eq!(host.inner.code_requests.borrow().len(), code_requests);
+        assert_eq!(host.inner.observations.len(), 3);
+        assert!(!resume.is_complete());
+    }
 }
