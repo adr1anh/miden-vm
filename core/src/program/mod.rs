@@ -14,6 +14,12 @@ pub use claim::{CLAIM_DOMAIN_TAG, ExecutionClaim, NUM_CLAIM_ELEMENTS, claim_comm
 
 pub mod domain;
 
+mod environment;
+pub use environment::{
+    EnvironmentRoot, ExecutionDescriptor, ImplementationRoot, LabelCommitment, Namespace,
+    ProcedureKey,
+};
+
 mod request;
 pub use request::{PROOF_REQUEST_DOMAIN_TAG, proof_request_key};
 
