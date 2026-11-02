@@ -26,17 +26,21 @@ use miden_core::{
         Namespace, ProcedureKey,
     },
 };
-use miden_debug_types::{Location, SourceFile, SourceSpan};
+use miden_debug_types::{
+    ByteIndex, ColumnNumber, LineNumber, Location, SourceFile, SourceSpan, Uri,
+};
 use miden_mast_package::debug_info::{
-    DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, PackageDebugInfo, PackageDebugInfoBuilder,
+    DebugFunctionInfo, DebugSourceAsmOp, DebugSourceInlineCall, DebugSourceNode, DebugSourceNodeId,
+    PackageDebugInfo, PackageDebugInfoBuilder,
 };
 use miden_processor::{
-    BaseHost, ContextId, Continuation, EnvironmentSourceError, EnvironmentTraceLimits,
-    EnvironmentWitnessRequest, ExecutionEnvironment, ExecutionError, ExecutionOptions,
-    ExecutionWitness, FastProcessor, Felt, FutureMaybeSend, Host, InvocationTag, LedgerLimits,
-    LoadedMastForest, OpeningError, OpeningLimits, OpeningResource, OpeningStep, ProcessorState,
-    Program, ReplayReadLimits, ResolutionWitness, SessionError, SessionLimits, SessionPhase,
-    SessionResource, StackInputs, SyncHost, Word,
+    BaseHost, ContextId, Continuation, DebugRuntimeFrame, DebugRuntimeFrameKind,
+    EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
+    ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionWitness, FastProcessor, Felt,
+    FutureMaybeSend, Host, InvocationTag, KeyedMode, LedgerLimits, LoadedMastForest, OpeningError,
+    OpeningLimits, OpeningResource, OpeningStep, ProcessorState, Program, ReplayReadLimits,
+    ResolutionWitness, SessionError, SessionLimits, SessionPhase, SessionResource, StackInputs,
+    SyncHost, Word,
     advice::AdviceMutation,
     event::{EventError, EventId},
     operation::OperationError,
@@ -2328,6 +2332,390 @@ fn mode_matrix_host(fixture: &ModeMatrixFixture, local_target: bool) -> AsyncCod
     AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(false),
+    }
+}
+
+fn runtime_debug_inline_info(
+    info: PackageDebugInfo,
+    source: DebugSourceNodeId,
+    implementation: Word,
+) -> PackageDebugInfo {
+    let mut builder = PackageDebugInfoBuilder::from(Box::new(info));
+    let uri = Uri::new("file:///native-fixture/inline.masm");
+    let file = builder.add_file(uri.clone(), None);
+    let location = builder.add_location(Location::new(uri, ByteIndex::new(0), ByteIndex::new(1)));
+    let name = builder.add_string("source::inline_only");
+    let function = builder.add_function(DebugFunctionInfo::new(
+        None,
+        name,
+        file,
+        LineNumber::new(1).unwrap(),
+        ColumnNumber::new(1).unwrap(),
+        implementation,
+    ));
+    let op_end = builder[source].op_end;
+    builder[source].inline_calls.push(DebugSourceInlineCall {
+        op_idx: 0,
+        op_end,
+        callee_idx: function,
+        loc_idx: location,
+    });
+    *builder.build()
+}
+
+type RuntimeDebugObservation = (
+    DebugRuntimeFrameKind,
+    ProcedureKey,
+    ImplementationRoot,
+    Option<u32>,
+    Option<usize>,
+);
+
+fn runtime_debug_observation(frames: &[DebugRuntimeFrame]) -> Vec<RuntimeDebugObservation> {
+    frames
+        .iter()
+        .map(|frame| {
+            (
+                frame.kind(),
+                frame.requested_key(),
+                frame.resolved_implementation(),
+                frame.invocation_row().map(|row| row.as_u32()),
+                frame.native_use_index(),
+            )
+        })
+        .collect()
+}
+
+fn assert_runtime_debug_native_uses(
+    frames: &[DebugRuntimeFrame],
+    resume: &miden_processor::ResumeContext,
+) {
+    for frame in frames {
+        if let Some(index) = frame.native_use_index() {
+            let invocation = resume.resolution_session().uses().nth(index).unwrap();
+            assert_eq!(frame.requested_key(), invocation.procedure_key());
+            assert_eq!(frame.resolved_implementation(), invocation.implementation_root());
+            assert_eq!(frame.opening_id(), invocation.opening_id());
+            assert_eq!(frame.invocation_row(), Some(invocation.row()));
+        } else {
+            assert_eq!(frame.kind(), DebugRuntimeFrameKind::Entry);
+            assert_eq!(frame.invocation_row(), None);
+            let entry = resume
+                .resolution_session()
+                .bindings()
+                .iter()
+                .find(|binding| binding.procedure_key() == frame.requested_key())
+                .unwrap();
+            assert_eq!(frame.resolved_implementation(), entry.implementation_root());
+            assert_eq!(frame.opening_id(), entry.opening_id());
+        }
+    }
+}
+
+#[test]
+fn runtime_debug_frames_separate_real_modes_and_inline_sources_at_every_return_cut() {
+    for (mode, expected_mode) in [
+        (Mode::Exec, KeyedMode::Exec),
+        (Mode::Call, KeyedMode::Call),
+        (Mode::Syscall, KeyedMode::Syscall),
+        (Mode::Dyn, KeyedMode::Dyn),
+        (Mode::DynCall, KeyedMode::DynCall),
+    ] {
+        let mut fixture = mode_matrix_fixture(mode, false);
+        fixture.callee_debug = runtime_debug_inline_info(
+            fixture.callee_debug,
+            fixture.points[2].1,
+            fixture.callee.hash(),
+        );
+        assert_ne!(fixture.target.into_word(), fixture.callee.hash());
+        let mut baseline = None;
+        let mut other_execution = None::<(DebugRuntimeFrame, DebugRuntimeFrame)>;
+        for source_aware in [false, true] {
+            for asynchronous in [false, true] {
+                let mut host = mode_matrix_host(&fixture, false);
+                let mut processor = source_dyncall_processor();
+                let mut resume = processor
+                    .get_initial_resume_context(
+                        &fixture.program,
+                        fixture.environment.configuration(
+                            fixture.entry,
+                            namespace(&["native_fixture", "kernel", "v7"]),
+                        ),
+                    )
+                    .unwrap();
+                assert!(resume.debug_runtime_frames().is_empty());
+                let mut previous = Vec::<DebugRuntimeFrame>::new();
+                let mut observations = Vec::new();
+                let mut saw_target = 0;
+                let mut saw_inline = false;
+                let mut saw_return = false;
+                let mut saw_root_end = false;
+                let mut entry_activation = None;
+                let mut target_activation = None;
+                for _ in 0..1024 {
+                    let frames = resume.debug_runtime_frames();
+                    assert_runtime_debug_native_uses(&frames, &resume);
+                    if let Some(entry) = frames.first() {
+                        entry_activation.get_or_insert_with(|| entry.clone());
+                    }
+                    for (old, current) in previous.iter().zip(&frames) {
+                        assert!(old.is_same_frame(current), "{mode:?}: caller identity changed");
+                    }
+                    observations.push(runtime_debug_observation(&frames));
+                    let target =
+                        frames.iter().find(|frame| frame.requested_key() == fixture.target);
+                    if let Some(target) = target {
+                        target_activation.get_or_insert_with(|| target.clone());
+                        saw_target += 1;
+                        assert_eq!(frames.len(), 3, "source inline rows are not runtime frames");
+                        assert_eq!(target.kind(), DebugRuntimeFrameKind::Invoke(expected_mode));
+                        assert_eq!(
+                            target.resolved_implementation().into_word(),
+                            fixture.callee.hash()
+                        );
+                        assert_eq!(target.native_use_index(), Some(1));
+                        if source_aware
+                            && Arc::ptr_eq(resume.current_forest(), fixture.callee.mast_forest())
+                        {
+                            let source = resume.next_source_node_id().unwrap();
+                            assert_eq!(source, fixture.points[2].1);
+                            assert_eq!(
+                                resume
+                                    .debug_info()
+                                    .unwrap()
+                                    .inline_calls_for_operation(source, 0)
+                                    .count(),
+                                1
+                            );
+                            saw_inline = true;
+                        }
+                    }
+                    let root_end = matches!(
+                        resume.continuation_stack().peek_continuation(),
+                        Some(Continuation::FinishJoin(root)) if *root == fixture.program.entrypoint()
+                    );
+                    if root_end {
+                        saw_root_end = true;
+                        assert_eq!(frames.len(), 1, "entry survives until its actual root END");
+                        assert_eq!(frames[0].kind(), DebugRuntimeFrameKind::Entry);
+                        assert_eq!(frames[0].requested_key(), fixture.entry);
+                        assert_eq!(
+                            frames[0].resolved_implementation().into_word(),
+                            fixture.program.hash()
+                        );
+                        assert_eq!(frames[0].native_use_index(), None);
+                        let session = resume.resolution_session();
+                        assert_eq!(session.phase(), SessionPhase::PendingEntry);
+                        assert_eq!(session.counters().reserved_requests, 1);
+                        assert!(
+                            session.uses().all(|record| record.procedure_key() != fixture.entry)
+                        );
+                    }
+                    let returning = target.is_some()
+                        && matches!(
+                            resume.continuation_stack().peek_continuation(),
+                            Some(
+                                Continuation::FinishExec(_)
+                                    | Continuation::FinishCall(_)
+                                    | Continuation::FinishDyn(_)
+                            )
+                        );
+                    previous = frames;
+                    let complete = match (source_aware, asynchronous) {
+                        (false, false) => processor.step_sync(&mut host.inner, &mut resume),
+                        (false, true) => poll_ready(processor.step(&mut host, &mut resume)),
+                        (true, false) => processor.step_with_package_debug_info_sync(
+                            &mut host.inner,
+                            &mut resume,
+                            &fixture.debug,
+                        ),
+                        (true, true) => poll_ready(processor.step_with_package_debug_info(
+                            &mut host,
+                            &mut resume,
+                            &fixture.debug,
+                        )),
+                    }
+                    .unwrap();
+                    if root_end {
+                        assert!(complete, "actual root END discharges the final entry frame");
+                        let entry = *resume.resolution_session().uses().next_back().unwrap();
+                        assert_eq!(entry.procedure_key(), fixture.entry);
+                        assert_eq!(entry.implementation_root().into_word(), fixture.program.hash());
+                    }
+                    if returning {
+                        saw_return = true;
+                        assert!(
+                            resume
+                                .debug_runtime_frames()
+                                .iter()
+                                .all(|frame| { frame.requested_key() != fixture.target })
+                        );
+                    }
+                    if complete {
+                        break;
+                    }
+                }
+                assert!(resume.is_complete(), "{mode:?}/{source_aware}/{asynchronous}");
+                assert!(resume.debug_runtime_frames().is_empty());
+                assert!(saw_target > 1 && saw_return && saw_root_end);
+                assert_eq!(saw_inline, source_aware);
+                let entry = entry_activation.unwrap();
+                let target = target_activation.unwrap();
+                if let Some((other_entry, other_target)) = &other_execution {
+                    assert!(!entry.is_same_frame(other_entry));
+                    assert_eq!(target.invocation_row(), other_target.invocation_row());
+                    assert!(
+                        !target.is_same_frame(other_target),
+                        "equal rows in separate executions are distinct"
+                    );
+                }
+                other_execution = Some((entry, target));
+                if let Some(baseline) = &baseline {
+                    assert_eq!(&observations, baseline, "{mode:?}/{source_aware}/{asynchronous}");
+                } else {
+                    baseline = Some(observations);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancellation() {
+    let fixture = source_dyncall_fixture();
+    let mut inner = CountingHost::new(&fixture.environment, &[]);
+    inner.forests.insert(
+        fixture.callee.hash(),
+        LoadedMastForest::with_package_debug_info(
+            fixture.callee.mast_forest().clone(),
+            Ok(Some(fixture.callee_debug.clone())),
+        ),
+    );
+    let mut host = AsyncCodeHost {
+        inner,
+        suspend_code: AtomicBool::new(false),
+    };
+    let mut processor = source_dyncall_processor();
+    let mut resume = processor
+        .get_initial_resume_context(
+            &fixture.program,
+            fixture.environment.configuration(fixture.entry, namespace(&["kernel"])),
+        )
+        .unwrap();
+    reach_source_dyncall(&mut processor, &mut host, &mut resume, &fixture);
+    let before = resume.debug_runtime_frames();
+    assert_eq!(before.len(), 1);
+    let clock = processor.state().clock();
+    host.inner.unavailable_keys.insert(fixture.target);
+    assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
+        Err(ExecutionError::EnvironmentWitnessUnavailable { key, .. }) if key == fixture.target));
+    host.inner.unavailable_keys.clear();
+    host.suspend_code.store(true, Ordering::Relaxed);
+    {
+        let mut future = Box::pin(processor.step(&mut host, &mut resume));
+        assert!(future.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+    }
+    let pending = resume.debug_runtime_frames();
+    assert_eq!(runtime_debug_observation(&pending), runtime_debug_observation(&before));
+    assert!(before[0].is_same_frame(&pending[0]));
+    assert_eq!(processor.state().clock(), clock);
+    assert_eq!(resume.resolution_session().uses().count(), 0);
+    host.suspend_code.store(false, Ordering::Relaxed);
+    host.inner.unavailable_code.insert(fixture.callee.hash());
+    assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
+        Err(ExecutionError::ProcedureNotFound { root_digest, .. }) if root_digest == fixture.callee.hash()));
+    assert_eq!(
+        runtime_debug_observation(&resume.debug_runtime_frames()),
+        runtime_debug_observation(&before)
+    );
+    host.inner.unavailable_code.clear();
+    assert!(!poll_ready(processor.step(&mut host, &mut resume)).unwrap());
+    let frames = resume.debug_runtime_frames();
+    assert_eq!(frames.len(), 2);
+    assert!(before[0].is_same_frame(&frames[0]));
+    assert_eq!(frames[1].kind(), DebugRuntimeFrameKind::Invoke(KeyedMode::DynCall));
+    assert_eq!(frames[1].requested_key(), fixture.target);
+    assert_ne!(frames[1].requested_key().into_word(), fixture.callee.hash());
+    assert_eq!(frames[1].resolved_implementation().into_word(), fixture.callee.hash());
+    assert_eq!(frames[1].invocation_row(), Some(clock));
+    assert_eq!(frames[1].native_use_index(), Some(0));
+    assert_runtime_debug_native_uses(&frames, &resume);
+    run_steps(&mut processor, &mut host.inner, &mut resume);
+    assert!(resume.debug_runtime_frames().is_empty());
+    assert_eq!(resume.resolution_session().uses().count(), 2);
+    assert_eq!(host.inner.requests_for(fixture.target), 2);
+}
+
+#[test]
+fn runtime_debug_frames_keep_cached_recursive_exec_activations_distinct() {
+    let recursive = key(&["native_fixture"], "recursive_exec");
+    let mut forest = MastForest::new();
+    let condition = block(&mut forest, vec![Operation::Dup0, Operation::Eqz, Operation::Not]);
+    let decrement = block(&mut forest, vec![Operation::Push(-felt(1)), Operation::Add]);
+    let exec_self = invocation(&mut forest, Mode::Exec, recursive);
+    let on_nonzero = join(&mut forest, decrement, exec_self);
+    let on_zero = block(&mut forest, vec![Operation::Noop]);
+    let branch = SplitNodeBuilder::new([on_nonzero, on_zero]).add_to_forest(&mut forest).unwrap();
+    let root = join(&mut forest, condition, branch);
+    let program = finish_program(forest, root);
+    let environment =
+        EnvironmentFixture::new(&[(&["native_fixture"], "recursive_exec", program.hash())]);
+    assert_ne!(recursive.into_word(), program.hash());
+    for asynchronous in [false, true] {
+        let mut host = AsyncCodeHost {
+            inner: CountingHost::new(&environment, &[]),
+            suspend_code: AtomicBool::new(false),
+        };
+        let mut processor = FastProcessor::new(StackInputs::new(&[felt(3)]).unwrap());
+        let mut resume = processor
+            .get_initial_resume_context(
+                &program,
+                environment.configuration(recursive, namespace(&["kernel"])),
+            )
+            .unwrap();
+        let mut previous = Vec::<DebugRuntimeFrame>::new();
+        let mut invocations = Vec::<DebugRuntimeFrame>::new();
+        let mut maximum_depth = 0;
+        for _ in 0..512 {
+            let frames = resume.debug_runtime_frames();
+            maximum_depth = maximum_depth.max(frames.len());
+            assert_runtime_debug_native_uses(&frames, &resume);
+            for (old, current) in previous.iter().zip(&frames) {
+                assert!(old.is_same_frame(current));
+            }
+            for frame in &frames {
+                assert_eq!(frame.requested_key(), recursive);
+                assert_eq!(frame.resolved_implementation().into_word(), program.hash());
+                if let Some(index) = frame.native_use_index() {
+                    assert_eq!(frame.kind(), DebugRuntimeFrameKind::Invoke(KeyedMode::Exec));
+                    if index == invocations.len() {
+                        assert!(invocations.iter().all(|old| !old.is_same_frame(frame)));
+                        invocations.push(frame.clone());
+                    } else {
+                        assert!(invocations[index].is_same_frame(frame));
+                    }
+                }
+            }
+            previous = frames;
+            let complete = if asynchronous {
+                poll_ready(processor.step(&mut host, &mut resume))
+            } else {
+                processor.step_sync(&mut host.inner, &mut resume)
+            }
+            .unwrap();
+            if complete {
+                break;
+            }
+        }
+        assert!(resume.is_complete());
+        assert!(resume.debug_runtime_frames().is_empty());
+        assert_eq!(maximum_depth, 4);
+        assert_eq!(invocations.len(), 3);
+        assert_eq!(host.inner.requests_for(recursive), 1);
+        assert!(host.inner.code_requests.borrow().is_empty());
+        assert_eq!(resume.resolution_session().bindings()[0].counts().normal, 4);
+        assert_eq!(resume.resolution_session().uses().count(), 4);
+        assert!(processor.state().ctx().is_root());
     }
 }
 
