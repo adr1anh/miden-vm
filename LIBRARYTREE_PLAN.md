@@ -33,7 +33,9 @@ Included: core identities/MAST, processor and replay, packed AIR/proofs, assembl
 
 ## Workflow and completion rules
 
-The first goal commit contains this plan only. Subagents perform the main research, implementation and review work; the orchestrator owns integration, signed commits, branch transitions and acceptance. Assign an independent reviewer who did not implement the change. Subagents must not commit or switch branches unless the orchestrator explicitly delegates that responsibility.
+The first goal commit contains this plan only. Subagents perform the main research, implementation and review work; the orchestrator owns integration, signed commits, branch transitions and acceptance. Prefer fresh bounded agents (`fork_turns: none`) with explicit task/file ownership, applicable user/repository instructions and selected references. Assign an independent reviewer who did not implement the change. Subagents must not commit or switch branches unless the orchestrator explicitly delegates that responsibility.
+
+Use `LIBRARYTREE_CURRENT.md` for the current handoff, then read only the active PR and relevant invariant/spec sections it names. This plan remains the sole backlog/scope/dependency/acceptance authority, and its ledger/evidence owns durable completion. The brief is not a second status ledger. Routine source snapshots live in uncommitted `.scratch/librarytree/reference-cache/` with Page/date/SHA-256 provenance; superseded proposals/handoffs and raw artifacts are reference-only archives, not agent input. Preserve shared temporary sources for other readers.
 
 Use one local branch per proposed PR in a **linear stack**: PR NN has PR NN−1 as its Git parent/base, even when its semantic dependency list is shorter. Research and design can proceed in parallel according to semantic dependencies; shared-worktree edits must have clear ownership. Branch names below are exact defaults using the required `adr1anh/` prefix. PR 00 starts from the baseline. Keep incomplete/noncompiling units as an unsubmitted local stack with deferred checks recorded. **Do not create any GitHub PR, including a draft, until the user explicitly says to do so.** No push or publication is required to execute the local stack.
 
@@ -43,7 +45,7 @@ Choose many focused, reviewable commits as work proceeds; do not freeze commit c
 
 Local uncommitted scratch files are allowed. Stage explicit file paths for each intended commit so scratch files and unrelated work are not swept into it. When a material shared design, product, ABI, security, policy or scope decision is needed, stop the affected work and ask the user a concise, concrete question to resolve together. Continue independent preparation only while waiting; do not silently choose a scope or weaken a selected contract to proceed. Routine implementation choices remain delegated within the agreed contracts.
 
-Maintain root `PR_DESCRIPTION.md` as the rolling description of the current PR. Before switching branches, finalize and commit it separately from implementation and plan changes. Describe only the final scope: problem/resulting behavior, stack base and semantic dependencies, checks passed/deferred with reasons, and material risks/open gates. Do not preserve abandoned approaches or use a passing happy path as completion evidence.
+Maintain root `PR_DESCRIPTION.md` for final branch review scope, never current-work discovery. Before switching branches, finalize and commit it separately from implementation and plan changes. Describe the problem/resulting behavior, stack base and semantic dependencies, checks passed/deferred with reasons, and material risks/open gates. Do not preserve abandoned approaches or use a passing happy path as completion evidence.
 
 The status ledger below is authoritative for progress. Allowed states are `planned`, `in-progress`, `implemented-awaiting-validation`, `complete`, and `blocked`. Add actual implementation commit SHAs and concrete test/capture/regeneration evidence. `complete` means its acceptance criteria are met; a branch with unrun required tests is `implemented-awaiting-validation`. Record exact external/decision blockers without guessing a policy to clear them.
 
@@ -255,7 +257,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | in-progress | `bf840bc6d` typed identities | Independent review; canonical bytes/rejection test; public API type-confusion fixtures; no-default-features check; scoped rustfmt/Clippy | Next slice: register the selected environment/verifier domains. Label/object hashing, shared vectors and bounded builders remain. No Protocol policy is chosen. |
+| 01 Identities | in-progress | `bf840bc6d` identities; `ee4e7f937` domains | Independent reviews; canonical bytes/type-confusion checks; five domain/collision/framing/vector tests; no-default-features and scoped rustfmt/Clippy | Next slice: built-in canonical label constructors/preimages/hashing. TypedId/exact decoding, object builders and shared vectors remain. No Protocol policy is chosen. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
@@ -295,3 +297,17 @@ The domain audit found the selected environment/verifier allocations free in the
 Verifier configuration mounts require explicit forward-coordinate lexicographic ordering; existing
 `Word::Ord` compares coordinates in reverse and must not supply that canonical order. Add a vector
 that distinguishes those orders when implementing the configuration codec.
+
+### PR 01 Environment and verifier domains
+
+Commit `ee4e7f937` registers the eleven selected domains without activating the later claim or
+proof-request cutover. Independent review found no actionable issue. Frozen cryptographic vectors
+were produced with an independent portable reference checked against existing generic vectors;
+tests also compare literal IV/block framing to the production FeltSequence helper.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::domain`: five tests.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and whitespace checks.
