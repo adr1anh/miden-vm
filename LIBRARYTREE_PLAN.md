@@ -329,7 +329,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
-| 05 Runtime | in-progress | Ledger `739acedb7`; shared cap `99bfbe6d9`; opening `d8972f02c`; base `722392682` | Independent source/test reviews; 35 exact-module isolated tests, isolated Clippy/no_std and formatting pass | Actual processor still has the same ten callable-cutover errors. Next descriptor/session/use staging, then real invocation transitions; inherited processor/fuzz checks remain pending. |
+| 05 Runtime | in-progress | Session `f4b511056`; peak hook `768a79319`; ledger `739acedb7`; opening `d8972f02c`; base `722392682` | Independent source/test reviews; 52 exact-module isolated tests, strict isolated Clippy/no_std and formatting pass | Actual processor still has six callee() and four missing-Exec errors. Next real key-resolution/code-loading/entry and invocation transitions; inherited processor/fuzz checks remain pending. |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
@@ -969,3 +969,29 @@ buffers, then preflights its staged/replacement/root-reserved buffers against th
 peak. Reserving the whole configured ledger cap is unnecessary and can falsely reject modest work.
 Commit this independently reviewed hook separately from the coherent native session lifecycle.
 The scratch harness reexports the actual miden-air-definitions RowIndex; no source type is substituted.
+
+### PR 05 Native descriptor session validated; execution integration next
+
+Commit `768a79319` independently adds the private composable ledger peak ceiling. Commit `f4b511056`
+adds immutable-descriptor native session phases, authenticated binding cache, normal/syscall use
+records and native counts, separately reserved entry demand/capacity, root-END-only discharge and
+strict read-only finalization. Ordinary/entry may target kernel exports; actual syscall checks exact
+full immediate N against N_kernel on misses and hits. Consuming borrowed guards publish only after
+all reservations/admission checks; drop/failure changes no published state. This is native bookkeeping,
+not an actual-VM completion certificate or integration of context/principal/stack transitions.
+
+Independent production and 17-test reviews found no remaining actionable issue. Review found an omitted
+phase helper, which was added; a nested-if Clippy lint was fixed without suppression. After successful
+AC/heavy-work guards the exact-source harness passed all 52 tests (35 prior plus 17 session), strict
+test-inclusive Clippy and no-default-features. It reexports the real miden-air-definitions RowIndex;
+actual row binding remains a transition/Core/replay gate. Allocator-excess tests exercise sizing/recheck
+inputs, not a real allocator over-return/OOM. Pinned formatting/whitespace pass. Actual processor lib
+check still fails exactly six callee() and four missing Exec matches, with no environment diagnostic.
+
+Next bind this infrastructure to real execution through a shared prepared-target path: ENTRY, keyed
+same-context EXEC and actual root END, followed by all CALL/SYSCALL/dynamic modes. Establish exact
+sans-IO pending request, explicit descriptor/limit input and bounded sync/async witness-provider seams
+before assigning disjoint host/execution/tracer owners. Authentication precedes D loading; retain code
+root/procedure-root and advice-once checks. Current loaders publish cache/advice before debug validation,
+and current tracer finalization can fail after VM mutation; those fallible seams require real preflight,
+not a session-commit call added after the old flow. Preserve all D2 semantics and later proof gates.
