@@ -3,6 +3,7 @@ use miden_core::{Felt, ONE, ZERO};
 pub mod ace;
 pub mod bitwise;
 pub mod hasher;
+pub mod library;
 pub mod memory;
 
 // CONSTANTS

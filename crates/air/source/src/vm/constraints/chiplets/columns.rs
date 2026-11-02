@@ -9,6 +9,7 @@ use core::{
 use miden_core::{Felt, WORD_SIZE, field::PrimeCharacteristicRing};
 
 use super::super::{columns::indices_arr, ext_field::QuadFeltExpr};
+pub use super::library::columns::LibraryCols;
 use crate::vm::trace::chiplets::{
     bitwise::NUM_U32_BYTES,
     hasher::{DIGEST_LEN, STATE_WIDTH},
@@ -543,6 +544,7 @@ const _: () = {
 // `crate::vm::constraints::columns` module.
 
 impl_borrow_for_chiplet_cols!(ControllerCols);
+impl_borrow_for_chiplet_cols!(LibraryCols);
 impl_borrow_for_chiplet_cols!(BitwiseCols);
 impl_borrow_for_chiplet_cols!(AeadStreamCols);
 impl_borrow_for_chiplet_cols!(AeadStreamReadCols);

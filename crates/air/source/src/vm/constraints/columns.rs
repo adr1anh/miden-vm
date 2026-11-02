@@ -14,13 +14,15 @@ use super::{
     chiplets::columns::{
         AceCols, AceEvalCols, AceReadCols, AeadStreamCols, AeadStreamHighFirstCols,
         AeadStreamHighSecondCols, AeadStreamLowSecondCols, AeadStreamReadCols, BitwiseCols,
-        ControllerCols, KernelRomCols, MemoryCols,
+        ControllerCols, KernelRomCols, LibraryCols, MemoryCols,
     },
     decoder::columns::DecoderCols,
     stack::columns::StackCols,
     system::columns::SystemCols,
 };
-use crate::vm::trace::{CHIPLETS_DATA_WIDTH, CHIPLETS_MODE_COL, TRACE_WIDTH};
+use crate::vm::trace::{
+    CHIPLETS_DATA_WIDTH, CHIPLETS_MODE_COL, TRACE_WIDTH, chiplets::library::LIBRARY_COL_RANGE,
+};
 
 // CORE TRACE COLUMN STRUCT
 // ================================================================================================
@@ -94,6 +96,14 @@ pub struct ChipletCols<T> {
 pub const NUM_CHIPLETS_COLS: usize = size_of::<ChipletCols<u8>>();
 
 impl<T> ChipletCols<T> {
+    /// Returns the dormant Library overlay of shared cells `c[1..23]`.
+    ///
+    /// This view excludes `c[0]` and the global clock. The current `c[0]` selects Controller;
+    /// Library interpretation must wait for the coupled packed-section migration.
+    pub fn library(&self) -> &LibraryCols<T> {
+        self.chiplets[LIBRARY_COL_RANGE].borrow()
+    }
+
     /// Returns the five columns used by the chiplet selector hierarchy.
     ///
     /// The bitwise-local mode cell is exposed separately through

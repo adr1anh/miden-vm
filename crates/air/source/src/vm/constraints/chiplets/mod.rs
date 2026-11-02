@@ -20,6 +20,7 @@ pub mod aead_stream;
 pub mod bitwise;
 pub mod columns;
 pub mod hasher_control;
+pub mod library;
 pub mod memory;
 pub mod selectors;
 
