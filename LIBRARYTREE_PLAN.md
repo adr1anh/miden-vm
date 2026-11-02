@@ -1424,3 +1424,15 @@ periodic9 and `[4,4,3,2]` lookup redistribution with required public8/boundary i
 materializer still discards the retained owner and uses a zero prefix. Production Library dispatch,
 Core Resolve/root-END/statement activation, full Range/And8 closure and all measured/generated/
 recursive/security gates remain open. PR06 stays in progress; no GitHub PR or push was created.
+
+
+### PR 06 Coordinated packed cutover ownership
+
+Proceed jointly with MAIN/schema/periodic migration, matching lookup dispatch/redistribution, and
+native band/buffer/materialization migration. Introduce mandatory Chiplets8 public inputs and pass
+them explicitly to MAIN and the Open boundary; unconverted producers must reject missing inputs,
+without zero defaults or legacy-aux inference. Root owns public-count/boundary propagation and
+statement shape validation. Core Resolve/root-END and canonical claim/transport/recursive activation
+remain PR07/12 obligations. Intermediate consumers may break during this selected cutover; that is
+not permission to accept a partial proof relation or clear any inherited/final gate. Exact degree,
+lookup multiset/capacity, prefix/boundary, public-binding and generated/security checks remain required.
