@@ -1067,3 +1067,21 @@ unexpected late custom failures invalidate execution and prohibit success/export
 private authenticated records from bounded untrusted replay evidence, not unchecked constructors.
 Commit shared contracts and actual consumers in focused reviewable slices; conditional replay v4,
 all invocation/context modes, later AIR/statement/resource gates and D3 remain required.
+
+
+### PR 05 Shared preparation contracts committed; consumer edits in flight
+
+Commit `967887de5` adds public keyed event/actual-target/global-cycle projection types, owned tracer
+reservations, separate entry preparation/publication, per-cycle preflight and stopper preflight.
+Independent source review passed; a stale trait overview was corrected, and pinned formatting plus
+whitespace checks pass. Required tracer implementations are deliberately migrated next; no compile
+or integration pass is claimed for this contract-only intermediate commit. The last processor check
+preceded this change and retained ten inherited callee/missing-Exec errors.
+
+Execution and tracer owners now implement disjoint real consumers; root owns error wiring and commits.
+Prefer focused control-hash/return/address preflight refactors before committing serialization-coupled
+queues. Do not add transient serializer panics, no-op execution arms or silent replay-v3 field loss.
+Compact occurrence snapshots, lazy path reconstruction and explicit caller wire/peak/work policies
+are the selected replay implementation direction; the exact bounded reader/validation API still
+requires source review. No unchecked authenticated-record constructors or serialized policy override.
+All D3, runtime-mode, replay-v4, actual root-END and later packed/proof acceptance gates remain open.
