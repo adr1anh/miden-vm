@@ -995,3 +995,29 @@ before assigning disjoint host/execution/tracer owners. Authentication precedes 
 root/procedure-root and advice-once checks. Current loaders publish cache/advice before debug validation,
 and current tracer finalization can fail after VM mutation; those fallible seams require real preflight,
 not a session-commit call added after the old flow. Preserve all D2 semantics and later proof gates.
+
+### PR 05 Required execution/provider and retry boundary
+
+First integrate an explicit immutable ExecutionEnvironment containing descriptor and opening/ledger/
+session limits (no Default or digest-authority path), plus bounded sync/async environment-witness
+requests. DefaultHost may have no configured witness source: that is unavailable evidence and must
+fail closed, never authorize code by D. None from a provider does not prove cryptographic nonmembership.
+Keep provider failure, invalid opening, missing code and malformed requested-D root distinct.
+
+ResumeContext owns session and an owned pending key/binding across waits; step APIs borrow it rather
+than consuming it, so cancellation/prepublication retry cannot lose or replay a pop. Peek a retained
+keyed StartNode until one shared final transition consumes it. Authenticate fixed R_E/K and actual
+syscall N first, then prepare D-indexed local/host code, actual source/debug owner, advice-once work,
+VM stack/context/FMP/return/continuation and projected stopper/tracer checks. No whole-state clone or
+rollback claim. Known fallible checks precede publication. Unexpected arbitrary late tracer/stopper
+callback errors terminally invalidate that execution: no subsequent transition, successful output or
+proof/witness export; retry must not publish twice. Actual driver/transition tests must establish this.
+
+Assign host/config/source files before disjoint execution and tracer owners; shared API references
+are short findings, not another plan. First vertical slice is real ENTRY/EXEC/root END, then all modes.
+Distinguish invocation-node hash H(mode,K) from loaded body D and its END; outer invocation END keeps
+its own node digest. Root discharge uses actual entry activation/completed D, not empty continuations.
+When mandatory keyed records are added to replay persistence, bump **ExecutionWitness replay envelope
+to version 4** and reject previous/unknown layouts before payload parsing. Existing replay v3 has no
+resolution records; do not silently reuse it. This routine breaking-version migration is separate
+from the planned proof transport format 3 and execution claim v2, whose contracts are unchanged.
