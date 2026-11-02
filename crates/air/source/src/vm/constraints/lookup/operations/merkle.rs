@@ -249,10 +249,9 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_inits<LB, G>(
     let hs0: LB::Expr = ctrl.s0.into();
     let hs1: LB::Expr = ctrl.s1.into();
     let hs2: LB::Expr = ctrl.s2.into();
-    let merkle_or_padding: LB::Expr = local.controller_merkle_or_padding().into();
-    // The controller skeleton makes this product zero off controller rows. Avoiding an
-    // additional controller selector keeps the response gate within the degree bound.
-    let merkle_gate = merkle_or_padding * hs0;
+    // The specific MP/MV/MU row kinds already imply Merkle mode. Keeping only their
+    // Controller scope avoids multiplying the redundant derived mode into each init gate.
+    let merkle_gate = ctx.chiplet_active.controller.clone() * hs0;
     let merkle_start: LB::Expr = ctrl.merkle_is_start().into();
     let f_mp: LB::Expr = merkle_gate.clone() * hs1.not() * hs2.clone() * merkle_start.clone();
     let f_mv: LB::Expr = merkle_gate.clone() * hs1.clone() * hs2.not() * merkle_start.clone();
@@ -359,7 +358,7 @@ pub(in crate::vm::constraints::lookup) fn emit_compression<LB, G>(
     let local = ctx.local;
     let ctrl = local.controller();
     let controller_flag = ctx.chiplet_active.controller.clone();
-    let merkle_or_padding: LB::Expr = local.controller_merkle_or_padding().into();
+    let merkle_or_padding = local.controller().merkle_or_padding::<LB::Expr>();
     let ctrl_s0: LB::Expr = ctrl.s0.into();
     let f_merkle_compression = controller_flag * merkle_or_padding * ctrl_s0;
     let ctrl_state: [LB::Var; 12] = array::from_fn(|i| ctrl.state[i]);
@@ -385,17 +384,17 @@ where
 {
     let local = ctx.local;
     let ctrl = local.controller();
-    let merkle_or_padding: LB::Expr = local.controller_merkle_or_padding().into();
+    let merkle_or_padding = local.controller().merkle_or_padding::<LB::Expr>();
     let ctrl_s0: LB::Expr = ctrl.s0.into();
     let op_final: LB::Expr = local.controller_op_final().into();
-    // The controller skeleton makes this product zero off controller rows.
-    let merkle_return = merkle_or_padding * ctrl_s0 * op_final;
+    let merkle_return =
+        ctx.chiplet_active.controller.clone() * merkle_or_padding * ctrl_s0 * op_final;
     let addr: LB::Expr = local.chip_clk.into();
     let merkle_digest = ctrl.merkle_digest();
     g.add(
         "merkle_return",
         merkle_return,
         || HasherMsg::return_hash(addr.clone(), merkle_digest.map(LB::Expr::from)),
-        Deg { v: 3, u: 4 },
+        Deg { v: 5, u: 6 },
     );
 }

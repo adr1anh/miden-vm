@@ -205,16 +205,6 @@ impl<T> ChipletCols<T> {
     {
         self.chiplets[21]
     }
-
-    /// Returns the shared mode cell as interpreted by controller rows.
-    ///
-    /// Controller constraints bind this cell to `is_merkle + is_padding`.
-    pub fn controller_merkle_or_padding(&self) -> T
-    where
-        T: Copy,
-    {
-        self.chiplets[CHIPLETS_MODE_COL]
-    }
 }
 
 impl<T> Borrow<ChipletCols<T>> for [T] {

@@ -28,8 +28,6 @@ use crate::vm::constraints::{chiplets::columns::ControllerCols, utils::BoolNot};
 #[derive(Clone)]
 pub struct ControllerFlags<E> {
     pub is_hash: E,
-    pub is_merkle: E,
-    pub is_padding: E,
     pub is_invalid: E,
 }
 
@@ -39,23 +37,42 @@ impl<E: PrimeCharacteristicRing + Clone> ControllerFlags<E> {
         let s0: E = cols.s0.into();
         let s1: E = cols.s1.into();
         let s2: E = cols.s2.into();
-        let not_s0 = s0.not();
-        let not_s1 = s1.not();
-        let not_s2 = s2.not();
+        let is_hash = s1.not() * s2.not();
+        let is_invalid = s0.not() * s2;
 
-        let is_hash = not_s1.clone() * not_s2.clone();
-        let is_mp = s0.clone() * not_s1 * s2.clone();
-        let is_mv = s0.clone() * s1.clone() * not_s2.clone();
-        let is_mu = s0 * s1.clone() * s2.clone();
-        let is_padding = not_s0.clone() * s1 * not_s2;
-        let is_invalid = not_s0 * s2;
-        let is_merkle = is_mp + is_mv + is_mu;
+        Self { is_hash, is_invalid }
+    }
+}
 
-        Self {
-            is_hash,
-            is_merkle,
-            is_padding,
-            is_invalid,
+#[cfg(test)]
+mod tests {
+    use miden_core::Felt;
+
+    use super::*;
+
+    #[test]
+    fn derived_mode_and_row_kinds_cover_all_boolean_patterns() {
+        for code in 0_u8..8 {
+            let cols = ControllerCols {
+                s0: Felt::from_u8(code & 1),
+                s1: Felt::from_u8((code >> 1) & 1),
+                s2: Felt::from_u8((code >> 2) & 1),
+                state: [Felt::ZERO; 12],
+                row_data: [Felt::ZERO; 4],
+            };
+            let flags = ControllerFlags::<Felt>::new(&cols);
+            let mode = cols.merkle_or_padding::<Felt>();
+            let is_hash = matches!(code, 0 | 1);
+            let is_merkle = matches!(code, 3 | 5 | 7);
+            let is_padding = code == 2;
+            let is_invalid = matches!(code, 4 | 6);
+            assert_eq!(flags.is_hash, Felt::from_bool(is_hash), "hash kind {code}");
+            assert_eq!(flags.is_invalid, Felt::from_bool(is_invalid), "invalid kind {code}");
+            assert_eq!(mode, Felt::from_bool(!is_hash), "derived mode {code}");
+            assert_eq!(mode + flags.is_hash, Felt::ONE, "mode/hash complement {code}");
+            if !is_invalid {
+                assert_eq!(mode, Felt::from_bool(is_merkle || is_padding), "valid row kind {code}");
+            }
         }
     }
 }

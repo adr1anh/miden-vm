@@ -49,8 +49,8 @@ macro_rules! impl_borrow_for_chiplet_cols {
 /// Logical overlay for controller rows (`s_ctrl = 1`). The `s0/s1/s2` columns select the
 /// controller row kind; see `hasher_control::flags` for the encoding.
 ///
-/// `s_ctrl` (= `chiplets[0]`) and the shared mode cell are not part of this overlay. Controller
-/// code reads that shared cell through `ChipletCols::controller_merkle_or_padding()`.
+/// `s_ctrl` (= `chiplets[0]`) is not part of this overlay. Controller mode is derived from the
+/// row-kind selectors by [`Self::merkle_or_padding`].
 ///
 /// The controller uses a row-kind-dependent overlay to fit one compression request in one row:
 ///
@@ -83,6 +83,20 @@ pub struct ControllerCols<T> {
 }
 
 impl<T: Copy> ControllerCols<T> {
+    /// Derived Merkle-or-padding mode: `s1 + s2 - s1 * s2`.
+    ///
+    /// On valid Controller row kinds this is one for Merkle and padding rows, and zero for
+    /// hash rows. This expression has no chiplet scope; callers must scope its use to Controller
+    /// rows and enforce the row-kind validity constraints there.
+    pub fn merkle_or_padding<E: PrimeCharacteristicRing>(&self) -> E
+    where
+        T: Into<E>,
+    {
+        let s1: E = self.s1.into();
+        let s2: E = self.s2.into();
+        s1.clone() + s2.clone() - s1 * s2
+    }
+
     /// Returns the state tail (`state[8..12]`).
     ///
     /// On hash rows this is the input CV. On Merkle rows this is the output digest.

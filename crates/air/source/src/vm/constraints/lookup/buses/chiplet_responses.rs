@@ -19,7 +19,7 @@ use miden_stark::lookup::{Deg, LookupBatch, LookupColumn, LookupGroup};
 
 use super::super::operations::{aead_stream, merkle};
 use crate::vm::constraints::{
-    chiplets::columns::PeriodicCols,
+    chiplets::{columns::PeriodicCols, hasher_control::flags::ControllerFlags},
     lookup::{
         chiplet_air::{ChipletBusContext, ChipletLookupBuilder},
         messages::{
@@ -66,8 +66,8 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_responses<LB>(
     // Hash-start and continuation flags on controller rows.
     let hs0: LB::Expr = ctrl.s0.into();
     let not_hs0 = hs0.not();
-    let merkle_or_padding: LB::Expr = local.controller_merkle_or_padding().into();
-    let hash_gate = ctx.chiplet_active.controller.clone() * merkle_or_padding.not();
+    let rows = ControllerFlags::<LB::Expr>::new(ctrl);
+    let hash_gate = ctx.chiplet_active.controller.clone() * rows.is_hash;
 
     let state: [LB::Var; 12] = ctrl.state;
     let block_lo: [LB::Var; 4] = array::from_fn(|i| ctrl.state[i]);

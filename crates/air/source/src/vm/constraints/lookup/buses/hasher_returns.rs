@@ -9,11 +9,11 @@ use miden_stark::lookup::{Deg, LookupColumn, LookupGroup};
 
 use super::super::operations::merkle;
 use crate::vm::constraints::{
+    chiplets::hasher_control::flags::ControllerFlags,
     lookup::{
         chiplet_air::{ChipletBusContext, ChipletLookupBuilder},
         messages::HasherMsg,
     },
-    utils::BoolNot,
 };
 
 /// Upper bound on fractions this emitter pushes into its column per row.
@@ -30,9 +30,9 @@ pub(in crate::vm::constraints::lookup) fn emit_hasher_returns<LB>(
     let ctrl = local.controller();
 
     let controller_flag = ctx.chiplet_active.controller.clone();
-    let merkle_or_padding: LB::Expr = local.controller_merkle_or_padding().into();
+    let rows = ControllerFlags::<LB::Expr>::new(ctrl);
     let op_final: LB::Expr = local.controller_op_final().into();
-    let hash_return = controller_flag * merkle_or_padding.not() * op_final;
+    let hash_return = controller_flag * rows.is_hash * op_final;
 
     let addr: LB::Expr = local.chip_clk.into();
     let hash_result = ctrl.hash_cv();
@@ -46,13 +46,13 @@ pub(in crate::vm::constraints::lookup) fn emit_hasher_returns<LB>(
                         "hash_return",
                         hash_return,
                         || HasherMsg::return_hash(addr.clone(), hash_result.map(LB::Expr::from)),
-                        Deg { v: 3, u: 4 },
+                        Deg { v: 4, u: 5 },
                     );
                     merkle::emit_return::<LB, _>(g, ctx);
                 },
-                Deg { v: 3, u: 4 },
+                Deg { v: 5, u: 6 },
             );
         },
-        Deg { v: 3, u: 4 },
+        Deg { v: 5, u: 6 },
     );
 }

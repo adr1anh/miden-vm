@@ -41,21 +41,18 @@ pub fn enforce_controller_constraints<AB>(
     let merkle_start_next: AB::Expr = cols_next.merkle_is_start().into();
     let op_final: AB::Expr = local.controller_op_final().into();
     let s_ctrl_next: AB::Expr = next.chiplets[0].into();
-    let merkle_or_padding: AB::Expr = local.controller_merkle_or_padding().into();
+    let merkle_or_padding = cols.merkle_or_padding::<AB::Expr>();
     let controller_s0: AB::Expr = cols.s0.into();
 
-    // Do not multiply this gate by `s_ctrl`: controller selector constraints make it zero
-    // off controller rows, and the narrower form keeps continuation-routing degree unchanged.
     let controller_padding =
         chiplet.is_active.clone() * merkle_or_padding.clone() * controller_s0.not();
-    let controller_merkle = merkle_or_padding.clone() * controller_s0.clone();
+    let controller_merkle = chiplet.is_active.clone() * merkle_or_padding.clone() * controller_s0;
 
     // Trace skeleton.
     builder.when_first_row().assert_one(chiplet.is_active.clone());
     builder.when_first_row().assert_one(cols.s0);
 
-    let first_merkle_row: AB::Expr = cols.s1 + cols.s2 - cols.s1 * cols.s2;
-    builder.when_first_row().assert_zero(first_merkle_row * merkle_start.not());
+    builder.when_first_row().assert_zero(merkle_or_padding * merkle_start.not());
 
     let first_mv_row = Into::<AB::Expr>::into(cols.s1) * Into::<AB::Expr>::into(cols.s2).not();
     builder.when_first_row().assert_eq(local.controller_mrupdate_id(), first_mv_row);
@@ -65,12 +62,6 @@ pub fn enforce_controller_constraints<AB>(
         .assert_bools([cols.s0, cols.s1, cols.s2]);
     builder.when(chiplet.is_active.clone()).assert_bool(op_final.clone());
     builder.when(chiplet.is_active.clone()).assert_zero(rows.is_invalid.clone());
-    builder
-        .when(chiplet.is_active.clone())
-        .assert_eq(merkle_or_padding.clone(), rows.is_padding.clone() + rows.is_merkle.clone());
-    builder
-        .when(chiplet.is_active.not() * controller_s0)
-        .assert_zero(merkle_or_padding);
 
     // Padding rows stay padding until the controller section ends.
     {
@@ -132,9 +123,9 @@ pub fn enforce_controller_constraints<AB>(
         builder.assert_zero(cols.s2);
     }
     {
-        let merkle_or_padding_next: AB::Expr = next.controller_merkle_or_padding().into();
-        let merkle_cont_next = s_ctrl_next
-            * merkle_or_padding_next
+        let merkle_cont_next = chiplet.is_active.clone()
+            * s_ctrl_next
+            * cols_next.merkle_or_padding::<AB::Expr>()
             * Into::<AB::Expr>::into(cols_next.s0)
             * merkle_start_next.not();
         let builder = &mut builder.when(merkle_cont_next);
@@ -203,14 +194,16 @@ pub fn enforce_merkle_level_constraints<AB>(
     builder: &mut AB,
     local: &ChipletCols<AB::Var>,
     next: &ChipletCols<AB::Var>,
+    chiplet: &ChipletFlags<AB::Expr>,
 ) where
     AB: MidenAirBuilder,
 {
     let cols: &ControllerCols<AB::Var> = local.controller();
     let cols_next: &ControllerCols<AB::Var> = next.controller();
     let op_final: AB::Expr = local.controller_op_final().into();
-    let merkle_or_padding: AB::Expr = local.controller_merkle_or_padding().into();
-    let controller_merkle = merkle_or_padding * Into::<AB::Expr>::into(cols.s0);
+    let controller_merkle = chiplet.is_active.clone()
+        * cols.merkle_or_padding::<AB::Expr>()
+        * Into::<AB::Expr>::into(cols.s0);
     let level: AB::Expr = cols.merkle_level().into();
 
     builder
@@ -232,7 +225,7 @@ mod tests {
 
     use crate::vm::{
         ChipletCols,
-        constraints::chiplets::selectors::build_chiplet_selectors,
+        constraints::chiplets::selectors::{ChipletFlags, build_chiplet_selectors},
         trace::{
             AUX_TRACE_RAND_CHALLENGES, AUX_TRACE_WIDTH, CHIPLETS_DATA_WIDTH, CHIPLETS_MODE_COL,
             CHIPLETS_WIDTH,
@@ -247,8 +240,6 @@ mod tests {
     const CTRL_ROW_DATA_BASE: usize = CTRL_STATE_BASE + CTRL_STATE_WIDTH;
     const CTRL_OVERLAY_WIDTH: usize = size_of::<crate::vm::ControllerCols<u8>>();
     const OP_FINAL_COL: usize = CTRL_BASE + CTRL_OVERLAY_WIDTH;
-    const MERKLE_OR_PADDING_COL: usize = CHIPLETS_MODE_COL;
-
     const MP_VERIFY_SELECTORS: [u64; 3] = [1, 0, 1];
 
     struct ConstraintEvalBuilder {
@@ -367,7 +358,6 @@ mod tests {
             chip_clk: Felt::ONE,
         };
         row.chiplets[S_CTRL_COL] = Felt::ONE;
-        row.chiplets[MERKLE_OR_PADDING_COL] = Felt::ONE;
         row.chiplets[CTRL_BASE] = Felt::new_unchecked(selectors[0]);
         row.chiplets[CTRL_BASE + 1] = Felt::new_unchecked(selectors[1]);
         row.chiplets[CTRL_BASE + 2] = Felt::new_unchecked(selectors[2]);
@@ -407,7 +397,7 @@ mod tests {
         let mut builder = ConstraintEvalBuilder::new();
         let selectors = build_chiplet_selectors(&mut builder, local, next);
         super::enforce_controller_constraints(&mut builder, local, next, &selectors.controller);
-        super::enforce_merkle_level_constraints(&mut builder, local, next);
+        super::enforce_merkle_level_constraints(&mut builder, local, next, &selectors.controller);
         builder.evaluations
     }
 
@@ -433,6 +423,141 @@ mod tests {
     fn merkle_controller_accepts_valid_index_route() {
         let (local, next) = valid_merkle_continuation_pair();
         assert_accepts(&local, &next, "valid Merkle continuation should satisfy constraints");
+    }
+
+    #[test]
+    fn controller_constraints_ignore_other_chiplets_payload() {
+        // Other chiplets can use every Controller overlay cell as arbitrary payload. Evaluate
+        // only the Controller constraints, since each row family's selectors have their own AIR.
+        let controller = ChipletFlags {
+            is_active: Felt::ZERO,
+            is_transition: Felt::ZERO,
+            is_last: Felt::ZERO,
+            next_is_first: Felt::ZERO,
+        };
+        for selectors in [[1, 0, 1], [1, 1, 0], [1, 1, 1], [2, 3, 4]] {
+            let mut local = non_controller_row();
+            let mut next = non_controller_row();
+            for (i, cell) in local.chiplets.iter_mut().enumerate().skip(1) {
+                *cell = Felt::from_usize(7 + i);
+            }
+            for (i, cell) in next.chiplets.iter_mut().enumerate().skip(1) {
+                *cell = Felt::from_usize(37 + i);
+            }
+            for (i, selector) in selectors.into_iter().enumerate() {
+                local.chiplets[CTRL_BASE + i] = Felt::new_unchecked(selector);
+            }
+
+            let mut builder = ConstraintEvalBuilder::new();
+            super::enforce_controller_constraints(&mut builder, &local, &next, &controller);
+            super::enforce_merkle_level_constraints(&mut builder, &local, &next, &controller);
+            assert!(
+                builder.evaluations.iter().all(|value| *value == QuadFelt::ZERO),
+                "off-Controller payload must not activate Controller routing: {selectors:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn merkle_controller_scope_uses_semantic_active_flag() {
+        // Isolate the Controller scope from the current physical selector encoding: an
+        // overlaid row may have the same cells as a Merkle continuation while owned elsewhere.
+        let controller = ChipletFlags {
+            is_active: Felt::ZERO,
+            is_transition: Felt::ZERO,
+            is_last: Felt::ZERO,
+            next_is_first: Felt::ZERO,
+        };
+        let mut local = merkle_controller_row(MP_VERIFY_SELECTORS, 17, false, false);
+        let mut next = merkle_controller_row(MP_VERIFY_SELECTORS, 3, false, true);
+        local.chiplets[CTRL_ROW_DATA_BASE + 3] = Felt::from_u8(23);
+        local.chiplets[OP_FINAL_COL] = Felt::from_u8(7);
+        next.chiplets[CTRL_ROW_DATA_BASE + 3] = Felt::from_u8(41);
+
+        let mut builder = ConstraintEvalBuilder::new();
+        super::enforce_controller_constraints(&mut builder, &local, &next, &controller);
+        super::enforce_merkle_level_constraints(&mut builder, &local, &next, &controller);
+        assert!(
+            builder.evaluations.iter().all(|value| *value == QuadFelt::ZERO),
+            "inactive Controller rows must not activate generic Merkle equations",
+        );
+    }
+
+    #[test]
+    fn controller_rejects_invalid_row_kinds() {
+        for selectors in [[0, 0, 1], [0, 1, 1]] {
+            // Zero payload also satisfies the padding equations, so the invalid-kind equation
+            // is required to reject these otherwise inactive row kinds.
+            let mut local = non_controller_row();
+            local.chiplets[S_CTRL_COL] = Felt::ONE;
+            for (i, selector) in selectors.into_iter().enumerate() {
+                local.chiplets[CTRL_BASE + i] = Felt::new_unchecked(selector);
+            }
+            assert_rejects(&local, &non_controller_row(), "invalid Controller row kind");
+        }
+    }
+
+    #[test]
+    fn controller_rejects_nonboolean_row_kind_selectors() {
+        for selector_col in CTRL_BASE..CTRL_BASE + CTRL_SELECTOR_COUNT {
+            let mut local = merkle_controller_row([1, 0, 0], 0, false, true);
+            local.chiplets[selector_col] = Felt::from_u8(2);
+            assert_rejects(&local, &non_controller_row(), "Controller selectors must be Boolean");
+        }
+    }
+
+    #[test]
+    fn controller_padding_uses_derived_mode() {
+        let mut local = non_controller_row();
+        local.chiplets[S_CTRL_COL] = Felt::ONE;
+        local.chiplets[CTRL_BASE + 1] = Felt::ONE;
+        // The shared AEAD mode cell is not part of Controller row validity.
+        local.chiplets[CHIPLETS_MODE_COL] = Felt::from_u8(17);
+        assert_accepts(&local, &non_controller_row(), "derived padding mode should be accepted");
+
+        local.chiplets[CTRL_STATE_BASE] = Felt::ONE;
+        assert_rejects(&local, &non_controller_row(), "padding must still carry zero payload");
+    }
+
+    #[test]
+    fn hash_controller_preserves_continuation_cv() {
+        let mut local = merkle_controller_row([1, 0, 0], 0, false, false);
+        let mut next = merkle_controller_row([0, 0, 0], 0, false, true);
+        for i in 0..4 {
+            let value = Felt::from_usize(21 + i);
+            local.chiplets[CTRL_ROW_DATA_BASE + i] = value;
+            next.chiplets[CTRL_STATE_BASE + 8 + i] = value;
+        }
+        assert_accepts(&local, &next, "hash continuation must accept the previous output CV");
+
+        next.chiplets[CTRL_STATE_BASE + 8] += Felt::ONE;
+        assert_rejects(&local, &next, "hash continuation must reject a forged input CV");
+    }
+
+    #[test]
+    fn merkle_controller_rejects_nonboolean_start_and_final_flags() {
+        for flag_col in [CTRL_ROW_DATA_BASE + 2, OP_FINAL_COL] {
+            let local = merkle_controller_row(MP_VERIFY_SELECTORS, 1, true, true);
+            assert_accepts(&local, &non_controller_row(), "single-row Merkle path is valid");
+            let mut forged = local;
+            forged.chiplets[flag_col] = Felt::from_u8(2);
+            assert_rejects(&forged, &non_controller_row(), "Controller flags must be Boolean");
+        }
+    }
+
+    #[test]
+    fn merkle_controller_rejects_section_exit_before_final_row() {
+        let (local, _) = valid_merkle_continuation_pair();
+        assert_rejects(&local, &non_controller_row(), "non-final Merkle rows must continue");
+    }
+
+    #[test]
+    fn merkle_controller_rejects_continuation_after_final_row() {
+        let local = merkle_controller_row(MP_VERIFY_SELECTORS, 1, true, true);
+        let mut next = merkle_controller_row(MP_VERIFY_SELECTORS, 0, false, true);
+        next.chiplets[CTRL_ROW_DATA_BASE + 3] = Felt::ONE;
+        set_block_lo(&mut next, merkle_digest(&local));
+        assert_rejects(&local, &next, "a Merkle continuation must follow a non-final row");
     }
 
     #[test]
