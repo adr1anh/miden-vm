@@ -332,7 +332,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
-| 08 Replay/debug | in-progress | Opening base `12e78f953` (final PR07 review description) | Bounded research confirms v4/session/native relocation already exist; no PR08 implementation/check pass yet | Depends on 05–07; cut/malformed-ID/mixed-tag/relocation/debugger evidence remains; inherited gates unchanged |
+| 08 Replay/debug | in-progress | Relocation fixture `11465c4f2`; opening base `12e78f953` | Independent relocation/runtime-source/public-test reviews; first public run18 pass/one DYN fragment1 failure, new mixed-tag/ID cases pass; diagnostic API compiles | Replay regression under diagnosis; runtime diagnostics/tests uncommitted, private relocation unrun behind assembly migration; remaining PR08 and inherited gates unchanged |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; release identity codec |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
@@ -1544,3 +1544,18 @@ Branch `adr1anh/librarytree-08-replay-debug` starts at final PR07 review-descrip
 acceptance gates. Reuse existing bounded v4/session reconstruction and one typed relocation.
 Bounded research identifies cut/mixed-tag/malformed-ID coverage and separate runtime-versus-inline
 debug diagnostics as remaining slices; no new ledger or serialized authority is selected.
+
+
+### PR 08 First cut-coverage checkpoint
+
+`11465c4f2` factors the same authenticated single-Mast fixture for arbitrary root programs and
+migrates the private relocation test to explicit environment/trace limits, actual Controller length,
+prefixes0/8/16 and serialized contexts across executable first cuts. Independently reviewed; unrun
+behind the recorded assembly migration. No synthetic-prefix proof acceptance is claimed.
+
+After AC/heavy guards the first public replay run passes18/fails1. New mixed normal/SYS counts
+and nine precise malformed-ID cases pass. Fragment1 exposes DYN native build failure before export
+(`invalid keyed replay record`); a focused diagnostic run confirms mode/cut. Keep the stronger
+assertion and diagnose capture/replay. The separate source-independent runtime-frame API compiles
+and has clean source/lifetime review, with public behavior checks pending. Temporary logging is
+local diagnosis only and must be removed before implementation commits. Logs `pr08-*`.
