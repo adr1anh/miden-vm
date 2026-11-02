@@ -1327,3 +1327,29 @@ without new allowances. Logs: `pr06-memory-ace-*`. These checks do not activate 
 packed/public/lookup-capacity/generated/recursive gates. Next implement complete scoped Library
 constraints and existing-group lookup entry points; public8/periodic9/validated boundary inputs
 and packed production dispatch remain coordinated integration.
+
+
+### PR 06 Scoped Library relation and genuine compression providers
+
+`40887c022` extracts canonical symbolic Eidos framing without changing the transcript formula.
+`7a184a8ca` adds explicitly scoped Library MAIN constraints: proper prefix/pairs/PAD, complete reverse
+Lists, routing and four per-supplier SYS namespace equations. `ab18cccc4` adds unit rooted Open,
+normal/syscall Resolve and compression emissions into an existing group, plus an explicit public
+R_E seed with canonical initial namespace; no production dispatch or additional column is activated.
+`800f6d75d` tests the same entry points with genuine Eidos MAIN/lookup providers, fresh auxiliaries,
+fixed Resolve demands and both challenge encodings. Negatives rehash incomplete Lists/padding and
+exercise unit provenance and weighted SYS cancellation. Acceptance uses the actual rational lookup
+correction; exact multiset equality is diagnostic. Independent reviews found and resolved a test
+oracle issue, and a previously unused MAIN reexport was removed after strict Clippy caught it.
+
+After AC/heavy guards the full AIR suite passed347; the strengthened combined subset passed all
+seven tests again. Strict AIR library/test Clippy, no-default-features processor and all six public
+witness reconstruction tests passed. Logs: `pr06-library-relation-*`. Isolated exact lookup metadata
+and MAIN/auxiliary degree≤9 do not establish integrated packed acceptance. Full Range/And8 closure,
+public8/periodic9/validated boundary propagation, both selectors, native writers/prefix relocation,
+Controller entry, `[4,4,3,2]` redistribution and generated/native/recursive/security gates remain open.
+
+Next reuse the authenticated occurrence ledger and existing compression interner for native Library
+prefix planning/writing. D3's Page-defined identity/full-closure correction is committed separately
+as `a477732bc`, with profile Rustdoc in `71bf65973`; it supersedes opaque-assignment history without
+waiving any external Protocol input or acceptance gate. No GitHub PR or push was created.
