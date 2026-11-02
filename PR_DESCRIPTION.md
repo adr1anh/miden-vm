@@ -1,47 +1,11 @@
-# PR06: Packed Library witness and authenticated lookup
+# PR07: Bind Core invocations and entry completion to authenticated keys
 
-Base: `adr1anh/librarytree-05-keyed-execution` at `53acb4837e8dc9f0ad046533600d2224afa8eea7`.
-Semantic dependencies: canonical identities, chiplet/address foundation and authenticated runtime ledger.
+An invocation's requested ProcedureKey now resolves to the implementation actually executed on that row. Core appends four resolved-D lanes and requests one Library Resolve per EXEC/CALL/SYS/DYN/DYNCALL, including cache hits. Immediate node hashes remain K-based; dynamic node hashes remain zero-payload, with K authenticated by memory. Entry completion requests Resolve using the actual completed root hash and restored next principal, replacing the old program-digest boundary seed.
 
-Authenticated environment openings previously had no packed witness or Chiplets authentication
-relation. This branch adds the Library side of resolution: unit rooted Open edges, complete reverse
-Lists, normal/syscall Resolve suppliers and per-supplier full-namespace syscall equations. It keeps
-four AIRs and Chiplets24/4 with nine periodic columns and lookup capacity `[4,4,3,2]`.
+Core MAIN becomes 52 columns (decoder27), with 36 public values (16 input, 16 output, 4 K_entry) and five lookup columns `[4,7,4,3,1]`. First/final principals bind K_entry, only a real END enters absorbing HALT, and signed END multiplicity preserves degree 9. Core's boundary accepts exactly four deferred-root values and emits two transcript terms. Native production uses retained validated keyed events for K/D/mode/row/root encoding and preserves principal through first row and padding. No new witness fields, authority source or wire version is introduced.
 
-The shared layout and both selector paths now use Library → Controller → AEAD → Memory → ACE →
-Bitwise → PAD. Controller initialization moves to the aligned Library exit. Memory/ACE helper
-refactors keep the captured degree within nine. Kernel ROM bands, builder and messages are removed;
-retired bus slots stay reserved.
+**Stack base:** `cc6a74742722ff9860d34cae20323faf90ee04ee` (final PR06 description). Semantic dependencies are PR02/05/06; canonical claim44, transport3 and production proof activation remain PR12. Existing MASM syntax and stack/memory conventions remain required after rebuilding. Page-defined D3 identity/interface/closure semantics and mandatory external Protocol profile fixtures remain unchanged.
 
-Native replay retains the completed session. One stack-only traversal registers its compression
-requests into the existing checked Hasher before exact allocation admission; final writing uses the
-same traversal without registering again. Checked bands finalize the prefix before the existing
-logical Controller-address conversion. Separate AEAD/Bitwise buffers preserve family order, clocks,
-calling conventions and replay parity. Resource errors remain typed and retained native storage is
-accounted at capture, read and export. Chiplets public `R_E || N_kernel` is mandatory and cannot be
-inferred from legacy auxiliary data.
+**Validation:** independently reviewed MAIN/lookup/native/integration slices; 383 actual AIR tests pass, with one explicit legacy-claim fixture failure (32-versus36 publics). Actual Core/packed MAIN and extension degree≤9 and selected shapes pass. 18 public execution and 9 witness tests pass in default/testing configurations through the exact-source runtime harness, including five modes, K≠D, aliases/cache frequencies, source/replay/streamed/fragments and precise mutation rejection. Strict AIR library/test, processor library and exact-source/public-test Clippy pass, as does processor no-default-features.
 
-CLI/benchmark reports count six bands. Existing measured snapshots remain unchanged and require
-recapture; their metrics are documented as historical.
-
-## Validation
-
-- Actual authored AIR library: 360 tests pass, including full degree capture, exact lookup metadata,
-  moved-fraction multisets, boundary/public-shape rejection and Library mutation cases.
-- Exact-source public harness using the real processor: nine witness tests pass in default/testing
-  configurations, and sixteen execution tests cover the 40-case native mode/API matrix. Tests inspect
-  the real prefix, entry frequency, relocated address, compression multiplicities and budget boundary.
-- Strict AIR/test, processor/lib and source/public-test Clippy pass; processor no-default-features passes.
-- Independent MAIN, lookup, native, integration and reporting source reviews completed.
-
-## Remaining acceptance
-
-PR06 is implemented-awaiting-validation. Normal processor/parallel/lookup/streamed fixtures remain
-behind the three assembly migration errors and legacy fixture work. Complete production forged
-matrices/Range/And8/global Resolve closure, generated/MASM/native/recursive/security checks, fuzz and
-measured benchmark recapture remain required. Reporting/benchmark checks have not run.
-
-Core Resolve/root-END binding is PR07; canonical Core36/claim44/transport and recursive activation
-remain PR12/14. Legacy prove/verify producers omit mandatory Chiplets publics and reject statement
-construction. This branch does not establish end-to-end proof acceptance. All external Protocol
-identity/profile/registration/closure fixtures remain required under plan D3.
+**Remaining gates:** normal processor decoder/lookup/parallel fixtures await the existing assembly migration; full forged production matrices/global lookup closure, generated drift, MASM/recursive/security/qualification and inherited resource/benchmark gates remain. Missing production publics continue to reject; no partial proof or full-suite pass is claimed.
