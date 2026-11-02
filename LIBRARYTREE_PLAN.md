@@ -276,7 +276,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | in-progress | Base `4f6cda599` | PR 01 dependency complete; bounded source/codec coupling review | Next: reserve EXEC opcode; then childless keyed nodes and complete v0.0.6 codecs. D2 preserves existing MASM source. |
+| 02 MAST | in-progress | Latest `66c94030b`; base `4f6cda599` | Independent review; 13 focused operation tests, scoped rustfmt/Clippy | Next: childless keyed nodes, then complete v0.0.6 codecs/tests. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
@@ -479,3 +479,15 @@ Passed after successful AC/heavy-work guards:
 
 PR 01 acceptance is complete. D2 governs the following MAST/toolchain work; its source-compatibility
 regressions remain PRs 04/09/final gates rather than an unimplemented PR 01 runtime claim.
+
+### PR 02 EXEC opcode reservation
+
+Commit `66c94030b` reserves control opcode 0x5f without adding a basic Operation or activating
+runtime/AIR behavior. Independent review found no issue. After successful AC/heavy-work guards,
+`CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib operations` passed thirteen tests,
+including the deterministic pin/rejection, control strategy and exhaustive wire sweep. Core Clippy
+(`--lib --tests -- -D warnings`), pinned-nightly formatting and staged whitespace checks passed.
+
+The following node/API refactor intentionally precedes codec/test migration. Any observed
+intermediate failure must be recorded before deferring its closure to the next PR 02 slice;
+processor/assembler semantic migration remains PRs 05/09. No old digest authority is retained.
