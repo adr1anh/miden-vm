@@ -280,7 +280,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | in-progress | Latest `9ebac7cc1`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, core seed generation, public API and full-feature Clippy pass | Final audit: add explicit structural-cycle/keyed-recursion cases. Processor witness checks await 05/09; fuzz smoke at 16. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
-| 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
+| 04 Toolchain contracts | in-progress | Base `45be30b96` | Bounded source/frontend/Protocol-domain reviews | First: in-memory declarations and explicit home derivation. User authorized shared-wire draft for review; no format/identity/closure policy adopted yet. |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
@@ -680,3 +680,18 @@ trace::execution_tracer::controller_address_tests, tracer::physical_helper_tests
 run `cargo test -p miden-processor --lib --features concurrent trace::parallel` and processor Clippy.
 Apply the standard AC/heavy-work guards to every command. Final packed shape/degree/lookup/four-AIR,
 D2 source/stack/memory regressions and clean regeneration remain PRs 06/later/16 gates.
+
+### PR 04 Shared-wire draft authorization and independent starting slice
+
+The user requested a shared InterfaceArtifact v1/home contract draft for review. This authorizes
+a proposal, not unreviewed serialization, identity derivation, domain allocation or Protocol policy.
+The live assembly paragraph was rechecked: Protocol owns immutable publisher-qualified declaration
+payloads, with no fabricated forest/D. Protocol namespace 0x02 is reserved to its owner; no local
+Protocol registry is present here, and narrow connected-source searches do not prove any local ID
+free. Numeric allocation remains an owner gate.
+
+Uncommitted `.scratch/librarytree/protocol-interface-v1-draft.txt` is a working proposal, not an
+authoritative specification or handoff. Review must settle I/declaration association, canonical
+publisher descriptor, closure schema and home authority; preserve the single plan's decisions and
+external gates. The in-memory declaration/home-key slice is independent and may proceed using
+existing core labels and parsed source components, without body/D/forest or an adopted wire codec.
