@@ -1,15 +1,25 @@
 //! Public replay-v4 transport and native trace-reconstruction regressions.
 //!
 //! The single-Mast environment and finite budgets are fixtures, not a Protocol policy. These
-//! programs have no retained invocations: native reconstruction uses the current zero Library
-//! prefix pending PR 06 and does not establish proof acceptance.
+//! programs retain entry resolution, whose completed session supplies the packed Library prefix.
+//! Native reconstruction does not establish proof acceptance.
 
 use std::{
     future::Future,
     task::{Context, Poll, Waker},
 };
 
-use miden_core::{operations::Operation, serde::DeserializationError};
+use miden_air_definitions::vm::trace::{
+    chiplets::library::{MAST, PAD},
+    eidos_compression::{
+        EIDOS_COMPRESSION_CYCLE_LEN, F_COMPRESSION_MULTIPLICITY_COL, NUM_EIDOS_COMPRESSION_COLS,
+    },
+};
+use miden_core::{
+    operations::Operation,
+    program::{CanonicalLabel, Namespace},
+    serde::DeserializationError,
+};
 use miden_mast_package::debug_info::{DebugSourceAsmOp, DebugSourceNode, PackageDebugInfoBuilder};
 use miden_processor::{
     self as processor, EnvironmentTraceLimits, ExecutionError, ExecutionOptions, ExecutionWitness,
@@ -24,6 +34,94 @@ use common::{
     aead_stream_witness, deferred_witness, execution_fixture, execution_witness, read_limits,
     trace_limits,
 };
+
+/// This fixture contains one authenticated Mast pair and the complete required Library PAD pairs.
+fn assert_single_mast_prefix(
+    trace: &processor::trace::VmTrace,
+    environment: processor::ExecutionEnvironment,
+) {
+    let main = trace.main_trace();
+    let rows: Vec<_> = (0..main.chiplets_height())
+        .map(RowIndex::from)
+        .take_while(|&row| main.is_library_row(row))
+        .collect();
+    assert_eq!(rows.len(), 8);
+    for (index, row) in rows.into_iter().enumerate() {
+        let shared = main.chiplet_cols(row);
+        assert_eq!(shared.chiplet_selectors()[0], ONE);
+        assert_eq!(shared.chip_clk, Felt::new_unchecked(index as u64 + 1));
+        if index < 2 {
+            assert_eq!(shared.library().k, MAST);
+            assert_eq!(shared.library().d, ZERO);
+        } else {
+            assert_eq!(shared.library().k, PAD);
+            let pad = shared.library();
+            for word in [pad.x, pad.y, pad.z, pad.w] {
+                assert_eq!(word, [ZERO; 4]);
+            }
+            assert_eq!((pad.d, pad.a, pad.b), (ZERO, ZERO, ZERO));
+        }
+    }
+    let label = CanonicalLabel::text("entry").unwrap().commitment().into_word().into_elements();
+    let descriptor = environment.descriptor();
+    let a = main.chiplet_cols(RowIndex::from(0)).library();
+    let b = main.chiplet_cols(RowIndex::from(1)).library();
+    assert_eq!(a.x, label);
+    assert_eq!(a.y, trace.program_hash().into_elements());
+    assert_eq!(a.z, descriptor.environment_root().into_word().into_elements());
+    assert_eq!(a.w, Namespace::initial().into_word().into_elements());
+    assert_eq!(b.x, a.w);
+    assert_eq!(b.y, label);
+    assert_eq!(b.w, a.y);
+    assert_eq!(b.z, descriptor.entry_key().into_word().into_elements());
+    assert_eq!((b.a, b.b), (ONE, ZERO), "entry resolution contributes one normal request");
+    let first_controller = RowIndex::from(8);
+    assert!(main.is_hash_row(first_controller));
+    assert_eq!(main.chiplet_cols(first_controller).chiplet_selectors()[..2], [ZERO, ONE]);
+    assert_eq!(main.chiplet_clk(first_controller), Felt::new_unchecked(9));
+    assert_eq!(main.addr(RowIndex::from(0)), ZERO, "the absent root address stays zero");
+    assert_eq!(main.addr(RowIndex::from(1)), Felt::new_unchecked(9));
+}
+
+#[test]
+fn completed_entry_prefix_registers_compressions_once_before_exact_budget_admission() {
+    let fixture = execution_witness(vec![Operation::Noop], StackInputs::default());
+    let bytes = fixture.witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+    let budget = miden_vm_stark::memory::default_budget();
+    let (vm, _) = fixture.witness.into_parts();
+    let trace = build_trace(vm, &budget).expect("completed entry should materialize its prefix");
+    assert_single_mast_prefix(&trace, fixture.environment);
+    // One span compression plus Mast and Procedure framing: the write traversal adds no requests.
+    assert_eq!(trace.trace_len_summary().eidos_compression_count(), 3);
+    let (_, _, eidos, _) = trace.main_trace().clone_air_matrices();
+    let multiplicities: Vec<_> = eidos
+        .values
+        .as_chunks::<{ NUM_EIDOS_COMPRESSION_COLS * EIDOS_COMPRESSION_CYCLE_LEN }>()
+        .0
+        .iter()
+        .map(|block| {
+            block[(EIDOS_COMPRESSION_CYCLE_LEN - 1) * NUM_EIDOS_COMPRESSION_COLS
+                + F_COMPRESSION_MULTIPLICITY_COL]
+        })
+        .collect();
+    assert_eq!(multiplicities.iter().filter(|&&count| count == ONE).count(), 3);
+    assert!(multiplicities.iter().all(|&count| count == ZERO || count == ONE));
+
+    let estimated = budget.prover_peak_bytes(trace.trace_len_summary().padded_heights()).unwrap();
+    let restored = ExecutionWitness::read_from_bytes_with_limits(
+        &bytes,
+        &fixture.environment,
+        trace_limits(),
+        read_limits(),
+    )
+    .unwrap();
+    let (vm, _) = restored.into_parts();
+    assert!(matches!(
+        build_trace(vm, &miden_vm_stark::memory::canonical_budget(estimated - 1)),
+        Err(ExecutionError::ProverMemoryExceeded { estimated_bytes, budget_bytes })
+            if estimated_bytes == estimated && budget_bytes == estimated - 1
+    ));
+}
 
 fn retained_limit(bytes: usize) -> EnvironmentTraceLimits {
     EnvironmentTraceLimits {
@@ -189,6 +287,9 @@ fn completed_witness_source_and_async_paths_rebuild_the_same_native_trace() {
         let (vm, precompile) = witness.into_parts();
         assert!(precompile.is_none());
         traces.push(build_trace(vm, &miden_vm_stark::memory::default_budget()).unwrap());
+    }
+    for trace in &traces {
+        assert_single_mast_prefix(trace, fixture.environment);
     }
     for trace in &traces[1..] {
         assert_eq!(trace.public_inputs(), traces[0].public_inputs());
@@ -391,6 +492,8 @@ fn aead_stream_witness_round_trip_rebuilds_the_same_native_trace() {
     let restored_trace = build_trace(restored_vm, &miden_vm_stark::memory::default_budget())
         .expect("restored native trace should build");
 
+    assert_single_mast_prefix(&original_trace, fixture.environment);
+    assert_single_mast_prefix(&restored_trace, fixture.environment);
     assert_eq!(restored_trace.public_inputs(), original_trace.public_inputs());
     assert_eq!(restored_trace.trace_len_summary(), original_trace.trace_len_summary());
     assert_eq!(
@@ -462,8 +565,8 @@ fn memory_write_helpers_survive_native_trace_materialization() {
     assert_eq!(trace.stack_outputs(), claim.stack_outputs());
     let main = trace.main_trace();
 
-    // The semantic classifier must include Memory rows with e1=1 in shared c22.
-    // Migrate the asserted legacy prefix deliberately with the packed selectors.
+    // The semantic classifier includes Memory rows with e1=1 in shared c22.
+    assert_single_mast_prefix(&trace, fixture.environment);
     let memory_rows: Vec<_> = (0..main.chiplets_height())
         .map(RowIndex::from)
         .filter(|&row| main.is_memory_row(row))
@@ -482,7 +585,7 @@ fn memory_write_helpers_survive_native_trace_materialization() {
         memory_rows.into_iter().zip(core_rows).zip(expected)
     {
         let shared = main.chiplet_cols(memory_row);
-        assert_eq!(shared.chiplet_selectors()[..3], [ZERO, ONE, ZERO]);
+        assert_eq!(shared.chiplet_selectors()[..4], [ZERO, ZERO, ZERO, ZERO]);
         let memory = shared.memory();
         assert_eq!(shared.chip_clk, Felt::from(memory_row + 1));
         assert_eq!(main.get_op_code(core_row), Felt::new_unchecked(u64::from(op.op_code())));
