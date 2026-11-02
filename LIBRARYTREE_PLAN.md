@@ -1085,3 +1085,43 @@ Compact occurrence snapshots, lazy path reconstruction and explicit caller wire/
 are the selected replay implementation direction; the exact bounded reader/validation API still
 requires source review. No unchecked authenticated-record constructors or serialized policy override.
 All D3, runtime-mode, replay-v4, actual root-END and later packed/proof acceptance gates remain open.
+
+
+### PR 05 ENTRY/EXEC/replay source integration committed; remaining modes next
+
+Commit `816742996` adds exact root-ID/digest checks for dense/sparse/Arc forests. Its external-first
+shared-digest regression passes, as does core test-inclusive Clippy with `-D warnings`. Commit
+`354880d7a` adds real EXEC/control-hash and checked source/Core trace preflights; `2757c6232` adds
+shared retained EXEC/actual root-END transitions, source restoration and END-frame reservation.
+Reviewed fixes address inherited inline context, pure-path restoration, exact root selection and
+prepublication capacity/type checks. No transition runtime test pass is claimed.
+
+Commit `fe5e06d45` adds explicit trace policies with no default; live peak is trace-owned, native
+limits remain independent. Commit `4cb37ebe9` binds every runnable/resume API to immutable authority,
+authenticates entry before code/advice selection, retains keyed evidence through waits and invalidates
+late failures. Legacy non-keyed async Emit/External cancellation is terminal rather than resumably
+losing a consumed continuation. Actual authenticated entry D supplies legacy ProgramInfo metadata;
+this neither activates the new claim nor grants authority to ProgramInfo/kernel-list metadata.
+
+Commit `b3323e3ad` adds bounded compact replay evidence and native revalidation; `8be2703c1` composes
+staged tracing, strict witness replay v4, explicit-budget readers/writers and validated build/export.
+Independent resource/composition reviews closed fragment placement, stale/cross-queue reservations,
+preallocation storage, repeat-validation revocation, work accounting and post-root replay findings.
+RootBoundary must be bottommost, actual root END must be the final executed row, and only zero-cycle
+forest restorations may remain. This is source-review evidence, not proof/AIR qualification.
+
+After AC/heavy guards, actual default and no-default-features processor lib checks fail only on four
+remaining `callee()` uses in `execution/call.rs`, with no warnings. The first integration check also
+found a streamed Result callsite and three warnings; these were corrected. Pinned formatting and
+whitespace pass. Seventeen provider/advice/loader tests remain authored/unrun; new driver/wire tests
+and old explicit-environment/serde/constructor fixture migrations remain required. In particular,
+old witness/TraceReplay and trace-state serialization tests still call removed unbudgeted APIs.
+Do not restore implicit policy or unchecked fixtures to pass those tests.
+
+Next implement CALL/SYSCALL/DYN/DYNCALL via the same retained bridge and prepared component tokens,
+including exact dynamic peek/consume, fresh/root/shared-context semantics and projected return
+principal. Immediate invocation hashes use K; **dynamic wrapper hashes stay static zero/zero**, while
+dynamic memory reads authenticate K and Resolve selects D (execution spec sections 3.2/5.2). Earlier
+agent shorthand H(mode,K) applied too broadly and is superseded by this distinction. No DynNode
+commitment redesign is selected. All pending PR 05 tests, source ABI, D3 and later packed/proof gates
+remain; PR 05 is still in progress.
