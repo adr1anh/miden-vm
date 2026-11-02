@@ -278,7 +278,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | in-progress | Latest `7be0e06c0`; base `4f6cda599` | Independent node review and formatting; opcode tests/Clippy passed | Core check currently fails at eight stale dense/sparse codec sites; close v0.0.6 codecs/tests next. D2 preserves existing MASM source. |
+| 02 MAST | in-progress | Latest `9d80e8eaf`; sparse `85171ecad`; base `4f6cda599` | Independent node/dense/sparse reviews; core lib check, production Clippy and no-default-features pass | Test compilation has 42 legacy fixture/arbitrary errors in five files; migrate next, then run pending node/codec/MAST checks. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
@@ -511,3 +511,29 @@ in `serialization/info.rs` (old callee accessor/constructor types) and `serializ
 This is intentional intermediate breakage allowed by the workflow, not passed acceptance. Complete
 these codecs next in PR 02; then migrate old core tests/arbitrary constructors and run the pending
 node/MAST/serialization checks and Clippy. Processor/assembler semantic consumers remain PRs 05/09.
+
+### PR 02 Dense and sparse keyed codec closure
+
+Commit `85171ecad` writes canonical key payloads for sparse Call/SysCall/Exec, adds sparse tag9,
+and requires ExecutionWitness v3 before reading replay payloads. Direct sparse encoding remains
+trusted/version-local; independent containment review found no other persisted sparse envelope.
+Commit `9d80e8eaf` implements dense v0.0.6 with one shared layout scanner, canonical per-invocation
+slots, separate target/external sections, hashless key retention and key-aware metadata/views.
+The writer, materialization and bulk metadata are linear; wire target access is O(1). In-memory
+single-entry metadata retains its documented existing prefix-scan tradeoff. Independent reviews
+found no actionable issue. Seven sparse and thirteen dense tests are authored but not yet runnable.
+
+Passed on the integrated codec working tree after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --lib`.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly formatting and staged whitespace checks.
+
+`CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --no-run` fails with 42 errors
+in legacy constructor/callee-ID fixtures: basic_block_node/arbitrary.rs (7), serialization/tests.rs
+(7), merger/tests.rs (23), multi_forest_node_iterator.rs (4), mast/tests.rs (1). Full compiler log
+is uncommitted at `.scratch/librarytree/logs/pr02-core-test-compilation.log`. Migrate those next,
+then run the pending focused tests and test-inclusive Clippy. The earlier eight production codec
+errors are resolved. Processor witness tests remain deferred until PRs 05/09 close downstream
+invocation consumers; no processor test pass is claimed.
