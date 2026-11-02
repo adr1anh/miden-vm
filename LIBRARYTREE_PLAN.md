@@ -109,7 +109,7 @@ Separate canonical declarations and optional body availability; add validated Na
 
 **Branch:** `adr1anh/librarytree-05-keyed-execution`. **Git base:** PR 04. **Semantic dependencies:** 01, 02; agree resolver/Resolve ledger schema with PRs 06–07.
 
-**Existing files:** `processor/src/execution/{mod,call,dyn,external}.rs`, `processor/src/fast/{mod,operation,execution_api,step}.rs`, processor/executor/options/errors/continuation stack, host/default/forest store and public exports. **New:** small shared resolver/EXEC modules and bounded environment witness provider; focused `processor/src/fast/tests/environment.rs`. Extend the core arbitrary fixture with an authenticated environment and migrate `processor/src/fast/tests/arbitrary_forest.rs` so executable generation covers actual keyed invocations again.
+**Existing files:** `processor/src/execution/{mod,call,dyn,external}.rs`, `processor/src/fast/{mod,operation,execution_api,step}.rs`, processor/executor/options/errors/continuation stack, host/default/forest store and public exports. **New:** small shared resolver/EXEC modules and bounded environment witness provider; focused public `processor/tests/keyed_execution.rs` and `processor/tests/keyed_witness.rs` with a shared single-Mast fixture. Extend the core arbitrary fixture with an authenticated environment and migrate `processor/src/fast/tests/arbitrary_forest.rs` so executable generation covers actual keyed invocations again.
 
 Resolve `(R_E,K)->(N,D,opening)` before typed D-indexed code loading. Share prepare/commit transitions across pure/source-aware and sync/async execution; authenticate before state changes and make retries idempotent. Implement ENTRY/all runtime modes, requested-key caller/principals, context/FMP/overflow/return behavior and checked budgets. Remove kernel-ROM/digest dispatch authority. Cache bindings by `(R_E,K)`, code by D, and preserve code-root checks/advice merge-once.
 
@@ -329,7 +329,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Environment-aware executable generator restored at 05 (`4bfa6fc94`, `15a9a07c0`). D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
-| 05 Runtime | in-progress | Source retry `542b8f9de`; wire tests `9d083316a`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 14 public execution and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
+| 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
@@ -1234,3 +1234,21 @@ allocation; no production policy changed. All 14 public execution regressions an
 passed after AC/heavy guards. Logs: `pr05-{keyed-witness-*,source-dyncall-*}` under the scratch log
 directory. Next finish the native five-mode/local-host/source-aware/sync-async matrix and terminal
 late-callback regression; normal test, D3, packed/proof and subsequent stage gates remain open.
+
+
+### PR 05 Native mode/API matrix checkpoint
+
+`2f9394e19` adds the full 40-case native matrix: five invocation modes, local/host-supplied D,
+pure/source-aware execution and sync/async stepping. A local user-call wrapper makes SYSCALL's
+root-context transition observable. Exact operand/overflow restoration, RAM/FMP/principals, source
+owner/graph restoration, one witness per K and ordered native uses/tags are checked. `4ebcb72ee`
+separately verifies a host event error after target publication is terminal without repeated
+callbacks, host requests, state advancement or use publication. Independent review found no
+actionable issue; a missing test trait import was fixed before execution.
+
+After AC/heavy guards all 16 public execution tests passed, including every matrix case, and strict
+all-target harness Clippy passed. Logs: `pr05-native-mode-matrix-*`. PR 05 is
+implemented-awaiting-validation, not complete: normal processor/legacy/parallel/address/state and
+private mutation checks remain deferred through the recorded assembly/trace migrations; fuzz smoke
+is at 16. Keep every PR 05 acceptance gate. Continue the linear stack to PR06; native resolution
+and trace reconstruction do not establish the packed AIR or statement relation.
