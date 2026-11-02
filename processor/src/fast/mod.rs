@@ -556,12 +556,6 @@ impl FastProcessor {
         Ok(())
     }
 
-    fn ensure_stack_capacity_for_top_idx(&mut self, top_idx: usize) {
-        if top_idx >= self.stack.len() {
-            self.grow_stack_buffer(top_idx + 1);
-        }
-    }
-
     fn grow_stack_buffer(&mut self, requested_min_len: usize) {
         // The maximum allocation is tied to the logical operand stack depth, not to the current
         // buffer position. Using `stack_bot_idx` here would make the allocation ceiling drift when
