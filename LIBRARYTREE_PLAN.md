@@ -330,7 +330,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
-| 06 Library | in-progress | Controller `5c7c9ce26`/`59b36d0ec`; degree tests `4e2158717`; earlier schema refs below; base `53acb4837` | Independent reviews; full AIR308, current degree≤9 and exact lookup metadata, native witness5, strict AIR/processor Clippy and no-default-features pass | Packed relation, prefix/relocation, measured degree/capacity and all soundness gates remain |
+| 06 Library | in-progress | Helpers `67390876a`/`3b07ee656`/`57c6f9426`; public test `43b2824f8`; earlier refs below; base `53acb4837` | Independent reviews; AIR321, current degree≤9/exact lookup metadata, native witness6, strict scoped Clippy and no-default-features pass | Packed relation, prefix/relocation, measured degree/capacity and all soundness gates remain |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
@@ -1304,3 +1304,26 @@ Next coordinate Memory/ACE helpers and packed views/writers/selectors/prefix/bou
 Controller global-first initialization and physical next-selector dependencies remain legacy until
 that migration. Current degree checks do not clear the full packed, public-input, lookup-capacity,
 forged-matrix or generated/native/recursive gates. All PR06 and inherited acceptance remain open.
+
+
+### PR 06 Memory/ACE helpers and family-band witness completion
+
+`67390876a` exposes scoped helper views. `3b07ee656` binds Memory e0/e1 and ACE z, reducing
+not-written/arithmetic degrees while retaining all conditional-inverse, value, read-only and
+ternary-validity rules. Review found an actual integration conflict: the legacy stream-mode zero
+gate and Memory classifier still treated c22 as mode outside Bitwise. Both now respect Memory e1,
+with full production-selector sequence regressions including forged entry reads.
+
+`57c6f9426` completes only materialized Memory/ACE bands after scatter, with no new allocations,
+compact-buffer holes, offsets, messages or selector-order changes. Private fixtures test absent/
+present bands and preserved payload/clocks/AEAD cells; normal processor execution of those fixtures
+remains deferred behind assembly. `43b2824f8` supplies public native materialization evidence for
+ten scalar/word accesses, exact helper/payload/clock semantics and replay-matrix equality.
+
+After AC/heavy guards AIR321 and all six public witness tests passed, including measured current
+degree≤9/exact lookup validation. Strict AIR/test, processor/lib and public-test Clippy and
+no-default-features processor checks passed. Clippy's fixed-size chunk suggestion was adopted
+without new allowances. Logs: `pr06-memory-ace-*`. These checks do not activate Library or clear
+packed/public/lookup-capacity/generated/recursive gates. Next implement complete scoped Library
+constraints and existing-group lookup entry points; public8/periodic9/validated boundary inputs
+and packed production dispatch remain coordinated integration.
