@@ -1021,3 +1021,24 @@ When mandatory keyed records are added to replay persistence, bump **ExecutionWi
 to version 4** and reject previous/unknown layouts before payload parsing. Existing replay v3 has no
 resolution records; do not silently reuse it. This routine breaking-version migration is separate
 from the planned proof transport format 3 and execution claim v2, whose contracts are unchanged.
+
+
+### PR 05 Provider seam validated; code-supply preparation next
+
+Commit `1fdca8496` adds immutable explicit ExecutionEnvironment policies, bounded native witness
+requests, sync/async host forwarding, an explicitly configured DefaultHost source, and distinct
+unavailable/provider/invalid-opening errors. None is unavailable evidence, never nonmembership.
+Runtime entry/execute APIs do not yet consume this seam. Independent source and eight-test reviews
+found no remaining issue. AC/heavy guards passed; actual processor lib check still has exactly six
+old callee() and four missing Exec errors, with no new provider/config diagnostic. An optional
+reference-host blanket introduced one ambiguity and was removed before commit. Eight new host tests
+are authored but unrun behind the processor cutover; do not count them as passing. Pinned nightly
+formatting and whitespace checks pass.
+
+Before ENTRY/EXEC integration, refactor existing advice-map extension into an exclusive borrowed
+prepare/commit guard, preserving checked conflicts/budgets and the public extension behavior. Then
+share postfetch requested-D/root/debug validation between sync/async loaders, prepare advice before
+publishing cache/merge-once changes, and keep prepared code supply separate from environment authority.
+Commit these focused refactors independently. Existing BTree allocation behavior does not guarantee
+survival of allocator abort. No whole-state clone, digest-authority fallback or proof acceptance is
+introduced. Root/entry/trace preflights, all invocation modes and replay remain required integration.
