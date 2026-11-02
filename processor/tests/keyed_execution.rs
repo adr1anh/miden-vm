@@ -848,7 +848,8 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
         let configuration = environment.configuration(entry, namespace(&["lib"]));
         let expected: Vec<_> = keys.into_iter().map(|key| (opcode, key, callee.hash())).collect();
         let mut baseline = None;
-        for fragment_size in [3, 64] {
+        // A one-row fragment places a cut on both sides of every invocation and return.
+        for fragment_size in [1, 3, 64] {
             let options = ExecutionOptions::default()
                 .with_environment_trace_limits(trace_limits())
                 .with_core_trace_fragment_size(fragment_size)
@@ -870,8 +871,10 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
                 read_limits(),
             )
             .unwrap();
-            for witness in [witness, restored] {
-                let trace = build_trace(witness.into_parts().0, &budget).unwrap();
+            for (imported, witness) in [(false, witness), (true, restored)] {
+                let trace = build_trace(witness.into_parts().0, &budget).unwrap_or_else(|error| {
+                    panic!("{mode:?}, fragment_size={fragment_size}, imported={imported}: {error}")
+                });
                 assert_native_core_bindings(&trace, entry, &expected);
                 let main = trace.main_trace();
                 for (key, count) in [(entry, 1), (aliases[0], 2), (aliases[1], 1)] {
@@ -896,7 +899,7 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
                     baseline = Some(matrices);
                 }
             }
-            if fragment_size == 3 {
+            if fragment_size <= 3 {
                 for explicit_root in [false, true] {
                     let mut host = CountingHost::new(&environment, &[&callee]);
                     host.forests.insert(
@@ -955,13 +958,113 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
 }
 
 #[test]
+fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay() {
+    use miden_air_definitions::vm::trace::chiplets::library::MAST;
+    use miden_core::operations::opcodes;
+    use miden_processor::trace::{RowIndex, build_trace};
+
+    let entry = key(&["app"], "entry");
+    let target = key(&["kernel"], "shared");
+    let callee = body(vec![Operation::Noop]);
+    let modes = [Mode::Exec, Mode::Syscall, Mode::Call, Mode::Syscall];
+    let mut forest = MastForest::new();
+    let mut root = invocation(&mut forest, modes[0], target);
+    for mode in modes.into_iter().skip(1) {
+        let next = invocation(&mut forest, mode, target);
+        root = join(&mut forest, root, next);
+    }
+    let program = finish_program(forest, root);
+    let environment = EnvironmentFixture::new(&[
+        (&["app"], "entry", program.hash()),
+        (&["kernel"], "shared", callee.hash()),
+    ]);
+    let configuration = environment.configuration(entry, namespace(&["kernel"]));
+    let expected = [opcodes::EXEC, opcodes::SYSCALL, opcodes::CALL, opcodes::SYSCALL]
+        .map(|opcode| (opcode, target, callee.hash()));
+    let budget = miden_vm_stark::memory::default_budget();
+    let mut baseline = None;
+    // One-row fragments save a continuation at every invocation, callee entry and return row.
+    for fragment_size in [1, 3, 64] {
+        let options = ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_core_trace_fragment_size(fragment_size)
+            .unwrap();
+        let mut host = CountingHost::new(&environment, &[&callee]);
+        let witness = FastProcessor::new(StackInputs::default())
+            .with_options(options.clone())
+            .unwrap()
+            .execute_for_proving_sync(&program, configuration, &mut host)
+            .unwrap();
+        assert_eq!(host.requests_for(entry), 1);
+        assert_eq!(host.requests_for(target), 1, "both tags must reuse the same opening");
+        assert_eq!(*host.code_requests.borrow(), vec![callee.hash()]);
+        let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+        let restored = ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &configuration,
+            trace_limits(),
+            read_limits(),
+        )
+        .unwrap();
+        assert_eq!(restored.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
+        for witness in [witness, restored] {
+            let trace = build_trace(witness.into_parts().0, &budget).unwrap();
+            assert_native_core_bindings(&trace, entry, &expected);
+            let main = trace.main_trace();
+            for (key, normal, syscall) in [(entry, 1, 0), (target, 2, 2)] {
+                let responses: Vec<_> = (0..main.chiplets_height())
+                    .map(RowIndex::from)
+                    .filter(|&row| main.is_library_row(row))
+                    .map(|row| main.chiplet_cols(row).library())
+                    .filter(|row| row.k == MAST && row.z == key.into_word().into_elements())
+                    .collect();
+                assert_eq!(responses.len(), 1, "one occurrence must serve both invocation tags");
+                assert_eq!((responses[0].a, responses[0].b), (felt(normal), felt(syscall)));
+            }
+            let matrices = main.clone_air_matrices();
+            if let Some(expected) = &baseline {
+                assert_eq!(&matrices, expected);
+            } else {
+                baseline = Some(matrices);
+            }
+        }
+        #[cfg(feature = "std")]
+        if fragment_size == 1 {
+            let (trace, precompile) = FastProcessor::new(StackInputs::default())
+                .with_options(options)
+                .unwrap()
+                .execute_and_build_trace_sync(
+                    &program,
+                    configuration,
+                    &mut CountingHost::new(&environment, &[&callee]),
+                    &budget,
+                )
+                .unwrap();
+            assert!(precompile.is_none());
+            assert_native_core_bindings(&trace, entry, &expected);
+            assert_eq!(&trace.main_trace().clone_air_matrices(), baseline.as_ref().unwrap());
+        }
+    }
+}
+
+#[test]
 fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
     use miden_core::serde::{DeserializationError, Serializable};
 
     let entry = key(&["app"], "entry");
     let target = key(&["lib"], "child");
-    let callee = body(vec![Operation::Noop]);
-    let program = invocation_program(Mode::Call, target);
+    // Both forests contain distinct nodes at IDs zero and two. A wrong existing ID must reach
+    // the actual body/digest check rather than being rejected only because a node is absent.
+    let mut callee_forest = MastForest::new();
+    let alternate_root = block(&mut callee_forest, vec![Operation::Noop]);
+    let callee_tail = block(&mut callee_forest, vec![Operation::Push(felt(7)), Operation::Drop]);
+    let callee_root = join(&mut callee_forest, alternate_root, callee_tail);
+    let callee = finish_program(callee_forest, callee_root);
+    let mut caller_forest = MastForest::new();
+    let caller_head = block(&mut caller_forest, vec![Operation::Noop]);
+    let called = invocation(&mut caller_forest, Mode::Call, target);
+    let caller_root = join(&mut caller_forest, caller_head, called);
+    let program = finish_program(caller_forest, caller_root);
     let environment = EnvironmentFixture::new(&[
         (&["app"], "entry", program.hash()),
         (&["lib"], "child", callee.hash()),
@@ -983,14 +1086,14 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
         trace_limits(),
         read_limits(),
     )
-    .expect("unmodified root CALL evidence must pass bounded native revalidation");
+    .expect("unmodified CALL evidence must pass bounded native revalidation");
     assert_eq!(restored.claim(), witness.claim());
     assert_eq!(restored.execution_descriptor(), configuration.descriptor());
     let budget = miden_vm_stark::memory::default_budget();
     let original_trace = miden_processor::trace::build_trace(witness.into_parts().0, &budget)
-        .expect("unmodified captured root CALL evidence must build a trace");
+        .expect("unmodified captured CALL evidence must build a trace");
     let restored_trace = miden_processor::trace::build_trace(restored.into_parts().0, &budget)
-        .expect("unmodified imported root CALL evidence must build a trace");
+        .expect("unmodified imported CALL evidence must build a trace");
     assert_native_core_bindings(
         &restored_trace,
         entry,
@@ -1015,12 +1118,14 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
     let offset = offsets[0];
     const RECORD_BYTES: usize = 150;
     assert_eq!(&bytes[offset - 8..offset], &2u64.to_le_bytes());
-    assert_eq!(bytes[offset + RECORD_BYTES], 5, "root END follows the root CALL");
+    assert_eq!(bytes[offset + RECORD_BYTES], 5, "root END follows the CALL record");
 
     #[derive(Clone, Copy)]
     enum Rejection {
         NativeRecord(&'static str),
+        NativeOpening(OpeningError),
         InvocationTransition,
+        Replay(&'static str),
     }
     let rejects = |name: &str, bytes: &[u8], expected: Rejection| {
         let decoded = ExecutionWitness::read_from_bytes_with_limits(
@@ -1037,13 +1142,25 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
                 Err(error) => panic!("{name} failed outside native keyed validation: {error}"),
                 Ok(_) => panic!("{name} unexpectedly passed native keyed validation"),
             },
-            Rejection::InvocationTransition => {
+            Rejection::NativeOpening(expected) => match decoded {
+                Err(DeserializationError::InvalidValue(actual)) => {
+                    assert_eq!(actual, expected.to_string(), "{name}");
+                },
+                Err(error) => panic!("{name} failed outside native opening validation: {error}"),
+                Ok(_) => panic!("{name} unexpectedly passed native opening validation"),
+            },
+            Rejection::InvocationTransition | Rejection::Replay(_) => {
+                let expected_reason = match expected {
+                    Rejection::InvocationTransition => "invocation differs from keyed replay event",
+                    Rejection::Replay(reason) => reason,
+                    _ => unreachable!(),
+                };
                 let witness = decoded.unwrap_or_else(|error| {
                     panic!("{name} must reach actual Core replay, but import failed: {error}")
                 });
                 match miden_processor::trace::build_trace(witness.into_parts().0, &budget) {
                     Err(ExecutionError::Internal(reason)) => {
-                        assert_eq!(reason, "invocation differs from keyed replay event", "{name}");
+                        assert_eq!(reason, expected_reason, "{name}");
                     },
                     Err(error) => panic!("{name} failed outside actual invocation replay: {error}"),
                     Ok(_) => panic!("{name} unexpectedly built a Core trace"),
@@ -1076,6 +1193,84 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
         forged[offset + field] ^= 1;
         assert_ne!(forged, bytes, "{name} mutation must change the observation");
         rejects(name, &forged, expected);
+    }
+    // V4 IDs are required scalar fields. "Missing" below selects the first ID without a
+    // retained occurrence/forest/node; distant out-of-range and wrong existing IDs are separate.
+    let root_end = offset + RECORD_BYTES;
+    let opening = u64::from_le_bytes(bytes[offset + 66..offset + 74].try_into().unwrap());
+    let entry_opening = u64::from_le_bytes(bytes[root_end + 66..root_end + 74].try_into().unwrap());
+    let target_forest = u32::from_le_bytes(bytes[offset + 142..offset + 146].try_into().unwrap());
+    let entry_forest =
+        u32::from_le_bytes(bytes[root_end + 142..root_end + 146].try_into().unwrap());
+    let target_root = u32::from_le_bytes(bytes[offset + 146..offset + 150].try_into().unwrap());
+    let entry_root = u32::from_le_bytes(bytes[root_end + 146..root_end + 150].try_into().unwrap());
+    assert!(entry_opening < opening, "target opening is the final selected occurrence");
+    assert_eq!((entry_forest, target_forest), (0, 1));
+    assert_eq!((entry_root, target_root), (2, 2));
+    for (name, id, expected) in [
+        (
+            "missing opening ID",
+            opening + 1,
+            Rejection::NativeRecord("opening index is outside occurrence tree"),
+        ),
+        (
+            "out-of-range opening ID",
+            u64::from(u32::MAX),
+            Rejection::NativeRecord("opening index is outside occurrence tree"),
+        ),
+        (
+            "wrong existing opening ID",
+            entry_opening,
+            Rejection::NativeOpening(OpeningError::KeyMismatch { expected: target, actual: entry }),
+        ),
+    ] {
+        let mut forged = bytes.clone();
+        forged[offset + 66..offset + 74].copy_from_slice(&id.to_le_bytes());
+        assert_ne!(forged, bytes, "{name} mutation must change the observation");
+        rejects(name, &forged, expected);
+    }
+    for (name, field, id, reason) in [
+        (
+            "missing target forest ID",
+            142,
+            target_forest + 1,
+            "MastForestId out of range of mast_forest_store",
+        ),
+        (
+            "out-of-range target forest ID",
+            142,
+            u32::MAX,
+            "MastForestId out of range of mast_forest_store",
+        ),
+        (
+            "wrong existing target forest ID",
+            142,
+            entry_forest,
+            "resolved invocation body does not match its implementation",
+        ),
+        (
+            "missing target root ID",
+            146,
+            target_root + 1,
+            "resolved invocation root is missing",
+        ),
+        (
+            "out-of-range target root ID",
+            146,
+            u32::MAX,
+            "resolved invocation root is missing",
+        ),
+        (
+            "wrong existing target root ID",
+            146,
+            0,
+            "resolved invocation body does not match its implementation",
+        ),
+    ] {
+        let mut forged = bytes.clone();
+        forged[offset + field..offset + field + 4].copy_from_slice(&id.to_le_bytes());
+        assert_ne!(forged, bytes, "{name} mutation must change the observation");
+        rejects(name, &forged, Rejection::Replay(reason));
     }
     let mut omitted = bytes.clone();
     omitted[offset - 8..offset].copy_from_slice(&1u64.to_le_bytes());
