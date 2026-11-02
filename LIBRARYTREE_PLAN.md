@@ -278,7 +278,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | in-progress | Latest `90ef69d6d`; generator `91d52f92c`; base `4f6cda599` | Independent implementation/migration reviews; 198 MAST tests pass (manual seed test ignored), test-inclusive Clippy, core/no_std checks and formatting | Fuzz oracle/seed update and final PR audit next. Processor witness tests await PRs 05/09 downstream consumers; bounded fuzz smoke at 16. D2 preserves existing MASM source. |
+| 02 MAST | in-progress | Latest `9ebac7cc1`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, core seed generation, public API and full-feature Clippy pass | Final audit: add explicit structural-cycle/keyed-recursion cases. Processor witness checks await 05/09; fuzz smoke at 16. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
@@ -565,3 +565,23 @@ seven sparse tests for the first time, alongside existing MAST regressions. Test
 (`CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`),
 pinned-nightly core formatting and staged whitespace checks passed. Full test log stays separate
 at uncommitted `.scratch/librarytree/logs/pr02-mast-tests.log`.
+
+### PR 02 Fuzz source and full-core qualification
+
+Commit `9ebac7cc1` adds pre-serialization expected-key/mode oracles and full/hashless keyed seeds,
+preserving the existing root-order and large-ID checks. Independent bounded review found no issue.
+After successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --features arbitrary`: 398 passed,
+  one manual seed test ignored.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --features arbitrary generate_fuzz_seeds -- --ignored --nocapture`: one passed. Generated MAST corpus stays local; two tracked Program seeds rewritten by the helper were restored, and final cross-stack corpus regeneration remains PR 16.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests --features arbitrary -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --test public_api`: all three fixtures passed.
+- Pinned formatting and staged whitespace checks.
+
+Full test/seed logs stay separate under uncommitted `.scratch/librarytree/logs/`. Fuzz target
+compilation/execution and processor witness tests are not claimed: their dependency graph still
+contains downstream processor/assembler consumers owned by PRs 05/09, with bounded fuzz smoke at 16.
+The final bounded acceptance audit found two evidence gaps to close now: explicit structural
+self/two-node cycle rejection, and a self/mutually-recursive key binding fixture. Existing childless
+tests support these by inference; add dedicated cases rather than claim those gates passed.
