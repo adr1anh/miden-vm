@@ -267,7 +267,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | in-progress | `bf840bc6d` identities; `ee4e7f937` domains; `6b27da605` built-in labels | Independent reviews; identity/UI, five domain and five label tests; frozen vectors; no-default-features and scoped rustfmt/Clippy | Next slice: exact canonical label decoding and explicit external TypedId-validation boundary. Object builders/shared vectors remain. No Protocol policy is chosen. |
+| 01 Identities | in-progress | Latest `3d389cf58`; prior slice SHAs in evidence below | Independent reviews; identity/UI, five domain and eleven label tests; frozen vectors; no-default-features and scoped rustfmt/Clippy | Next slice: typed initial/child namespace and procedure-key derivation. Objects, D1 node codec and bounded builders remain; Protocol codecs stay external. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
@@ -302,6 +302,20 @@ Passed on Rust 1.99.0 after successful AC/heavy-work guards:
 - `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
 - `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib -- -D warnings`.
 - `cargo +nightly-2026-10-09 fmt -p miden-core -- --check` and staged whitespace checks.
+
+### PR 01 Exact labels and external TypedId validation
+
+Commit `3d389cf58` adds exact built-in decoding and explicit caller validation for opaque TypedIds,
+including a synthetic-codec frozen vector. No AccountId codec or unknown-codec recognition is
+assumed. Independent review found no actionable issue.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::label`:
+  all eleven tests, including malformed framing/payloads, EOF and callback validation boundaries.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
 
 The domain audit found the selected environment/verifier allocations free in the current registry.
 Verifier configuration mounts require explicit forward-coordinate lexicographic ordering; existing
