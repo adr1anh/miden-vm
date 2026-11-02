@@ -4,16 +4,284 @@
 //! programs have no retained invocations: native reconstruction uses the current zero Library
 //! prefix pending PR 06 and does not establish proof acceptance.
 
-use miden_core::operations::Operation;
+use std::{
+    future::Future,
+    task::{Context, Poll, Waker},
+};
+
+use miden_core::{operations::Operation, serde::DeserializationError};
+use miden_mast_package::debug_info::{DebugSourceAsmOp, DebugSourceNode, PackageDebugInfoBuilder};
 use miden_processor::{
-    self as processor, ExecutionWitness, Felt, ONE, StackInputs, ZERO,
-    trace::{RowIndex, build_trace},
+    self as processor, EnvironmentTraceLimits, ExecutionError, ExecutionOptions, ExecutionWitness,
+    FastProcessor, Felt, ONE, StackInputs, ZERO,
+    trace::{KeyedReplayError, ReplayResource, RowIndex, build_trace},
 };
 
 #[path = "common/keyed_witness.rs"]
 mod common;
 
-use common::{aead_stream_witness, deferred_witness, execution_witness, read_limits, trace_limits};
+use common::{
+    aead_stream_witness, deferred_witness, execution_fixture, execution_witness, read_limits,
+    trace_limits,
+};
+
+fn retained_limit(bytes: usize) -> EnvironmentTraceLimits {
+    EnvironmentTraceLimits {
+        max_retained_bytes: bytes,
+        ..trace_limits()
+    }
+}
+
+// Search only within the fixture's explicit finite policy. Live capture and wire decoding can
+// retain different queue capacities, so each operation has its own measured boundary.
+fn minimum_retained_limit(mut admits: impl FnMut(usize) -> bool) -> usize {
+    let mut rejected = 0;
+    let mut admitted = trace_limits().max_retained_bytes;
+    assert!(!admits(rejected), "zero retained storage must reject this witness");
+    assert!(admits(admitted), "the explicit fixture policy must admit this witness");
+    while admitted - rejected > 1 {
+        let candidate = rejected + (admitted - rejected) / 2;
+        if admits(candidate) {
+            admitted = candidate;
+        } else {
+            rejected = candidate;
+        }
+    }
+    admitted
+}
+
+fn retained_export_admits(result: Result<Vec<u8>, DeserializationError>, limit: usize) -> bool {
+    match result {
+        Ok(_) => true,
+        Err(DeserializationError::InvalidValue(reason))
+            if reason == "keyed export exceeds caller limits" =>
+        {
+            false
+        },
+        Err(error) => panic!("unexpected export error at retained limit {limit}: {error}"),
+    }
+}
+
+fn retained_capture_admits(result: Result<ExecutionWitness, ExecutionError>, limit: usize) -> bool {
+    match result {
+        Ok(_) => true,
+        Err(ExecutionError::KeyedTrace(KeyedReplayError::LimitExceeded {
+            resource: ReplayResource::RetainedBytes,
+            ..
+        })) => false,
+        Err(error) => panic!("unexpected capture error at retained limit {limit}: {error}"),
+    }
+}
+
+fn retained_read_admits(
+    result: Result<ExecutionWitness, DeserializationError>,
+    limit: usize,
+) -> bool {
+    match result {
+        Ok(_) => true,
+        Err(DeserializationError::InvalidValue(reason))
+            if reason.contains("RetainedBytes limit") =>
+        {
+            false
+        },
+        Err(error) => panic!("unexpected read error at retained limit {limit}: {error}"),
+    }
+}
+
+fn poll_ready<T>(future: impl Future<Output = T>) -> T {
+    let mut future = std::pin::pin!(future);
+    match future.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+        Poll::Ready(result) => result,
+        Poll::Pending => panic!("the fixture's DefaultHost unexpectedly suspended"),
+    }
+}
+
+#[test]
+fn completed_witness_source_and_async_paths_rebuild_the_same_native_trace() {
+    let operations = vec![Operation::Push(Felt::new_unchecked(7)), Operation::Drop];
+    let mut fixture = execution_fixture(operations.clone());
+    let mut builder = PackageDebugInfoBuilder::default();
+    let context = builder.add_string("fixture::entry");
+    let operation = builder.add_string("push.7 drop");
+    let source = builder
+        .add_node(DebugSourceNode {
+            exec_node: fixture.program.entrypoint(),
+            children: Vec::new(),
+            op_start: 0,
+            op_end: u32::try_from(operations.len()).unwrap(),
+            asm_ops: vec![DebugSourceAsmOp::new(0, None, context, operation, 1)],
+            debug_vars: Vec::new(),
+            inline_calls: Vec::new(),
+        })
+        .unwrap();
+    builder.add_root(source);
+    let debug = builder.build();
+    let processor = || {
+        FastProcessor::new(StackInputs::default())
+            .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+            .unwrap()
+    };
+    let plain = processor()
+        .execute_for_proving_sync(&fixture.program, fixture.environment, &mut fixture.host)
+        .unwrap();
+    let asynchronous = poll_ready(processor().execute_for_proving(
+        &fixture.program,
+        fixture.environment,
+        &mut execution_fixture(operations.clone()).host,
+    ))
+    .unwrap();
+    let source_derived = processor()
+        .execute_for_proving_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug,
+            &mut execution_fixture(operations.clone()).host,
+        )
+        .unwrap();
+    let source_explicit = processor()
+        .execute_for_proving_with_package_debug_info_at_source_node_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug,
+            source,
+            &mut execution_fixture(operations.clone()).host,
+        )
+        .unwrap();
+    let mut witnesses = vec![plain, asynchronous, source_derived, source_explicit];
+    #[cfg(feature = "testing")]
+    {
+        witnesses.push(
+            poll_ready(processor().execute_for_proving_with_package_debug_info(
+                &fixture.program,
+                fixture.environment,
+                &debug,
+                &mut execution_fixture(operations.clone()).host,
+            ))
+            .unwrap(),
+        );
+        witnesses.push(
+            poll_ready(processor().execute_for_proving_with_package_debug_info_at_source_node(
+                &fixture.program,
+                fixture.environment,
+                &debug,
+                source,
+                &mut execution_fixture(operations).host,
+            ))
+            .unwrap(),
+        );
+    }
+    let bytes = witnesses[0].to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+    assert_eq!(bytes[0], 4);
+    let claim = witnesses[0].claim();
+    let restored = ExecutionWitness::read_from_bytes_with_limits(
+        &bytes,
+        &fixture.environment,
+        trace_limits(),
+        read_limits(),
+    )
+    .unwrap();
+    witnesses.push(restored);
+    let mut traces = Vec::new();
+    for witness in witnesses {
+        assert_eq!(witness.claim(), claim);
+        assert_eq!(witness.execution_descriptor(), fixture.environment.descriptor());
+        assert_eq!(witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
+        let (vm, precompile) = witness.into_parts();
+        assert!(precompile.is_none());
+        traces.push(build_trace(vm, &miden_vm_stark::memory::default_budget()).unwrap());
+    }
+    for trace in &traces[1..] {
+        assert_eq!(trace.public_inputs(), traces[0].public_inputs());
+        assert_eq!(trace.trace_len_summary(), traces[0].trace_len_summary());
+        assert_eq!(
+            trace.main_trace().clone_air_matrices(),
+            traces[0].main_trace().clone_air_matrices()
+        );
+    }
+}
+
+#[test]
+fn completed_witness_retained_limits_admit_exact_boundaries_and_reject_less() {
+    let execute = |limit| {
+        let mut fixture = execution_fixture(vec![Operation::Push(ONE), Operation::Drop]);
+        FastProcessor::new(StackInputs::default())
+            .with_options(
+                ExecutionOptions::default().with_environment_trace_limits(retained_limit(limit)),
+            )
+            .unwrap()
+            .execute_for_proving_sync(&fixture.program, fixture.environment, &mut fixture.host)
+    };
+    let capture_minimum =
+        minimum_retained_limit(|limit| retained_capture_admits(execute(limit), limit));
+    let witness = execute(capture_minimum).expect("exact retained capture limit must admit");
+    let error = execute(capture_minimum - 1)
+        .expect_err("insufficient retained capture storage must not publish a witness");
+    assert!(
+        matches!(
+            error,
+            ExecutionError::KeyedTrace(KeyedReplayError::LimitExceeded {
+                resource: ReplayResource::RetainedBytes,
+                ..
+            })
+        ),
+        "unexpected capture error: {error}"
+    );
+    let environment = execution_fixture(vec![Operation::Push(ONE), Operation::Drop]).environment;
+    let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+    let export_minimum = minimum_retained_limit(|limit| {
+        retained_export_admits(
+            witness.to_bytes_with_limits(retained_limit(limit), read_limits()),
+            limit,
+        )
+    });
+    assert_eq!(
+        witness
+            .to_bytes_with_limits(retained_limit(export_minimum), read_limits())
+            .unwrap(),
+        bytes
+    );
+    assert!(
+        witness
+            .to_bytes_with_limits(retained_limit(export_minimum - 1), read_limits())
+            .expect_err("insufficient retained export storage must not publish bytes")
+            .to_string()
+            .contains("caller limits")
+    );
+    let read = |limit| {
+        ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &environment,
+            retained_limit(limit),
+            read_limits(),
+        )
+    };
+    let read_minimum = minimum_retained_limit(|limit| retained_read_admits(read(limit), limit));
+    let restored = read(read_minimum).expect("exact retained read limit must admit");
+    let error = read(read_minimum - 1)
+        .expect_err("insufficient retained read storage must not publish a witness");
+    assert!(error.to_string().contains("RetainedBytes"), "unexpected read error: {error}");
+    assert_eq!(restored.claim(), witness.claim());
+    assert_eq!(restored.execution_descriptor(), environment.descriptor());
+    let restored_export_minimum = minimum_retained_limit(|limit| {
+        retained_export_admits(
+            restored.to_bytes_with_limits(retained_limit(limit), read_limits()),
+            limit,
+        )
+    });
+    assert_eq!(
+        restored
+            .to_bytes_with_limits(retained_limit(restored_export_minimum), read_limits())
+            .unwrap(),
+        bytes
+    );
+    assert!(
+        restored
+            .to_bytes_with_limits(retained_limit(restored_export_minimum - 1), read_limits())
+            .expect_err("insufficient retained re-export storage must not publish bytes")
+            .to_string()
+            .contains("caller limits")
+    );
+}
 
 #[test]
 fn witness_reports_precompile_state() {
