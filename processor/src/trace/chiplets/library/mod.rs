@@ -119,18 +119,25 @@ impl<'a> LibraryTrace<'a> {
         self.prefix_cells
     }
 
-    /// Writes an exact caller-allocated prefix and emits every raw packed compression request.
+    /// Streams every raw packed compression request before the caller allocates the prefix.
     ///
-    /// A failed write or callback leaves disposable, partially written destination/callback state;
-    /// no rollback is promised. The authoritative session is never changed. The callback may merge
-    /// requests into the existing Hasher interner, but must not append Controller rows. Combined
-    /// height, PCS and proving-memory admission remain the caller's responsibility before
-    /// allocation.
-    pub(crate) fn write(
+    /// The traversal uses only one stack pair and never stores rows or requests. On callback
+    /// failure the caller must discard its partially updated state; no rollback is promised.
+    /// The callback may merge requests into the existing Hasher interner, but must not append
+    /// Controller rows. The authoritative session is never changed.
+    pub(crate) fn visit_compression_requests(
         &self,
-        prefix: &mut [Felt],
-        mut request: impl FnMut(&[Felt; STATE_WIDTH]) -> Result<(), ExecutionError>,
+        request: impl FnMut(&[Felt; STATE_WIDTH]) -> Result<(), ExecutionError>,
     ) -> Result<(), ExecutionError> {
+        self.walk(|_, _| Ok(()), request)
+    }
+
+    /// Writes an exact caller-allocated prefix without registering compression requests again.
+    ///
+    /// Combined height, PCS and proving-memory admission remain the caller's responsibility before
+    /// allocation. A failed write leaves a disposable, partially written destination; no rollback
+    /// is promised. The authoritative session is never changed.
+    pub(crate) fn write(&self, prefix: &mut [Felt]) -> Result<(), ExecutionError> {
         if prefix.len() != self.prefix_cells {
             return Err(ExecutionError::Internal(
                 "Library destination must be the exact prefix size",
@@ -141,6 +148,34 @@ impl<'a> LibraryTrace<'a> {
             row[0] = ONE;
             row[CHIPLETS_CLK_COL] = bounded_felt(index.checked_add(1).ok_or_else(length_error)?)?;
         }
+        self.walk(
+            |offset, pair| {
+                let start = offset.checked_mul(CHIPLETS_WIDTH).ok_or_else(length_error)?;
+                let end = start.checked_add(pair.len()).ok_or_else(length_error)?;
+                let rows = prefix.get_mut(start..end).ok_or_else(inconsistent)?;
+                for (destination, source) in rows
+                    .as_chunks_mut::<CHIPLETS_WIDTH>()
+                    .0
+                    .iter_mut()
+                    .zip(pair.as_chunks::<CHIPLETS_WIDTH>().0)
+                {
+                    destination[LIBRARY_COL_RANGE].copy_from_slice(&source[LIBRARY_COL_RANGE]);
+                }
+                Ok(())
+            },
+            |_| Ok(()),
+        )?;
+        // The initialized zero overlay is PAD on every remaining complete pair, including at
+        // least one mandatory pair. Its final B row has global AEAD phase seven.
+        Ok(())
+    }
+
+    /// The sole node/hash/row traversal for request admission and final materialization.
+    fn walk(
+        &self,
+        mut emit: impl FnMut(usize, &[Felt; 2 * CHIPLETS_WIDTH]) -> Result<(), ExecutionError>,
+        mut request: impl FnMut(&[Felt; STATE_WIDTH]) -> Result<(), ExecutionError>,
+    ) -> Result<(), ExecutionError> {
         let totals = self.session.ledger().counters();
         let mut requests = Requests {
             callback: &mut request,
@@ -160,26 +195,30 @@ impl<'a> LibraryTrace<'a> {
             if end > totals.library_rows {
                 return Err(inconsistent());
             }
-            let rows = &mut prefix[cursor * CHIPLETS_WIDTH..end * CHIPLETS_WIDTH];
             match occurrence.node() {
-                EnvNode::List(children) => write_list(
-                    rows,
+                EnvNode::List(children) => visit_list(
                     children,
                     occurrence.selected_children(),
                     occurrence.namespace(),
                     occurrence.depth(),
                     occurrence.commitment(),
                     &mut requests,
+                    &mut |offset, pair| {
+                        emit(cursor.checked_add(offset).ok_or_else(length_error)?, pair)
+                    },
                 )?,
-                _ => write_object(rows, occurrence, &mut bindings, &mut requests)?,
+                _ => visit_object(occurrence, &mut bindings, &mut requests, &mut |pair| {
+                    emit(cursor, pair)
+                })?,
             }
             cursor = end;
         }
-        if cursor != totals.library_rows || requests.count != totals.compression_requests {
+        if cursor != totals.library_rows
+            || requests.count != totals.compression_requests
+            || bindings.next().is_some()
+        {
             return Err(inconsistent());
         }
-        // The initialized zero overlay is PAD on every remaining complete pair, including at
-        // least one mandatory pair. Its final B row has global AEAD phase seven.
         Ok(())
     }
 }
@@ -260,11 +299,11 @@ fn validate_occurrence(
     Ok(())
 }
 
-fn write_object<'a>(
-    rows: &mut [Felt],
+fn visit_object<'a>(
     occurrence: &OpeningOccurrence,
     bindings: &mut impl Iterator<Item = &'a SessionBinding>,
     requests: &mut Requests<'_, impl FnMut(&[Felt; STATE_WIDTH]) -> Result<(), ExecutionError>>,
+    emit: &mut impl FnMut(&[Felt; 2 * CHIPLETS_WIDTH]) -> Result<(), ExecutionError>,
 ) -> Result<(), ExecutionError> {
     let (kind, x, y, frame) = match occurrence.node() {
         EnvNode::Env { label, child } => (
@@ -290,7 +329,8 @@ fn write_object<'a>(
     if requests.compress(x, y, frame)? != occurrence.commitment().into_word() {
         return Err(inconsistent());
     }
-    let (a, b) = pair(rows, kind, occurrence.namespace(), occurrence.depth())?;
+    let mut rows = [ZERO; 2 * CHIPLETS_WIDTH];
+    let (a, b) = pair(&mut rows, kind, occurrence.namespace(), occurrence.depth())?;
     a.x = x.into_elements();
     a.y = y.into_elements();
     a.z = occurrence.commitment().into_word().into_elements();
@@ -333,17 +373,17 @@ fn write_object<'a>(
             _ => return Err(inconsistent()),
         };
     }
-    Ok(())
+    emit(&rows)
 }
 
-fn write_list(
-    rows: &mut [Felt],
+fn visit_list(
     children: &[EnvironmentRoot],
     selected: &[Option<crate::environment::OpeningId>],
     namespace: Namespace,
     depth: usize,
     commitment: EnvironmentRoot,
     requests: &mut Requests<'_, impl FnMut(&[Felt; STATE_WIDTH]) -> Result<(), ExecutionError>>,
+    emit: &mut impl FnMut(usize, &[Felt; 2 * CHIPLETS_WIDTH]) -> Result<(), ExecutionError>,
 ) -> Result<(), ExecutionError> {
     let felt_len = children.len().checked_mul(4).ok_or_else(length_error)?;
     let felt_len = u32::try_from(felt_len).map_err(|_| length_error())?;
@@ -362,8 +402,8 @@ fn write_list(
         } else {
             LIST_CONTINUE
         };
-        let start = reverse * 2 * CHIPLETS_WIDTH;
-        let (a, b) = pair(&mut rows[start..start + 2 * CHIPLETS_WIDTH], kind, namespace, depth)?;
+        let mut rows = [ZERO; 2 * CHIPLETS_WIDTH];
+        let (a, b) = pair(&mut rows, kind, namespace, depth)?;
         a.x = x.into_elements();
         a.y = y.into_elements();
         a.z = output.into_elements();
@@ -386,6 +426,8 @@ fn write_list(
         b.z = cv.into_elements();
         b.a = a.a;
         b.b = selection(selected, slot);
+        let destination = reverse.checked_mul(2).ok_or_else(length_error)?;
+        emit(destination, &rows)?;
         cv = output;
     }
     if cv != commitment.into_word() {

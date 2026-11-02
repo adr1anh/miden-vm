@@ -141,6 +141,12 @@ fn completed_nested_session_maps_occurrences_and_frequencies_to_exact_packed_row
         assert_object_requests(&mut expected, occurrence, &cells, physical);
     }
     assert_eq!(requests, expected);
+    assert_walk_matches_materialization(
+        &trace,
+        &cells,
+        &requests,
+        &[0, 4, 2, 6, 8, 10, 12, 14, 16],
+    );
     assert_eq!(session.phase(), SessionPhase::Completed);
     assert_eq!(session.counters().committed_requests, 7);
 }
@@ -170,6 +176,8 @@ fn odd_even_and_multiblock_lists_include_every_child_and_reverse_complete_cvs() 
         assert_eq!(session.ledger().counters().library_rows, 2 * pairs + 2);
         assert_eq!(requests.len(), pairs + 2);
         assert_prefix(&cells, 2 * pairs + 2);
+        let offsets: Vec<_> = (0..pairs).rev().map(|pair| 2 * pair).chain([2 * pairs]).collect();
+        assert_walk_matches_materialization(&trace, &cells, &requests, &offsets);
         let mut cv = Eidos::init_chaining_word(domain::ENV_LIST, (4 * n) as u32);
         for block in 0..pairs {
             let reverse = pairs - block - 1;
@@ -223,7 +231,7 @@ fn odd_even_and_multiblock_lists_include_every_child_and_reverse_complete_cvs() 
 
 #[test]
 fn empty_list_helper_preserves_the_distinct_empty_frame_without_a_second_ledger_path() {
-    let mut rows = vec![ZERO; 2 * CHIPLETS_WIDTH];
+    let mut rows = [ZERO; 2 * CHIPLETS_WIDTH];
     let mut captured = Vec::new();
     let mut callback = |request: &[Felt; STATE_WIDTH]| {
         captured.push(*request);
@@ -235,17 +243,24 @@ fn empty_list_helper_preserves_the_distinct_empty_frame_without_a_second_ledger_
         limit: 1,
     };
     let namespace = Namespace::initial();
-    write_list(
-        &mut rows,
+    let mut emitted = 0;
+    visit_list(
         &[],
         &[],
         namespace,
         3,
         commitment(&EnvNode::List(vec![])),
         &mut requests,
+        &mut |offset, pair| {
+            assert_eq!(offset, 0);
+            rows.copy_from_slice(pair);
+            emitted += 1;
+            Ok(())
+        },
     )
     .unwrap();
     assert_eq!(requests.count, 1);
+    assert_eq!(emitted, 1);
     assert_eq!(cols(&rows, 0).k, EMPTY_LIST);
     assert_eq!(cols(&rows, 1).k, EMPTY_LIST);
     for index in 0..2 {
@@ -292,32 +307,117 @@ fn phase_size_and_callback_failures_do_not_mutate_the_native_authority() {
     let counters = session.counters();
     for size in [0, trace.prefix_cells() - 1, trace.prefix_cells() + 1] {
         let mut destination = vec![ONE; size];
-        let mut calls = 0;
-        let result = trace.write(&mut destination, |_| {
-            calls += 1;
-            Ok(())
-        });
+        let result = trace.write(&mut destination);
         assert!(matches!(result, Err(ExecutionError::Internal(_))));
         assert_eq!(destination, vec![ONE; size]);
-        assert_eq!(calls, 0);
     }
-    let mut destination = vec![ONE; trace.prefix_cells()];
-    let mut calls = 0;
-    let result = trace.write(&mut destination, |_| {
-        calls += 1;
-        if calls == 2 {
-            Err(ExecutionError::Internal("callback stopped"))
-        } else {
+    for stop in 1..=2 {
+        let mut calls = 0;
+        let result = trace.visit_compression_requests(|_| {
+            calls += 1;
+            if calls == stop {
+                Err(ExecutionError::Internal("callback stopped"))
+            } else {
+                Ok(())
+            }
+        });
+        assert!(matches!(result, Err(ExecutionError::Internal("callback stopped"))));
+        assert_eq!(calls, stop);
+        assert_eq!(session.counters(), counters);
+    }
+    let mut requests = 0;
+    let mut pairs = 0;
+    let result = trace.walk(
+        |offset, _| {
+            assert_eq!(offset, 0);
+            pairs += 1;
+            Err(ExecutionError::Internal("pair stopped"))
+        },
+        |_| {
+            requests += 1;
             Ok(())
-        }
-    });
-    assert!(matches!(result, Err(ExecutionError::Internal("callback stopped"))));
-    assert_eq!(calls, 2);
-    assert_ne!(destination, vec![ONE; trace.prefix_cells()]);
+        },
+    );
+    assert!(matches!(result, Err(ExecutionError::Internal("pair stopped"))));
+    assert_eq!((pairs, requests), (1, 2));
     assert_eq!(session.counters(), counters);
     let (retry, requests) = materialize(&trace);
     assert_prefix(&retry, 2);
     assert_eq!(requests.len(), 2);
+}
+
+#[test]
+fn pre_admission_needs_only_a_fixed_request_sink_and_write_does_not_register_again() {
+    let leaf = mast("entry", 40);
+    let resolved = binding(vec![step(&leaf, None)]);
+    let implementation = resolved.implementation_root();
+    let key = resolved.procedure_key();
+    let mut session = new_session(&resolved, Namespace::initial());
+    session.prepare_entry(resolved).unwrap().commit();
+    session.prepare_root_end(implementation, row(1)).unwrap().commit();
+    let counters = session.counters();
+    let trace = LibraryTrace::new(&session).unwrap();
+    // No prefix or growable request storage exists during pre-admission.
+    let mut requests = [[ZERO; STATE_WIDTH]; 2];
+    let mut registered = 0;
+    trace
+        .visit_compression_requests(|state| {
+            requests[registered] = *state;
+            registered += 1;
+            Ok(())
+        })
+        .unwrap();
+    let EnvNode::Mast { label, .. } = leaf else {
+        unreachable!()
+    };
+    assert_eq!(registered, 2);
+    assert_eq!(
+        requests,
+        [
+            state(
+                label.into_word(),
+                implementation.into_word(),
+                Eidos::init_chaining_word(domain::ENV_MAST, 8),
+            ),
+            state(
+                Namespace::initial().into_word(),
+                label.into_word(),
+                Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8),
+            ),
+        ]
+    );
+    let mut destination = vec![ONE; trace.prefix_cells()];
+    trace.write(&mut destination).unwrap();
+    assert_eq!(registered, session.ledger().counters().compression_requests);
+    assert_eq!(cols(&destination, 1).z, key.into_word().into_elements());
+    assert_prefix(&destination, 2);
+    assert_eq!(session.counters(), counters);
+}
+
+#[test]
+fn compression_request_limit_stops_before_the_callback_and_uses_checked_counts() {
+    let mut calls = 0;
+    let mut callback = |_: &[Felt; STATE_WIDTH]| {
+        calls += 1;
+        Ok(())
+    };
+    let mut requests = Requests {
+        callback: &mut callback,
+        count: 0,
+        limit: 1,
+    };
+    requests.compress(Word::default(), Word::default(), Word::default()).unwrap();
+    assert!(matches!(
+        requests.compress(Word::default(), Word::default(), Word::default()),
+        Err(ExecutionError::Internal(_))
+    ));
+    assert_eq!(requests.count, 1);
+    requests.count = usize::MAX;
+    assert!(matches!(
+        requests.compress(Word::default(), Word::default(), Word::default()),
+        Err(ExecutionError::TraceLenExceeded(MAX_TRACE_LEN))
+    ));
+    assert_eq!(calls, 1);
 }
 
 #[test]
@@ -398,15 +498,53 @@ fn assert_prefix(cells: &[Felt], active: usize) {
 }
 
 fn materialize(trace: &LibraryTrace<'_>) -> (Vec<Felt>, Vec<[Felt; STATE_WIDTH]>) {
-    let mut cells = vec![ONE; trace.prefix_cells()];
     let mut requests = Vec::new();
     trace
-        .write(&mut cells, |state| {
+        .visit_compression_requests(|state| {
             requests.push(*state);
             Ok(())
         })
         .unwrap();
+    let mut cells = vec![ONE; trace.prefix_cells()];
+    trace.write(&mut cells).unwrap();
     (cells, requests)
+}
+
+fn assert_walk_matches_materialization(
+    trace: &LibraryTrace<'_>,
+    cells: &[Felt],
+    expected_requests: &[[Felt; STATE_WIDTH]],
+    expected_offsets: &[usize],
+) {
+    let mut requests = Vec::new();
+    let mut emitted = vec![false; trace.session.ledger().counters().library_rows / 2];
+    let mut pairs = 0;
+    trace
+        .walk(
+            |offset, pair| {
+                assert_eq!(offset, expected_offsets[pairs]);
+                assert_eq!(offset % 2, 0);
+                assert!(!emitted[offset / 2]);
+                emitted[offset / 2] = true;
+                for phase in 0..2 {
+                    let source = &pair[phase * CHIPLETS_WIDTH..(phase + 1) * CHIPLETS_WIDTH];
+                    let destination = &cells
+                        [(offset + phase) * CHIPLETS_WIDTH..(offset + phase + 1) * CHIPLETS_WIDTH];
+                    assert_eq!(source[LIBRARY_COL_RANGE], destination[LIBRARY_COL_RANGE]);
+                    assert_eq!((source[0], source[CHIPLETS_CLK_COL]), (ZERO, ZERO));
+                }
+                pairs += 1;
+                Ok(())
+            },
+            |state| {
+                requests.push(*state);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(pairs, expected_offsets.len());
+    assert!(emitted.into_iter().all(|emitted| emitted));
+    assert_eq!(requests, expected_requests);
 }
 
 fn cols(cells: &[Felt], row: usize) -> &LibraryCols<Felt> {
