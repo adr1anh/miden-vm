@@ -1,4 +1,4 @@
-//! Tests exercise the dormant MAIN entry point over the actual shared 24-cell row schema.
+//! Tests exercise Library MAIN over the shared 24-cell row schema.
 //! Hash and Open/Resolve lookup soundness is tested by the combined lookup adapter separately.
 
 use alloc::vec::Vec;

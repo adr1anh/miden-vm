@@ -65,9 +65,7 @@ pub mod log_deferred {
 // `chip_clk` is the chiplet-trace row counter (value `row_index + 1`); it sources the
 // hasher responder address on the chiplet side.
 pub const CHIPLETS_DATA_WIDTH: usize = 23;
-pub const CHIPLETS_MODE_COL: usize = CHIPLETS_DATA_WIDTH - 1;
-pub const CHIPLETS_STREAM_MODE_COL: usize = CHIPLETS_MODE_COL;
-pub const CHIPLETS_CLK_COL: usize = CHIPLETS_MODE_COL + 1;
+pub const CHIPLETS_CLK_COL: usize = CHIPLETS_DATA_WIDTH;
 pub const CHIPLETS_WIDTH: usize = CHIPLETS_CLK_COL + 1;
 
 pub mod eidos_compression {

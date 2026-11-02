@@ -1,8 +1,7 @@
-//! Explicitly scoped constraints for the future packed Library region.
+//! Scoped Library expressions for the packed Chiplets prefix.
 //!
-//! These entry points do not activate a Library section in the production Chiplets AIR.
-//! The current `c[0]` selects Controller rows. Library activation must migrate the section
-//! selectors, physical views and writers, Controller gates, and periodic consumers together.
+//! The Chiplets MAIN dispatcher supplies the section selector, fixed periodics, and mandatory
+//! public kernel namespace. Rooted authorization is completed by its paired lookup relation.
 
 pub mod columns;
 pub(crate) mod constraints;
@@ -19,7 +18,6 @@ use crate::vm::constraints::utils::BoolNot;
 ///
 /// `phase` is the fixed period-two column `[0, 1]`; `exit_aligned` is the fixed AEAD
 /// phase-seven column. They must come from the caller's periodic columns, never witness cells.
-/// The current legacy Controller selector must not be passed as `is_active`.
 #[derive(Clone)]
 pub struct LibraryRowContext<E> {
     pub is_active: E,
@@ -77,9 +75,7 @@ pub struct LibraryPhaseFlags<E> {
 }
 
 impl<E: PrimeCharacteristicRing> LibraryPhaseFlags<E> {
-    /// Builds scope from an explicit Library selector and the future period-two phase.
-    ///
-    /// The active legacy Controller selector must not be passed as `s_lib`.
+    /// Builds scope from an explicit Library selector and the fixed period-two phase.
     pub fn new(s_lib: E, library_phase: E) -> Self {
         Self {
             phase_a: s_lib.clone() * library_phase.not(),

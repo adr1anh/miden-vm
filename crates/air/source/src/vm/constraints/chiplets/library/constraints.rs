@@ -1,4 +1,4 @@
-//! Library MAIN equations, dormant until the coordinated packed Chiplets cutover.
+//! Library MAIN equations for the packed Chiplets prefix.
 
 use miden_core::{field::PrimeCharacteristicRing, program::domain};
 use miden_stark::air::AirBuilder;
@@ -13,7 +13,7 @@ use crate::{shared::eidos::framing::initial_cv_from_frame, vm::MidenAirBuilder};
 ///
 /// Hashing and rooted authorization are supplied by the paired Library lookup entry point. This
 /// function constrains routing, complete reverse Lists, prefix boundaries, and each syscall
-/// supplier's full namespace. Neither entry point is dispatched by the production Chiplets AIR yet.
+/// supplier's full namespace. The Chiplets dispatcher supplies mandatory public inputs explicitly.
 pub fn enforce_library_constraints<AB: MidenAirBuilder>(
     builder: &mut AB,
     local: &LibraryCols<AB::Var>,

@@ -1,4 +1,4 @@
-//! Shared column schema for the future packed Library region.
+//! Shared column schema for the packed Library region.
 
 use miden_core::WORD_SIZE;
 
@@ -7,9 +7,6 @@ use miden_core::WORD_SIZE;
 /// The direct Library selector at `c[0]` and global `chip_clk` at `c[23]` are outside this
 /// overlay. The words and scalars have row-kind-dependent meanings; the scalar `b` holds sigma
 /// on Merkle and nonempty List B rows.
-///
-/// This view is dormant until the packed section migration activates Library together with the
-/// other selectors and physical layouts. Currently `c[0]` selects Controller rows.
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct LibraryCols<T> {

@@ -14,15 +14,13 @@ use super::{
     chiplets::columns::{
         AceCols, AceEvalCols, AceReadCols, AeadStreamCols, AeadStreamHighFirstCols,
         AeadStreamHighSecondCols, AeadStreamLowSecondCols, AeadStreamReadCols, BitwiseCols,
-        ControllerCols, KernelRomCols, LibraryCols, MemoryCols,
+        ControllerCols, LibraryCols, MemoryCols,
     },
     decoder::columns::DecoderCols,
     stack::columns::StackCols,
     system::columns::SystemCols,
 };
-use crate::vm::trace::{
-    CHIPLETS_DATA_WIDTH, CHIPLETS_MODE_COL, TRACE_WIDTH, chiplets::library::LIBRARY_COL_RANGE,
-};
+use crate::vm::trace::{CHIPLETS_DATA_WIDTH, TRACE_WIDTH, chiplets::library::LIBRARY_COL_RANGE};
 
 // CORE TRACE COLUMN STRUCT
 // ================================================================================================
@@ -96,57 +94,37 @@ pub struct ChipletCols<T> {
 pub const NUM_CHIPLETS_COLS: usize = size_of::<ChipletCols<u8>>();
 
 impl<T> ChipletCols<T> {
-    /// Returns the dormant Library overlay of shared cells `c[1..23]`.
-    ///
-    /// This view excludes `c[0]` and the global clock. The current `c[0]` selects Controller;
-    /// Library interpretation must wait for the coupled packed-section migration.
+    /// Returns the Library overlay of shared cells `c[1..23]`.
     pub fn library(&self) -> &LibraryCols<T> {
         self.chiplets[LIBRARY_COL_RANGE].borrow()
     }
 
-    /// Returns the five columns used by the chiplet selector hierarchy.
+    /// Returns the packed section selectors `[S_lib, C, A, m, a, b]`.
     ///
-    /// The bitwise-local mode cell is exposed separately through
-    /// [`Self::bitwise_stream_mode`].
-    pub fn chiplet_selectors(&self) -> [T; 5]
+    /// Later selector cells are payload when an earlier section owns the row.
+    pub fn chiplet_selectors(&self) -> [T; 6]
     where
         T: Copy,
     {
-        [
-            self.chiplets[0],
-            self.chiplets[1],
-            self.chiplets[2],
-            self.chiplets[3],
-            self.chiplets[4],
-        ]
+        core::array::from_fn(|i| self.chiplets[i])
     }
 
-    /// Returns the bitwise-local stream mode.
-    ///
-    /// Meaningful only in the bitwise selector region.
-    pub fn bitwise_stream_mode(&self) -> T
-    where
-        T: Copy,
-    {
-        self.chiplets[CHIPLETS_MODE_COL]
-    }
-
-    /// Returns a typed borrow of the bitwise chiplet columns (chiplets\[2..15\]).
+    /// Returns a typed borrow of the bitwise chiplet columns (chiplets\[6..19\]).
     pub fn bitwise(&self) -> &BitwiseCols<T> {
-        self.chiplets[2..15].borrow()
+        self.chiplets[6..19].borrow()
     }
 
-    /// Returns a typed borrow of the AEAD stream columns (chiplets\[2..22\]).
+    /// Returns a typed borrow of the AEAD stream columns (chiplets\[3..23\]).
     pub fn aead_stream(&self) -> &AeadStreamCols<T> {
-        self.chiplets[2..22].borrow()
+        self.chiplets[3..23].borrow()
     }
 
-    /// Returns a typed borrow of the memory chiplet columns (chiplets\[3..18\]).
+    /// Returns a typed borrow of the memory chiplet columns (chiplets\[4..19\]).
     pub fn memory(&self) -> &MemoryCols<T> {
-        self.chiplets[3..18].borrow()
+        self.chiplets[4..19].borrow()
     }
 
-    /// Returns the lower 16-bit limb of the memory word address (chiplets\[18\]).
+    /// Returns the lower 16-bit limb of the memory word address (chiplets\[19\]).
     ///
     /// Range-check auxiliary column populated by the trace builder for the lookup-bus
     /// emitter; not part of [`MemoryCols`] because the memory AIR's own transition
@@ -155,10 +133,10 @@ impl<T> ChipletCols<T> {
     where
         T: Copy,
     {
-        self.chiplets[18]
+        self.chiplets[19]
     }
 
-    /// Returns the upper 16-bit limb of the memory word address (chiplets\[19\]).
+    /// Returns the upper 16-bit limb of the memory word address (chiplets\[20\]).
     ///
     /// See [`Self::memory_word_addr_lo`] for the same caveat about the range-check
     /// auxiliary columns living outside [`MemoryCols`].
@@ -166,7 +144,7 @@ impl<T> ChipletCols<T> {
     where
         T: Copy,
     {
-        self.chiplets[19]
+        self.chiplets[20]
     }
 
     /// Returns the Memory write helpers `e0` and `e1` (shared cells `c[21]` and `c[22]`).
@@ -187,9 +165,9 @@ impl<T> ChipletCols<T> {
         (&mut self.chiplets[21..23]).try_into().expect("fixed Memory helper width")
     }
 
-    /// Returns a typed borrow of the ACE chiplet columns (chiplets\[4..20\]).
+    /// Returns a typed borrow of the ACE chiplet columns (chiplets\[5..21\]).
     pub fn ace(&self) -> &AceCols<T> {
-        self.chiplets[4..20].borrow()
+        self.chiplets[5..21].borrow()
     }
 
     /// Returns the ACE operation-square helper `z` (shared cell `c[21]`).
@@ -210,36 +188,31 @@ impl<T> ChipletCols<T> {
         &mut self.chiplets[21]
     }
 
-    /// Returns a typed borrow of the kernel ROM chiplet columns (chiplets\[5..10\]).
-    pub fn kernel_rom(&self) -> &KernelRomCols<T> {
-        self.chiplets[5..10].borrow()
-    }
-
-    /// Returns a typed borrow of the controller sub-chiplet columns (chiplets\[1..20\]).
+    /// Returns a typed borrow of the controller sub-chiplet columns (chiplets\[2..21\]).
     pub fn controller(&self) -> &ControllerCols<T> {
-        self.chiplets[1..20].borrow()
+        self.chiplets[2..21].borrow()
     }
 
-    /// Returns the controller-local final-row marker (`chiplets[20]`).
+    /// Returns the controller-local final-row marker (`chiplets[21]`).
     ///
-    /// Meaningful only when `s_ctrl = 1`; other chiplets use this physical cell according to
+    /// Meaningful only on Controller rows; other chiplets use this physical cell according to
     /// their own overlays.
     pub fn controller_op_final(&self) -> T
     where
         T: Copy,
     {
-        self.chiplets[20]
+        self.chiplets[21]
     }
 
-    /// Returns the controller-local MRUPDATE id (`chiplets[21]`).
+    /// Returns the controller-local MRUPDATE id (`chiplets[22]`).
     ///
-    /// Meaningful only when `s_ctrl = 1`; other chiplets use this physical cell according to
+    /// Meaningful only on Controller rows; other chiplets use this physical cell according to
     /// their own overlays.
     pub fn controller_mrupdate_id(&self) -> T
     where
         T: Copy,
     {
-        self.chiplets[21]
+        self.chiplets[22]
     }
 }
 
@@ -298,7 +271,6 @@ pub const NUM_MEMORY_COLS: usize = size_of::<MemoryCols<u8>>();
 pub const NUM_ACE_COLS: usize = size_of::<AceCols<u8>>();
 pub const NUM_ACE_READ_COLS: usize = size_of::<AceReadCols<u8>>();
 pub const NUM_ACE_EVAL_COLS: usize = size_of::<AceEvalCols<u8>>();
-pub const NUM_KERNEL_ROM_COLS: usize = size_of::<KernelRomCols<u8>>();
 
 const _: () = assert!(NUM_SYSTEM_COLS == 6);
 const _: () = assert!(NUM_DECODER_COLS == 23);
@@ -313,7 +285,6 @@ const _: () = assert!(NUM_MEMORY_COLS == 15);
 const _: () = assert!(NUM_ACE_COLS == 16);
 const _: () = assert!(NUM_ACE_READ_COLS == 4);
 const _: () = assert!(NUM_ACE_EVAL_COLS == 4);
-const _: () = assert!(NUM_KERNEL_ROM_COLS == 5);
 
 // TESTS
 // ================================================================================================
@@ -322,7 +293,7 @@ const _: () = assert!(NUM_KERNEL_ROM_COLS == 5);
 mod tests {
     use super::*;
     use crate::vm::trace::{
-        CHIPLETS_CLK_COL, CHIPLETS_MODE_COL, CHIPLETS_WIDTH, DECODER_TRACE_WIDTH, SYS_TRACE_WIDTH,
+        CHIPLETS_CLK_COL, CHIPLETS_WIDTH, DECODER_TRACE_WIDTH, SYS_TRACE_WIDTH,
     };
 
     /// Per-AIR index maps used only by the column-layout tests below. Each field holds its
@@ -387,10 +358,18 @@ mod tests {
     #[test]
     fn col_map_chiplets() {
         assert_eq!(CHIPLET_COL_MAP.chiplets[0], 0);
-        assert_eq!(CHIPLET_COL_MAP.chiplets[CHIPLETS_MODE_COL], CHIPLETS_MODE_COL);
         assert_eq!(CHIPLET_COL_MAP.chip_clk, CHIPLETS_CLK_COL);
         assert_eq!(CHIPLET_COL_MAP.memory_write_helpers(), [21, 22]);
         assert_eq!(CHIPLET_COL_MAP.ace_op_squared(), 21);
+        assert_eq!(CHIPLET_COL_MAP.chiplet_selectors(), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(CHIPLET_COL_MAP.controller().s0, 2);
+        assert_eq!(CHIPLET_COL_MAP.controller_op_final(), 21);
+        assert_eq!(CHIPLET_COL_MAP.controller_mrupdate_id(), 22);
+        assert_eq!(CHIPLET_COL_MAP.bitwise().op_flag, 6);
+        assert_eq!(CHIPLET_COL_MAP.memory().is_read, 4);
+        assert_eq!(CHIPLET_COL_MAP.memory_word_addr_lo(), 19);
+        assert_eq!(CHIPLET_COL_MAP.memory_word_addr_hi(), 20);
+        assert_eq!(CHIPLET_COL_MAP.ace().s_start, 5);
     }
 
     #[test]
@@ -505,11 +484,6 @@ mod tests {
     #[test]
     fn ace_eval_col_map_layout() {
         insta::assert_debug_snapshot!(col_map!(AceEvalCols));
-    }
-
-    #[test]
-    fn kernel_rom_col_map_layout() {
-        insta::assert_debug_snapshot!(col_map!(KernelRomCols));
     }
 
     #[test]

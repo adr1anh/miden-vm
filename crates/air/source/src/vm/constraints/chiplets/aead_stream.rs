@@ -1,6 +1,6 @@
 //! AEAD stream constraints.
 //!
-//! Stream rows live in the bitwise selector region with `stream_mode = 1`. One stream entry spans
+//! Stream rows occupy their own packed section after Controller. One stream entry spans
 //! eight rows; each row proves one u32 XOR as four AND8 byte lookups. These constraints bind the
 //! row phases and carry the plaintext/ciphertext limbs across the eight-row schedule.
 
@@ -38,15 +38,13 @@ pub fn enforce_aead_stream_constraints<AB>(
 
     let cols = local.aead_stream();
     let cols_next = next.aead_stream();
-    let stream = selectors.bitwise.aead_stream.clone();
+    let stream = selectors.aead_stream.is_active.clone();
     let stream_next = aead_stream_active_next::<AB>(next);
 
     // Align stream entry boundaries with the eight-row phase cycle.
     builder
-        .when(selectors.bitwise.region.next_is_first.clone() * stream_next.clone())
+        .when(selectors.aead_stream.next_is_first.clone())
         .assert_one(phases[7].clone());
-
-    builder.when(stream.not() * stream_next.clone()).assert_one(phases[7].clone());
 
     builder.when(stream.clone() * phases[7].clone().not()).assert_one(stream_next);
 
@@ -161,10 +159,9 @@ fn aead_stream_active_next<AB>(next: &ChipletCols<AB::Var>) -> AB::Expr
 where
     AB: MidenAirBuilder,
 {
-    let s_ctrl_next: AB::Expr = next.chiplets[0].into();
-    let s1_next: AB::Expr = next.chiplets[1].into();
-    let stream_mode_next: AB::Expr = next.bitwise_stream_mode().into();
-    s_ctrl_next.not() * s1_next.not() * stream_mode_next
+    let [library, controller, aead, _, _, _]: [AB::Expr; 6] =
+        next.chiplet_selectors().map(Into::into);
+    library.not() * controller.not() * aead
 }
 
 fn assert_eq_expr_on<AB>(builder: &mut AB, gate: AB::Expr, next: AB::Var, current: AB::Expr)

@@ -225,7 +225,7 @@ mod tests {
     };
 
     fn ace_cols(row: &mut ChipletCols<Felt>) -> &mut AceCols<Felt> {
-        row.chiplets[4..20].borrow_mut()
+        row.chiplets[5..21].borrow_mut()
     }
 
     fn quad_expr(value: QuadFelt) -> QuadFeltExpr<Felt> {
@@ -238,9 +238,8 @@ mod tests {
             chiplets: [Felt::ZERO; CHIPLETS_DATA_WIDTH],
             chip_clk: Felt::ONE,
         };
-        // Current selector hierarchy: non-Controller, past Bitwise and Memory, before ROM.
-        row.chiplets[1] = Felt::ONE;
-        row.chiplets[2] = Felt::ONE;
+        // Packed ACE prefix follows Library, Controller, AEAD, and Memory.
+        row.chiplets[3] = Felt::ONE;
         let v1 = QuadFelt::new(inputs[0].map(Felt::from_u8));
         let v2 = QuadFelt::new(inputs[1].map(Felt::from_u8));
         let result = if op == -Felt::ONE {

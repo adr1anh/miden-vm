@@ -40,7 +40,7 @@ pub fn enforce_controller_constraints<AB>(
     let merkle_start: AB::Expr = cols.merkle_is_start().into();
     let merkle_start_next: AB::Expr = cols_next.merkle_is_start().into();
     let op_final: AB::Expr = local.controller_op_final().into();
-    let s_ctrl_next: AB::Expr = next.chiplets[0].into();
+    let controller_next: AB::Expr = (AB::Expr::ONE - next.chiplets[0].into()) * next.chiplets[1];
     let merkle_or_padding = cols.merkle_or_padding::<AB::Expr>();
     let controller_s0: AB::Expr = cols.s0.into();
 
@@ -48,14 +48,20 @@ pub fn enforce_controller_constraints<AB>(
         chiplet.is_active.clone() * merkle_or_padding.clone() * controller_s0.not();
     let controller_merkle = chiplet.is_active.clone() * merkle_or_padding.clone() * controller_s0;
 
-    // Trace skeleton.
-    builder.when_first_row().assert_one(chiplet.is_active.clone());
-    builder.when_first_row().assert_one(cols.s0);
-
-    builder.when_first_row().assert_zero(merkle_or_padding * merkle_start.not());
-
-    let first_mv_row = Into::<AB::Expr>::into(cols.s1) * Into::<AB::Expr>::into(cols.s2).not();
-    builder.when_first_row().assert_eq(local.controller_mrupdate_id(), first_mv_row);
+    // The first Controller follows the terminal Library PAD B row. Its complete operation
+    // initialization belongs to that boundary, rather than to global trace row zero.
+    {
+        let builder = &mut builder.when(chiplet.next_is_first.clone());
+        builder.assert_one(controller_next.clone());
+        builder.assert_one(cols_next.s0);
+        builder.assert_zero(cols_next.merkle_or_padding::<AB::Expr>() * merkle_start_next.not());
+        let first_mv_row =
+            Into::<AB::Expr>::into(cols_next.s1) * Into::<AB::Expr>::into(cols_next.s2).not();
+        builder.assert_eq(next.controller_mrupdate_id(), first_mv_row);
+        builder
+            .when(cols_next.merkle_or_padding::<AB::Expr>())
+            .assert_zero(cols_next.merkle_level());
+    }
 
     builder
         .when(chiplet.is_active.clone())
@@ -65,7 +71,7 @@ pub fn enforce_controller_constraints<AB>(
 
     // Padding rows stay padding until the controller section ends.
     {
-        let gate = controller_padding.clone() * s_ctrl_next.clone();
+        let gate = controller_padding.clone() * controller_next.clone();
         let builder = &mut builder.when(gate);
         builder.assert_zero(cols_next.s0);
         builder.assert_one(cols_next.s1);
@@ -86,7 +92,7 @@ pub fn enforce_controller_constraints<AB>(
         let s1_next: AB::Expr = cols_next.s1.into();
         let s2_next: AB::Expr = cols_next.s2.into();
         let mv_start_next = s1_next * s2_next.not() * merkle_start_next.clone();
-        let ctrl_pair = chiplet.is_active.clone() * s_ctrl_next.clone();
+        let ctrl_pair = chiplet.is_active.clone() * controller_next.clone();
         builder
             .when(ctrl_pair)
             .assert_eq(next.controller_mrupdate_id(), mrupdate_id + mv_start_next);
@@ -96,7 +102,7 @@ pub fn enforce_controller_constraints<AB>(
     {
         let gate = chiplet.is_active.clone() * rows.is_hash.clone() * op_final.not();
         let builder = &mut builder.when(gate);
-        builder.assert_one(s_ctrl_next.clone());
+        builder.assert_one(controller_next.clone());
         builder.assert_zero(cols_next.s0);
         builder.assert_zero(cols_next.s1);
         builder.assert_zero(cols_next.s2);
@@ -104,7 +110,7 @@ pub fn enforce_controller_constraints<AB>(
     {
         let gate = controller_merkle.clone() * op_final.not();
         let builder = &mut builder.when(gate);
-        builder.assert_one(s_ctrl_next.clone());
+        builder.assert_one(controller_next.clone());
         builder.assert_one(cols_next.s0);
         builder.assert_eq(cols_next.s1, cols.s1);
         builder.assert_eq(cols_next.s2, cols.s2);
@@ -116,7 +122,7 @@ pub fn enforce_controller_constraints<AB>(
         let hash_absorb_next = Into::<AB::Expr>::into(cols_next.s0).not()
             * Into::<AB::Expr>::into(cols_next.s1).not()
             * Into::<AB::Expr>::into(cols_next.s2).not();
-        let gate = s_ctrl_next.clone() * hash_absorb_next;
+        let gate = controller_next.clone() * hash_absorb_next;
         let builder = &mut builder.when(gate);
         builder.assert_zero(op_final.clone());
         builder.assert_zero(cols.s1);
@@ -124,7 +130,7 @@ pub fn enforce_controller_constraints<AB>(
     }
     {
         let merkle_cont_next = chiplet.is_active.clone()
-            * s_ctrl_next
+            * controller_next
             * cols_next.merkle_or_padding::<AB::Expr>()
             * Into::<AB::Expr>::into(cols_next.s0)
             * merkle_start_next.not();
@@ -226,14 +232,11 @@ mod tests {
     use crate::vm::{
         ChipletCols,
         constraints::chiplets::selectors::{ChipletFlags, build_chiplet_selectors},
-        trace::{
-            AUX_TRACE_RAND_CHALLENGES, AUX_TRACE_WIDTH, CHIPLETS_DATA_WIDTH, CHIPLETS_MODE_COL,
-            CHIPLETS_WIDTH,
-        },
+        trace::{AUX_TRACE_RAND_CHALLENGES, AUX_TRACE_WIDTH, CHIPLETS_DATA_WIDTH, CHIPLETS_WIDTH},
     };
 
-    const S_CTRL_COL: usize = 0;
-    const CTRL_BASE: usize = 1;
+    const S_CTRL_COL: usize = 1;
+    const CTRL_BASE: usize = 2;
     const CTRL_SELECTOR_COUNT: usize = 3;
     const CTRL_STATE_WIDTH: usize = 12;
     const CTRL_STATE_BASE: usize = CTRL_BASE + CTRL_SELECTOR_COUNT;
@@ -420,6 +423,33 @@ mod tests {
     }
 
     #[test]
+    fn controller_initialization_belongs_to_library_exit() {
+        let mut library_pad = non_controller_row();
+        library_pad.chiplets[0] = Felt::ONE;
+        for selectors in [[1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]] {
+            let is_merkle = selectors[1] != 0 || selectors[2] != 0;
+            let mut first = merkle_controller_row(selectors, 0, is_merkle, true);
+            first.chiplets[22] = Felt::from_bool(selectors == [1, 1, 0]);
+            assert_accepts(&library_pad, &first, "valid first operation after Library");
+
+            let mut forged = first.clone();
+            forged.chiplets[CTRL_BASE] = Felt::ZERO;
+            assert_rejects(&library_pad, &forged, "first Controller must start an operation");
+            let mut forged = first.clone();
+            forged.chiplets[22] += Felt::ONE;
+            assert_rejects(&library_pad, &forged, "first MRUPDATE id must be initialized");
+            if is_merkle {
+                let mut forged = first.clone();
+                forged.chiplets[CTRL_ROW_DATA_BASE + 2] = Felt::ZERO;
+                assert_rejects(&library_pad, &forged, "first Merkle row must start its path");
+                let mut forged = first.clone();
+                forged.chiplets[CTRL_ROW_DATA_BASE + 3] = Felt::ONE;
+                assert_rejects(&library_pad, &forged, "first Merkle level must be zero");
+            }
+        }
+    }
+
+    #[test]
     fn merkle_controller_accepts_valid_index_route() {
         let (local, next) = valid_merkle_continuation_pair();
         assert_accepts(&local, &next, "valid Merkle continuation should satisfy constraints");
@@ -438,10 +468,10 @@ mod tests {
         for selectors in [[1, 0, 1], [1, 1, 0], [1, 1, 1], [2, 3, 4]] {
             let mut local = non_controller_row();
             let mut next = non_controller_row();
-            for (i, cell) in local.chiplets.iter_mut().enumerate().skip(1) {
+            for (i, cell) in local.chiplets.iter_mut().enumerate().skip(CTRL_BASE) {
                 *cell = Felt::from_usize(7 + i);
             }
-            for (i, cell) in next.chiplets.iter_mut().enumerate().skip(1) {
+            for (i, cell) in next.chiplets.iter_mut().enumerate().skip(CTRL_BASE) {
                 *cell = Felt::from_usize(37 + i);
             }
             for (i, selector) in selectors.into_iter().enumerate() {
@@ -511,8 +541,8 @@ mod tests {
         let mut local = non_controller_row();
         local.chiplets[S_CTRL_COL] = Felt::ONE;
         local.chiplets[CTRL_BASE + 1] = Felt::ONE;
-        // The shared AEAD mode cell is not part of Controller row validity.
-        local.chiplets[CHIPLETS_MODE_COL] = Felt::from_u8(17);
+        // The MRUPDATE id is independent of the derived row-kind mode.
+        local.chiplets[22] = Felt::from_u8(17);
         assert_accepts(&local, &non_controller_row(), "derived padding mode should be accepted");
 
         local.chiplets[CTRL_STATE_BASE] = Felt::ONE;

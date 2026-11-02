@@ -52,7 +52,7 @@ pub fn enforce_core<AB>(
     decoder::enforce_main(builder, local, next, op_flags);
 }
 
-/// Enforces the Chiplets-trace main constraints (hasher controller, bitwise, memory, ACE).
+/// Enforces the Chiplets-trace main constraints, including the authenticated Library prefix.
 /// Selector validity is enforced separately via
 /// [`chiplets::selectors::build_chiplet_selectors`].
 pub fn enforce_chiplets<AB>(
@@ -60,8 +60,9 @@ pub fn enforce_chiplets<AB>(
     local: &ChipletCols<AB::Var>,
     next: &ChipletCols<AB::Var>,
     selectors: &ChipletSelectors<AB::Expr>,
+    kernel: &[AB::Expr; 4],
 ) where
     AB: MidenAirBuilder,
 {
-    chiplets::enforce_main(builder, local, next, selectors);
+    chiplets::enforce_main(builder, local, next, selectors, kernel);
 }
