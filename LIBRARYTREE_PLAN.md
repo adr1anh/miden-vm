@@ -267,7 +267,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | in-progress | Latest `c67f3a963`; prior slice SHAs in evidence below | Independent reviews; frozen vectors/codec and thirty builder tests; no-default-features and scoped rustfmt/Clippy | Next: native verifier configuration and identity contracts, then PR acceptance audit. Protocol codecs stay external. |
+| 01 Identities | in-progress | Latest `d79a6c34c`; prior slice SHAs in evidence below | Independent reviews; frozen vectors/codec and thirty builder tests; no-default-features and scoped rustfmt/Clippy | Next: verifier identity derivation and shared test-vector fixtures, then PR acceptance checks. Protocol codecs stay external. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
@@ -427,6 +427,21 @@ Passed after successful AC/heavy-work guards:
 
 - `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::builder`:
   thirty tests, including seventeen new completeness/uniqueness/occurrence/depth/work/storage cases.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Native verifier configuration
+
+Commit `d79a6c34c` adds immutable typed mounts/configuration and the v2 commitment with mandatory
+full N_kernel. Forward canonical-u64 sorting deliberately differs from Word::Ord; duplicate pairs
+reject while same-namespace distinct fragments remain subject to external disjointness checks.
+Independent review found no actionable issue. No claim/request/recursive activation is included.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::verifier`: nine tests,
+  including independently frozen complete 14/22/30-Felt preimages and ordering/mutation/boundaries.
 - `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
 - `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
 - Pinned-nightly core formatting and staged whitespace checks.
