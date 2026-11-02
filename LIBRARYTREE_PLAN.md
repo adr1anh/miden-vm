@@ -585,3 +585,25 @@ contains downstream processor/assembler consumers owned by PRs 05/09, with bound
 The final bounded acceptance audit found two evidence gaps to close now: explicit structural
 self/two-node cycle rejection, and a self/mutually-recursive key binding fixture. Existing childless
 tests support these by inference; add dedicated cases rather than claim those gates passed.
+
+### PR 02 Explicit cycles and deferred integration disposition
+
+Commit `364fbb35c` closes both final audit gaps with four test-only cases. Valid-ID corrupted
+structural self/two-node loops reject with the exact cycle error, without claiming a real
+cryptographic hash cycle. Self Call/Exec and mutual keyed recursion derive N/L/K before D,
+construct complete bounded K→D environments and round-trip both wire modes without execution.
+Independent review found no actionable issue.
+
+After successful AC/heavy-work guards, both focused commands passed two tests each:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --features arbitrary canonicalization_rejects_structural`.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --features arbitrary keyed_recursion_tests`.
+
+Full-feature test-inclusive Clippy and pinned formatting/staged whitespace checks passed again.
+The earlier 398-test full-core pass predates these four added cases; no rerun is claimed.
+PR 02 core acceptance is closed, but its row remains implemented-awaiting-validation until the
+required cross-graph checks run. After PRs 05/09 close old invocation consumers, run the authored
+`CARGO_NET_OFFLINE=true cargo test --locked -p miden-processor --lib trace::tests::witness_wire_rejects_unsupported_version`
+and related witness round trips. `tools/miden-core-fuzz/Cargo.toml` directly depends on that
+processor and assembly graph, so its build/smoke remains PR 16, not a claimed current pass.
+The local stack may continue under the workflow's intentional intermediate-build allowance.
