@@ -1,4 +1,4 @@
-use alloc::format;
+use alloc::{format, vec::Vec};
 
 use miden_core::{
     deferred::{Digest, TRUE_DIGEST},
@@ -9,14 +9,19 @@ use miden_core::{
     },
 };
 
-use crate::{ProgramInfo, StackInputs, StackOutputs, fast::ExecutionOutput};
+use crate::{
+    EnvironmentTraceLimits, ExecutionEnvironment, ProgramInfo, StackInputs, StackOutputs,
+    fast::ExecutionOutput,
+};
 
 pub(crate) mod utils;
 use utils::ChipletTraceFragment;
 
 pub mod chiplets;
 pub(crate) mod execution_tracer;
+pub(crate) mod keyed;
 pub(crate) mod limits;
+pub use keyed::ReplayReadLimits;
 
 mod block_stack;
 mod parallel;
@@ -61,7 +66,13 @@ impl ExecutionWitness {
         stack_inputs: StackInputs,
         execution_output: ExecutionOutput,
         trace: TraceReplay,
-    ) -> Self {
+    ) -> Result<Self, crate::ExecutionError> {
+        trace.require_validated()?;
+        if program_info.program_hash() != trace.entry_implementation()?.as_word() {
+            return Err(crate::ExecutionError::Internal(
+                "legacy ProgramInfo differs from authenticated entry",
+            ));
+        }
         let ExecutionOutput {
             stack: stack_outputs,
             advice: _,
@@ -77,7 +88,7 @@ impl ExecutionWitness {
             precompile_root,
         };
 
-        Self { vm, precompile }
+        Ok(Self { vm, precompile })
     }
 
     /// Returns the public claim associated with this witness.
@@ -98,20 +109,26 @@ impl ExecutionWitness {
         (self.vm, self.precompile)
     }
 
-    /// Decodes one execution witness from a potentially adversarial byte slice.
-    ///
-    /// The reader applies an input-proportional limit to byte consumption and collection
-    /// preallocation, then rejects trailing bytes. These checks establish safe transport syntax.
-    /// They do not prove that the sparse MAST replay is a subset of a particular source forest
-    /// because the witness wire does not carry such a proof.
-    ///
-    /// Use [`Self::read_from_bytes_trusted`] for bytes retained inside a trusted prover system.
-    #[track_caller]
-    pub fn read_from_bytes(bytes: &[u8]) -> Result<Self, DeserializationError> {
+    /// Immutable descriptor authenticated separately from legacy ProgramInfo transport.
+    pub fn execution_descriptor(&self) -> crate::ExecutionDescriptor {
+        self.vm.trace.environment.descriptor()
+    }
+
+    /// Reads replay v4 using caller authority and explicit transport/revalidation budgets.
+    pub fn read_from_bytes_with_limits(
+        bytes: &[u8],
+        environment: &ExecutionEnvironment,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<Self, DeserializationError> {
+        if bytes.len() > read_limits.max_wire_bytes {
+            return Err(DeserializationError::InvalidValue(
+                "execution witness exceeds wire limit".into(),
+            ));
+        }
         let budget = bytes.len().saturating_mul(EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER);
         let mut reader = BudgetedReader::new(SliceReader::new(bytes), budget);
-        let witness = <Self as Deserializable>::read_from(&mut reader)?;
-
+        let witness = Self::read_with_limits(&mut reader, environment, trace_limits, read_limits)?;
         if reader.has_more_bytes() {
             return Err(DeserializationError::InvalidValue(
                 "extra bytes after execution witness payload".into(),
@@ -120,16 +137,49 @@ impl ExecutionWitness {
         Ok(witness)
     }
 
-    /// Decodes execution witness bytes retained inside a trusted prover system.
-    ///
-    /// This preserves the original permissive byte-slice behavior. It trusts sparse MAST replay
-    /// hashes, accepts trailing bytes, and uses a replay-sized byte budget. Use
-    /// [`Self::read_from_bytes`] for bytes received across a trust boundary.
-    #[track_caller]
-    pub fn read_from_bytes_trusted(bytes: &[u8]) -> Result<Self, DeserializationError> {
-        let budget = bytes.len().saturating_mul(EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER);
-        let mut reader = BudgetedReader::new(SliceReader::new(bytes), budget);
-        <Self as Deserializable>::read_from(&mut reader)
+    /// Writes only validated, completed replay under the supplied export bounds.
+    pub fn write_into_with_limits<W: ByteWriter>(
+        &self,
+        target: &mut W,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<(), DeserializationError> {
+        self.export_size(trace_limits, read_limits)?;
+        self.write_payload(target);
+        Ok(())
+    }
+
+    pub fn to_bytes_with_limits(
+        &self,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<Vec<u8>, DeserializationError> {
+        let size = self.export_size(trace_limits, read_limits)?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(size).map_err(|_| {
+            DeserializationError::InvalidValue("witness export allocation failed".into())
+        })?;
+        self.write_payload(&mut bytes);
+        Ok(bytes)
+    }
+
+    fn export_size(
+        &self,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<usize, DeserializationError> {
+        self.vm
+            .require_validated()
+            .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?;
+        self.vm.trace.validate_export(trace_limits, read_limits)?;
+        let mut size = WitnessSize { bytes: 0, overflow: false };
+        self.write_payload(&mut size);
+        if size.overflow || size.bytes > read_limits.max_wire_bytes {
+            return Err(DeserializationError::InvalidValue(
+                "execution witness exceeds wire limit".into(),
+            ));
+        }
+        Ok(size.bytes)
     }
 }
 
@@ -139,15 +189,15 @@ const EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER: usize = 4;
 /// Current wire format version for [`ExecutionWitness`] serialization.
 ///
 /// The version is written as the first byte of every serialized witness. Deserialization only
-/// accepts this exact value; older formats are intentionally unsupported. Version 3 changes sparse
-/// CALL/SYSCALL targets from callee node IDs to procedure keys and adds keyed EXEC nodes. This
+/// accepts this exact value; older formats are intentionally unsupported. Version 4 includes
+/// mandatory authenticated environment metadata and per-fragment keyed observations. This
 /// replay version is separate from proof transport and execution-claim versions.
-const EXECUTION_WITNESS_WIRE_VERSION: u8 = 3;
+const EXECUTION_WITNESS_WIRE_VERSION: u8 = 4;
 
-impl Serializable for ExecutionWitness {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+impl ExecutionWitness {
+    fn write_payload<W: ByteWriter>(&self, target: &mut W) {
         EXECUTION_WITNESS_WIRE_VERSION.write_into(target);
-        self.vm.write_into(target);
+        self.vm.write_payload(target);
         match &self.precompile {
             Some(precompile) => {
                 target.write_u8(1);
@@ -158,8 +208,13 @@ impl Serializable for ExecutionWitness {
     }
 }
 
-impl Deserializable for ExecutionWitness {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+impl ExecutionWitness {
+    fn read_with_limits<R: ByteReader>(
+        source: &mut R,
+        environment: &ExecutionEnvironment,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<Self, DeserializationError> {
         let version = u8::read_from(source)?;
         if version != EXECUTION_WITNESS_WIRE_VERSION {
             return Err(DeserializationError::InvalidValue(format!(
@@ -167,7 +222,7 @@ impl Deserializable for ExecutionWitness {
                  {EXECUTION_WITNESS_WIRE_VERSION})"
             )));
         }
-        let vm = VmWitness::read_from(source)?;
+        let vm = VmWitness::read_with_limits(source, environment, trace_limits, read_limits)?;
         let precompile = match source.read_u8()? {
             0 => {
                 if vm.precompile_root != TRUE_DIGEST {
@@ -195,10 +250,6 @@ impl Deserializable for ExecutionWitness {
         };
         Ok(Self { vm, precompile })
     }
-
-    fn read_from_bytes(bytes: &[u8]) -> Result<Self, DeserializationError> {
-        ExecutionWitness::read_from_bytes(bytes)
-    }
 }
 
 /// Witness required to materialize and prove a VM execution trace.
@@ -208,8 +259,7 @@ impl Deserializable for ExecutionWitness {
 /// inside the trace replay are not checked against a source `MastForest` commitment; see
 /// <https://github.com/0xMiden/miden-vm/issues/3303>.
 ///
-/// Its direct [`Serializable`] encoding is an unversioned implementation detail. Use the
-/// versioned [`ExecutionWitness`] envelope for transport or persistence.
+/// Transport uses the versioned [`ExecutionWitness`] envelope with explicit caller budgets.
 #[derive(Debug)]
 pub struct VmWitness {
     program_info: ProgramInfo,
@@ -220,6 +270,16 @@ pub struct VmWitness {
 }
 
 impl VmWitness {
+    pub(crate) fn require_validated(&self) -> Result<(), crate::ExecutionError> {
+        self.trace.require_validated()?;
+        if self.program_info.program_hash() != self.trace.entry_implementation()?.as_word() {
+            return Err(crate::ExecutionError::Internal(
+                "legacy ProgramInfo differs from authenticated entry",
+            ));
+        }
+        Ok(())
+    }
+
     /// Returns the public claim associated with this witness.
     pub fn claim(&self) -> ExecutionClaim {
         ExecutionClaim::from_program_info(
@@ -273,25 +333,56 @@ impl VmWitness {
     }
 }
 
-impl Serializable for VmWitness {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+impl VmWitness {
+    fn write_payload<W: ByteWriter>(&self, target: &mut W) {
         self.program_info.write_into(target);
         self.stack_inputs.write_into(target);
         self.stack_outputs.write_into(target);
-        self.trace.write_into(target);
+        self.trace.write_payload(target);
         self.precompile_root.write_into(target);
     }
 }
 
-impl Deserializable for VmWitness {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
-        Ok(Self {
+impl VmWitness {
+    fn read_with_limits<R: ByteReader>(
+        source: &mut R,
+        environment: &ExecutionEnvironment,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<Self, DeserializationError> {
+        let witness = Self {
             program_info: ProgramInfo::read_from(source)?,
             stack_inputs: StackInputs::read_from(source)?,
             stack_outputs: StackOutputs::read_from(source)?,
-            trace: TraceReplay::read_from(source)?,
+            trace: TraceReplay::read_with_limits(source, environment, trace_limits, read_limits)?,
             precompile_root: Digest::read_from(source)?,
-        })
+        };
+        let entry = witness
+            .trace
+            .entry_implementation()
+            .map_err(|error| DeserializationError::InvalidValue(format!("{error}")))?;
+        if witness.program_info.program_hash() != entry.as_word() {
+            return Err(DeserializationError::InvalidValue(
+                "legacy ProgramInfo differs from authenticated entry implementation".into(),
+            ));
+        }
+        Ok(witness)
+    }
+}
+
+struct WitnessSize {
+    bytes: usize,
+    overflow: bool,
+}
+impl ByteWriter for WitnessSize {
+    fn write_u8(&mut self, _: u8) {
+        self.write_bytes(&[0]);
+    }
+    fn write_bytes(&mut self, values: &[u8]) {
+        match self.bytes.checked_add(values.len()) {
+            Some(bytes) => self.bytes = bytes,
+            None => self.overflow = true,
+        }
     }
 }
 

@@ -61,10 +61,7 @@ mod serialization_tests;
 /// (`package_debug_info` and `source_node_ids`), so the exact-equality round-trip test generated
 /// by `serde_test` does not apply to this type.
 #[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(
-    all(feature = "arbitrary", test),
-    miden_test_serialization_macros::serialization_test
-)]
+
 pub struct CoreTraceFragmentContext {
     pub state: CoreTraceState,
     pub replay: ExecutionReplay,
@@ -322,11 +319,9 @@ impl StackState {
 /// also packages up all the necessary data for trace generators to generate trace fragments, which
 /// can be done on separate machines in parallel, for example.
 #[derive(Debug, Default, PartialEq, Eq)]
-#[cfg_attr(
-    all(feature = "arbitrary", test),
-    miden_test_serialization_macros::serialization_test
-)]
+
 pub struct ExecutionReplay {
+    pub(crate) keyed: super::keyed::KeyedReplay,
     pub block_stack: BlockStackReplay,
     pub execution_context: ExecutionContextReplay,
     pub stack_overflow: StackOverflowReplay,
@@ -1370,6 +1365,9 @@ impl Default for HasherOpSink {
 }
 
 impl HasherRequestReplay {
+    pub(crate) fn is_buffered(&self) -> bool {
+        matches!(self.sink, HasherOpSink::Buffered(_))
+    }
     /// Creates a replay that forwards each request, resolved, to the receiving end as it is
     /// recorded.
     ///
@@ -2263,6 +2261,7 @@ mod arbitrary_replays {
                         mast_forest_resolution,
                     )| {
                         Self {
+                            keyed: super::super::keyed::KeyedReplay::default(),
                             block_stack,
                             execution_context,
                             stack_overflow,

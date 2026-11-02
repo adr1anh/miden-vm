@@ -314,11 +314,13 @@ impl<F> ContinuationStack<F> {
 
     /// Finds a root boundary below the retained END, crossing only zero-cycle restorations.
     pub(crate) fn root_boundary_after_next(&self) -> Option<(ImplementationRoot, ProcedureKey)> {
-        for continuation in self.stack.iter().rev().skip(1) {
+        for (index, continuation) in self.stack.iter().enumerate().rev().skip(1) {
             match continuation {
                 Continuation::EnterForest { .. } => {},
                 Continuation::RootBoundary { implementation, principal } => {
-                    return Some((*implementation, *principal));
+                    // Real entry construction installs this first. A replay cannot hide later
+                    // executable work underneath its claimed entry boundary.
+                    return (index == 0).then_some((*implementation, *principal));
                 },
                 _ => return None,
             }

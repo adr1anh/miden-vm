@@ -144,6 +144,16 @@ pub trait Tracer {
     /// Publishes successfully prepared entry metadata without a recoverable failure.
     fn commit_environment(&mut self, reservation: Self::KeyedReservation);
 
+    /// Stages the compact selected-opening snapshot before preparing native root completion.
+    fn prepare_environment_completion(
+        &mut self,
+        environment: &crate::ExecutionEnvironment,
+        session: &crate::ResolutionSession,
+    ) -> Result<Self::KeyedReservation, ExecutionError>;
+
+    /// Publishes the prepared snapshot alongside the actual root-END transition.
+    fn commit_environment_completion(&mut self, reservation: Self::KeyedReservation);
+
     /// Checks known clock-cycle failures before [`Self::start_clock_cycle`] or publication.
     ///
     /// During keyed invocation/root-END preparation, `continuation_stack` still contains the

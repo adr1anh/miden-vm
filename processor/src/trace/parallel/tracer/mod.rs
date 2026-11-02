@@ -23,7 +23,7 @@ use crate::{
         chiplets::layout::ChipletsLayout,
         trace_state::{EndBlockFlags, EndBlockStackEntryKind},
     },
-    tracer::{CycleProjection, OperationHelperRegisters, Tracer},
+    tracer::{CycleProjection, KeyedEvent, KeyedTarget, OperationHelperRegisters, Tracer},
 };
 
 mod trace_row;
@@ -109,6 +109,7 @@ pub(crate) struct CoreTraceGenerationTracer<'a> {
     /// subsequent `start_clock_cycle` and `finalize_clock_cycle` calls become no-ops, and the
     /// error is returned by [`into_parts`](Self::into_parts).
     error_encountered: Option<ExecutionError>,
+    keyed_event: Option<KeyedEvent>,
 }
 
 impl<'a> CoreTraceGenerationTracer<'a> {
@@ -134,6 +135,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             continuation: None,
             is_loop_body: false,
             error_encountered: None,
+            keyed_event: None,
         }
     }
 
@@ -408,6 +410,70 @@ impl<'a> CoreTraceGenerationTracer<'a> {
 impl Tracer for CoreTraceGenerationTracer<'_> {
     type Processor = ReplayProcessor;
     type Forest = Arc<SparseMastForest>;
+    type KeyedReservation = KeyedEvent;
+
+    fn prepare_environment(
+        &mut self,
+        _descriptor: &crate::ExecutionDescriptor,
+        _entry: crate::SessionBinding,
+    ) -> Result<KeyedEvent, ExecutionError> {
+        Err(ExecutionError::Internal("fragment replay cannot initialize native environment"))
+    }
+
+    fn commit_environment(&mut self, _reservation: KeyedEvent) {
+        unreachable!("replay environment is validated before fragment generation")
+    }
+
+    fn prepare_environment_completion(
+        &mut self,
+        _environment: &crate::ExecutionEnvironment,
+        _session: &crate::ResolutionSession,
+    ) -> Result<KeyedEvent, ExecutionError> {
+        Err(ExecutionError::Internal("fragment replay cannot capture native environment"))
+    }
+
+    fn commit_environment_completion(&mut self, _reservation: KeyedEvent) {
+        unreachable!("replay environment is validated before fragment generation")
+    }
+
+    fn prepare_keyed_transition(
+        &mut self,
+        processor: &ReplayProcessor,
+        event: &KeyedEvent,
+        target: KeyedTarget<'_, Arc<SparseMastForest>>,
+        projection: CycleProjection,
+    ) -> Result<KeyedEvent, ExecutionError> {
+        let record = processor
+            .keyed
+            .peek()
+            .map_err(|_| ExecutionError::Internal("missing validated keyed replay event"))?;
+        let forest_id = processor
+            .mast_forest_store
+            .iter()
+            .position(|forest| Arc::ptr_eq(forest, target.forest))
+            .and_then(|index| u32::try_from(index).ok())
+            .map(crate::mast::MastForestId::from)
+            .ok_or(ExecutionError::Internal("keyed target forest is absent from replay store"))?;
+        record.matches(*event, forest_id, target.root).map_err(|_| {
+            ExecutionError::Internal("keyed replay event differs from actual transition")
+        })?;
+        if self.keyed_event.is_some()
+            || event.use_record.row() != projection.row
+            || processor.system.clk != projection.row
+            || event.use_record.implementation_root() != target.implementation
+            || processor.system.fn_hash != *event.principal_before.as_word()
+        {
+            return Err(ExecutionError::Internal(
+                "keyed event does not match replay row or principal",
+            ));
+        }
+        Ok(*event)
+    }
+
+    fn commit_keyed_transition(&mut self, reservation: KeyedEvent, event: KeyedEvent) {
+        debug_assert_eq!(reservation, event);
+        self.keyed_event = Some(reservation);
+    }
 
     fn prepare_clock_cycle(
         &mut self,
@@ -443,6 +509,31 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
         }
 
         let result = (|| -> Result<(), ExecutionError> {
+            let event = self.keyed_event.take();
+            let is_exec = matches!(&continuation, Continuation::StartNode(id)
+                if matches!(current_forest.get_node_by_id(*id), Some(MastNode::Exec(_))));
+            if is_exec && event.is_none() {
+                return Err(ExecutionError::Internal("EXEC row has no authenticated keyed event"));
+            }
+            if let Some(event) = event {
+                let valid_kind = match event.kind {
+                    crate::KeyedEventKind::Invoke(crate::KeyedMode::Exec) => is_exec,
+                    crate::KeyedEventKind::RootEnd => matches!(
+                        continuation,
+                        Continuation::FinishBasicBlock(_)
+                            | Continuation::FinishJoin(_)
+                            | Continuation::FinishSplit(_)
+                            | Continuation::FinishExec(_)
+                            | Continuation::FinishLoop(_)
+                    ),
+                    _ => false,
+                };
+                if !valid_kind || event.use_record.row() != processor.system.clk {
+                    return Err(ExecutionError::Internal(
+                        "authenticated event belongs to another row",
+                    ));
+                }
+            }
             // If this is a DYNCALL node, store execution context info needed when writing the trace
             // row in finalize_clock_cycle.
             self.ctx_info =

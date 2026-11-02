@@ -67,7 +67,9 @@ pub use errors::{
     advice_error_with_package_source_context, event_error_with_package_source_context,
     procedure_not_found_with_package_source_context,
 };
-pub use execution_options::{ExecutionEnvironment, ExecutionOptions, ExecutionOptionsError};
+pub use execution_options::{
+    EnvironmentTraceLimits, ExecutionEnvironment, ExecutionOptions, ExecutionOptionsError,
+};
 pub use executor::ProgramExecutor;
 pub use fast::{
     BreakReason, DebugCallFrame, DebugCallFrameResolver, DebugFrameOrigin, ExecutionOutput,
@@ -87,7 +89,7 @@ pub use miden_core::{
     },
     serde, utils,
 };
-pub use trace::{ExecutionWitness, PrecompileWitness, VmWitness};
+pub use trace::{ExecutionWitness, PrecompileWitness, ReplayReadLimits, VmWitness};
 pub use tracer::{CycleProjection, KeyedEvent, KeyedEventKind, KeyedMode, KeyedTarget};
 
 pub mod advice {

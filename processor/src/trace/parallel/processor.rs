@@ -32,6 +32,10 @@ use crate::{
 // REPLAY PROCESSOR
 // ================================================================================================
 
+fn replay_keyed_error(_: crate::trace::keyed::KeyedReplayError) -> ExecutionError {
+    ExecutionError::Internal("invalid keyed replay record")
+}
+
 /// A processor implementation used in conjunction with the [`CoreTraceGenerationTracer`] in
 /// [`super::build_trace`] to replay the execution of a fragment of execution for a predetermined
 /// number of clock cycles.
@@ -54,6 +58,7 @@ pub(crate) struct ReplayProcessor {
     pub memory_reads_replay: MemoryReadsReplay,
     pub hasher_response_replay: HasherResponseReplay,
     pub mast_forest_resolution_replay: MastForestResolutionReplay,
+    pub keyed: crate::trace::keyed::KeyedReplay,
 
     /// Per-fragment view of the trace replay's `mast_forest_store`. Used to resolve `usize`
     /// indices recorded in the replays back to [`Arc<SparseMastForest>`] handles
@@ -83,6 +88,7 @@ impl ReplayProcessor {
         memory_reads_replay: MemoryReadsReplay,
         hasher_response_replay: HasherResponseReplay,
         mast_forest_resolution_replay: MastForestResolutionReplay,
+        keyed: crate::trace::keyed::KeyedReplay,
         mast_forest_store: Vec<Arc<SparseMastForest>>,
         max_stack_depth: usize,
         num_clocks_to_execute: RowIndex,
@@ -98,6 +104,7 @@ impl ReplayProcessor {
             memory_reads_replay,
             hasher_response_replay,
             mast_forest_resolution_replay,
+            keyed,
             mast_forest_store,
             max_stack_depth,
             maximum_clock,
@@ -115,7 +122,7 @@ impl ReplayProcessor {
     where
         T: Tracer<Processor = Self, Forest = Arc<SparseMastForest>>,
     {
-        match self.execute_impl(continuation_stack, current_forest, kernel, tracer) {
+        let result = match self.execute_impl(continuation_stack, current_forest, kernel, tracer) {
             ControlFlow::Continue(_) => {
                 // End of program reached - i.e. the execution loop exited without the end of
                 // fragment being reached (and thus the stopper breaking).
@@ -129,7 +136,12 @@ impl ReplayProcessor {
                     Ok(())
                 },
             },
+        };
+        result?;
+        if !self.keyed.is_empty() {
+            return Err(ExecutionError::Internal("unused keyed replay events in fragment"));
         }
+        Ok(())
     }
 
     /// Core execution loop implementation for the replay processor.
@@ -163,6 +175,175 @@ impl ReplayProcessor {
             &mut inline_call_contexts,
         ) {
             match internal_break_reason {
+                InternalBreakReason::ResolveKey(request) => {
+                    let result = (|| -> Result<_, ExecutionError> {
+                        let record = self.keyed.peek().map_err(replay_keyed_error)?;
+                        let event = record.event().map_err(replay_keyed_error)?;
+                        if event.kind != crate::KeyedEventKind::Invoke(request.mode)
+                            || event.use_record.procedure_key() != request.key
+                            || event.use_record.row() != request.row
+                            || event.principal_before != event.principal_after
+                            || *event.principal_before.as_word() != self.system.fn_hash
+                        {
+                            return Err(ExecutionError::Internal(
+                                "EXEC differs from keyed replay event",
+                            ));
+                        }
+                        let target = crate::execution::LoadedTarget {
+                            implementation: event.use_record.implementation_root(),
+                            root: record.target_root(),
+                            forest: super::lookup_mast_forest(
+                                &self.mast_forest_store,
+                                record.target_forest(),
+                            )?
+                            .clone(),
+                            package_debug_info: None,
+                            source_node_id: None,
+                        };
+                        let mut state = crate::execution::ExecutionState {
+                            processor: self,
+                            continuation_stack: &mut *continuation_stack,
+                            kernel,
+                            host: &mut *host,
+                            tracer: &mut *tracer,
+                            stopper,
+                            source_debug_info: None,
+                            current_source_node_id: request.source_node_id,
+                            inline_call_contexts: &mut inline_call_contexts,
+                        };
+                        let projection = crate::execution::preflight_keyed_exec(
+                            &mut state,
+                            current_forest,
+                            request,
+                            &target,
+                        )?;
+                        let reservation = state.tracer.prepare_keyed_transition(
+                            state.processor,
+                            &event,
+                            crate::KeyedTarget {
+                                forest: &target.forest,
+                                root: target.root,
+                                implementation: target.implementation,
+                            },
+                            projection,
+                        )?;
+                        state.processor.keyed.pop_front().map_err(replay_keyed_error)?;
+                        Ok(crate::execution::finish_keyed_exec(
+                            &mut state,
+                            current_forest,
+                            request,
+                            target,
+                            event,
+                            reservation,
+                        ))
+                    })();
+                    match result {
+                        Ok(flow) => flow?,
+                        Err(error) => return ControlFlow::Break(BreakReason::Err(error)),
+                    }
+                },
+                InternalBreakReason::RootEnd(request) => {
+                    let result = (|| -> Result<_, ExecutionError> {
+                        let record = self.keyed.peek().map_err(replay_keyed_error)?;
+                        let event = record.event().map_err(replay_keyed_error)?;
+                        let root = request
+                            .continuation
+                            .exec_node()
+                            .ok_or(ExecutionError::Internal("root END has no node"))?;
+                        if event.kind != crate::KeyedEventKind::RootEnd
+                            || event.use_record.row() != request.row
+                            || event.use_record.implementation_root() != request.implementation
+                            || event.use_record.procedure_key() != request.principal
+                            || event.principal_before != request.principal
+                            || event.principal_after != request.principal
+                            || record.target_root() != root
+                            || !Arc::ptr_eq(
+                                current_forest,
+                                super::lookup_mast_forest(
+                                    &self.mast_forest_store,
+                                    record.target_forest(),
+                                )?,
+                            )
+                        {
+                            return Err(ExecutionError::Internal(
+                                "root END differs from keyed replay event",
+                            ));
+                        }
+                        let mut state = crate::execution::ExecutionState {
+                            processor: self,
+                            continuation_stack: &mut *continuation_stack,
+                            kernel,
+                            host: &mut *host,
+                            tracer: &mut *tracer,
+                            stopper,
+                            source_debug_info: None,
+                            current_source_node_id: request.source_node_id,
+                            inline_call_contexts: &mut inline_call_contexts,
+                        };
+                        let projection = crate::execution::preflight_root_end(
+                            &mut state,
+                            current_forest,
+                            &request,
+                        )?;
+                        let reservation = state.tracer.prepare_keyed_transition(
+                            state.processor,
+                            &event,
+                            crate::KeyedTarget {
+                                forest: current_forest,
+                                root,
+                                implementation: request.implementation,
+                            },
+                            projection,
+                        )?;
+                        state.processor.keyed.pop_front().map_err(replay_keyed_error)?;
+                        let flow = crate::execution::finish_root_end(
+                            &mut state,
+                            current_forest,
+                            request,
+                            event,
+                            reservation,
+                        );
+                        if let ControlFlow::Break(BreakReason::Err(error)) = flow {
+                            return Err(error);
+                        }
+                        let completed_clock = event
+                            .use_record
+                            .row()
+                            .as_u32()
+                            .checked_add(1)
+                            .map(RowIndex::from)
+                            .ok_or(ExecutionError::InvalidExecutionState)?;
+                        if state.processor.system.clk != completed_clock
+                            || !state.continuation_stack.iter_with_source_node_ids().all(
+                                |(continuation, _)| {
+                                    matches!(continuation, Continuation::EnterForest { .. })
+                                },
+                            )
+                        {
+                            return Err(ExecutionError::Internal(
+                                "root END did not terminate the replay activation",
+                            ));
+                        }
+                        // Only transparent forest restorations may follow the authenticated END.
+                        // Apply them without starting another clock cycle, then finish replay.
+                        while let Some(continuation) = state.continuation_stack.pop_continuation() {
+                            let Continuation::EnterForest { forest, inline_context_depth, .. } =
+                                continuation
+                            else {
+                                unreachable!(
+                                    "root completion checked every remaining continuation"
+                                );
+                            };
+                            *current_forest = forest;
+                            state.inline_call_contexts.truncate(inline_context_depth);
+                        }
+                        Ok(ControlFlow::Continue(()))
+                    })();
+                    match result {
+                        Ok(flow) => return flow,
+                        Err(error) => return ControlFlow::Break(BreakReason::Err(error)),
+                    }
+                },
                 InternalBreakReason::User(break_reason) => return ControlFlow::Break(break_reason),
                 InternalBreakReason::Emit { op_idx: _, continuation, source_node_id } => {
                     // do nothing - in replay processor we don't need to emit anything

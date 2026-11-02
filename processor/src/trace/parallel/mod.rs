@@ -130,6 +130,7 @@ fn build_trace_inner(
     prebuilt_hasher: Option<Hasher>,
     budget: &ProvingBudget<MIDEN_AIR_COUNT>,
 ) -> Result<VmTrace, ExecutionError> {
+    witness.require_validated()?;
     let VmWitness {
         program_info,
         stack_inputs,
@@ -139,6 +140,7 @@ fn build_trace_inner(
     } = witness;
 
     let TraceReplay {
+        environment: _,
         core_trace_contexts,
         mast_forest_store,
         range_checker_replay,
@@ -1012,6 +1014,7 @@ fn split_trace_fragment_context<'a>(
         state: CoreTraceState { system, decoder, stack },
         replay:
             ExecutionReplay {
+                keyed,
                 block_stack: block_stack_replay,
                 execution_context: execution_context_replay,
                 stack_overflow: stack_overflow_replay,
@@ -1040,6 +1043,7 @@ fn split_trace_fragment_context<'a>(
         memory_reads_replay,
         hasher_response_replay,
         mast_forest_resolution_replay,
+        keyed,
         mast_forest_store.to_vec(),
         max_stack_depth,
         fragment_size.into(),
