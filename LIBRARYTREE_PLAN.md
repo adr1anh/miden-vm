@@ -327,9 +327,9 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
-| 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
+| 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
-| 05 Runtime | in-progress | Session `f4b511056`; peak hook `768a79319`; ledger `739acedb7`; opening `d8972f02c`; base `722392682` | Independent source/test reviews; 52 exact-module isolated tests, strict isolated Clippy/no_std and formatting pass | Actual processor still has six callee() and four missing-Exec errors. Next real key-resolution/code-loading/entry and invocation transitions; inherited processor/fuzz checks remain pending. |
+| 05 Runtime | in-progress | Runtime `7fa01c810`; replay `c22c423ef`; public tests `157ff858e`; earlier slice SHAs below; base `722392682` | Independent reviews; actual processor lib/default/no_std and strict lib Clippy pass; 12 real public API regressions and strict harness Clippy pass; 52 earlier isolated native tests | Restore environment-aware executable generator; migrate old processor context/serde/environment fixtures; inherited processor/parallel/address/state and fuzz gates remain. Proof/AIR/statement activation is later. |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
@@ -1125,3 +1125,44 @@ dynamic memory reads authenticate K and Resolve selects D (execution spec sectio
 agent shorthand H(mode,K) applied too broadly and is superseded by this distinction. No DynNode
 commitment redesign is selected. All pending PR 05 tests, source ABI, D3 and later packed/proof gates
 remain; PR 05 is still in progress.
+
+
+### PR 05 All invocation modes build; public execution regressions pass
+
+Commit `78adc658f` adds prepared stack/system/memory effects; `7fa01c810` routes all modes through the
+retained authenticated bridge, with full-N syscall authorization before any D lookup (cached too).
+`c22c423ef` composes replay, targeted trace queue reservations and terminal failure handling. Owned
+word-read/pop/context/write/return tokens avoid known fallible rechecks after publication; only
+affected overflow or a required replacement buffer is staged. Native and independent component/bridge
+reviews covered projected root return principal/depth, dynamic pop-before-save conventions and
+once-only read/FMP hooks. Static DYN/DYNCALL commitments remain unchanged.
+
+Dead runtime KernelDescriptor threading was removed after an independent caller audit; legacy
+ProgramInfo/chiplet transport remains pending its planned cutover and grants no native authority.
+ReplayProcessor consumes the existing ExecutionReplay bundle, forwarding its two tracer queues
+without replacement defaults. OpeningError is boxed inside contextual ExecutionError to keep ordinary
+Result size bounded. One targeted large-enum Clippy allowance preserves owned inline fixed-stack
+reservations rather than introducing an unbudgeted heap allocation. Other lints were fixed directly.
+
+After successful AC/heavy guards, actual `cargo check --locked -p miden-processor --lib`, the same
+no-default-features check, and lib Clippy with `-D warnings` pass without warnings. First mode compile
+found four FastProcessor/trait getter-shadowing errors; these were corrected through the shared
+Processor API. The first Clippy run exposed one oversized error variant and mechanical lints; the
+passing run follows their fixes. No failed attempt is counted as passing.
+
+Commits `051cc3274`/`157ff858e` add twelve public-API regressions. They run against the actual processor
+dependency through an uncommitted standalone harness pointing directly at the repository test file;
+there is no substitute VM. The harness uses the normal core arbitrary feature for public test builders
+and a lock derived from this repository; its first missing-feature setup failure was corrected. All
+twelve tests and strict test-target Clippy pass. Coverage includes entry authority/hint override,
+same-D aliases, exact deep kernel namespace and ordinary kernel exports, all context modes/RAM/FMP,
+retry/cancellation ownership, explicit budgets, replay-v4 roundtrip, and bounded keyed self-recursion
+whose entry reserve closes only at actual root END. A direct DynCall-only public entry fixture cannot
+seed RAM: coverage is terminal DYNCALL inside authenticated setup, not a claimed standalone case.
+
+This restores library compilation and supplies native runtime evidence, not proof acceptance or full
+PR 05 completion. The original seventeen host/advice/loader tests and address/state/parallel suites
+still need their normal dev graph, and older context/serde/constructor fixtures need explicit API
+migration. Restore the temporarily restricted environment-aware executable generator and its bounded
+invocation fixture; run required witness/fuzz checks at the recorded dependent stages. External D3
+profile fixtures, private ABI decisions and all later packed/AIR/statement/recursive gates remain.
