@@ -1166,3 +1166,26 @@ still need their normal dev graph, and older context/serde/constructor fixtures 
 migration. Restore the temporarily restricted environment-aware executable generator and its bounded
 invocation fixture; run required witness/fuzz checks at the recorded dependent stages. External D3
 profile fixtures, private ABI decisions and all later packed/AIR/statement/recursive gates remain.
+
+
+### PR 05 Executable-fixture ownership boundary
+
+The normal `cargo test --locked -p miden-processor --lib environment` attempt, after AC/heavy
+guards, stops in miden-assembly with three remaining keyed-MAST migration errors; it does not run
+processor tests. Record this concrete dev-graph blocker without restoring digest/child-ID adapters.
+
+Restore runtime generation through an `ExecutableForestFixture` that owns the forest, validated
+environment, stable label/key-to-body metadata and root openings. Core keeps processor policies out;
+its environment builder takes explicit caller limits. Synthetic nested namespace and full kernel
+namespace are fixture data, not Protocol defaults. Reuse existing EnvironmentBuilder validation and
+ID remapping; procedure labels/keys remain independent of implementation D. Generate bounded
+acyclic runtime targets with all retained modes and balanced dynamic setup.
+
+A bare MastForest cannot retain that environment. Make bare arbitrary defaults structure-only and
+reject explicit Executable requests with a clear fixture-API migration diagnostic; only the new
+owned fixture strategy carries the complete executable guarantee. Migrate the sole processor
+consumer to serve its openings and execute every root under an explicit descriptor/resource policy.
+This is a breaking testing API change, not a runtime or MASM scope reduction. Coverage must prove
+all modes remain retained and executable, same-D aliases, key stability, remapping and termination.
+Commit fixture implementation, consumer/tests and this boundary separately; do not close PR 05 on
+source generation alone. Existing normal test/assembly and later proof gates remain open.
