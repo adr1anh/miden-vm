@@ -1,4 +1,4 @@
-use core::cell::RefCell;
+use core::cell::{Cell, RefCell};
 
 use miden_assembly_syntax::ast::types::{CallConv, FunctionType, Type};
 use miden_core::program::CanonicalLabel;
@@ -6,6 +6,8 @@ use miden_crypto::hash::eidos::DELEGATED_VERSIONING;
 
 use super::*;
 use crate::interface::{ProcedureDeclaration, PublicProcedurePath};
+
+mod decoding;
 
 // Synthetic test markers only: these IDs make no Protocol allocation or registry claim.
 macro_rules! test_domain {
@@ -34,6 +36,7 @@ struct TestProfile<D> {
     domain: D,
     reject: Option<ArtifactProfileOperation>,
     calls: RefCell<Vec<ArtifactProfileOperation>>,
+    typed_id_calls: Cell<usize>,
 }
 
 impl<D> TestProfile<D> {
@@ -42,6 +45,7 @@ impl<D> TestProfile<D> {
             domain,
             reject: None,
             calls: RefCell::new(Vec::new()),
+            typed_id_calls: Cell::new(0),
         }
     }
 
@@ -63,6 +67,7 @@ impl<D> TypedIdProfile for TestProfile<D> {
     type Error = &'static str;
 
     fn validate_typed_id(&self, _: &u8, _: u32, _: &[u8]) -> Result<(), Self::Error> {
+        self.typed_id_calls.set(self.typed_id_calls.get() + 1);
         Err("no test TypedId codec")
     }
 }

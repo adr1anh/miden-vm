@@ -10,9 +10,10 @@ use miden_core::{Felt, Word, chiplets::hasher, utils::bytes_to_packed_u32_elemen
 use miden_crypto::hash::eidos::{DomainTag, DomainVersion, EidosDomain, FeltSequence, namespace};
 
 use super::{
-    DeclarationSet,
+    DeclarationError, DeclarationSet,
     serialization::{
-        Budget, CodecError, CodecLimits, TypedIdProfile, Writer, checked_add, reserve, wire_len,
+        Budget, CodecError, CodecLimits, Reader, TypedIdProfile, Writer, checked_add, reserve,
+        wire_len,
     },
 };
 
@@ -134,6 +135,22 @@ pub enum ArtifactError<E> {
     MissingDirectRequirement { id: LibraryId },
     #[error("stored declaration commitment differs under the supplied profile")]
     CommitmentMismatch,
+    #[error("invalid canonical Word for {kind}")]
+    InvalidWord { kind: &'static str },
+    #[error("artifact LibraryId {actual:?} differs from expected {expected:?}")]
+    UnexpectedLibraryId { expected: LibraryId, actual: LibraryId },
+    #[error(transparent)]
+    InvalidDeclarations(#[from] DeclarationError),
+    #[error("public procedure components require Text labels, found tag {tag}")]
+    NonTextPublicLabel { tag: u8 },
+    #[error("invalid ABI presence discriminator {tag}")]
+    InvalidAbiDiscriminator { tag: u8 },
+    #[error("invalid UTF-8 ABI metadata: {0}")]
+    InvalidAbiUtf8(core::str::Utf8Error),
+    #[error("public procedure paths must be strictly increasing in canonical envelope order")]
+    NonCanonicalPublicPathOrder,
+    #[error("{kind} requirements must be strictly increasing in canonical Word-byte order")]
+    NonCanonicalLibraryIdOrder { kind: &'static str },
     #[error("external {operation} validation rejected the value: {error}")]
     ProfileRejected {
         operation: ArtifactProfileOperation,
@@ -253,6 +270,68 @@ impl InterfaceArtifactV1 {
         Ok(writer.finish()?)
     }
 
+    /// Decodes exact canonical v1 bytes and verifies the caller's identity and external evidence.
+    ///
+    /// All wire framing, canonical ordering, aggregate budgets and the stored commitment are
+    /// checked before authority callbacks. The core label decoder, decoded strings and native
+    /// declaration map use bounded infallible allocations after logical size/layout checks;
+    /// limits are not an allocator or RSS/OOM guarantee. Tooling signatures are absent on decode.
+    pub fn decode_verified<P: InterfaceProfile + ?Sized>(
+        bytes: &[u8],
+        expected_id: LibraryId,
+        profile: &P,
+        context: &P::Context,
+        limits: CodecLimits,
+    ) -> Result<Self, ArtifactError<P::Error>> {
+        check_domain::<P>()?;
+        let mut budget = Budget::new(limits);
+        let mut reader = Reader::new(bytes, &budget)?;
+        let version = reader.u8("interface artifact version")?;
+        if version != 1 {
+            return Err(
+                CodecError::UnsupportedVersion { kind: "interface artifact", version }.into()
+            );
+        }
+        let id = LibraryId::new(decode_word(&mut reader, "interface LibraryId")?);
+        let commitment =
+            DeclarationCommitment::new(decode_word(&mut reader, "declaration commitment")?);
+        let descriptor = borrow_blob(&mut reader, "publisher descriptor")?;
+        budget.blob_bytes(descriptor.len())?;
+        let db = borrow_blob(&mut reader, "declaration bytes")?;
+        reader.finish("interface artifact")?;
+        if id != expected_id {
+            return Err(ArtifactError::UnexpectedLibraryId { expected: expected_id, actual: id });
+        }
+        let decoded = declarations::decode(db, &mut budget)?;
+        validate_requirements(id, &decoded.direct, &decoded.closure)?;
+        // Reuse the already charged aggregate budget and hash the original wire DB, rather than
+        // re-encoding native maps or charging parsed values a second time.
+        let plan = EncodingPlan::from_lengths(descriptor.len(), db.len(), budget)?;
+        if compute_commitment(descriptor, db, profile, &plan)? != commitment {
+            return Err(ArtifactError::CommitmentMismatch);
+        }
+        let mut publisher_descriptor = Vec::new();
+        reserve(&mut publisher_descriptor, descriptor.len(), "publisher descriptor")?;
+        publisher_descriptor.extend_from_slice(descriptor);
+        validate_authority(
+            profile,
+            context,
+            descriptor,
+            id,
+            commitment,
+            &decoded.direct,
+            &decoded.closure,
+        )?;
+        Ok(Self {
+            id,
+            commitment,
+            publisher_descriptor,
+            declarations: decoded.declarations,
+            direct_requirements: decoded.direct,
+            dependency_closure: decoded.closure,
+        })
+    }
+
     pub const fn id(&self) -> LibraryId {
         self.id
     }
@@ -293,8 +372,16 @@ impl EncodingPlan {
         wire_len(descriptor.len(), "publisher descriptor")?;
         budget.blob_bytes(descriptor.len())?;
         let db_len = declarations::preflight(declarations, direct, closure, &mut budget)?;
+        Self::from_lengths(descriptor.len(), db_len, budget)
+    }
+
+    fn from_lengths<E>(
+        descriptor_len: usize,
+        db_len: usize,
+        budget: Budget,
+    ) -> Result<Self, CodecError<E>> {
         let dcl_len = checked_add(
-            checked_add(4, descriptor.len(), "declaration preimage")?,
+            checked_add(4, descriptor_len, "declaration preimage")?,
             db_len,
             "declaration preimage",
         )?;
@@ -317,6 +404,19 @@ impl EncodingPlan {
             hash_elements,
         })
     }
+}
+
+fn decode_word<E>(reader: &mut Reader<'_>, kind: &'static str) -> Result<Word, ArtifactError<E>> {
+    Word::try_from(reader.bytes(32, kind)?).map_err(|_| ArtifactError::InvalidWord { kind })
+}
+
+fn borrow_blob<'a, E>(
+    reader: &mut Reader<'a>,
+    kind: &'static str,
+) -> Result<&'a [u8], CodecError<E>> {
+    let length = reader.u32(kind)?;
+    let length = reader.count::<u8, E>(length, 1, kind)?;
+    reader.bytes(length, kind)
 }
 
 fn check_domain<P: InterfaceProfile + ?Sized>() -> Result<(), ArtifactError<P::Error>> {

@@ -1,15 +1,15 @@
-//! Private canonical declaration-byte encoding. Source-map iteration does not define wire order.
+//! Private canonical declaration-byte codec. Source-map iteration does not define wire order.
 
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::{alloc::Layout, cmp::Ordering};
 
 use miden_core::program::CanonicalLabel;
 
-use super::{EncodingPlan, LibraryId};
+use super::{ArtifactError, EncodingPlan, LibraryId, borrow_blob, decode_word};
 use crate::interface::{
-    DeclarationSet, ProcedureDeclaration,
+    DeclarationSet, ProcedureDeclaration, PublicProcedurePath,
     serialization::{
-        Budget, CodecError, Writer, check_label_layout, checked_add, reserve, wire_len,
+        Budget, CodecError, Reader, Writer, check_label_layout, checked_add, reserve, wire_len,
     },
 };
 
@@ -98,6 +98,132 @@ pub(super) fn encode<E>(
         }
     }
     writer.finish()
+}
+
+pub(super) struct DecodedDeclarations {
+    pub(super) declarations: DeclarationSet,
+    pub(super) direct: Vec<LibraryId>,
+    pub(super) closure: Vec<LibraryId>,
+}
+
+pub(super) fn decode<E>(
+    bytes: &[u8],
+    budget: &mut Budget,
+) -> Result<DecodedDeclarations, ArtifactError<E>> {
+    let mut reader = Reader::new(bytes, budget)?;
+    let public_count = reader.u32("public declaration count")?;
+    // A nonempty Text path needs P's count, one seven-byte label, and an ABI discriminator.
+    // Both requirement counts remain mandatory even when every set is empty.
+    let public_count = count_with_tail::<ProcedureDeclaration, E>(
+        &reader,
+        public_count,
+        12,
+        8,
+        "public declarations",
+    )?;
+    budget.records(public_count)?;
+    let mut public = Vec::new();
+    reserve(&mut public, public_count, "public declarations")?;
+    let mut previous: Option<Vec<&[u8]>> = None;
+    for index in 0..public_count {
+        let component_count = reader.u32("public path component count")?;
+        let remaining_public = (public_count - index - 1)
+            .checked_mul(12)
+            .ok_or(CodecError::LengthOverflow("public declarations"))?;
+        let tail = checked_add(remaining_public, 9, "public declaration framing")?;
+        let component_count = count_with_tail::<String, E>(
+            &reader,
+            component_count,
+            7,
+            tail,
+            "public path components",
+        )?;
+        budget.components(component_count)?;
+        let mut components = Vec::new();
+        reserve(&mut components, component_count, "public path components")?;
+        let mut envelopes = Vec::new();
+        reserve(&mut envelopes, component_count, "public path ordering")?;
+        for _ in 0..component_count {
+            let envelope = reader.label_envelope(budget)?;
+            // Reject TypedId and every other non-Text tag before invoking any core TypedId
+            // validator. The core decoder remains the single authority for label framing/UTF-8.
+            if envelope[1] != 0 {
+                return Err(ArtifactError::NonTextPublicLabel { tag: envelope[1] });
+            }
+            let label = CanonicalLabel::from_bytes(envelope).map_err(CodecError::InvalidLabel)?;
+            let text = core::str::from_utf8(&label.as_bytes()[6..])
+                .expect("the core Text decoder validated these exact UTF-8 bytes");
+            // label_envelope checked the complete envelope's layout and charged this payload.
+            components.push(String::from(text));
+            envelopes.push(envelope);
+        }
+        let path = PublicProcedurePath::from_semantic_components(components)?;
+        if previous.as_ref().is_some_and(|previous| previous >= &envelopes) {
+            return Err(ArtifactError::NonCanonicalPublicPathOrder);
+        }
+        previous = Some(envelopes);
+        let abi_metadata = match reader.u8("ABI presence discriminator")? {
+            0 => None,
+            1 => {
+                let bytes = borrow_blob(&mut reader, "ABI metadata")?;
+                budget.blob_bytes(bytes.len())?;
+                let text = core::str::from_utf8(bytes).map_err(ArtifactError::InvalidAbiUtf8)?;
+                Some(String::from(text))
+            },
+            tag => return Err(ArtifactError::InvalidAbiDiscriminator { tag }),
+        };
+        public.push(ProcedureDeclaration::new(path, abi_metadata));
+    }
+    let direct = decode_ids(&mut reader, budget, "direct", 4)?;
+    let closure = decode_ids(&mut reader, budget, "closure", 0)?;
+    reader.finish("declaration bytes")?;
+    // The native map clones paths and allocates nodes infallibly. All record/component/string
+    // counts and layouts above are finite and bounded; this is not an RSS/OOM guarantee.
+    let declarations = DeclarationSet::new(public)?;
+    Ok(DecodedDeclarations { declarations, direct, closure })
+}
+
+fn decode_ids<E>(
+    reader: &mut Reader<'_>,
+    budget: &mut Budget,
+    kind: &'static str,
+    tail: usize,
+) -> Result<Vec<LibraryId>, ArtifactError<E>> {
+    let count = reader.u32("requirement count")?;
+    let count = count_with_tail::<LibraryId, E>(reader, count, 32, tail, "requirements")?;
+    budget.records(count)?;
+    let mut ids: Vec<LibraryId> = Vec::new();
+    reserve(&mut ids, count, "requirements")?;
+    for _ in 0..count {
+        let id = LibraryId::new(decode_word(reader, "requirement LibraryId")?);
+        if let Some(previous) = ids.last() {
+            match previous.as_word().as_bytes().cmp(&id.as_word().as_bytes()) {
+                Ordering::Less => (),
+                Ordering::Equal => return Err(ArtifactError::DuplicateLibraryId { kind, id }),
+                Ordering::Greater => {
+                    return Err(ArtifactError::NonCanonicalLibraryIdOrder { kind });
+                },
+            }
+        }
+        ids.push(id);
+    }
+    Ok(ids)
+}
+
+/// Retain mandatory later framing in addition to the shared count/layout lower-bound check.
+fn count_with_tail<T, E>(
+    reader: &Reader<'_>,
+    count: u32,
+    minimum_bytes: usize,
+    tail: usize,
+    kind: &'static str,
+) -> Result<usize, CodecError<E>> {
+    let count = reader.count::<T, E>(count, minimum_bytes, kind)?;
+    let minimum = count.checked_mul(minimum_bytes).ok_or(CodecError::LengthOverflow(kind))?;
+    if checked_add(minimum, tail, kind)? > reader.remaining() {
+        return Err(CodecError::Truncated(kind));
+    }
+    Ok(count)
 }
 
 fn compare_paths(left: &ProcedureDeclaration, right: &ProcedureDeclaration) -> Ordering {

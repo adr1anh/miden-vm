@@ -266,13 +266,14 @@ impl<'a> Reader<'a> {
         Ok(())
     }
 
-    /// Extract exactly one complete envelope before calling the core decoder/external validator.
-    pub(crate) fn label<P: TypedIdProfile + ?Sized>(
+    /// Borrow exactly one complete envelope after checking its payload budget and layouts.
+    ///
+    /// This performs no label interpretation or external validation. Callers must use the core
+    /// decoder to validate the complete envelope before treating it as a canonical label.
+    pub(crate) fn label_envelope<E>(
         &mut self,
         budget: &mut Budget,
-        profile: &P,
-        context: &P::Context,
-    ) -> Result<CanonicalLabel, CodecError<P::Error>> {
+    ) -> Result<&'a [u8], CodecError<E>> {
         let start = self.position;
         let header = self.bytes(6, "canonical label header")?;
         let payload = u32::from_le_bytes([header[2], header[3], header[4], header[5]]);
@@ -281,7 +282,17 @@ impl<'a> Reader<'a> {
         budget.blob_bytes(payload)?;
         check_label_layout(payload)?;
         self.bytes(payload, "canonical label payload")?;
-        let envelope = &self.bytes[start..self.position];
+        Ok(&self.bytes[start..self.position])
+    }
+
+    /// Extract exactly one complete envelope before calling the core decoder/external validator.
+    pub(crate) fn label<P: TypedIdProfile + ?Sized>(
+        &mut self,
+        budget: &mut Budget,
+        profile: &P,
+        context: &P::Context,
+    ) -> Result<CanonicalLabel, CodecError<P::Error>> {
+        let envelope = self.label_envelope(budget)?;
         let mut rejected = None;
         let result =
             CanonicalLabel::from_bytes_with_typed_id_validator(envelope, |codec, bytes| {
