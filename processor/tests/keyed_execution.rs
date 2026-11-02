@@ -27,13 +27,17 @@ use miden_core::{
     },
 };
 use miden_debug_types::{Location, SourceFile, SourceSpan};
+use miden_mast_package::debug_info::{
+    DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, PackageDebugInfo, PackageDebugInfoBuilder,
+};
 use miden_processor::{
-    BaseHost, ContextId, EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionWitness, FastProcessor, Felt,
-    FutureMaybeSend, Host, InvocationTag, LedgerLimits, LoadedMastForest, OpeningError,
-    OpeningLimits, OpeningResource, OpeningStep, ProcessorState, Program, ReplayReadLimits,
-    ResolutionWitness, SessionError, SessionLimits, SessionPhase, SessionResource, StackInputs,
-    SyncHost, Word, advice::AdviceMutation, event::EventError, operation::OperationError,
+    BaseHost, ContextId, Continuation, EnvironmentSourceError, EnvironmentTraceLimits,
+    EnvironmentWitnessRequest, ExecutionEnvironment, ExecutionError, ExecutionOptions,
+    ExecutionWitness, FastProcessor, Felt, FutureMaybeSend, Host, InvocationTag, LedgerLimits,
+    LoadedMastForest, OpeningError, OpeningLimits, OpeningResource, OpeningStep, ProcessorState,
+    Program, ReplayReadLimits, ResolutionWitness, SessionError, SessionLimits, SessionPhase,
+    SessionResource, StackInputs, SyncHost, Word, advice::AdviceMutation, event::EventError,
+    operation::OperationError,
 };
 
 const OBSERVE: u32 = 0x8bad_f00d;
@@ -1048,4 +1052,380 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
     assert_eq!(host.inner.observations.len(), 1);
     assert_eq!(host.inner.observations[0].principal, entry.into_word());
     assert_eq!(resume.resolution_session().uses().count(), 1);
+}
+
+struct SourceDynCallFixture {
+    entry: ProcedureKey,
+    target: ProcedureKey,
+    program: Program,
+    caller_debug: PackageDebugInfo,
+    dynamic_source: DebugSourceNodeId,
+    returned_source: DebugSourceNodeId,
+    callee: Program,
+    callee_debug: PackageDebugInfo,
+    callee_source: DebugSourceNodeId,
+    environment: EnvironmentFixture,
+}
+
+fn source_node(
+    builder: &mut PackageDebugInfoBuilder,
+    exec_node: MastNodeId,
+    children: Vec<DebugSourceNodeId>,
+    op_end: u32,
+    context: &str,
+) -> DebugSourceNodeId {
+    let asm_op = DebugSourceAsmOp::new(
+        0,
+        None,
+        builder.add_string(context),
+        builder.add_string("fixture"),
+        1,
+    );
+    builder
+        .add_node(DebugSourceNode {
+            exec_node,
+            children,
+            op_start: 0,
+            op_end,
+            asm_ops: vec![asm_op],
+            debug_vars: Vec::new(),
+            inline_calls: Vec::new(),
+        })
+        .unwrap()
+}
+
+fn source_dyncall_fixture() -> SourceDynCallFixture {
+    let entry = key(&["app"], "entry");
+    let target = key(&["lib"], "dynamic");
+    let mut operations = vec![Operation::Dup0; 4];
+    operations.extend(observe());
+    operations.extend([Operation::Drop; 4]);
+    store_element(&mut operations, felt(VALUE_ADDR), felt(111));
+    store_element(&mut operations, FMP_ADDR, felt(222));
+    let callee_op_end = u32::try_from(operations.len()).unwrap();
+    let callee = body(operations);
+    let mut builder = PackageDebugInfoBuilder::default();
+    let callee_source = source_node(
+        &mut builder,
+        callee.entrypoint(),
+        Vec::new(),
+        callee_op_end,
+        "callee::dynamic",
+    );
+    builder.add_root(callee_source);
+    let callee_debug = *builder.build();
+
+    let mut operations = dynamic_prefix(target);
+    store_element(&mut operations, felt(VALUE_ADDR), felt(77));
+    store_element(&mut operations, FMP_ADDR, felt(88));
+    operations.extend((40..44).map(|value| Operation::Push(felt(value))));
+    operations.extend([Operation::Dup0; 4]);
+    operations.extend(observe());
+    operations.extend([Operation::Drop; 4]);
+    operations.push(Operation::Push(felt(KEY_ADDR)));
+    let setup_op_end = u32::try_from(operations.len()).unwrap();
+    let mut forest = MastForest::new();
+    let setup = block(&mut forest, operations);
+    let dynamic = invocation(&mut forest, Mode::DynCall, target);
+    let mut operations = vec![Operation::Dup0; 4];
+    operations.extend(observe());
+    operations.extend([Operation::Drop; 8]);
+    let returned_op_end = u32::try_from(operations.len()).unwrap();
+    let returned = block(&mut forest, operations);
+    let tail = join(&mut forest, dynamic, returned);
+    let root = join(&mut forest, setup, tail);
+    let program = finish_program(forest, root);
+    let mut builder = PackageDebugInfoBuilder::default();
+    let setup_source = source_node(&mut builder, setup, Vec::new(), setup_op_end, "caller::setup");
+    let dynamic_source = source_node(&mut builder, dynamic, Vec::new(), 1, "caller::dyncall");
+    let returned_source =
+        source_node(&mut builder, returned, Vec::new(), returned_op_end, "caller::returned");
+    let tail_source =
+        source_node(&mut builder, tail, vec![dynamic_source, returned_source], 1, "caller::tail");
+    let root_source =
+        source_node(&mut builder, root, vec![setup_source, tail_source], 1, "caller::entry");
+    builder.add_root(root_source);
+    let caller_debug = *builder.build();
+    let environment = EnvironmentFixture::new(&[
+        (&["app"], "entry", program.hash()),
+        (&["lib"], "dynamic", callee.hash()),
+    ]);
+    SourceDynCallFixture {
+        entry,
+        target,
+        program,
+        caller_debug,
+        dynamic_source,
+        returned_source,
+        callee,
+        callee_debug,
+        callee_source,
+        environment,
+    }
+}
+
+fn source_dyncall_processor() -> FastProcessor {
+    let inputs = (1..=16).map(felt).collect::<Vec<_>>();
+    let options = ExecutionOptions::new(Some(1024), 64, 64)
+        .unwrap()
+        .with_max_num_continuations(16)
+        .with_max_stack_depth(64)
+        .unwrap()
+        .with_max_memory_elements(64)
+        // Covers the empty provider's retained allocation; supplied forests carry no advice.
+        .with_max_advice_size_bytes(65_536)
+        .with_max_hash_len_bytes(8192);
+    FastProcessor::new(StackInputs::new(&inputs).unwrap())
+        .with_options(options)
+        .unwrap()
+}
+
+fn reach_source_dyncall(
+    processor: &mut FastProcessor,
+    host: &mut AsyncCodeHost,
+    resume: &mut miden_processor::ResumeContext,
+    fixture: &SourceDynCallFixture,
+) {
+    for _ in 0..256 {
+        if resume.next_source_node_id() == Some(fixture.dynamic_source) {
+            assert!(matches!(
+                resume.continuation_stack().peek_continuation(),
+                Some(Continuation::StartNode(_))
+            ));
+            assert_eq!(processor.stack_get(0), felt(KEY_ADDR));
+            assert_eq!(processor.stack_depth(), 21);
+            assert!(
+                processor.state().get_stack_state()[17..].iter().all(|value| *value != felt(0))
+            );
+            assert_eq!(host.inner.observations.len(), 1);
+            assert_eq!(host.inner.observations[0].principal, fixture.entry.into_word());
+            assert!(host.inner.code_requests.borrow().is_empty());
+            return;
+        }
+        assert!(
+            !poll_ready(processor.step_with_package_debug_info(
+                host,
+                resume,
+                &fixture.caller_debug,
+            ))
+            .unwrap()
+        );
+    }
+    panic!("bounded source fixture did not reach its retained DYNCALL");
+}
+
+struct PendingSourceDynCall {
+    stack: Vec<Felt>,
+    memory: Vec<(miden_processor::MemoryAddress, Felt)>,
+    clock: u32,
+    continuations: Vec<Continuation<Arc<MastForest>>>,
+    debug: Arc<PackageDebugInfo>,
+    forest: Arc<MastForest>,
+}
+
+impl PendingSourceDynCall {
+    fn capture(processor: &FastProcessor, resume: &miden_processor::ResumeContext) -> Self {
+        Self {
+            stack: processor.state().get_stack_state(),
+            memory: processor.state().get_mem_state(ContextId::root()),
+            clock: processor.state().clock().as_u32(),
+            continuations: resume.continuation_stack().clone().into_inner(),
+            debug: resume.debug_info().unwrap(),
+            forest: resume.current_forest().clone(),
+        }
+    }
+
+    fn assert_unchanged(
+        &self,
+        processor: &FastProcessor,
+        resume: &miden_processor::ResumeContext,
+        fixture: &SourceDynCallFixture,
+    ) {
+        let state = processor.state();
+        assert_eq!(state.get_stack_state(), self.stack);
+        assert_eq!(state.get_mem_state(ContextId::root()), self.memory);
+        assert_eq!(state.stack_depth(), 21);
+        assert_eq!(state.clock().as_u32(), self.clock);
+        assert!(state.ctx().is_root());
+        assert_eq!(
+            state.get_mem_word(state.ctx(), KEY_ADDR).unwrap(),
+            Some(fixture.target.into_word())
+        );
+        assert_eq!(state.get_mem_value(state.ctx(), VALUE_ADDR), Some(felt(77)));
+        assert_eq!(
+            state.get_mem_value(state.ctx(), FMP_ADDR.as_canonical_u64() as u32),
+            Some(felt(88))
+        );
+        assert!(state.get_mem_state(ContextId::from(self.clock + 1)).is_empty());
+        assert_eq!(resume.continuation_stack().clone().into_inner(), self.continuations);
+        assert_eq!(resume.next_source_node_id(), Some(fixture.dynamic_source));
+        assert!(Arc::ptr_eq(&resume.debug_info().unwrap(), &self.debug));
+        assert!(Arc::ptr_eq(resume.current_forest(), &self.forest));
+        assert_eq!(
+            resume.environment().descriptor(),
+            fixture
+                .environment
+                .configuration(fixture.entry, namespace(&["kernel"]))
+                .descriptor()
+        );
+        let session = resume.resolution_session();
+        assert_eq!(session.phase(), SessionPhase::PendingEntry);
+        // Private verified evidence and allocation capacity may survive preparation. Neither is
+        // a published invocation or a charge against committed demand.
+        assert_eq!(session.uses().count(), 0);
+        assert_eq!(session.counters().committed_requests, 0);
+        assert_eq!(session.counters().reserved_requests, 1);
+        assert_eq!(session.bindings().len(), 1);
+        assert_eq!(session.bindings()[0].procedure_key(), fixture.entry);
+        assert_eq!(session.bindings()[0].counts().normal, 0);
+        assert!(!resume.is_complete());
+    }
+}
+
+#[test]
+fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use() {
+    let fixture = source_dyncall_fixture();
+    let mut inner = CountingHost::new(&fixture.environment, &[]);
+    let supplied = LoadedMastForest::with_package_debug_info(
+        fixture.callee.mast_forest().clone(),
+        Ok(Some(fixture.callee_debug.clone())),
+    );
+    inner.forests.insert(fixture.callee.hash(), supplied.clone());
+    let mut host = AsyncCodeHost {
+        inner,
+        suspend_code: AtomicBool::new(true),
+    };
+    let mut processor = source_dyncall_processor();
+    let mut resume = processor
+        .get_initial_resume_context(
+            &fixture.program,
+            fixture.environment.configuration(fixture.entry, namespace(&["kernel"])),
+        )
+        .unwrap();
+    reach_source_dyncall(&mut processor, &mut host, &mut resume, &fixture);
+    let before = PendingSourceDynCall::capture(&processor, &resume);
+    {
+        let mut future = Box::pin(processor.step_with_package_debug_info(
+            &mut host,
+            &mut resume,
+            &fixture.caller_debug,
+        ));
+        assert!(future.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+    }
+    before.assert_unchanged(&processor, &resume, &fixture);
+    assert_eq!(host.inner.requests_for(fixture.target), 1);
+    assert_eq!(*host.inner.code_requests.borrow(), vec![fixture.callee.hash()]);
+    host.suspend_code.store(false, Ordering::Relaxed);
+    host.inner.unavailable_code.insert(fixture.callee.hash());
+    assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
+        Err(ExecutionError::ProcedureNotFound { root_digest, .. }) if root_digest == fixture.callee.hash()));
+    before.assert_unchanged(&processor, &resume, &fixture);
+    host.inner.unavailable_code.clear();
+    let unrelated = body(vec![Operation::Swap, Operation::Swap]);
+    host.inner
+        .forests
+        .insert(fixture.callee.hash(), LoadedMastForest::new(unrelated.mast_forest().clone()));
+    assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
+        Err(ExecutionError::OperationError {
+            err: OperationError::MalformedMastForestInHost { root_digest }, ..
+        }) if root_digest == fixture.callee.hash()));
+    before.assert_unchanged(&processor, &resume, &fixture);
+    assert_eq!(host.inner.observations.len(), 1);
+    host.inner.forests.insert(fixture.callee.hash(), supplied);
+    assert!(!poll_ready(processor.step(&mut host, &mut resume)).unwrap());
+    let callee_context = processor.state().ctx();
+    assert_eq!(callee_context, ContextId::from(before.clock + 1));
+    assert_eq!(processor.state().get_stack_state(), before.stack[1..17]);
+    assert_eq!(
+        processor.stack_depth(),
+        16,
+        "one address pop precedes hiding four overflow rows"
+    );
+    assert_eq!(
+        processor
+            .state()
+            .get_mem_value(callee_context, FMP_ADDR.as_canonical_u64() as u32),
+        Some(FMP_INIT_VALUE)
+    );
+    assert_eq!(processor.state().get_mem_value(callee_context, VALUE_ADDR), None);
+    assert!(Arc::ptr_eq(resume.current_forest(), fixture.callee.mast_forest()));
+    assert_eq!(resume.next_source_node_id(), Some(fixture.callee_source));
+    let debug = resume.debug_info().unwrap();
+    assert!(!Arc::ptr_eq(&debug, &before.debug));
+    assert_eq!(
+        debug.source_node(fixture.callee_source).unwrap().exec_node,
+        fixture.callee.entrypoint()
+    );
+    assert_eq!(
+        debug[debug
+            .first_asm_op_for_source_node(fixture.callee_source)
+            .unwrap()
+            .context_name_idx]
+            .as_ref(),
+        "callee::dynamic"
+    );
+    assert_eq!(resume.resolution_session().uses().count(), 1);
+    assert_eq!(
+        resume.resolution_session().uses().next().unwrap().procedure_key(),
+        fixture.target
+    );
+    assert_eq!(resume.resolution_session().counters().committed_requests, 1);
+    assert_eq!(resume.resolution_session().counters().reserved_requests, 1);
+
+    let mut restored = false;
+    for _ in 0..256 {
+        if !restored
+            && resume.next_source_node_id() == Some(fixture.returned_source)
+            && Arc::ptr_eq(resume.current_forest(), &before.forest)
+        {
+            restored = true;
+            assert!(processor.state().ctx().is_root());
+            assert_eq!(processor.state().get_stack_state(), before.stack[1..]);
+            assert!(Arc::ptr_eq(&resume.debug_info().unwrap(), &before.debug));
+            assert_eq!(resume.resolution_session().uses().count(), 1);
+        }
+        if poll_ready(processor.step(&mut host, &mut resume)).unwrap() {
+            break;
+        }
+    }
+    assert!(restored);
+    assert!(resume.is_complete());
+    assert_eq!(processor.stack_depth(), 16);
+    assert!(processor.state().ctx().is_root());
+    assert_eq!(host.inner.observations.len(), 3);
+    let callee = &host.inner.observations[1];
+    assert_eq!(callee.principal, fixture.target.into_word());
+    assert_eq!(callee.context, callee_context);
+    assert_eq!(callee.depth, 21);
+    assert_eq!(callee.value, None);
+    assert_eq!(callee.fmp, Some(FMP_INIT_VALUE));
+    let returned = &host.inner.observations[2];
+    assert_eq!(returned.principal, fixture.entry.into_word());
+    assert!(returned.context.is_root());
+    assert_eq!(returned.depth, 25);
+    assert_eq!(returned.value, Some(felt(77)));
+    assert_eq!(returned.fmp, Some(felt(88)));
+    assert_eq!(
+        processor
+            .state()
+            .get_mem_value(callee_context, FMP_ADDR.as_canonical_u64() as u32),
+        Some(felt(222))
+    );
+    assert_eq!(host.inner.requests_for(fixture.entry), 1);
+    assert_eq!(host.inner.requests_for(fixture.target), 1, "verified K survives each D retry");
+    assert_eq!(*host.inner.code_requests.borrow(), vec![fixture.callee.hash(); 4]);
+    let session = resume.resolution_session();
+    assert_eq!(session.uses().count(), 2);
+    assert_eq!(session.counters().committed_requests, 2);
+    assert_eq!(session.counters().reserved_requests, 0);
+    assert_eq!(
+        session
+            .bindings()
+            .iter()
+            .find(|binding| binding.procedure_key() == fixture.target)
+            .unwrap()
+            .counts()
+            .normal,
+        1
+    );
 }
