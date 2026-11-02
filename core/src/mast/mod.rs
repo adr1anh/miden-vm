@@ -848,6 +848,13 @@ pub trait ExecutableMastForest {
     /// Returns the [`MastNodeId`] of the procedure associated with a given digest, if any.
     fn find_procedure_root(&self, digest: Word) -> Option<MastNodeId>;
 
+    /// Returns true if the specified node ID is a procedure root with the given digest.
+    ///
+    /// This checks the exact root ID even when multiple roots share a digest. Sparse forests
+    /// may satisfy this check using a digest-only entry; callers requiring an executable body
+    /// must also use [`Self::get_node_by_id`] to confirm that the node is materialized.
+    fn is_procedure_root_with_exact_digest(&self, node_id: MastNodeId, digest: Word) -> bool;
+
     /// Returns the advice map associated with this forest.
     fn advice_map(&self) -> &AdviceMap;
 }
@@ -866,6 +873,11 @@ impl ExecutableMastForest for MastForest {
     #[inline(always)]
     fn find_procedure_root(&self, digest: Word) -> Option<MastNodeId> {
         MastForest::find_procedure_root(self, digest)
+    }
+
+    #[inline(always)]
+    fn is_procedure_root_with_exact_digest(&self, node_id: MastNodeId, digest: Word) -> bool {
+        MastForest::is_procedure_root_with_exact_digest(self, node_id, digest)
     }
 
     #[inline(always)]
@@ -903,6 +915,11 @@ impl<T: ExecutableMastForest + ?Sized> ExecutableMastForest for Arc<T> {
     #[inline(always)]
     fn find_procedure_root(&self, digest: Word) -> Option<MastNodeId> {
         T::find_procedure_root(self, digest)
+    }
+
+    #[inline(always)]
+    fn is_procedure_root_with_exact_digest(&self, node_id: MastNodeId, digest: Word) -> bool {
+        T::is_procedure_root_with_exact_digest(self, node_id, digest)
     }
 
     #[inline(always)]

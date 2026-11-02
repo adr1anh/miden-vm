@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 
 use proptest::prelude::*;
 use rand::{RngExt, SeedableRng};
@@ -9,14 +9,75 @@ use crate::{
     advice::AdviceMap,
     chiplets::hasher,
     mast::{
-        BasicBlockNodeBuilder, DynNode, DynNodeBuilder, ExternalNodeBuilder, JoinNodeBuilder,
-        MastForest, MastForestContributor, MastForestError, MastNodeExt, MastNodeId,
+        BasicBlockNodeBuilder, DynNode, DynNodeBuilder, ExecutableMastForest, ExternalNodeBuilder,
+        JoinNodeBuilder, MastForest, MastForestContributor, MastForestError, MastNodeExt,
+        MastNodeId, SparseMastForestBuilder, VisitKind,
     },
     operations::Operation,
     program::{KernelDescriptor, ProgramInfo},
     serde::{Deserializable, Serializable},
     utils::IndexVec,
 };
+
+#[test]
+fn executable_procedure_root_checks_use_exact_ids() {
+    let digest = BasicBlockNodeBuilder::new(vec![Operation::Add]).build().unwrap().digest();
+    let mut source = MastForest::new();
+    let external = ExternalNodeBuilder::new(digest).add_to_forest(&mut source).unwrap();
+    let unvisited_root = BasicBlockNodeBuilder::new(vec![Operation::Mul])
+        .add_to_forest(&mut source)
+        .unwrap();
+    let nonroot = BasicBlockNodeBuilder::new(vec![Operation::Add])
+        .add_to_forest(&mut source)
+        .unwrap();
+    let local_root = BasicBlockNodeBuilder::new(vec![Operation::Add])
+        .add_to_forest(&mut source)
+        .unwrap();
+    source.make_root(external);
+    source.make_root(local_root);
+    source.make_root(unvisited_root);
+    let source = Arc::new(
+        MastForest::from_raw_parts(source.nodes, source.roots, source.advice_map).unwrap(),
+    );
+    let wrong_digest = source[unvisited_root].digest();
+    let unknown = MastNodeId::new_unchecked(u32::MAX);
+
+    // The first match is a marker, but the later materialized body is also an exact root.
+    assert_eq!(source.find_procedure_root(digest), Some(external));
+    assert!(source[external].is_external());
+    assert!(source[local_root].is_basic_block());
+    assert_eq!(local_root, MastNodeId::new_unchecked(3));
+    let assert_exact_roots = |forest: &dyn ExecutableMastForest| {
+        assert!(forest.is_procedure_root_with_exact_digest(external, digest));
+        assert!(forest.is_procedure_root_with_exact_digest(local_root, digest));
+        assert!(!forest.is_procedure_root_with_exact_digest(local_root, wrong_digest));
+        assert!(!forest.is_procedure_root_with_exact_digest(nonroot, digest));
+        assert!(!forest.is_procedure_root_with_exact_digest(unknown, digest));
+    };
+    // Passing Arc itself through the trait object also checks its blanket delegation.
+    assert_exact_roots(&source);
+
+    for kind in [VisitKind::FullVisit, VisitKind::DigestOnly] {
+        let mut builder = SparseMastForestBuilder::new(source.clone());
+        builder.record_visit(external, VisitKind::FullVisit);
+        builder.record_visit(nonroot, VisitKind::DigestOnly);
+        builder.record_visit(local_root, kind);
+        let sparse = Arc::new(builder.finalize());
+
+        assert_eq!(sparse.find_procedure_root(digest), Some(external));
+        assert_exact_roots(&sparse);
+        assert!(!sparse.is_procedure_root_with_exact_digest(unvisited_root, wrong_digest));
+        assert_eq!(sparse.get_digest_by_id(nonroot), Some(digest));
+        assert_eq!(sparse.get_digest_by_id(local_root), Some(digest));
+        assert_eq!(sparse.get_node_by_id(local_root).is_some(), kind == VisitKind::FullVisit);
+        if kind == VisitKind::FullVisit {
+            assert_eq!(
+                sparse.nodes().keys().copied().collect::<Vec<_>>(),
+                vec![external, local_root]
+            );
+        }
+    }
+}
 
 #[test]
 fn dyn_hash_is_correct() {
