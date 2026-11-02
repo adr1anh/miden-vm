@@ -1416,11 +1416,11 @@ impl Tracer for ExecutionTracer {
         {
             prepared_keyed_cycle = Some((KeyedEventKind::RootEnd, principal));
         }
+        // Only actual keyed cycles retain their current continuation on the live stack.
+        // SPAN/final-op preflight may see a root END below the current block, but its snapshot
+        // must still add the executing block continuation through start_new_fragment_context.
         if projection.row.as_usize().is_multiple_of(self.fragment_size)
-            && (matches!(continuation, Continuation::StartNode(id)
-                if matches!(current_forest.get_node_by_id(*id),
-                    Some(MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_))))
-                || continuation_stack.root_boundary_after_next().is_some())
+            && prepared_keyed_cycle.is_some()
         {
             self.prepared_snapshot = None;
             let mut translated = ContinuationStack::default();
