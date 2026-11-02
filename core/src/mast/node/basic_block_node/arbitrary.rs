@@ -13,11 +13,11 @@ use crate::{
     advice::{AdviceInputs, AdviceMap, AdviceStack},
     crypto::merkle::MerkleStore,
     mast::{
-        CallNodeBuilder, DenseMastForestBuilder, DynNodeBuilder, ExternalNodeBuilder,
-        JoinNodeBuilder, LoopNodeBuilder, SplitNodeBuilder,
+        CallNodeBuilder, DenseMastForestBuilder, DynNodeBuilder, ExecNodeBuilder,
+        ExternalNodeBuilder, JoinNodeBuilder, LoopNodeBuilder, SplitNodeBuilder,
     },
     operations::Operation,
-    program::{KernelDescriptor, Program},
+    program::{KernelDescriptor, ProcedureKey, Program},
 };
 
 // OPERATIONS
@@ -262,7 +262,7 @@ pub enum GenerationMode {
     #[default]
     Executable,
     /// Broad structural coverage without execution guarantees: fallible operations, dyn nodes,
-    /// externals with random digests, and syscalls to arbitrary nodes.
+    /// externals with random digests, and keyed invocations with independent procedure keys.
     StructureOnly,
 }
 
@@ -276,15 +276,16 @@ pub enum GenerationMode {
 ///   `0`, so conditions are binary and loops run exactly once;
 /// - each external resolves to a procedure root of the same forest, and the graph of externals is
 ///   acyclic;
-/// - each syscall callee is a member of the paired kernel;
-/// - dyn nodes are never emitted (issue #3397 tracks a MASM-level generator for them).
+/// - immediate keyed invocations and dyn nodes are never emitted.
 ///
-/// The `MastForest` `Arbitrary` impl drops the kernel, so in this mode it emits no syscalls and
-/// its samples run under the empty kernel of `Program::new`; [`forest_kernel_strategy`] keeps the
-/// kernel and the syscalls.
+/// The executable mode currently covers structural execution only. Generating executable
+/// EXEC/CALL/SYSCALL requires a paired authenticated execution environment, which this API does not
+/// yet provide. Structure-only mode covers all three immediate invocation modes and retains each
+/// selected implementation body as a separate procedure root. A symbolic key does not retain its
+/// implementation through a structural edge.
 ///
-/// With `kernel_procedures` set, syscall callees are external nodes carrying the supplied hashes,
-/// so running them requires the matching kernel forest in the host.
+/// `kernel_procedures` supplies digest-only descriptor metadata. It does not authorize or select
+/// symbolic invocation keys.
 ///
 /// Samples of both modes are pruned: every node is reachable from a procedure root.
 #[derive(Clone, Debug)]
@@ -297,10 +298,11 @@ pub struct MastForestParams {
     pub max_splits: usize,
     /// Maximum number of loop nodes.
     pub max_loops: usize,
-    /// Maximum number of call nodes.
+    /// Maximum number of call nodes. Ignored in [`GenerationMode::Executable`].
     pub max_calls: usize,
-    /// Maximum number of syscall nodes. Forced to `0` by the `MastForest` `Arbitrary` impl in
-    /// [`GenerationMode::Executable`].
+    /// Maximum number of exec nodes. Ignored in [`GenerationMode::Executable`].
+    pub max_execs: usize,
+    /// Maximum number of syscall nodes. Ignored in [`GenerationMode::Executable`].
     pub max_syscalls: usize,
     /// Maximum number of external nodes.
     pub max_externals: usize,
@@ -308,10 +310,10 @@ pub struct MastForestParams {
     pub max_dyns: usize,
     /// Guarantees the samples provide.
     pub mode: GenerationMode,
-    /// Procedure hashes of a caller-supplied kernel. When `None`, the kernel holds exactly the
-    /// digests the emitted syscalls target and is empty without syscalls. Duplicate hashes or more
-    /// than [`KernelDescriptor::MAX_NUM_PROCEDURES`] entries make [`forest_kernel_strategy`]
-    /// panic.
+    /// Procedure hashes of a caller-supplied legacy kernel descriptor. When `None`, the descriptor
+    /// is empty. These implementation digests are independent of generated procedure keys.
+    /// Duplicate hashes or more than [`KernelDescriptor::MAX_NUM_PROCEDURES`] entries make
+    /// [`forest_kernel_strategy`] panic.
     pub kernel_procedures: Option<Vec<Word>>,
 }
 
@@ -323,6 +325,7 @@ impl Default for MastForestParams {
             max_splits: 1,
             max_loops: 1,
             max_calls: 1,
+            max_execs: 1,
             max_syscalls: 1,
             max_externals: 1,
             max_dyns: 0,
@@ -344,6 +347,22 @@ enum ExternalPick {
     Random(Word),
 }
 
+/// Selects a retained implementation body and an independently sampled symbolic target.
+#[derive(Clone, Copy, Debug)]
+struct InvocationPick {
+    body: usize,
+    target: ProcedureKey,
+}
+
+fn invocation_picks_strategy(max_len: usize) -> impl Strategy<Value = Vec<InvocationPick>> {
+    prop::collection::vec(any::<(usize, Word)>(), 0..=max_len).prop_map(|picks| {
+        picks
+            .into_iter()
+            .map(|(body, target)| InvocationPick { body, target: ProcedureKey::new(target) })
+            .collect()
+    })
+}
+
 /// Raw samples for one forest. Index vectors are reduced modulo the number of candidates when
 /// they are consumed.
 #[derive(Clone, Debug)]
@@ -353,8 +372,9 @@ struct ForestSeeds {
     /// Branch indices and the condition pushed before the split (executable mode).
     splits: Vec<(usize, usize, bool)>,
     loop_indices: Vec<usize>,
-    call_indices: Vec<usize>,
-    syscall_picks: Vec<usize>,
+    call_picks: Vec<InvocationPick>,
+    exec_picks: Vec<InvocationPick>,
+    syscall_picks: Vec<InvocationPick>,
     external_picks: Vec<ExternalPick>,
     /// `true` selects `dyncall`, `false` selects `dyn`.
     dyn_selectors: Vec<bool>,
@@ -381,6 +401,11 @@ fn forest_seeds_strategy(params: &MastForestParams) -> BoxedStrategy<ForestSeeds
             .boxed()
     };
     let max_dyns = if executable { 0 } else { params.max_dyns };
+    let (max_calls, max_execs, max_syscalls) = if executable {
+        (0, 0, 0)
+    } else {
+        (params.max_calls, params.max_execs, params.max_syscalls)
+    };
 
     (
         prop::collection::vec(any_with::<BasicBlockNode>(block_params), blocks),
@@ -388,22 +413,25 @@ fn forest_seeds_strategy(params: &MastForestParams) -> BoxedStrategy<ForestSeeds
             prop::collection::vec(any::<(usize, usize)>(), 0..=params.max_joins),
             prop::collection::vec(any::<(usize, usize, bool)>(), 0..=params.max_splits),
             prop::collection::vec(any::<usize>(), 0..=params.max_loops),
-            prop::collection::vec(any::<usize>(), 0..=params.max_calls),
+            invocation_picks_strategy(max_calls),
+            invocation_picks_strategy(max_execs),
         ),
         (
-            prop::collection::vec(any::<usize>(), 0..=params.max_syscalls),
+            invocation_picks_strategy(max_syscalls),
             external_picks,
             prop::collection::vec(any::<bool>(), 0..=max_dyns),
         ),
     )
         // Root selection is the one vector that needs an exact size: a flag per skeleton node.
         .prop_flat_map(|(basic_blocks, control_flow, tail)| {
-            let (join_pairs, splits, loop_indices, call_indices) = &control_flow;
+            let (join_pairs, splits, loop_indices, call_picks, exec_picks) = &control_flow;
             let skeleton_nodes = basic_blocks.len()
                 + join_pairs.len()
                 + splits.len()
                 + loop_indices.len()
-                + call_indices.len();
+                + call_picks.len()
+                + exec_picks.len()
+                + tail.0.len();
             (
                 Just((basic_blocks, control_flow, tail)),
                 prop::collection::vec(any::<bool>(), skeleton_nodes),
@@ -413,7 +441,7 @@ fn forest_seeds_strategy(params: &MastForestParams) -> BoxedStrategy<ForestSeeds
             |(
                 (
                     basic_blocks,
-                    (join_pairs, splits, loop_indices, call_indices),
+                    (join_pairs, splits, loop_indices, call_picks, exec_picks),
                     (syscall_picks, external_picks, dyn_selectors),
                 ),
                 root_selection,
@@ -423,7 +451,8 @@ fn forest_seeds_strategy(params: &MastForestParams) -> BoxedStrategy<ForestSeeds
                     join_pairs,
                     splits,
                     loop_indices,
-                    call_indices,
+                    call_picks,
+                    exec_picks,
                     syscall_picks,
                     external_picks,
                     dyn_selectors,
@@ -523,9 +552,21 @@ fn build_skeleton(seeds: &ForestSeeds, executable: bool) -> Skeleton {
         node_ids.push(forest.push_node(LoopNodeBuilder::new(body)).expect("loop"));
     }
 
-    for &callee in &seeds.call_indices {
-        let call = CallNodeBuilder::new(choose(&node_ids, callee));
+    // Symbolic invocations have no structural body edge. Keep selected bodies explicitly.
+    let mut invoked_bodies = Vec::new();
+    for pick in &seeds.call_picks {
+        invoked_bodies.push(choose(&node_ids, pick.body));
+        let call = CallNodeBuilder::new(pick.target);
         node_ids.push(forest.push_node(call).expect("call"));
+    }
+    for pick in &seeds.exec_picks {
+        invoked_bodies.push(choose(&node_ids, pick.body));
+        node_ids.push(forest.push_node(ExecNodeBuilder::new(pick.target)).expect("exec"));
+    }
+    for pick in &seeds.syscall_picks {
+        invoked_bodies.push(choose(&node_ids, pick.body));
+        let syscall = CallNodeBuilder::new_syscall(pick.target);
+        node_ids.push(forest.push_node(syscall).expect("syscall"));
     }
 
     let mut roots: Vec<MastNodeId> = node_ids
@@ -537,6 +578,9 @@ fn build_skeleton(seeds: &ForestSeeds, executable: bool) -> Skeleton {
     if roots.is_empty() {
         roots.push(node_ids[0]);
     }
+    roots.extend(invoked_bodies);
+    roots.sort_unstable();
+    roots.dedup();
     for &root in &roots {
         forest.mark_root(root);
     }
@@ -587,27 +631,10 @@ fn build_executable_forest(
     let mut externals = BTreeMap::new();
 
     add_local_externals(&mut forest, &node_ids, &mut roots, &mut externals, &seeds.external_picks);
-    let syscall_hashes = match kernel {
-        Some(kernel) => {
-            let hashes = kernel.proc_hashes();
-            add_kernel_syscalls(
-                &mut forest,
-                &mut roots,
-                &mut externals,
-                hashes,
-                &seeds.syscall_picks,
-            );
-            Vec::new()
-        },
-        None => add_local_syscalls(&mut forest, &mut roots, &seeds.syscall_picks),
-    };
     promote_unreachable(&mut forest, &mut roots);
 
-    let kernel = kernel.cloned().unwrap_or_else(|| {
-        KernelDescriptor::from_hashes(syscall_hashes).expect("unique hashes within the size limit")
-    });
     let forest = forest.build().expect("generated forest is valid");
-    (forest, kernel)
+    (forest, kernel.cloned().unwrap_or_default())
 }
 
 /// Adds externals resolving to a root of the same forest. Each one is joined with an existing
@@ -637,59 +664,6 @@ fn add_local_externals(
     }
 }
 
-/// Adds syscalls to existing roots and returns the callee digests, which stay within the kernel
-/// size limit.
-fn add_local_syscalls(
-    forest: &mut DenseMastForestBuilder,
-    roots: &mut Vec<MastNodeId>,
-    picks: &[usize],
-) -> Vec<Word> {
-    let mut hashes: Vec<Word> = Vec::new();
-    for &index in picks {
-        // Once the kernel is full, only roots already in it can be called.
-        let full = hashes.len() >= KernelDescriptor::MAX_NUM_PROCEDURES;
-        let callable: Vec<MastNodeId> = roots
-            .iter()
-            .copied()
-            .filter(|&id| !full || hashes.contains(&digest_of(forest, id)))
-            .collect();
-        if callable.is_empty() {
-            continue;
-        }
-        let callee = choose(&callable, index);
-        let digest = digest_of(forest, callee);
-        let syscall = forest.push_node(CallNodeBuilder::new_syscall(callee)).expect("syscall");
-        forest.mark_root(syscall);
-        roots.push(syscall);
-        if !hashes.contains(&digest) {
-            hashes.push(digest);
-        }
-    }
-    hashes
-}
-
-/// Adds syscalls whose callees are externals carrying the supplied kernel hashes.
-fn add_kernel_syscalls(
-    forest: &mut DenseMastForestBuilder,
-    roots: &mut Vec<MastNodeId>,
-    externals: &mut BTreeMap<Word, MastNodeId>,
-    hashes: &[Word],
-    picks: &[usize],
-) {
-    if hashes.is_empty() {
-        return;
-    }
-    for &index in picks {
-        let hash = hashes[index % hashes.len()];
-        let callee = *externals.entry(hash).or_insert_with(|| {
-            forest.push_node(ExternalNodeBuilder::new(hash)).expect("kernel external")
-        });
-        let syscall = forest.push_node(CallNodeBuilder::new_syscall(callee)).expect("syscall");
-        forest.mark_root(syscall);
-        roots.push(syscall);
-    }
-}
-
 // STRUCTURE-ONLY MODE
 // ================================================================================================
 
@@ -698,11 +672,6 @@ fn build_structure_only_forest(
     kernel: Option<&KernelDescriptor>,
 ) -> (MastForest, KernelDescriptor) {
     let Skeleton { mut forest, mut node_ids, mut roots } = build_skeleton(seeds, false);
-
-    for &index in &seeds.syscall_picks {
-        let syscall = CallNodeBuilder::new_syscall(choose(&node_ids, index));
-        node_ids.push(forest.push_node(syscall).expect("syscall"));
-    }
 
     let mut digests = BTreeSet::new();
     for pick in &seeds.external_picks {
@@ -729,8 +698,9 @@ fn build_structure_only_forest(
 // STRATEGIES
 // ================================================================================================
 
-/// Strategy yielding `(MastForest, KernelDescriptor)` pairs. See [`MastForestParams`] for what
-/// each [`GenerationMode`] guarantees.
+/// Strategy yielding `(MastForest, KernelDescriptor)` pairs. The descriptor preserves supplied
+/// implementation hashes independently of symbolic keys. It does not authenticate invocation
+/// bindings. See [`MastForestParams`] for what each [`GenerationMode`] guarantees.
 ///
 /// # Panics
 ///
@@ -757,13 +727,10 @@ impl Arbitrary for MastForest {
     type Parameters = MastForestParams;
     type Strategy = BoxedStrategy<Self>;
 
-    /// Samples forests that need no kernel: in [`GenerationMode::Executable`] no syscalls are
-    /// emitted, so every root runs under the empty kernel of `Program::new`. Use
-    /// [`forest_kernel_strategy`] to sample syscalls together with their kernel.
-    fn arbitrary_with(mut params: Self::Parameters) -> Self::Strategy {
-        if params.mode == GenerationMode::Executable {
-            params.max_syscalls = 0;
-        }
+    /// In [`GenerationMode::Executable`] every root runs under the empty kernel of `Program::new`.
+    /// Immediate keyed invocations remain restricted to [`GenerationMode::StructureOnly`] until
+    /// execution-environment generation is available.
+    fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
         forest_kernel_strategy(params).prop_map(|(forest, _)| forest).boxed()
     }
 }
@@ -877,6 +844,47 @@ mod tests {
         })
     }
 
+    fn invocation_seeds(body_op: Operation) -> ForestSeeds {
+        ForestSeeds {
+            basic_blocks: vec![
+                BasicBlockNode::new(vec![Operation::Noop]).expect("basic block"),
+                BasicBlockNode::new(vec![body_op]).expect("implementation body"),
+            ],
+            join_pairs: Vec::new(),
+            splits: Vec::new(),
+            loop_indices: Vec::new(),
+            call_picks: vec![InvocationPick {
+                body: 1,
+                target: ProcedureKey::new(word(100)),
+            }],
+            exec_picks: vec![InvocationPick {
+                body: 1,
+                target: ProcedureKey::new(word(200)),
+            }],
+            syscall_picks: vec![InvocationPick {
+                body: 1,
+                target: ProcedureKey::new(word(300)),
+            }],
+            external_picks: Vec::new(),
+            dyn_selectors: Vec::new(),
+            root_selection: vec![false, false, true, true, true],
+        }
+    }
+
+    fn immediate_invocations(forest: &MastForest) -> BTreeSet<(u8, ProcedureKey, Word)> {
+        forest
+            .nodes()
+            .iter()
+            .filter_map(|node| match node {
+                MastNode::Call(call) => {
+                    Some((u8::from(call.is_syscall()), call.target(), node.digest()))
+                },
+                MastNode::Exec(exec) => Some((2, exec.target(), node.digest())),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn assert_pruned(forest: &MastForest) {
         let reachable: BTreeSet<MastNodeId> = forest
             .procedure_roots()
@@ -900,7 +908,16 @@ mod tests {
         let params = MastForestParams::default();
         assert_eq!(params.mode, GenerationMode::Executable);
         assert_eq!(params.kernel_procedures, None);
-        assert_eq!((params.max_syscalls, params.max_externals, params.max_dyns), (1, 1, 0));
+        assert_eq!(
+            (
+                params.max_calls,
+                params.max_execs,
+                params.max_syscalls,
+                params.max_externals,
+                params.max_dyns
+            ),
+            (1, 1, 1, 1, 0),
+        );
     }
 
     #[test]
@@ -932,8 +949,8 @@ mod tests {
             ..Default::default()
         });
         let mut runner = TestRunner::default();
-        // dyn, dyncall, external, syscall
-        let mut seen = [false; 4];
+        // dyn, dyncall, external, syscall, call, exec
+        let mut seen = [false; 6];
         for _ in 0..256 {
             let (forest, _) = sample(&strategy, &mut runner);
             for node in forest.nodes() {
@@ -941,6 +958,8 @@ mod tests {
                     MastNode::Dyn(dyn_node) => seen[usize::from(dyn_node.is_dyncall())] = true,
                     MastNode::External(_) => seen[2] = true,
                     MastNode::Call(call) if call.is_syscall() => seen[3] = true,
+                    MastNode::Call(_) => seen[4] = true,
+                    MastNode::Exec(_) => seen[5] = true,
                     _ => {},
                 }
             }
@@ -952,41 +971,82 @@ mod tests {
     }
 
     #[test]
-    fn supplied_kernel_syscalls_target_its_hashes() {
-        let hashes = vec![word(1), word(10)];
-        let strategy = forest_kernel_strategy(MastForestParams {
-            kernel_procedures: Some(hashes.clone()),
-            max_syscalls: 3,
-            ..Default::default()
-        });
-        let mut runner = TestRunner::default();
-        let (forest, kernel) = (0..64)
-            .map(|_| sample(&strategy, &mut runner))
-            .find(|(forest, _)| syscalls(forest).next().is_some())
-            .expect("a sample with syscalls");
+    fn kernel_descriptor_digests_do_not_select_symbolic_targets() {
+        let seeds = invocation_seeds(Operation::Incr);
+        let first = KernelDescriptor::from_hashes(vec![word(1), word(10)]).expect("kernel");
+        let second = KernelDescriptor::from_hashes(vec![word(20)]).expect("replacement kernel");
+        let (first_forest, first_descriptor) = build_structure_only_forest(&seeds, Some(&first));
+        let (second_forest, second_descriptor) = build_structure_only_forest(&seeds, Some(&second));
 
-        assert_eq!(kernel.proc_hashes().len(), hashes.len());
-        for call in syscalls(&forest) {
-            let callee = &forest[call.callee()];
-            assert!(callee.is_external());
-            assert!(kernel.contains_proc(callee.digest()));
+        assert_eq!(first_descriptor, first);
+        assert_eq!(second_descriptor, second);
+        assert_eq!(first_forest, second_forest);
+        assert_eq!(
+            syscalls(&first_forest).next().expect("syscall").target(),
+            ProcedureKey::new(word(300))
+        );
+    }
+
+    #[test]
+    fn symbolic_invocation_hashes_are_independent_of_implementation_bodies() {
+        let first_seeds = invocation_seeds(Operation::Incr);
+        let second_seeds = invocation_seeds(Operation::Pad);
+        let first_body = first_seeds.basic_blocks[1].digest();
+        let second_body = second_seeds.basic_blocks[1].digest();
+        assert_ne!(first_body, second_body);
+
+        let (first, first_kernel) = build_structure_only_forest(&first_seeds, None);
+        let (second, second_kernel) = build_structure_only_forest(&second_seeds, None);
+        let invocations = immediate_invocations(&first);
+        assert_eq!(invocations.len(), 3);
+        let targets: BTreeSet<_> =
+            invocations.iter().map(|&(mode, target, _)| (mode, target)).collect();
+        assert_eq!(
+            targets,
+            BTreeSet::from([
+                (0, ProcedureKey::new(word(100))),
+                (1, ProcedureKey::new(word(300))),
+                (2, ProcedureKey::new(word(200))),
+            ])
+        );
+        assert_eq!(invocations, immediate_invocations(&second));
+        assert!(first_kernel.is_empty() && second_kernel.is_empty());
+        for (_, target, _) in invocations {
+            assert_ne!(target.into_word(), first_body);
+            assert_ne!(target.into_word(), second_body);
         }
     }
 
     #[test]
-    fn empty_supplied_kernel_emits_no_syscalls() {
-        let strategy = forest_kernel_strategy(MastForestParams {
-            kernel_procedures: Some(Vec::new()),
-            max_syscalls: 4,
-            max_calls: 0,
-            ..Default::default()
-        });
-        let mut runner = TestRunner::default();
-        for _ in 0..64 {
-            let (forest, kernel) = sample(&strategy, &mut runner);
-            assert!(kernel.is_empty());
-            assert!(!forest.nodes().iter().any(|node| matches!(node, MastNode::Call(_))));
+    fn symbolic_invocation_bodies_are_explicit_procedure_roots() {
+        let seeds = invocation_seeds(Operation::Incr);
+        let body_digest = seeds.basic_blocks[1].digest();
+        for mode in 0..3 {
+            let mut one_mode = seeds.clone();
+            if mode != 0 {
+                one_mode.call_picks.clear();
+            }
+            if mode != 1 {
+                one_mode.exec_picks.clear();
+            }
+            if mode != 2 {
+                one_mode.syscall_picks.clear();
+            }
+            one_mode.root_selection = vec![false, false, true];
+            let Skeleton { forest, node_ids, roots } = build_skeleton(&one_mode, false);
+            assert!(roots.contains(&node_ids[1]), "implementation root for mode {mode}");
+            let skeleton = forest.build().expect("skeleton");
+            assert!(skeleton.find_procedure_root(body_digest).is_some());
         }
+
+        let (forest, _) = build_structure_only_forest(&seeds, None);
+        assert!(forest.find_procedure_root(body_digest).is_some());
+        for node in forest.nodes() {
+            if matches!(node, MastNode::Call(_) | MastNode::Exec(_)) {
+                assert!(!node.has_children());
+            }
+        }
+        assert_pruned(&forest);
     }
 
     #[test]
@@ -1010,13 +1070,21 @@ mod tests {
 
     proptest! {
         #[test]
-        fn executable_forests_have_no_dyn_nodes(
-            forest in any_with::<MastForest>(MastForestParams { max_dyns: 6, ..Default::default() })
+        fn executable_forests_emit_only_structural_nodes(
+            (forest, _) in forest_kernel_strategy(MastForestParams {
+                max_calls: 6,
+                max_execs: 6,
+                max_syscalls: 6,
+                max_dyns: 6,
+                ..Default::default()
+            })
         ) {
-            prop_assert!(!forest.nodes().iter().any(MastNode::is_dyn));
+            prop_assert!(!forest.nodes().iter().any(|node| matches!(
+                node, MastNode::Call(_) | MastNode::Exec(_) | MastNode::Dyn(_)
+            )));
         }
 
-        /// Without a paired kernel there is nothing a syscall could target.
+        /// The plain strategy preserves the same structural execution guarantee.
         #[test]
         fn plain_executable_forests_have_no_syscalls(
             forest in any_with::<MastForest>(MastForestParams { max_syscalls: 3, ..Default::default() })
@@ -1128,22 +1196,26 @@ mod tests {
         }
 
         #[test]
-        fn syscalls_target_kernel_procedures(
-            (forest, kernel) in forest_kernel_strategy(executable_params())
+        fn supplied_kernel_descriptor_preserves_implementation_digests(
+            (forest, kernel) in forest_kernel_strategy(MastForestParams {
+                kernel_procedures: Some(vec![word(1), word(10)]),
+                mode: GenerationMode::StructureOnly,
+                ..Default::default()
+            })
         ) {
-            for call in syscalls(&forest) {
-                prop_assert!(kernel.contains_proc(forest[call.callee()].digest()));
-            }
+            let listed: BTreeSet<Word> = kernel.proc_hashes().iter().copied().collect();
+            prop_assert_eq!(listed, BTreeSet::from([word(1), word(10)]));
+            assert_pruned(&forest);
         }
 
         #[test]
-        fn generated_kernel_lists_exactly_the_syscall_targets(
-            (forest, kernel) in forest_kernel_strategy(executable_params())
+        fn absent_kernel_descriptor_stays_empty_for_symbolic_forests(
+            (_, kernel) in forest_kernel_strategy(MastForestParams {
+                mode: GenerationMode::StructureOnly,
+                ..Default::default()
+            })
         ) {
-            let targets: BTreeSet<Word> =
-                syscalls(&forest).map(|call| forest[call.callee()].digest()).collect();
-            let listed: BTreeSet<Word> = kernel.proc_hashes().iter().copied().collect();
-            prop_assert_eq!(listed, targets);
+            prop_assert!(kernel.is_empty());
         }
 
         #[test]

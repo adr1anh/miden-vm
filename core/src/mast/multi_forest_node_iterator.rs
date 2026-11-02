@@ -29,13 +29,13 @@ type ForestIndex = usize;
 /// **all [`MastNodeId`]s of child nodes are strictly less than the [`MastNodeId`] of their
 /// parents**.
 ///
-/// For instance, consider these `MastForest`s being passed to this iterator with the `Call(0)`'s
+/// For instance, consider these `MastForest`s being passed to this iterator with the `Loop(0)`'s
 /// digest being `qux`:
 ///
 /// ```text
 /// Forest A Nodes: [Block(foo), External(qux), Join(0, 1)]
 /// Forest A Roots: [2]
-/// Forest B Nodes: [Block(bar), Call(0)]
+/// Forest B Nodes: [Block(bar), Loop(0)]
 /// Forest B Roots: [0]
 /// ```
 ///
@@ -44,7 +44,7 @@ type ForestIndex = usize;
 /// starting at the root at index 2 and following all children until we reach terminal nodes (like
 /// `Block`s) and building up a deque of the discovered nodes. The special case here is the
 /// `External` node whose digest matches that of a node in forest B. Instead of the External
-/// node being added to the deque, the tree of the Call node is added instead. The deque is built
+/// node being added to the deque, the tree of the Loop node is added instead. The deque is built
 /// such that popping elements off the deque (from the front) yields a postorder.
 ///
 /// After the first tree is discovered, the deque looks like this:
@@ -307,12 +307,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        Word,
+        Felt, Word,
         mast::{
-            BasicBlockNodeBuilder, CallNodeBuilder, ExternalNodeBuilder, JoinNodeBuilder,
-            SplitNodeBuilder,
+            BasicBlockNodeBuilder, CallNodeBuilder, ExecNodeBuilder, ExternalNodeBuilder,
+            JoinNodeBuilder, LoopNodeBuilder, SplitNodeBuilder,
         },
         operations::Operation,
+        program::ProcedureKey,
     };
 
     fn random_digest() -> Word {
@@ -395,18 +396,18 @@ mod tests {
 
         let mut forest_a = MastForest::new();
         let id_foo_a = ExternalNodeBuilder::new(foo_digest).add_to_forest(&mut forest_a).unwrap();
-        let id_call_a = CallNodeBuilder::new(id_foo_a).add_to_forest(&mut forest_a).unwrap();
-        forest_a.make_root(id_call_a);
+        let id_loop_a = LoopNodeBuilder::new(id_foo_a).add_to_forest(&mut forest_a).unwrap();
+        forest_a.make_root(id_loop_a);
 
         let mut forest_b = MastForest::new();
-        let id_ext_b = ExternalNodeBuilder::new(forest_a[id_call_a].digest())
+        let id_ext_b = ExternalNodeBuilder::new(forest_a[id_loop_a].digest())
             .add_to_forest(&mut forest_b)
             .unwrap();
-        let id_call_b = CallNodeBuilder::new(id_ext_b).add_to_forest(&mut forest_b).unwrap();
+        let id_loop_b = LoopNodeBuilder::new(id_ext_b).add_to_forest(&mut forest_b).unwrap();
         BasicBlockNodeBuilder::new(vec![Operation::Drop])
             .add_to_forest(&mut forest_b)
             .unwrap();
-        forest_b.make_root(id_call_b);
+        forest_b.make_root(id_loop_b);
 
         let nodes = MultiMastForestNodeIter::new(vec![&forest_a, &forest_b]).collect::<Vec<_>>();
 
@@ -430,7 +431,7 @@ mod tests {
                 replaced_mast_node_id: MastNodeId::new_unchecked(0)
             }
         );
-        // The call from forest A.
+        // The loop from forest A.
         assert_eq!(
             nodes[2],
             MultiMastForestIteratorItem::Node {
@@ -438,7 +439,7 @@ mod tests {
                 node_id: MastNodeId::new_unchecked(1)
             }
         );
-        // The replacement for the external node that is replaced by the Call in forest A.
+        // The replacement for the external node that is replaced by the Loop in forest A.
         assert_eq!(
             nodes[3],
             MultiMastForestIteratorItem::ExternalNodeReplacement {
@@ -448,13 +449,49 @@ mod tests {
                 replaced_mast_node_id: MastNodeId::new_unchecked(0)
             }
         );
-        // The call from forest B.
+        // The loop from forest B.
         assert_eq!(
             nodes[4],
             MultiMastForestIteratorItem::Node {
                 forest_idx: 1,
                 node_id: MastNodeId::new_unchecked(1)
             }
+        );
+    }
+
+    #[test]
+    fn multi_mast_forest_invocations_are_leaves() {
+        let target = ProcedureKey::new(Word::new([
+            Felt::from_u32(71),
+            Felt::from_u32(73),
+            Felt::from_u32(79),
+            Felt::from_u32(83),
+        ]));
+        let mut forest = MastForest::new();
+        let body = BasicBlockNodeBuilder::new(vec![Operation::Drop])
+            .add_to_forest(&mut forest)
+            .unwrap();
+        let call = CallNodeBuilder::new(target).add_to_forest(&mut forest).unwrap();
+        let exec = ExecNodeBuilder::new(target).add_to_forest(&mut forest).unwrap();
+        let syscall = CallNodeBuilder::new_syscall(target).add_to_forest(&mut forest).unwrap();
+        let join = JoinNodeBuilder::new([call, exec]).add_to_forest(&mut forest).unwrap();
+        forest.make_root(join);
+        forest.make_root(syscall);
+
+        let nodes = MultiMastForestNodeIter::new(vec![&forest]).collect::<Vec<_>>();
+        let expected = [call, exec, join, syscall]
+            .map(|node_id| MultiMastForestIteratorItem::Node { forest_idx: 0, node_id });
+        assert_eq!(nodes, expected);
+
+        // An implementation becomes reachable through its own root, independently of the K
+        // stored in each invocation node.
+        forest.make_root(body);
+        let retained = MultiMastForestNodeIter::new(vec![&forest]).collect::<Vec<_>>();
+        assert_eq!(&retained[..expected.len()], &expected);
+        assert_eq!(retained.len(), expected.len() + 1);
+        assert_eq!(
+            retained[expected.len()],
+            MultiMastForestIteratorItem::Node { forest_idx: 0, node_id: body }
         );
     }
 
@@ -484,16 +521,17 @@ mod tests {
 
         let mut forest = MastForest::new();
         let id_foo = ExternalNodeBuilder::new(foo_digest).add_to_forest(&mut forest).unwrap();
-        let id_call1 = CallNodeBuilder::new(id_foo).add_to_forest(&mut forest).unwrap();
-        let id_call2 = CallNodeBuilder::new(id_foo).add_to_forest(&mut forest).unwrap();
+        let id_loop1 = LoopNodeBuilder::new(id_foo).add_to_forest(&mut forest).unwrap();
+        let id_loop2 = LoopNodeBuilder::new(id_foo).add_to_forest(&mut forest).unwrap();
         let id_split =
-            SplitNodeBuilder::new([id_call1, id_call2]).add_to_forest(&mut forest).unwrap();
+            SplitNodeBuilder::new([id_loop1, id_loop2]).add_to_forest(&mut forest).unwrap();
         forest.make_root(id_split);
 
         let nodes = MultiMastForestNodeIter::new(vec![&forest]).collect::<Vec<_>>();
 
         // The foo node should be yielded first and it should not be yielded twice.
-        for (i, expected_node_id) in [id_foo, id_call1, id_call2, id_split].into_iter().enumerate()
+        assert_eq!(nodes.len(), 4);
+        for (i, expected_node_id) in [id_foo, id_loop1, id_loop2, id_split].into_iter().enumerate()
         {
             assert_eq!(
                 nodes[i],
