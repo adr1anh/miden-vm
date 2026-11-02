@@ -169,9 +169,45 @@ impl<T> ChipletCols<T> {
         self.chiplets[19]
     }
 
+    /// Returns the Memory write helpers `e0` and `e1` (shared cells `c[21]` and `c[22]`).
+    ///
+    /// Meaningful only on Memory rows. Other row families own these cells through their
+    /// respective overlays.
+    pub fn memory_write_helpers(&self) -> [T; 2]
+    where
+        T: Copy,
+    {
+        [self.chiplets[21], self.chiplets[22]]
+    }
+
+    /// Returns mutable Memory write-helper cells `c[21]` and `c[22]`.
+    ///
+    /// Callers must restrict writes through this view to materialized Memory rows.
+    pub fn memory_write_helpers_mut(&mut self) -> &mut [T; 2] {
+        (&mut self.chiplets[21..23]).try_into().expect("fixed Memory helper width")
+    }
+
     /// Returns a typed borrow of the ACE chiplet columns (chiplets\[4..20\]).
     pub fn ace(&self) -> &AceCols<T> {
         self.chiplets[4..20].borrow()
+    }
+
+    /// Returns the ACE operation-square helper `z` (shared cell `c[21]`).
+    ///
+    /// Meaningful only on ACE EVAL rows. Other row families own this cell through their
+    /// respective overlays.
+    pub fn ace_op_squared(&self) -> T
+    where
+        T: Copy,
+    {
+        self.chiplets[21]
+    }
+
+    /// Returns the mutable ACE operation-square helper cell `c[21]`.
+    ///
+    /// Callers must restrict writes through this view to materialized ACE rows.
+    pub fn ace_op_squared_mut(&mut self) -> &mut T {
+        &mut self.chiplets[21]
     }
 
     /// Returns a typed borrow of the kernel ROM chiplet columns (chiplets\[5..10\]).
@@ -353,6 +389,30 @@ mod tests {
         assert_eq!(CHIPLET_COL_MAP.chiplets[0], 0);
         assert_eq!(CHIPLET_COL_MAP.chiplets[CHIPLETS_MODE_COL], CHIPLETS_MODE_COL);
         assert_eq!(CHIPLET_COL_MAP.chip_clk, CHIPLETS_CLK_COL);
+        assert_eq!(CHIPLET_COL_MAP.memory_write_helpers(), [21, 22]);
+        assert_eq!(CHIPLET_COL_MAP.ace_op_squared(), 21);
+    }
+
+    #[test]
+    fn chiplet_helper_writes_preserve_other_cells() {
+        let mut row = indices_arr::<NUM_CHIPLETS_COLS>();
+        let mut expected = row;
+        {
+            let cols: &mut ChipletCols<usize> = row.as_mut_slice().borrow_mut();
+            *cols.memory_write_helpers_mut() = [101, 102];
+            assert_eq!(cols.memory_write_helpers(), [101, 102]);
+        }
+        expected[21..23].copy_from_slice(&[101, 102]);
+        assert_eq!(row, expected);
+
+        {
+            let cols: &mut ChipletCols<usize> = row.as_mut_slice().borrow_mut();
+            *cols.ace_op_squared_mut() = 103;
+            assert_eq!(cols.ace_op_squared(), 103);
+            assert_eq!(cols.memory_write_helpers(), [103, 102]);
+        }
+        expected[21] = 103;
+        assert_eq!(row, expected);
     }
 
     // --- Per-AIR width invariants -------------------------------------------------------------
