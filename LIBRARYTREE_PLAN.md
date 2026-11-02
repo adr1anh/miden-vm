@@ -1042,3 +1042,28 @@ publishing cache/merge-once changes, and keep prepared code supply separate from
 Commit these focused refactors independently. Existing BTree allocation behavior does not guarantee
 survival of allocator abort. No whole-state clone, digest-authority fallback or proof acceptance is
 introduced. Root/entry/trace preflights, all invocation modes and replay remain required integration.
+
+
+### PR 05 Advice/code publication refactors validated; live/replay integration next
+
+Commit `94d690f2e` shares ordered advice conflict/budget checks through an exclusive two-lifetime
+prepare/commit guard; drop does not publish, and commit returns no execution error. Commit `b3445530a`
+shares requested-D/local-root/debug preparation between sync/async loaders and preflights advice
+before cache/merge-marker publication. A host answer containing only External(D) now rejects as
+malformed code supply; an earlier external marker cannot hide a later exact local body. Structural
+external references remain supported. Independent production and four/five-test source reviews
+passed. After AC/heavy guards, actual processor lib check still reports exactly six callee() and four
+missing-Exec errors, with no new refactor diagnostic. The nine new tests are authored/unrun, as are
+the eight provider tests. Pinned nightly formatting and whitespace checks pass; no suite pass is
+claimed for this noncompiling intermediate branch.
+
+Next connect real ENTRY/EXEC/root END in shared live/replay transitions. Keep concrete native session
+in live outer drivers, owned pending resolution through waits, and generic transition functions for
+Sparse replay. ENTRY is zero-cycle authentication/reservation, not a fabricated row use. Peek finish
+continuations before pop/tracer start; a real FinishBasicBlock and RootBoundary may expose actual root
+END through only zero-cycle forest restorations. Separate fallible tracer/environment preparation
+from infallible publication; built-in stopper and return/controller errors must preflight, while
+unexpected late custom failures invalidate execution and prohibit success/export/reentry. Reconstruct
+private authenticated records from bounded untrusted replay evidence, not unchecked constructors.
+Commit shared contracts and actual consumers in focused reviewable slices; conditional replay v4,
+all invocation/context modes, later AIR/statement/resource gates and D3 remain required.
