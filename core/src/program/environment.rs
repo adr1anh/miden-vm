@@ -19,6 +19,11 @@ pub use label::{CanonicalLabel, LabelError};
 mod object;
 pub use object::{EnvNode, EnvNodeError};
 
+mod builder;
+pub use builder::{
+    EnvironmentBuildError, EnvironmentBuildLimits, EnvironmentBuildResource, EnvironmentBuilder,
+};
+
 macro_rules! word_identity {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
