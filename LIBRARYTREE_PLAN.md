@@ -303,7 +303,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required owner-approved descriptor/domain/home/association/closure fixtures remain external. Generic implementation and local checks are done. Executable lowering at 09; fuzz regeneration/smoke at16. |
-| 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
+| 05 Runtime | in-progress | Base `722392682` | Bounded opening/Resolve source and existing-API research | First bounded opening verifier, then occurrence ledger/session and real invocation transitions. Inherited processor/fuzz tests remain pending; no runtime/proof completion claim. |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
@@ -834,3 +834,20 @@ complete homes and immutable association/authenticated closure fixtures. The pen
 does not authorize defaults or waive evidence. Validate accepted/rejected owner fixtures through both
 artifact and Home codecs and record provenance before clearing this gate. Continue the local stack
 with this unresolved validation owner explicit; no GitHub PR or push is authorized.
+
+### PR 05 Opening foundation starting boundary
+
+The branch `adr1anh/librarytree-05-keyed-execution` starts at PR 04 tip `722392682`; PR 04's
+production-profile evidence remains open. First implement bounded environment-opening candidate and
+private verified-result types in processor `src/environment/{mod,witness,tests}.rs`, with module/export
+wiring only. Reuse core EnvNode commitments, Namespace/ProcedureKey derivation and ExecutionDescriptor;
+verify selected Merkle paths and complete List material before exposing a binding. No deployment
+limits/defaults, full-enumeration requirement or root-admission authority are inferred.
+
+Implement occurrence opening/Resolve ledger and immutable-descriptor resolution session in the next
+focused slice, followed by host adapters and shared prepare/commit invocation transitions. Unit rooted
+Open edges, complete reverse Lists, per-invocation normal/syscall demand including root-END reserve,
+source occurrence and idempotent retries must remain compatible with PRs 06–08. Source/API findings
+are uncommitted references, not a second plan. The existing ten callable-cutover processor errors and
+PRs 02/03 deferred checks remain until real transitions/consumers are migrated; do not add digest or
+old child-ID adapters to create an intermediate passing build. Only actual validation clears gates.
