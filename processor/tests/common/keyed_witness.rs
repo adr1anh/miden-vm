@@ -21,6 +21,12 @@ pub struct WitnessFixture {
     pub environment: ExecutionEnvironment,
 }
 
+pub struct ExecutionFixture {
+    pub program: Program,
+    pub environment: ExecutionEnvironment,
+    pub host: DefaultHost,
+}
+
 struct EntrySource {
     environment: ExecutionEnvironment,
     node: EnvNode,
@@ -44,7 +50,7 @@ impl EnvironmentWitnessSource for EntrySource {
     }
 }
 
-pub fn execution_witness(operations: Vec<Operation>, stack: StackInputs) -> WitnessFixture {
+pub fn execution_fixture(operations: Vec<Operation>) -> ExecutionFixture {
     let mut forest = MastForest::new();
     let root = BasicBlockNodeBuilder::new(operations).add_to_forest(&mut forest).unwrap();
     forest.make_root(root);
@@ -82,8 +88,13 @@ pub fn execution_witness(operations: Vec<Operation>, stack: StackInputs) -> Witn
             max_prepare_peak_bytes: 131_072,
         },
     );
-    let mut host =
+    let host =
         DefaultHost::default().with_environment_source(Arc::new(EntrySource { environment, node }));
+    ExecutionFixture { program, environment, host }
+}
+
+pub fn execution_witness(operations: Vec<Operation>, stack: StackInputs) -> WitnessFixture {
+    let ExecutionFixture { program, environment, mut host } = execution_fixture(operations);
     let witness = FastProcessor::new(stack)
         .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
         .unwrap()
