@@ -1,8 +1,8 @@
 //! Typed identities for execution in an authenticated code environment.
 //!
-//! These values distinguish callable keys from code commitments and environment metadata. They
-//! serialize as ordinary canonical [`Word`] values. Constructing or decoding a value does not
-//! authenticate a binding, authorize a kernel namespace, or establish that code is available.
+//! The word identities distinguish callable keys from code commitments and environment metadata.
+//! They serialize as ordinary canonical [`Word`] values. Constructing or decoding an identity does
+//! not authenticate a binding, authorize a kernel namespace, or establish that code is available.
 //! Ordering follows [`Word`]; it does not define canonical environment or verifier-configuration
 //! ordering.
 
@@ -15,6 +15,9 @@ use crate::{
 
 mod label;
 pub use label::{CanonicalLabel, LabelError};
+
+mod object;
+pub use object::{EnvNode, EnvNodeError};
 
 macro_rules! word_identity {
     ($(#[$meta:meta])* $name:ident) => {
@@ -73,7 +76,10 @@ word_identity! {
 }
 
 word_identity! {
-    /// A commitment to the immutable environment containing an execution's procedure bindings.
+    /// A commitment to an environment object or subtree, including a complete execution environment.
+    ///
+    /// A wrapped or computed root alone does not establish completeness, executable-path uniqueness,
+    /// or authority over the environment's procedure bindings.
     EnvironmentRoot
 }
 

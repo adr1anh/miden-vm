@@ -16,8 +16,8 @@ pub mod domain;
 
 mod environment;
 pub use environment::{
-    CanonicalLabel, EnvironmentRoot, ExecutionDescriptor, ImplementationRoot, LabelCommitment,
-    LabelError, Namespace, ProcedureKey,
+    CanonicalLabel, EnvNode, EnvNodeError, EnvironmentRoot, ExecutionDescriptor,
+    ImplementationRoot, LabelCommitment, LabelError, Namespace, ProcedureKey,
 };
 
 mod request;
