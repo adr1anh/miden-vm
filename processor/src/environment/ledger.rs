@@ -242,6 +242,15 @@ impl OpeningLedger {
         &mut self,
         binding: ResolvedBinding,
     ) -> Result<PreparedOpening<'_>, LedgerError> {
+        self.prepare_with_peak_limit(binding, self.limits.max_peak_bytes)
+    }
+
+    /// Composes a parent's simultaneous-storage budget without changing this ledger's policy.
+    pub(super) fn prepare_with_peak_limit(
+        &mut self,
+        binding: ResolvedBinding,
+        max_peak_bytes: usize,
+    ) -> Result<PreparedOpening<'_>, LedgerError> {
         if binding.environment_root() != self.expected_root {
             return Err(LedgerError::WrongRoot {
                 expected: self.expected_root,
@@ -252,16 +261,35 @@ impl OpeningLedger {
         let path = binding.into_path();
         let prefix = self.shared_prefix(&path)?;
         let plan = self.plan(&path, path.capacity(), &prefix)?;
+        self.check_preparation_storage(
+            &plan,
+            plan.new_occurrences,
+            plan.replacement_capacity,
+            plan.slot_bytes,
+            max_peak_bytes,
+        )?;
 
         // These are independent staging buffers: reserving them never changes the ledger.
         let mut staged = reserve_vec::<OpeningOccurrence>(plan.new_occurrences)?;
-        self.check_storage(&plan, staged.capacity(), plan.replacement_capacity, plan.slot_bytes)?;
+        self.check_preparation_storage(
+            &plan,
+            staged.capacity(),
+            plan.replacement_capacity,
+            plan.slot_bytes,
+            max_peak_bytes,
+        )?;
         let replacement = match plan.replacement_capacity {
             Some(capacity) => Some(reserve_vec::<OpeningOccurrence>(capacity)?),
             None => None,
         };
         let replacement_capacity = replacement.as_ref().map(Vec::capacity);
-        self.check_storage(&plan, staged.capacity(), replacement_capacity, plan.slot_bytes)?;
+        self.check_preparation_storage(
+            &plan,
+            staged.capacity(),
+            replacement_capacity,
+            plan.slot_bytes,
+            max_peak_bytes,
+        )?;
 
         let first_new = self.occurrences.len();
         let mut parent = prefix.parent;
@@ -280,11 +308,12 @@ impl OpeningLedger {
             remaining_slot_bytes = remaining_slot_bytes
                 .checked_sub(requested_slots)
                 .ok_or(LedgerError::LengthOverflow)?;
-            self.check_storage(
+            self.check_preparation_storage(
                 &plan,
                 staged.capacity(),
                 replacement_capacity,
                 checked_add(actual_slot_bytes, remaining_slot_bytes)?,
+                max_peak_bytes,
             )?;
             selected_children.resize(slot_count, None);
 
@@ -319,8 +348,13 @@ impl OpeningLedger {
             }
         }
 
-        let (retained_bytes, requested_peak_bytes) =
-            self.check_storage(&plan, staged.capacity(), replacement_capacity, actual_slot_bytes)?;
+        let (retained_bytes, requested_peak_bytes) = self.check_preparation_storage(
+            &plan,
+            staged.capacity(),
+            replacement_capacity,
+            actual_slot_bytes,
+            max_peak_bytes,
+        )?;
         let mut counters = plan.counters;
         counters.retained_bytes = retained_bytes;
         let opening_id = if staged.is_empty() {
@@ -496,6 +530,24 @@ impl OpeningLedger {
         check_limit(LedgerResource::RetainedBytes, retained_bytes, self.limits.max_retained_bytes)?;
         check_limit(LedgerResource::PeakBytes, peak_bytes, self.limits.max_peak_bytes)?;
         Ok((retained_bytes, peak_bytes))
+    }
+
+    fn check_preparation_storage(
+        &self,
+        plan: &MergePlan,
+        staged_capacity: usize,
+        replacement_capacity: Option<usize>,
+        slot_bytes: usize,
+        max_peak_bytes: usize,
+    ) -> Result<(usize, usize), LedgerError> {
+        let storage =
+            self.check_storage(plan, staged_capacity, replacement_capacity, slot_bytes)?;
+        check_limit(
+            LedgerResource::PeakBytes,
+            storage.1,
+            self.limits.max_peak_bytes.min(max_peak_bytes),
+        )?;
+        Ok(storage)
     }
 }
 
