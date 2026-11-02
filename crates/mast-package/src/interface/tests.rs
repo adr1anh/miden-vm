@@ -6,6 +6,112 @@ fn public_path(source: &str) -> PublicProcedurePath {
     PublicProcedurePath::new(Path::new(source)).expect("valid public source path")
 }
 
+fn semantic_public_path(components: &[&str]) -> Result<PublicProcedurePath, DeclarationError> {
+    PublicProcedurePath::from_semantic_components(
+        components.iter().map(|text| (*text).into()).collect(),
+    )
+}
+
+#[test]
+fn semantic_components_match_source_paths_without_interpreting_text() {
+    for (source, components) in [
+        ("module::run", &["module", "run"][..]),
+        (r#""a::b""#, &["a::b"][..]),
+        (r#""a::b"::"f#tag""#, &["a::b", "f#tag"][..]),
+        (r#""mod\ule"::"f\\tag""#, &[r"mod\ule", r"f\\tag"][..]),
+        (r#""Å"::"Å""#, &["Å", "Å"][..]),
+        (r#"module::"Å""#, &["module", "Å"][..]),
+        (r#"module::"Å""#, &["module", "Å"][..]),
+        (r#""::""#, &["::"][..]),
+    ] {
+        let semantic = semantic_public_path(components).expect("valid semantic components");
+        assert_eq!(semantic, public_path(source), "{source:?}");
+        assert_eq!(semantic.components(), components, "{source:?}");
+    }
+
+    assert_ne!(semantic_public_path(&["Å"]).unwrap(), semantic_public_path(&["Å"]).unwrap());
+    assert_ne!(
+        semantic_public_path(&[r"a\b"]).unwrap(),
+        semantic_public_path(&[r"a\\b"]).unwrap()
+    );
+    assert_ne!(
+        semantic_public_path(&["a::b"]).unwrap(),
+        semantic_public_path(&["a", "b"]).unwrap()
+    );
+}
+
+#[test]
+fn semantic_components_reject_empty_and_invalid_names() {
+    for components in [
+        &[][..],
+        &[""][..],
+        &["", "run"][..],
+        &["module", ""][..],
+        &["bad namespace", "run"][..],
+        &["bad#namespace", "run"][..],
+        &["bad\0namespace", "run"][..],
+        &["module", "bad procedure"][..],
+        &["module", "bad\0procedure"][..],
+        &["module", "bad\nprocedure"][..],
+        &["module", "e\u{301}"][..],
+        &["module", "🙂"][..],
+        &["module", r#""run""#][..],
+        &["module", r#"prefix"run""#][..],
+        &["module", r#"f\"tag"#][..],
+    ] {
+        assert!(semantic_public_path(components).is_err(), "{components:?}");
+    }
+}
+
+#[test]
+fn semantic_components_reject_reserved_roots_and_entrypoint() {
+    for components in [
+        &["$kernel"][..],
+        &["$kernel", "run"][..],
+        &["$exec"][..],
+        &["$exec", "run"][..],
+        &["$main"][..],
+        &["module", "$main"][..],
+    ] {
+        assert!(matches!(
+            semantic_public_path(components),
+            Err(DeclarationError::ReservedPublicPath)
+        ));
+    }
+}
+
+#[test]
+fn semantic_components_enforce_component_and_decoded_path_lengths() {
+    let longest_component = "a".repeat(Path::MAX_COMPONENT_LENGTH);
+    let too_long_component = "a".repeat(Path::MAX_COMPONENT_LENGTH + 1);
+    assert!(semantic_public_path(&[&longest_component]).is_ok());
+    assert!(matches!(
+        semantic_public_path(&[&too_long_component]),
+        Err(DeclarationError::InvalidPath(PathError::InvalidComponent(
+            IdentError::InvalidLength { max: Path::MAX_COMPONENT_LENGTH }
+        )))
+    ));
+
+    let namespace = "a".repeat(32_766);
+    let local = "b".repeat(32_767);
+    assert!(semantic_public_path(&[&namespace, &local]).is_ok());
+    let too_long_local = "b".repeat(32_768);
+    assert!(matches!(
+        semantic_public_path(&[&namespace, &too_long_local]),
+        Err(DeclarationError::InvalidPath(PathError::TooLong { max }))
+            if max == u16::MAX as usize
+    ));
+
+    // The total bound counts UTF-8 bytes even when the component character limit is satisfied.
+    let wide_local = "Å".repeat(21_845);
+    assert!(semantic_public_path(&[&wide_local]).is_ok());
+    let too_wide_local = "Å".repeat(21_846);
+    assert!(matches!(
+        semantic_public_path(&[&too_wide_local]),
+        Err(DeclarationError::InvalidPath(PathError::TooLong { .. }))
+    ));
+}
+
 #[test]
 fn quoted_separator_remains_one_public_component() {
     let quoted = public_path(r#""a::b""#);

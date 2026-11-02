@@ -8,7 +8,7 @@ use alloc::{collections::BTreeMap, string::String, vec::Vec};
 
 use miden_assembly_syntax::{
     Path, PathComponent, PathError,
-    ast::{Ident, ProcedureName, types::FunctionType},
+    ast::{Ident, IdentError, ProcedureName, types::FunctionType},
 };
 
 /// A nonempty public procedure path relative to an explicitly supplied namespace home.
@@ -40,29 +40,61 @@ impl PublicProcedurePath {
             parsed.push(component);
         }
 
-        let (local, namespaces) = parsed.split_last().ok_or(PathError::Empty)?;
-        for component in namespaces {
-            // The Path iterator validates bare identifiers, but quoted components also need
-            // semantic identifier validation after their quotes have been removed.
-            Ident::validate(component.as_str()).map_err(PathError::InvalidComponent)?;
-        }
+        let local = parsed.last().ok_or(PathError::Empty)?;
         // Validate the same forward component whose text will be retained below. A reverse path
         // scan can interpret embedded quotes differently and validate only a suffix of that text.
         let PathComponent::Normal(local_spelling) = local else {
             return Err(DeclarationError::AbsolutePublicPath);
         };
-        let procedure = ProcedureName::new(local_spelling).map_err(PathError::InvalidComponent)?;
-        let first = parsed[0].as_str();
-        if matches!(first, Path::KERNEL_PATH | Path::EXEC_PATH) || procedure.is_main() {
+        ProcedureName::new(local_spelling).map_err(PathError::InvalidComponent)?;
+
+        Self::from_semantic_components(
+            parsed.into_iter().map(|component| component.as_str().into()).collect(),
+        )
+    }
+
+    /// Validates decoded component text without rendering, escaping, or parsing source spelling.
+    ///
+    /// Components are nonempty and retain their exact UTF-8 bytes. Namespace components obey
+    /// [`Ident::validate`], and the local name obeys [`ProcedureName::validate_semantic`]. A `::`
+    /// inside a component is literal text, never an absolute root or a separator. Reserved module
+    /// roots and the entrypoint name are rejected as in [`Self::new`].
+    ///
+    /// The existing component character limit applies. The path byte limit applies to decoded
+    /// component bytes plus separators; source quoting does not contribute to this semantic length.
+    pub fn from_semantic_components(components: Vec<String>) -> Result<Self, DeclarationError> {
+        let (local, namespaces) = components.split_last().ok_or(PathError::Empty)?;
+        let mut decoded_len = 0usize;
+        for (index, component) in components.iter().enumerate() {
+            if component.is_empty() {
+                return Err(PathError::EmptyComponent.into());
+            }
+            if component.chars().count() > Path::MAX_COMPONENT_LENGTH {
+                return Err(PathError::InvalidComponent(IdentError::InvalidLength {
+                    max: Path::MAX_COMPONENT_LENGTH,
+                })
+                .into());
+            }
+            decoded_len = decoded_len
+                .checked_add(if index == 0 { 0 } else { 2 })
+                .and_then(|len| len.checked_add(component.len()))
+                .filter(|len| *len <= u16::MAX as usize)
+                .ok_or(PathError::TooLong { max: u16::MAX as usize })?;
+        }
+        for namespace in namespaces {
+            Ident::validate(namespace).map_err(PathError::InvalidComponent)?;
+        }
+        ProcedureName::validate_semantic(local).map_err(PathError::InvalidComponent)?;
+        if matches!(components[0].as_str(), Path::KERNEL_PATH | Path::EXEC_PATH)
+            || local == ProcedureName::MAIN_PROC_NAME
+        {
             return Err(DeclarationError::ReservedPublicPath);
         }
 
-        Ok(Self {
-            components: parsed.into_iter().map(|component| component.as_str().into()).collect(),
-        })
+        Ok(Self { components })
     }
 
-    /// Returns the nonempty sequence of exact source component values, ending in the local name.
+    /// Returns the nonempty sequence of exact semantic component values, ending in the local name.
     pub fn components(&self) -> &[String] {
         &self.components
     }
