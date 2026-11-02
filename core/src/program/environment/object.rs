@@ -116,57 +116,34 @@ fn checked_list_element_len(child_count: usize) -> Result<usize, EnvNodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::program::test_vectors::vector;
 
     #[test]
     fn fixed_object_commitments_match_frozen_vectors() {
-        // Frozen with an independent portable seven-round BLAKE3/Eidos reference. The words
-        // below are synthetic role fixtures, independent of canonical-label encoding.
+        // Synthetic role inputs keep object vectors independent of canonical-label encoding.
         let label = LabelCommitment::new(word([1, 2, 3, 4]));
         let child = root([5, 6, 7, 8]);
-        assert_commitment(
-            EnvNode::Env { label, child },
-            [
-                9143599571533059343,
-                8908360227589699819,
-                6883950889849834679,
-                1197985989650993006,
-            ],
-        );
+        assert_commitment(EnvNode::Env { label, child }, "object_env");
         assert_commitment(
             EnvNode::Mast {
                 label,
                 implementation: ImplementationRoot::new(word([9, 10, 11, 12])),
             },
-            [
-                2776383580688061123,
-                7263775316574204518,
-                8700035568220465339,
-                4412892605332930771,
-            ],
+            "object_mast",
         );
         assert_commitment(
             EnvNode::Mast {
                 label,
                 implementation: ImplementationRoot::new(child.into_word()),
             },
-            [
-                8548425680082088572,
-                6019885797277038687,
-                8974549159554566326,
-                8823654274802312787,
-            ],
+            "object_mast_same_payload_as_env",
         );
         assert_commitment(
             EnvNode::Merkle {
                 left: child,
                 right: root([17, 18, 19, 20]),
             },
-            [
-                2080466080082027977,
-                5952908188570496172,
-                6668409885858446511,
-                7224297485516850461,
-            ],
+            "object_merkle",
         );
     }
 
@@ -174,24 +151,8 @@ mod tests {
     fn data_commitments_match_frozen_zero_and_maximum_kind_vectors() {
         let label = LabelCommitment::new(word([1, 2, 3, 4]));
         let value = word([13, 14, 15, 16]);
-        assert_commitment(
-            EnvNode::Data { kind: 0, label, value },
-            [
-                7154870909558716857,
-                5511750556388875546,
-                5142768471032681035,
-                8924267478376316025,
-            ],
-        );
-        assert_commitment(
-            EnvNode::Data { kind: u32::MAX, label, value },
-            [
-                7662390847174596604,
-                7339432335683110381,
-                6483152732149557066,
-                7917459172525715927,
-            ],
-        );
+        assert_commitment(EnvNode::Data { kind: 0, label, value }, "object_data_zero");
+        assert_commitment(EnvNode::Data { kind: u32::MAX, label, value }, "object_data_max");
     }
 
     #[test]
@@ -202,41 +163,17 @@ mod tests {
             root([21, 22, 23, 24]),
             root([25, 26, 27, 28]),
         ];
-        let expected = [
-            [
-                3627761970644528567,
-                802923872635074999,
-                6752068228248324534,
-                8798542386309968540,
-            ],
-            [
-                1200924166248258404,
-                8840788365739416842,
-                7103997094053499770,
-                8801368233190197783,
-            ],
-            [
-                3356985696966558860,
-                6610946235139075915,
-                6497657311716874795,
-                1902198784303031168,
-            ],
-            [
-                2806876085859106474,
-                457250438764273753,
-                7927902219872406714,
-                6638813290763165061,
-            ],
-            [
-                8748265396250179275,
-                374008720200454079,
-                8077035264800382332,
-                5961619193547121306,
-            ],
-        ];
-
-        for (len, expected) in expected.into_iter().enumerate() {
-            assert_commitment(EnvNode::List(children[..len].to_vec()), expected);
+        for (len, id) in [
+            "object_list_0",
+            "object_list_1",
+            "object_list_2",
+            "object_list_3",
+            "object_list_4",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_commitment(EnvNode::List(children[..len].to_vec()), id);
         }
     }
 
@@ -321,7 +258,7 @@ mod tests {
         EnvironmentRoot::new(word(values))
     }
 
-    fn assert_commitment(object: EnvNode, expected: [u64; 4]) {
-        assert_eq!(object.commitment().unwrap().into_word(), word(expected));
+    fn assert_commitment(object: EnvNode, id: &str) {
+        assert_eq!(object.commitment().unwrap().into_word(), word(vector(id).digest));
     }
 }

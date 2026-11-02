@@ -179,14 +179,19 @@ fn list_length_error() -> DeserializationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Felt, utils::ToHex};
+    use crate::{
+        Felt,
+        program::test_vectors::{Vector, vector},
+    };
 
     #[test]
     fn node_bytes_match_frozen_vectors_and_roundtrips_preserve_commitments() {
         for (node, expected) in fixtures() {
-            assert_eq!(node.encoded_len().unwrap(), expected.len() / 2);
+            let expected_bytes = expected.bytes.unwrap();
+            assert_eq!(node.encoded_len().unwrap(), expected_bytes.len());
             let bytes = node.to_bytes().unwrap();
-            assert_eq!(bytes.to_hex(), expected);
+            assert_eq!(bytes, expected_bytes);
+            assert_eq!(node.commitment().unwrap().into_word(), word(expected.digest));
             let decoded = EnvNode::from_bytes(&bytes, bytes.len()).unwrap();
             assert_eq!(decoded, node);
             assert_eq!(decoded.commitment().unwrap(), node.commitment().unwrap());
@@ -304,31 +309,27 @@ mod tests {
         EnvironmentRoot::new(word(values))
     }
 
-    fn fixtures() -> Vec<(EnvNode, &'static str)> {
-        // Literal bytes frozen by an independent D1 reference, alongside the hash fixtures
-        // in object-vectors.json. No production encoder generates these expected records.
+    fn fixtures() -> Vec<(EnvNode, Vector)> {
+        // The same tracked rows supply exact D1 bytes, Felt preimages, and commitments.
         let label = LabelCommitment::new(word([1, 2, 3, 4]));
         let child = root([5, 6, 7, 8]);
         let children =
             [child, root([17, 18, 19, 20]), root([21, 22, 23, 24]), root([25, 26, 27, 28])];
         vec![
-            (
-                EnvNode::Env { label, child },
-                "010001000000000000000200000000000000030000000000000004000000000000000500000000000000060000000000000007000000000000000800000000000000",
-            ),
+            (EnvNode::Env { label, child }, vector("object_env")),
             (
                 EnvNode::Mast {
                     label,
                     implementation: ImplementationRoot::new(word([9, 10, 11, 12])),
                 },
-                "0101010000000000000002000000000000000300000000000000040000000000000009000000000000000a000000000000000b000000000000000c00000000000000",
+                vector("object_mast"),
             ),
             (
                 EnvNode::Mast {
                     label,
                     implementation: ImplementationRoot::new(child.into_word()),
                 },
-                "010101000000000000000200000000000000030000000000000004000000000000000500000000000000060000000000000007000000000000000800000000000000",
+                vector("object_mast_same_payload_as_env"),
             ),
             (
                 EnvNode::Data {
@@ -336,7 +337,7 @@ mod tests {
                     label,
                     value: word([13, 14, 15, 16]),
                 },
-                "01020000000001000000000000000200000000000000030000000000000004000000000000000d000000000000000e000000000000000f000000000000001000000000000000",
+                vector("object_data_zero"),
             ),
             (
                 EnvNode::Data {
@@ -344,29 +345,14 @@ mod tests {
                     label,
                     value: word([13, 14, 15, 16]),
                 },
-                "0102ffffffff01000000000000000200000000000000030000000000000004000000000000000d000000000000000e000000000000000f000000000000001000000000000000",
+                vector("object_data_max"),
             ),
-            (
-                EnvNode::Merkle { left: child, right: children[1] },
-                "010305000000000000000600000000000000070000000000000008000000000000001100000000000000120000000000000013000000000000001400000000000000",
-            ),
-            (EnvNode::List(vec![]), "010400000000"),
-            (
-                EnvNode::List(children[..1].to_vec()),
-                "0104010000000500000000000000060000000000000007000000000000000800000000000000",
-            ),
-            (
-                EnvNode::List(children[..2].to_vec()),
-                "01040200000005000000000000000600000000000000070000000000000008000000000000001100000000000000120000000000000013000000000000001400000000000000",
-            ),
-            (
-                EnvNode::List(children[..3].to_vec()),
-                "010403000000050000000000000006000000000000000700000000000000080000000000000011000000000000001200000000000000130000000000000014000000000000001500000000000000160000000000000017000000000000001800000000000000",
-            ),
-            (
-                EnvNode::List(children.to_vec()),
-                "01040400000005000000000000000600000000000000070000000000000008000000000000001100000000000000120000000000000013000000000000001400000000000000150000000000000016000000000000001700000000000000180000000000000019000000000000001a000000000000001b000000000000001c00000000000000",
-            ),
+            (EnvNode::Merkle { left: child, right: children[1] }, vector("object_merkle")),
+            (EnvNode::List(vec![]), vector("object_list_0")),
+            (EnvNode::List(children[..1].to_vec()), vector("object_list_1")),
+            (EnvNode::List(children[..2].to_vec()), vector("object_list_2")),
+            (EnvNode::List(children[..3].to_vec()), vector("object_list_3")),
+            (EnvNode::List(children.to_vec()), vector("object_list_4")),
         ]
     }
 }

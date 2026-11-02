@@ -14,6 +14,9 @@ pub use claim::{CLAIM_DOMAIN_TAG, ExecutionClaim, NUM_CLAIM_ELEMENTS, claim_comm
 
 pub mod domain;
 
+#[cfg(test)]
+mod test_vectors;
+
 mod environment;
 pub use environment::{
     CanonicalLabel, EnvNode, EnvNodeError, EnvironmentBinding, EnvironmentBuildError,

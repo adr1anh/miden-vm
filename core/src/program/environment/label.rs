@@ -220,11 +220,14 @@ mod tests {
     use core::cell::Cell;
 
     use super::*;
+    use crate::program::test_vectors::vector;
 
     // A synthetic fixture codec, unrelated to the Protocol's AccountId codec (type 1).
     const SYNTHETIC_TYPE_ID: u32 = 0x0403_0201;
     const SYNTHETIC_ID: &[u8] = &[0xa5, 0, 0xff, 0x7e, 0x81];
-    const SYNTHETIC_ENVELOPE: &[u8] = &[1, 3, 9, 0, 0, 0, 1, 2, 3, 4, 0xa5, 0, 0xff, 0x7e, 0x81];
+    fn synthetic_envelope() -> Vec<u8> {
+        vector("label_synthetic_typed_id").bytes.unwrap()
+    }
 
     #[test]
     fn exact_decoding_preserves_builtin_bytes() {
@@ -260,7 +263,7 @@ mod tests {
             CanonicalLabel::text("a::β\n").unwrap().as_bytes().to_vec(),
             CanonicalLabel::library_id(Word::default()).as_bytes().to_vec(),
             CanonicalLabel::revision(NonZeroU32::MIN).as_bytes().to_vec(),
-            SYNTHETIC_ENVELOPE.to_vec(),
+            synthetic_envelope(),
         ];
         for envelope in envelopes {
             for end in 0..envelope.len() {
@@ -319,8 +322,8 @@ mod tests {
         })
         .unwrap();
         assert_eq!(calls.get(), 1);
-        assert_eq!(label.as_bytes(), SYNTHETIC_ENVELOPE);
-        let envelope_bytes = SYNTHETIC_ENVELOPE.to_vec();
+        assert_eq!(label.as_bytes(), synthetic_envelope().as_slice());
+        let envelope_bytes = synthetic_envelope();
         let decoded = CanonicalLabel::from_bytes_with_typed_id_validator(
             &envelope_bytes,
             |type_id, bytes| {
@@ -332,8 +335,8 @@ mod tests {
         .unwrap();
         assert_eq!(calls.get(), 2);
         assert_eq!(decoded, label);
-        assert_eq!(decoded.as_bytes(), SYNTHETIC_ENVELOPE);
-        assert!(CanonicalLabel::from_bytes(SYNTHETIC_ENVELOPE).is_err());
+        assert_eq!(decoded.as_bytes(), synthetic_envelope().as_slice());
+        assert!(CanonicalLabel::from_bytes(&synthetic_envelope()).is_err());
     }
 
     #[test]
@@ -344,7 +347,7 @@ mod tests {
                 CanonicalLabel::typed_id(type_id, SYNTHETIC_ID, validate_synthetic_id),
                 Err(error.clone()),
             );
-            let mut bad = SYNTHETIC_ENVELOPE.to_vec();
+            let mut bad = synthetic_envelope();
             bad[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&type_id.to_le_bytes());
             assert_eq!(
                 CanonicalLabel::from_bytes_with_typed_id_validator(&bad, validate_synthetic_id),
@@ -393,12 +396,8 @@ mod tests {
         let label =
             CanonicalLabel::typed_id(SYNTHETIC_TYPE_ID, SYNTHETIC_ID, validate_synthetic_id)
                 .unwrap();
-        assert_eq!(label.as_bytes(), SYNTHETIC_ENVELOPE);
-        assert_vector(
-            label,
-            &[15, 0x0009_0301, 0x0201_0000, 0x00a5_0403, 0x0081_7eff],
-            [0x7f354f46e72aa2a5, 0x22a290946ae2f150, 0x0d3639ea44c9f2d1, 0x26797fe9a8eaf2be],
-        );
+        assert_eq!(label.as_bytes(), synthetic_envelope().as_slice());
+        assert_vector(label, "label_synthetic_typed_id");
         let typed_text = CanonicalLabel::typed_id(SYNTHETIC_TYPE_ID, b"alice", |_, bytes| {
             assert_eq!(bytes, b"alice");
             Ok(())
@@ -436,7 +435,10 @@ mod tests {
 
     #[test]
     fn built_in_labels_retain_exact_canonical_envelopes() {
-        assert_eq!(CanonicalLabel::text("").unwrap().as_bytes(), [1, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            CanonicalLabel::text("").unwrap().as_bytes(),
+            vector("label_text_empty").bytes.unwrap(),
+        );
         assert_eq!(
             CanonicalLabel::text("a::β\n").unwrap().as_bytes(),
             [1, 0, 6, 0, 0, 0, b'a', b':', b':', 0xce, 0xb2, b'\n'],
@@ -454,10 +456,9 @@ mod tests {
                 6, 7, 8, 0, 0, 0, 0, 255, 255, 255, 255,
             ],
         );
-        for (revision, payload) in [(1, [1, 0, 0, 0]), (u32::MAX, [255; 4])] {
+        for (revision, id) in [(1, "label_revision_1"), (u32::MAX, "label_revision_max")] {
             let label = CanonicalLabel::revision(NonZeroU32::new(revision).unwrap());
-            assert_eq!(&label.as_bytes()[..HEADER_LEN], &[1, 2, 4, 0, 0, 0]);
-            assert_eq!(&label.as_bytes()[HEADER_LEN..], &payload);
+            assert_eq!(label.as_bytes(), vector(id).bytes.unwrap());
         }
         assert!(NonZeroU32::new(0).is_none());
     }
@@ -513,71 +514,41 @@ mod tests {
 
     #[test]
     fn frozen_builtin_label_vectors() {
-        // Frozen from the independent portable Eidos reference calibrated against the existing
-        // generic empty/three/nine-Felt vectors. Literal Felt preimages can also be used by MASM.
-        assert_vector(
-            CanonicalLabel::text("").unwrap(),
-            &[6, 1, 0],
-            [0x528bd307c5940f1a, 0x40ab78c8d3413fce, 0x786f4695ab72fd74, 0x4145380cf8c98bfc],
-        );
-        assert_vector(
-            CanonicalLabel::text("a::b").unwrap(),
-            &[10, 262145, 979435520, 25146],
-            [0x5bf3b80228ab38de, 0x287aad7cb8069073, 0x531e815abb592e63, 0x510d0ed33d8a0c96],
-        );
-        assert_vector(
-            CanonicalLabel::text("é").unwrap(),
-            &[8, 131073, 2848129024],
-            [0x2108c70c2283b5f0, 0x44145cec36e8b778, 0x171dc1d567c34aa7, 0x51d4e4fc382bc069],
-        );
-        assert_vector(
-            CanonicalLabel::text("e\u{301}").unwrap(),
-            &[9, 196609, 3429171200, 129],
-            [0x111fac8a69e982f1, 0x154e91a036117a9d, 0x0ee07620b63a9370, 0x69c0301702ce100d],
-        );
-        assert_vector(
-            CanonicalLabel::library_id(Word::new([1, 2, 3, 4].map(Felt::from_u32))),
-            &[38, 2097409, 65536, 0, 131072, 0, 196608, 0, 262144, 0, 0],
-            [0x4b55d12bdf2165ea, 0x316d86db813259e0, 0x4ea45ff06fcd68c5, 0x72ff8d97db29d730],
-        );
-        assert_vector(
-            CanonicalLabel::revision(NonZeroU32::MIN),
-            &[10, 262657, 65536, 0],
-            [0x60e8408255f38871, 0x51b340bd48ea58ee, 0x02eb98142c198577, 0x2eeefd3c97619b5d],
-        );
-        assert_vector(
-            CanonicalLabel::revision(NonZeroU32::MAX),
-            &[10, 262657, 4294901760, 65535],
-            [0x1f991e0fe2e19968, 0x0241e73c0038e125, 0x7cf1505f52cfa037, 0x76bb1d381404b2c3],
-        );
-        // Eight payload Felts require exactly one compression; nine require a partial second.
-        assert_vector(
-            CanonicalLabel::text("aaaaaaaaaaaaaaaaaaaaaa").unwrap(),
-            &[
-                28, 1441793, 1633746944, 1633771873, 1633771873, 1633771873, 1633771873, 1633771873,
-            ],
-            [0x62f83e7828db2365, 0x608f94735a4e7b0a, 0x6752b84c2438d755, 0x3074332575b88406],
-        );
-        assert_vector(
-            CanonicalLabel::text("aaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
-            &[
-                29, 1507329, 1633746944, 1633771873, 1633771873, 1633771873, 1633771873,
-                1633771873, 97,
-            ],
-            [0x61c39a4e23988124, 0x69bf3302e482c78d, 0x12e2c2109a66ec8b, 0x5dcf962871fae51f],
-        );
+        for (label, id) in [
+            (CanonicalLabel::text("").unwrap(), "label_text_empty"),
+            (CanonicalLabel::text("a::b").unwrap(), "label_text_component"),
+            (CanonicalLabel::text("é").unwrap(), "label_text_composed"),
+            (CanonicalLabel::text("e\u{301}").unwrap(), "label_text_decomposed"),
+            (
+                CanonicalLabel::library_id(Word::new([1, 2, 3, 4].map(Felt::from_u32))),
+                "label_library_id_1_2_3_4",
+            ),
+            (CanonicalLabel::revision(NonZeroU32::MIN), "label_revision_1"),
+            (CanonicalLabel::revision(NonZeroU32::MAX), "label_revision_max"),
+            // Eight payload Felts require exactly one compression; nine require a partial second.
+            (CanonicalLabel::text("aaaaaaaaaaaaaaaaaaaaaa").unwrap(), "label_text_22"),
+            (CanonicalLabel::text("aaaaaaaaaaaaaaaaaaaaaaa").unwrap(), "label_text_23"),
+        ] {
+            assert_vector(label, id);
+        }
     }
 
-    fn assert_vector(label: CanonicalLabel, expected_payload: &[u32], expected_digest: [u64; 4]) {
+    fn assert_vector(label: CanonicalLabel, id: &str) {
+        let expected = vector(id);
+        assert_eq!(label.as_bytes(), expected.bytes.unwrap());
+        assert_eq!(
+            domain::domain_tag(domain::ENV_LABEL).as_canonical_u64(),
+            u64::from(expected.domain_tag),
+        );
         let mut payload = vec![Felt::from_u32(label.as_bytes().len() as u32)];
         payload.extend(bytes_to_packed_u32_elements(label.as_bytes()));
         assert_eq!(
             payload,
-            expected_payload.iter().copied().map(Felt::from_u32).collect::<Vec<_>>()
+            expected.payload.into_iter().map(Felt::new_unchecked).collect::<Vec<_>>()
         );
         assert_eq!(
             label.commitment().into_word(),
-            Word::new(expected_digest.map(Felt::new_unchecked)),
+            Word::new(expected.digest.map(Felt::new_unchecked)),
         );
     }
 
