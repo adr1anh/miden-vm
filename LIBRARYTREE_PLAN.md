@@ -333,7 +333,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Fresh normal private attempt stops at exactly3 assembly migration errors; relocation/sidecar unit tests unrun, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Callable paths `b3440301e`; base `82935d673` | Independent path/builder/sema reviews; package215/one manual seed ignored, strict package Clippy/no_std; syntax317 pass | Builder/frontend integration and lint pending; runtime graph, explicit-inline decision, package9/admission and all external/inherited gates remain |
+| 09 Assembly/packages | in-progress | Callable paths `b3440301e`; sema `450ff638f`; base `82935d673` | Independent path/builder/sema reviews; package215/one manual seed ignored, strict package Clippy/no_std; syntax317/strict Clippy, first assembly lib check pass | Builder/frontend tests and legacy inline cleanup pending; runtime graph, explicit-inline decision, package9/admission and all external/inherited gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; release identity codec |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -1629,3 +1629,16 @@ reachability must replace the old invocation DAG separately from real source-ali
 The user has been asked to select explicit-inline source syntax versus API-only opt-in; dependent
 expansion remains unimplemented while independent work continues. No final package9/profile or
 proof acceptance is claimed.
+
+
+### PR 09 Frontend library and retention review checkpoint
+
+`450ff638f` separately commits the reviewed semantic cleanup after317 syntax tests and strict
+library/test Clippy pass. The actual assembly library now compiles: old child-ID/Exec errors are
+resolved, with unused former implicit-inline machinery still warning while explicit-inline choice
+is pending. Frontend binding/resolver reviews find no identity fallback but identify a concrete P1:
+static subtree import loses independent helper/callback bodies after keyed nodes have zero children.
+Builder ownership now fixes selected static callable-inventory retention with regressions. Runtime
+scheduling and actual closed source-alias cycle checks proceed under separate graph ownership.
+Frontend tests moved to a child module; review corrected an iterator-method error and strengthened
+CALL/SYS source-operation pairing. Integration checks wait for coherent owner checkpoints.
