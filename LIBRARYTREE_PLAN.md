@@ -1601,3 +1601,14 @@ Private/entry callable representation is distinct from the public-interface path
 Package9 requires coordinated required metadata and explicit profile-aware admission; no version-only
 bump, default home/profile, digest key, arbitrary I or old-format reinterpretation is selected.
 PR08 and all inherited/external acceptance gates remain. No PR09 code/check pass is claimed.
+
+
+### PR 09 First coordinated builder/path ownership
+
+Proceed with zero-child typed-key pending Exec/Call/SYS records and canonical core builders in
+MAST builder/finalizer/import code. In parallel, general semantic callable paths support entry and
+helpers under explicit NamespacePlan; PublicProcedurePath restrictions and all existing codecs
+remain unchanged. Frontend declaration prebinding must supply actual K independently of body
+availability before these pieces are validated together. No dummy keys, default home/profile,
+source-alias identity or kernel-string authorization is introduced. Source ownership is exclusive;
+no PR09 test/build result is claimed yet.
