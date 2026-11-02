@@ -11,6 +11,9 @@ use crate::{
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
 };
 
+mod label;
+pub use label::{CanonicalLabel, LabelError};
+
 macro_rules! word_identity {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
