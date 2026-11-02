@@ -8,10 +8,11 @@ use crate::{
     Word,
     advice::AdviceMap,
     mast::{
-        BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder, ExternalNodeBuilder,
-        JoinNodeBuilder, LoopNodeBuilder, MastForest, MastForestContributor, MastNode, MastNodeExt,
-        MastNodeId, SparseMastForest, SplitNodeBuilder,
+        BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder, ExecNodeBuilder,
+        ExternalNodeBuilder, JoinNodeBuilder, LoopNodeBuilder, MastForest, MastForestContributor,
+        MastNode, MastNodeExt, MastNodeId, SparseMastForest, SplitNodeBuilder,
     },
+    program::ProcedureKey,
     serde::{
         BudgetedReader, ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable,
         SliceReader, read_bounded_len,
@@ -27,6 +28,10 @@ const SPARSE_SYSCALL: u8 = 5;
 const SPARSE_DYN: u8 = 6;
 const SPARSE_DYNCALL: u8 = 7;
 const SPARSE_EXTERNAL: u8 = 8;
+const SPARSE_EXEC: u8 = 9;
+
+#[cfg(test)]
+mod tests;
 
 // WRITER
 // ================================================================================================
@@ -101,7 +106,12 @@ fn write_sparse_node<W: ByteWriter>(node: &MastNode, target: &mut W) {
         MastNode::Call(call) => {
             target.write_u8(if call.is_syscall() { SPARSE_SYSCALL } else { SPARSE_CALL });
             node.digest().write_into(target);
-            call.callee().write_into(target);
+            call.target().write_into(target);
+        },
+        MastNode::Exec(exec) => {
+            target.write_u8(SPARSE_EXEC);
+            node.digest().write_into(target);
+            exec.target().write_into(target);
         },
         MastNode::Dyn(dyn_node) => {
             target.write_u8(if dyn_node.is_dyncall() {
@@ -267,14 +277,18 @@ fn read_sparse_node<R: ByteReader>(
             LoopNodeBuilder::new(body).with_digest(digest).build_linked().map(Into::into)
         },
         SPARSE_CALL | SPARSE_SYSCALL => {
-            let callee = read_node_id(source, "call callee")?;
+            let target = ProcedureKey::read_from(source)?;
             let builder = if tag == SPARSE_SYSCALL {
-                CallNodeBuilder::new_syscall(callee)
+                CallNodeBuilder::new_syscall(target)
             } else {
-                CallNodeBuilder::new(callee)
+                CallNodeBuilder::new(target)
             };
-            builder.with_digest(digest).build_linked().map(Into::into)
+            Ok(builder.with_digest(digest).build().into())
         },
+        SPARSE_EXEC => Ok(ExecNodeBuilder::new(ProcedureKey::read_from(source)?)
+            .with_digest(digest)
+            .build()
+            .into()),
         SPARSE_DYN | SPARSE_DYNCALL => {
             let builder = if tag == SPARSE_DYNCALL {
                 DynNodeBuilder::new_dyncall()
