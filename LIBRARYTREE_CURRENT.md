@@ -2,9 +2,9 @@
 
 This is the short handoff for the current slice. [LIBRARYTREE_PLAN.md](LIBRARYTREE_PLAN.md) remains the sole backlog, scope, dependency and acceptance authority; its status ledger and implementation evidence own durable completion. `PR_DESCRIPTION.md` describes final branch review scope and is not a discovery source.
 
-Verified implementation checkpoint on 2 November 2026: branch `adr1anh/librarytree-01-identities`, code/test SHA `8152f9a34643727616c82f1bf16510ecdd644524`. The working tree contains only uncommitted local reference scratch. Documentation commits follow this checkpoint. Recheck `git rev-parse HEAD` and `git status --short` before assigning edits.
+Verified implementation checkpoint on 2 November 2026: branch `adr1anh/librarytree-02-keyed-mast`, code/test SHA `8152f9a34643727616c82f1bf16510ecdd644524`. PR 02 starts from PR 01 tip `4f6cda59906ffbbbbe3c794232bb5395be0cf344`. The working tree contains only uncommitted local reference scratch. Documentation commits follow this checkpoint. Recheck `git rev-parse HEAD` and `git status --short` before assigning edits.
 
-PR 01 is complete. The current small slice is its branch closure: record reviewed acceptance evidence, finalize the branch review description separately, then create the stacked PR 02 branch. No implementation agent owns files during this transition. The next bounded change reserves EXEC opcode 0x5f and keeps it excluded from basic-block decoding; it does not activate runtime execution or AIR semantics.
+PR 01 is complete; PR 02 is in progress. The current small slice reserves EXEC opcode 0x5f and keeps it excluded from basic-block Operation decoding; it does not activate runtime execution or AIR semantics. The fresh `opcode_reservation` agent owns only core/src/operations/mod.rs and operations/tests.rs. No MAST nodes, codecs, assembly or AIR files are owned by this slice.
 
 Start with this brief and the plan's **PR 02**, **invariants 2 and 6**, **D2**, and **Workflow and completion rules**. Read `.scratch/librarytree/findings-keyed-mast.md` and `.scratch/librarytree/findings-mast-compatibility.md` for exact current-source locations. Consult cached execution.md **lines 151–219 and 508–554** only when required. Source identity is in `.scratch/librarytree/reference-cache/provenance.json`; archives and old handoffs are not routine input.
 
