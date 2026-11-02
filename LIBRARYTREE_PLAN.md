@@ -332,7 +332,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
-| 08 Replay/debug | in-progress | Relocation fixture `11465c4f2`; opening base `12e78f953` | Independent relocation/runtime-source/public-test reviews; first public run18 pass/one DYN fragment1 failure, new mixed-tag/ID cases pass; diagnostic API compiles | Replay regression under diagnosis; runtime diagnostics/tests uncommitted, private relocation unrun behind assembly migration; remaining PR08 and inherited gates unchanged |
+| 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Fresh normal private attempt stops at exactly3 assembly migration errors; relocation/sidecar unit tests unrun, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; release identity codec |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
@@ -1559,3 +1559,32 @@ and nine precise malformed-ID cases pass. Fragment1 exposes DYN native build fai
 assertion and diagnose capture/replay. The separate source-independent runtime-frame API compiles
 and has clean source/lifetime review, with public behavior checks pending. Temporary logging is
 local diagnosis only and must be removed before implementation commits. Logs `pr08-*`.
+
+
+### PR 08 Reviewed replay and runtime-debug checkpoint
+
+`96adee6a6` fixes ordinary block snapshots at fragment boundaries: only an actual prepared keyed
+transition retains its executing continuation. One-row DYN cleanup-SPAN replay exposed the old
+outer-root shortcut; diagnostic evidence confirmed the wrong FinishJoin snapshot. Temporary
+logging was removed. `63dde7907` tests all invocation/return cuts, source matrices at sizes1/3,
+mixed normal/SYS cache frequencies and nine exact malformed opening/forest/root ID rejections.
+
+`7afd90af7` exposes source-independent runtime Entry/Invoke frames with distinct K/D/opening/use
+observations. Bounded transient markers reserve before publication and reference existing native
+uses; no parallel authority ledger or wire change. Clone retains diagnostics, while trace projection
+and serde omit them; ordinary capture avoids cloning discarded sidecars. `fbac6f48b` checks all
+five modes/source/sync/async cuts, inline exclusion, pending/cancel publication, recursion/cache-hit
+identity, cross-execution inequality and actual root-END entry retention/removal. Reviews are clean.
+
+After AC/heavy guards execution22/witness9 pass in default, testing and testing+concurrent
+configurations. Strict processor library and exact-source/public-test Clippy (default and combined
+features), no-default-features processor and formatting/whitespace checks pass. The isolated
+harness lock was refreshed offline for its real concurrent feature; repository dependencies/lock
+were unchanged. Fresh normal `--lib trace::trace_state` stops at exactly three assembly errors:
+finalizer.rs464/466 still pass child IDs, pending_record.rs77 lacks Exec. Private relocation and
+sidecar unit tests remain unrun. Logs `pr08-*`; prior failed diagnostic/lint runs remain separate.
+
+PR08 is implemented-awaiting-validation. Full relation rejection for omitted/doubled relocation,
+normal private/parallel/lookup fixtures, production forged matrices, generated/MASM/recursive/security
+and inherited gates remain. No proof acceptance or measured diagnostic-overhead claim. Proceed to
+PR09 keyed assembly/package cutover, preserving D2/D3, required external production inputs and all gates.
