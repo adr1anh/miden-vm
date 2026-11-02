@@ -127,10 +127,6 @@ impl ReplayReadBudget {
         self.events = requested;
         Ok(())
     }
-
-    pub(crate) const fn retained_bytes(&self) -> usize {
-        self.retained_bytes
-    }
 }
 
 /// Primitive entry metadata. The entry itself consumes no execution row.
@@ -150,16 +146,8 @@ impl ReplayEntry {
         }
     }
 
-    pub(crate) const fn namespace(self) -> Namespace {
-        self.namespace
-    }
-
     pub(crate) const fn implementation_root(self) -> ImplementationRoot {
         self.implementation
-    }
-
-    pub(crate) const fn opening_index(self) -> usize {
-        self.opening
     }
 }
 
@@ -896,7 +884,6 @@ pub(crate) struct PreparedKeyedRecord {
     replacement: Option<VecDeque<KeyedReplayRecord>>,
     retained_bytes_delta: usize,
     event_count: usize,
-    staged_bytes: usize,
     source: QueueStamp,
     next_generation: usize,
 }
@@ -908,11 +895,6 @@ impl PreparedKeyedRecord {
 
     pub(crate) const fn event_count(&self) -> usize {
         self.event_count
-    }
-
-    /// Full replacement capacity simultaneous with the unchanged published queue.
-    pub(crate) const fn staged_bytes(&self) -> usize {
-        self.staged_bytes
     }
 
     /// The adapter checks this against the exclusive target queue immediately before publication.
@@ -1021,7 +1003,6 @@ impl KeyedReplay {
         let old_bytes = self.retained_bytes()?;
         let mut replacement = None;
         let mut retained_bytes_delta = 0;
-        let mut staged_bytes = 0;
         if self.records.len() == self.records.capacity() {
             let capacity = add(self.records.len(), 1)?
                 .checked_next_power_of_two()
@@ -1042,7 +1023,6 @@ impl KeyedReplay {
                 .try_reserve_exact(capacity)
                 .map_err(|_| KeyedReplayError::AllocationFailed)?;
             let bytes = array_bytes::<KeyedReplayRecord>(buffer.capacity())?;
-            staged_bytes = bytes;
             limit(
                 ReplayResource::PreparePeakBytes,
                 add(total_retained_bytes, bytes)?,
@@ -1074,7 +1054,6 @@ impl KeyedReplay {
             replacement,
             retained_bytes_delta,
             event_count,
-            staged_bytes,
             source,
             next_generation,
         })

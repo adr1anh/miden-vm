@@ -1,4 +1,4 @@
 use crate::{Felt, ZERO};
 
 mod overflow;
-pub(crate) use overflow::OverflowTable;
+pub(crate) use overflow::{OverflowTable, PreparedOverflowRestore};

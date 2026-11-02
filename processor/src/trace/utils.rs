@@ -90,7 +90,7 @@ impl<'a> ChipletTraceFragment<'a> {
 
     /// Adds the chiplets-trace overheads: per-row ONEs at `prefix_one_cols` and `chip_clk` at
     /// column `stride - 1` (when there's room), using the layout's checked physical band.
-    pub fn with_overheads(
+    pub(crate) fn with_overheads(
         band: &'a mut [Felt],
         stride: usize,
         col_start: usize,

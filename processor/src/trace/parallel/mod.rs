@@ -28,8 +28,8 @@ use super::{
     execution_tracer::TraceReplay,
     trace_state::{
         AceReplay, BitwiseOp, BitwiseReplay, BitwiseReplayEntry, CoreTraceFragmentContext,
-        CoreTraceState, ExecutionReplay, HasherRequestReplay, KernelReplay, MemoryWritesReplay,
-        RangeCheckerReplay, ResolvedBasicBlockGroups, ResolvedHasherOp,
+        CoreTraceState, HasherRequestReplay, KernelReplay, MemoryWritesReplay, RangeCheckerReplay,
+        ResolvedBasicBlockGroups, ResolvedHasherOp,
     },
 };
 use crate::{
@@ -201,7 +201,6 @@ fn build_trace_inner(
 
     let mut core_trace_data = generate_core_trace_row_major(
         core_trace_contexts,
-        program_info.kernel().clone(),
         fragment_size,
         &mast_forest_store,
         max_stack_depth,
@@ -329,7 +328,6 @@ fn validate_heights_within_max_trace_len(
 /// Generates row-major core trace in parallel from the provided trace fragment contexts.
 fn generate_core_trace_row_major(
     core_trace_contexts: Vec<CoreTraceFragmentContext>,
-    kernel: KernelDescriptor,
     fragment_size: usize,
     mast_forest_store: &[Arc<SparseMastForest>],
     max_stack_depth: usize,
@@ -369,12 +367,7 @@ fn generate_core_trace_row_major(
                     layout,
                 )?;
 
-            processor.execute(
-                &mut continuation_stack,
-                &mut current_forest,
-                &kernel,
-                &mut tracer,
-            )?;
+            processor.execute(&mut continuation_stack, &mut current_forest, &mut tracer)?;
 
             tracer.into_final_state()
         })
@@ -1012,18 +1005,7 @@ fn split_trace_fragment_context<'a>(
 ) -> Result<SplitFragmentContext<'a>, ExecutionError> {
     let CoreTraceFragmentContext {
         state: CoreTraceState { system, decoder, stack },
-        replay:
-            ExecutionReplay {
-                keyed,
-                block_stack: block_stack_replay,
-                execution_context: execution_context_replay,
-                stack_overflow: stack_overflow_replay,
-                memory_reads: memory_reads_replay,
-                advice: advice_replay,
-                hasher: hasher_response_replay,
-                block_address: block_address_replay,
-                mast_forest_resolution: mast_forest_resolution_replay,
-            },
+        replay,
         continuation,
         initial_mast_forest_id,
     } = fragment_context;
@@ -1034,16 +1016,10 @@ fn split_trace_fragment_context<'a>(
     let initial_mast_forest =
         lookup_mast_forest(mast_forest_store, initial_mast_forest_id)?.clone();
 
-    let processor = ReplayProcessor::new(
+    let (processor, block_stack_replay, block_address_replay) = ReplayProcessor::from_replay(
         system,
         stack,
-        stack_overflow_replay,
-        execution_context_replay,
-        advice_replay,
-        memory_reads_replay,
-        hasher_response_replay,
-        mast_forest_resolution_replay,
-        keyed,
+        replay,
         mast_forest_store.to_vec(),
         max_stack_depth,
         fragment_size.into(),

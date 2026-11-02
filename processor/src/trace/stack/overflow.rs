@@ -1,8 +1,10 @@
+use alloc::{vec, vec::Vec};
+
 use miden_air_definitions::vm::trace::RowIndex;
 use miden_utils_indexing::IndexVec;
 
 use super::{Felt, ZERO};
-use crate::operation::OperationError;
+use crate::{ExecutionError, operation::OperationError};
 
 // OVERFLOW TABLE
 // ================================================================================================
@@ -25,7 +27,6 @@ impl OverflowStackEntry {
         self.value
     }
 }
-
 /// Represents an overflow stack at a given context.
 #[derive(Debug, Default, Clone)]
 struct OverflowStack {
@@ -82,7 +83,15 @@ impl OverflowStack {
 /// called whenever the clock cycle is incremented globally.
 #[derive(Debug, Clone)]
 pub struct OverflowTable {
-    overflow: IndexVec<RowIndex, OverflowStack>,
+    overflow: Vec<OverflowStack>,
+}
+
+/// The exact empty child frame and caller metadata checked before an END is published.
+#[derive(Debug)]
+pub(crate) struct PreparedOverflowRestore {
+    context_count: usize,
+    parent_elements: usize,
+    parent_addr: Felt,
 }
 
 impl OverflowTable {
@@ -91,8 +100,7 @@ impl OverflowTable {
     /// If `save_history` is set to true, the table will keep track of the history of the overflow
     /// table at every clock cycle. This is used for debugging purposes.
     pub fn new() -> Self {
-        let mut overflow = IndexVec::new();
-        let _ = overflow.push(OverflowStack::new()); // discard returned index
+        let overflow = vec![OverflowStack::new()];
 
         Self { overflow }
     }
@@ -167,7 +175,17 @@ impl OverflowTable {
     /// Note: It is possible to return to context 0 with a syscall; in this case, each instantiation
     /// of context 0 will get a separate overflow table.
     pub fn start_context(&mut self) {
-        let _ = self.overflow.push(OverflowStack::new()); // discard returned index
+        self.overflow.push(OverflowStack::new());
+    }
+
+    /// Reserves the new caller frame before the VM or replay queues publish an invocation.
+    pub(crate) fn prepare_start_context(&mut self) -> Result<(), ExecutionError> {
+        if self.overflow.len() >= u32::MAX as usize {
+            return Err(ExecutionError::Internal("trace overflow context count exhausted"));
+        }
+        self.overflow
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("trace overflow context allocation failed"))
     }
 
     /// Checks restoration of the previous context without consuming either stack.
@@ -175,7 +193,7 @@ impl OverflowTable {
     /// Returns an error if the overflow table has no stacks (i.e. there is no current context)
     /// or if the overflow stack for the current context is not empty (i.e. the caller should
     /// have drained it before calling this function).
-    pub(crate) fn preflight_restore_context(&self) -> Result<(), OperationError> {
+    fn preflight_restore_context(&self) -> Result<(), OperationError> {
         let len = self.overflow.len();
 
         if len <= 1 {
@@ -194,11 +212,34 @@ impl OverflowTable {
         Ok(())
     }
 
-    /// Restores the previous context after checking that the child overflow stack is empty.
-    pub fn restore_context(&mut self) -> Result<(), OperationError> {
+    /// Retains the exact caller frame checked before either the VM or tracer restores it.
+    pub(crate) fn prepare_restore_context(
+        &self,
+    ) -> Result<PreparedOverflowRestore, OperationError> {
         self.preflight_restore_context()?;
-        self.overflow.swap_remove(self.overflow.len() - 1);
-        Ok(())
+        let parent = &self.overflow[self.overflow.len() - 2];
+        Ok(PreparedOverflowRestore {
+            context_count: self.overflow.len(),
+            parent_elements: parent.num_elements(),
+            parent_addr: parent.last().map_or(ZERO, |entry| Felt::from(entry.clk)),
+        })
+    }
+
+    /// Commits only the retained frame. A stale token is terminal to the owning tracer.
+    pub(crate) fn commit_restore_context(&mut self, prepared: PreparedOverflowRestore) -> bool {
+        if self.overflow.len() != prepared.context_count
+            || self.overflow.last().is_none_or(|child| !child.is_empty())
+        {
+            return false;
+        }
+        let parent = &self.overflow[self.overflow.len() - 2];
+        if parent.num_elements() != prepared.parent_elements
+            || parent.last().map_or(ZERO, |entry| Felt::from(entry.clk)) != prepared.parent_addr
+        {
+            return false;
+        }
+        self.overflow.pop();
+        true
     }
 
     // HELPERS
@@ -223,7 +264,7 @@ impl OverflowTable {
                 "the current context should always have an overflow stack initialized",
             ));
         }
-        Ok(&mut self.overflow[RowIndex::from(len - 1)])
+        Ok(&mut self.overflow[len - 1])
     }
 }
 

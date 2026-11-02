@@ -6,6 +6,7 @@ use miden_air_definitions::vm::trace::chiplets::hasher::{
 use miden_core::{
     FMP_ADDR, FMP_INIT_VALUE,
     operations::Operation,
+    program::ProcedureKey,
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
 };
 
@@ -15,7 +16,7 @@ use super::{
         EnvironmentReplay, KeyedReplay, PreparedEnvironmentReplay, PreparedKeyedRecord,
         ReplayReadBudget, ReplayReadLimits,
     },
-    stack::OverflowTable,
+    stack::{OverflowTable, PreparedOverflowRestore},
     trace_state::{
         AceReplay, AdviceReplay, BitwiseReplay, BlockAddressReplay, BlockStackReplay,
         CoreTraceFragmentContext, CoreTraceState, DecoderState, ExecutionContextReplay,
@@ -41,7 +42,8 @@ use crate::{
         layout::{ControllerRow, LogicalControllerAddress},
     },
     tracer::{
-        CycleProjection, KeyedEvent, KeyedEventKind, KeyedTarget, OperationHelperRegisters, Tracer,
+        CycleProjection, KeyedEvent, KeyedEventKind, KeyedMode, KeyedTarget,
+        OperationHelperRegisters, Tracer,
     },
     utils::Idx,
 };
@@ -351,6 +353,9 @@ pub struct ExecutionTracer {
     keyed_retained_bytes: usize,
     validation_work: usize,
     pending_keyed: Option<(PreparedKeyedRecord, KeyedEvent, Option<KeyedReplay>)>,
+    prepared_keyed_cycle: Option<(KeyedEventKind, ProcedureKey)>,
+    active_keyed_event: Option<KeyedEvent>,
+    prepared_fragment_replays: Option<PreparedFragmentReplays>,
     keyed_reservation_pending: bool,
     keyed_invalidated: bool,
     pending_environment: Option<PreparedEnvironmentReplay>,
@@ -411,11 +416,10 @@ pub struct ExecutionTracer {
     /// context.
     max_stack_depth: usize,
 
-    /// Flag set in `start_clock_cycle` when a Call/Syscall/Dyncall END is encountered, consumed
-    /// in `finalize_clock_cycle` to call `overflow_table.restore_context()`. This is deferred to
-    /// `finalize_clock_cycle` because `finalize_clock_cycle` is only called when the operation
-    /// succeeds (i.e., the stack depth check passes).
-    pending_restore_context: bool,
+    /// Caller overflow frame checked before a Call/Syscall/Dyncall END is published.
+    prepared_restore_context: Option<PreparedOverflowRestore>,
+    /// Prepared frame moved here at start and consumed after the VM return commits.
+    pending_restore_context: Option<PreparedOverflowRestore>,
 
     /// Flag set in `start_clock_cycle` when an `EvalCircuit` operation is encountered, consumed
     /// in `finalize_clock_cycle` to record the memory reads performed by the operation.
@@ -423,6 +427,16 @@ pub struct ExecutionTracer {
 
     /// Infallible Tracer hooks report checked address failures at cycle finalization.
     pending_address_error: Option<ExecutionError>,
+}
+
+/// Empty replacement queues reserved for the first row after a fragment drain.
+#[derive(Debug, Default)]
+struct PreparedFragmentReplays {
+    block_addresses: BlockAddressReplay,
+    block_stack: BlockStackReplay,
+    execution_context: ExecutionContextReplay,
+    overflow: StackOverflowReplay,
+    memory_reads: MemoryReadsReplay,
 }
 
 impl ExecutionTracer {
@@ -460,6 +474,9 @@ impl ExecutionTracer {
             keyed_retained_bytes: 0,
             validation_work: 0,
             pending_keyed: None,
+            prepared_keyed_cycle: None,
+            active_keyed_event: None,
+            prepared_fragment_replays: None,
             keyed_reservation_pending: false,
             keyed_invalidated: false,
             pending_environment: None,
@@ -485,7 +502,8 @@ impl ExecutionTracer {
             mast_forest_ids: Vec::new(),
             fragment_size,
             max_stack_depth,
-            pending_restore_context: false,
+            prepared_restore_context: None,
+            pending_restore_context: None,
             is_eval_circuit_op: false,
             pending_address_error: None,
         })
@@ -581,7 +599,12 @@ impl ExecutionTracer {
             || self.keyed_reservation_pending
             || self.keyed_invalidated
             || self.pending_address_error.is_some()
-            || self.pending_restore_context
+            || self.pending_restore_context.is_some()
+            || self.active_keyed_event.is_some()
+            || self.prepared_keyed_cycle.is_some()
+            || self.prepared_restore_context.is_some()
+            || self.prepared_fragment_replays.is_some()
+            || self.prepared_snapshot.is_some()
         {
             return Err(ExecutionError::InvalidExecutionState);
         }
@@ -793,7 +816,7 @@ impl ExecutionTracer {
                     // the depth and the overflow address is ZERO — mirroring the same guard
                     // already present in the parallel-tracer path.  See #2813 / PR #2904.
                     let (stack_depth_after_drop, overflow_addr) =
-                        if processor.stack().depth() > MIN_STACK_DEPTH as u32 {
+                        if Processor::stack(processor).depth() > MIN_STACK_DEPTH as u32 {
                             (
                                 processor.stack().depth() - 1,
                                 self.overflow_table.clk_after_pop_in_current_ctx(),
@@ -915,6 +938,9 @@ impl ExecutionTracer {
 /// Owned reservations are unpublished until their matching infallible hook consumes them.
 pub struct ExecutionTraceReservation(ExecutionTraceReservationKind);
 
+// Keep the unpublished reservation inline: boxing would introduce a separate allocation outside
+// trace preparation's checked resource reservations. Its bounded stack footprint is deliberate.
+#[allow(clippy::large_enum_variant)]
 enum ExecutionTraceReservationKind {
     Entry(miden_core::program::ExecutionDescriptor, SessionBinding),
     Completion,
@@ -1027,6 +1053,20 @@ impl Tracer for ExecutionTracer {
                 "keyed trace target or row differs from activation",
             ));
         }
+        if self.prepared_keyed_cycle != Some((event.kind, event.use_record.procedure_key()))
+            || match event.kind {
+                KeyedEventKind::Invoke(KeyedMode::Call | KeyedMode::DynCall) => {
+                    event.principal_after != event.use_record.procedure_key()
+                },
+                KeyedEventKind::Invoke(_) => event.principal_before != event.principal_after,
+                KeyedEventKind::RootEnd => {
+                    Some(event.principal_after)
+                        != self.prepared_keyed_cycle.map(|(_, principal)| principal)
+                },
+            }
+        {
+            return Err(ExecutionError::Internal("keyed event differs from actual trace mode"));
+        }
         if matches!(event.kind, KeyedEventKind::RootEnd) != self.pending_environment.is_some() {
             return Err(ExecutionError::InvalidExecutionState);
         }
@@ -1126,14 +1166,31 @@ impl Tracer for ExecutionTracer {
             || self.keyed_reservation_pending
             || self.pending_keyed.is_some()
             || self.pending_address_error.is_some()
-            || self.pending_restore_context
+            || self.pending_restore_context.is_some()
+            || self.active_keyed_event.is_some()
         {
             return Err(ExecutionError::Internal("previous trace cycle was not finalized"));
         }
+        let mut prepared_keyed_cycle = None;
+        let mut prepared_restore_context = None;
+        let mut prepared_fragment_replays = projection
+            .row
+            .as_usize()
+            .is_multiple_of(self.fragment_size)
+            .then(PreparedFragmentReplays::default);
         if projection.row.as_usize().is_multiple_of(self.fragment_size) {
             self.fragment_contexts
                 .try_reserve(1)
                 .map_err(|_| ExecutionError::Internal("trace fragment allocation failed"))?;
+        }
+        if matches!(continuation, Continuation::FinishLoop(_))
+            && Processor::stack(processor).depth() > MIN_STACK_DEPTH as u32
+        {
+            prepared_fragment_replays
+                .as_mut()
+                .map(|replays| &mut replays.overflow)
+                .unwrap_or(&mut self.overflow_replay)
+                .prepare_record_pop()?;
         }
         match continuation {
             Continuation::StartNode(node_id) => {
@@ -1163,6 +1220,70 @@ impl Tracer for ExecutionTracer {
                 };
                 self.hasher_chiplet_shim.preflight_rows(count, CONTROLLER_ROWS_PER_HASHER_OP)?;
                 self.block_stack.prepare_push()?;
+                let mode_and_key = match node {
+                    MastNode::Exec(node) => Some((KeyedMode::Exec, node.target())),
+                    MastNode::Call(node) => Some((
+                        if node.is_syscall() {
+                            KeyedMode::Syscall
+                        } else {
+                            KeyedMode::Call
+                        },
+                        node.target(),
+                    )),
+                    MastNode::Dyn(node) => {
+                        let word = processor
+                            .memory()
+                            .read_word(
+                                processor.system().ctx(),
+                                processor.stack_get(0),
+                                projection.row,
+                            )
+                            .map_err(ExecutionError::MemoryErrorNoCtx)?;
+                        Some((
+                            if node.is_dyncall() {
+                                KeyedMode::DynCall
+                            } else {
+                                KeyedMode::Dyn
+                            },
+                            ProcedureKey::new(word),
+                        ))
+                    },
+                    _ => None,
+                };
+                if let Some((mode, key)) = mode_and_key {
+                    prepared_keyed_cycle = Some((KeyedEventKind::Invoke(mode), key));
+                    prepared_fragment_replays
+                        .as_mut()
+                        .map(|replays| &mut replays.block_addresses)
+                        .unwrap_or(&mut self.hasher_chiplet_shim.block_addr_replay)
+                        .prepare_record()?;
+                    self.hasher_for_chiplet.prepare_record_control_block()?;
+                    prepared_fragment_replays
+                        .as_mut()
+                        .map(|replays| &mut replays.block_stack)
+                        .unwrap_or(&mut self.block_stack_replay)
+                        .prepare_record_start()?;
+                    if matches!(mode, KeyedMode::Call | KeyedMode::Syscall | KeyedMode::DynCall) {
+                        self.overflow_table.prepare_start_context()?;
+                    }
+                    if matches!(mode, KeyedMode::Dyn | KeyedMode::DynCall) {
+                        prepared_fragment_replays
+                            .as_mut()
+                            .map(|replays| &mut replays.memory_reads)
+                            .unwrap_or(&mut self.memory_reads)
+                            .prepare_record_read_word()?;
+                        if Processor::stack(processor).depth() > MIN_STACK_DEPTH as u32 {
+                            prepared_fragment_replays
+                                .as_mut()
+                                .map(|replays| &mut replays.overflow)
+                                .unwrap_or(&mut self.overflow_replay)
+                                .prepare_record_pop()?;
+                        }
+                    }
+                    if matches!(mode, KeyedMode::Call | KeyedMode::DynCall) {
+                        self.memory_writes.prepare_record_write_element()?;
+                    }
+                }
             },
             Continuation::Respan { .. } => {
                 self.block_stack
@@ -1179,10 +1300,26 @@ impl Tracer for ExecutionTracer {
             | Continuation::FinishExec(_)
             | Continuation::FinishBasicBlock(_) => {
                 if self.block_stack.prepare_pop()?.ctx_info.is_some() {
-                    self.overflow_table.preflight_restore_context().map_err(|_| {
-                        ExecutionError::Internal("trace overflow context cannot be restored")
-                    })?;
+                    prepared_restore_context =
+                        Some(self.overflow_table.prepare_restore_context().map_err(|_| {
+                            ExecutionError::Internal("trace overflow context cannot be restored")
+                        })?);
+                    prepared_fragment_replays
+                        .as_mut()
+                        .map(|replays| &mut replays.execution_context)
+                        .unwrap_or(&mut self.execution_context_replay)
+                        .prepare_record()?;
+                    prepared_fragment_replays
+                        .as_mut()
+                        .map(|replays| &mut replays.overflow)
+                        .unwrap_or(&mut self.overflow_replay)
+                        .prepare_record_restore()?;
                 }
+                prepared_fragment_replays
+                    .as_mut()
+                    .map(|replays| &mut replays.block_stack)
+                    .unwrap_or(&mut self.block_stack_replay)
+                    .prepare_record_end()?;
             },
             Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
                 let block = current_forest
@@ -1217,9 +1354,25 @@ impl Tracer for ExecutionTracer {
                 return Err(ExecutionError::Internal("zero-cycle continuation cannot be traced"));
             },
         }
+        if matches!(
+            continuation,
+            Continuation::FinishBasicBlock(_)
+                | Continuation::FinishJoin(_)
+                | Continuation::FinishSplit(_)
+                | Continuation::FinishExec(_)
+                | Continuation::FinishLoop(_)
+                | Continuation::FinishCall(_)
+                | Continuation::FinishDyn(_)
+        ) && !matches!(continuation, Continuation::FinishLoop(_)
+            if processor.stack_get(0) == ONE)
+            && let Some((_, principal)) = continuation_stack.root_boundary_after_next()
+        {
+            prepared_keyed_cycle = Some((KeyedEventKind::RootEnd, principal));
+        }
         if projection.row.as_usize().is_multiple_of(self.fragment_size)
             && (matches!(continuation, Continuation::StartNode(id)
-                if matches!(current_forest.get_node_by_id(*id), Some(MastNode::Exec(_))))
+                if matches!(current_forest.get_node_by_id(*id),
+                    Some(MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_))))
                 || continuation_stack.root_boundary_after_next().is_some())
         {
             self.prepared_snapshot = None;
@@ -1287,6 +1440,9 @@ impl Tracer for ExecutionTracer {
                 initial_mast_forest_id: self.forest_id(current_forest),
             });
         }
+        self.prepared_keyed_cycle = prepared_keyed_cycle;
+        self.prepared_restore_context = prepared_restore_context;
+        self.prepared_fragment_replays = prepared_fragment_replays;
         Ok(())
     }
 
@@ -1300,6 +1456,14 @@ impl Tracer for ExecutionTracer {
         continuation_stack: &ContinuationStack<Arc<MastForest>>,
         current_forest: &Arc<MastForest>,
     ) {
+        if matches!(&continuation, Continuation::StartNode(id)
+            if matches!(current_forest.get_node_by_id(*id),
+                Some(MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_))))
+            && self.pending_keyed.is_none()
+        {
+            self.keyed_invalidated = true;
+            return;
+        }
         // check if we need to start a new trace state
         if processor.system().clock().as_usize().is_multiple_of(self.fragment_size) {
             if self.prepared_snapshot.is_some() {
@@ -1317,14 +1481,35 @@ impl Tracer for ExecutionTracer {
                     current_forest.clone(),
                 );
             }
+            if let Some(replays) = self.prepared_fragment_replays.take() {
+                self.hasher_chiplet_shim.block_addr_replay = replays.block_addresses;
+                self.block_stack_replay = replays.block_stack;
+                self.execution_context_replay = replays.execution_context;
+                self.overflow_replay = replays.overflow;
+                self.memory_reads = replays.memory_reads;
+            }
         }
 
-        if let Some((record, _, queue)) = self.pending_keyed.take() {
+        let expected_keyed = self.prepared_keyed_cycle.take();
+        let pending_keyed = self.pending_keyed.take();
+        if expected_keyed.is_some() != pending_keyed.is_some() {
+            self.keyed_invalidated = true;
+            return;
+        }
+        if let Some((record, event, queue)) = pending_keyed {
+            if expected_keyed != Some((event.kind, event.use_record.procedure_key()))
+                || event.use_record.row() != processor.system().clock()
+                || *event.principal_before.as_word() != processor.system().caller_hash()
+            {
+                self.keyed_invalidated = true;
+                return;
+            }
             if let Some(queue) = queue {
                 self.keyed = queue;
             }
             record.commit(&mut self.keyed);
             self.keyed_invalidated |= self.keyed.is_invalidated();
+            self.active_keyed_event = Some(event);
         }
 
         // Record that the node being executed at this cycle was visited inside `current_forest`.
@@ -1450,7 +1635,10 @@ impl Tracer for ExecutionTracer {
                         parent_fn_hash: ctx_info.parent_fn_hash,
                     });
 
-                    self.pending_restore_context = true;
+                    self.pending_restore_context = self.prepared_restore_context.take();
+                    if self.pending_restore_context.is_none() {
+                        self.keyed_invalidated = true;
+                    }
                 }
             },
             Continuation::EnterForest { .. } | Continuation::RootBoundary { .. } => {
@@ -1735,25 +1923,27 @@ impl Tracer for ExecutionTracer {
             return Err(ExecutionError::InvalidExecutionState);
         }
         if let Some(error) = self.pending_address_error.take() {
+            self.keyed_invalidated = true;
             return Err(error);
         }
-        // Restore the overflow table context for Call/Syscall/Dyncall END. This is deferred
-        // from start_clock_cycle because finalize_clock_cycle is only called when the operation
-        // succeeds (i.e., the stack depth check in processor.restore_context() passes).
-        if self.pending_restore_context {
+        if let Some(event) = self.active_keyed_event.take()
+            && processor.system().caller_hash() != *event.principal_after.as_word()
+        {
+            self.keyed_invalidated = true;
+            return Err(ExecutionError::InvalidExecutionState);
+        }
+        // Restore the checked overflow frame only after the prepared VM return commits.
+        if let Some(prepared) = self.pending_restore_context.take() {
             // Restore context for call/syscall/dyncall: pop the current context's
             // (empty) overflow stack and restore the previous context's overflow state.
-            self.overflow_table.restore_context().map_err(|_| {
-                ExecutionError::Internal(
-                    "overflow table restore_context failed during trace finalization",
-                )
-            })?;
+            if !self.overflow_table.commit_restore_context(prepared) {
+                self.keyed_invalidated = true;
+                return Err(ExecutionError::InvalidExecutionState);
+            }
             self.overflow_replay.record_restore_context_overflow_addr(
                 MIN_STACK_DEPTH + self.overflow_table.num_elements_in_current_ctx(),
                 self.overflow_table.last_update_clk_in_current_ctx(),
             );
-
-            self.pending_restore_context = false;
         }
 
         // Record all memory reads performed during EvalCircuit operations. We run this in
