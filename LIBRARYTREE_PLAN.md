@@ -294,8 +294,8 @@ projection fixtures must establish that mapping before adoption. Home is version
 complete typed path, including explicit empty N0. Caller budgets/expected I/context remain mandatory.
 Publisher/home/TypedId/profile validation, allocated domains, immutable registration, closure completeness
 and all security/acceptance gates remain required with **no permissive fallback**. Package9/ReleaseRecord
-activation and production profile fixtures remain separate gates. Audit the existing assigned-I/profile
-Rustdoc and codec projections in a separate implementation checkpoint; this correction changes no code.
+activation and production profile fixtures remain separate gates. Keep profile Rustdoc aligned with
+this contract; production codec projections require a separate implementation/fixture checkpoint.
 
 Sources: [LibraryTree proposal](https://chatgpt.com/space/page_d5d09034b1e881919a4c425fe6429d0a)
 (identity/interface/registration blocks f83b18f1, 6d71b671, c1b6063f; closure blocks 88b6753b/b8c4a9c4)
@@ -329,7 +329,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
-| 05 Runtime | in-progress | Opening `d8972f02c`; base `722392682` | Independent source/test reviews; 17 exact-module isolated tests, isolated Clippy/no_std and formatting pass | Processor check still has the same ten callable-cutover errors. Next occurrence ledger/session, then real invocation transitions; inherited processor/fuzz checks remain pending. |
+| 05 Runtime | in-progress | Ledger `739acedb7`; shared cap `99bfbe6d9`; opening `d8972f02c`; base `722392682` | Independent source/test reviews; 35 exact-module isolated tests, isolated Clippy/no_std and formatting pass | Actual processor still has the same ten callable-cutover errors. Next descriptor/session/use staging, then real invocation transitions; inherited processor/fuzz checks remain pending. |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
@@ -923,3 +923,40 @@ are explicit, not deployment defaults. Account retained native capacities and co
 peak (old/input/staged/replacement overlap), and recheck returned capacities before publication; no
 allocator-excess/RSS guarantee or whole-ledger clone is implied. Commit the shared-owner refactor
 separately from ledger implementation and document actual checks without waiving inherited failures.
+
+### PR 05 Occurrence ledger validated in isolation
+
+Commit `99bfbe6d9` mechanically gives the unchanged MAX_TRACE_LEN constant a shared owner while
+preserving existing crate-private paths. Commit `739acedb7` adds bounded occurrence merging and
+atomic preparation/publication, plus only a private consuming accessor to the verified opening.
+Parent/slot provenance distinguishes equal commitments/N/depth at different positions; complete
+Lists and full inherited namespaces are retained. A borrowed guard owns staged/reserved buffers,
+so error/drop leaves published storage unchanged and commit allocates nothing. Logical row/request
+costs and native capacity/peak accounting are explicit; the shared necessary row ceiling does not
+clear final packed/global proof gates. No session, use frequency, host or invocation behavior is added.
+
+Independent production and 18-test reviews found no actionable issue. After successful AC/heavy-work
+guards, the exact-source uncommitted harness passed 35 tests (17 opening plus 18 ledger), test-inclusive
+Clippy with `-D warnings`, and no-default-features. It imports the real shared trace-limit source,
+not a substitute definition. Actual `cargo check --locked -p miden-processor --lib` still fails on
+exactly six callee() uses and four missing Exec matches, with no environment-module diagnostic.
+The capacity-excess test verifies sizing/rejection math directly; actual post-reservation calls are
+supported by source review rather than allocator-driven fault injection. Pinned formatting and
+whitespace checks pass. These are isolated unit results, not processor/proof integration acceptance.
+
+Continue with immutable ExecutionDescriptor-scoped resolution session, checked normal/syscall uses,
+entry reservation discharged at actual root END, and staged source/use records. Existing host loaders
+and all fallible VM transition preflights must precede final publication when integrated; do not infer
+runtime atomicity from native bookkeeping alone. Preserve the superseding D3 identity/closure contract
+and its external profile gates throughout subsequent work.
+
+The next session slice includes prepared entry, ordinary/syscall miss/cache-hit preparation, reserved
+normal entry demand, root-END-only discharge and strict finalization together; no permissive partial
+finish API is selected. Preserve OpeningLimits/LedgerLimits and add only explicit session cache/use/
+storage limits. Reuse immutable ExecutionDescriptor and existing RowIndex as an adapter-supplied source
+marker; actual-row binding and package-owned debug context remain transition/Core/replay obligations.
+The selected exclusive Core groups emit at most one request per row (execution lines 443–450), so
+committed invocations plus the reserved root demand must obey the necessary shared MAX_TRACE_LEN
+ceiling. This is native checked-integer accounting, not a new AIR frequency range or proof gate waiver.
+Rustdoc-only commit `71bf65973` separately aligned opaque VM I/profile requirements with superseding D3;
+non-Rustdoc lines were unchanged, and owner production projection/registration fixtures remain pending.
