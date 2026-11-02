@@ -13,8 +13,8 @@ use miden_core::{
 use super::{
     block_stack::{BlockInfo, BlockStack, ExecutionContextInfo},
     keyed::{
-        EnvironmentReplay, KeyedReplay, PreparedEnvironmentReplay, PreparedKeyedRecord,
-        ReplayReadBudget, ReplayReadLimits,
+        EnvironmentReplay, KeyedReplay, KeyedReplayError, PreparedEnvironmentReplay,
+        PreparedKeyedRecord, ReplayReadBudget, ReplayReadLimits, ReplayResource,
     },
     stack::{OverflowTable, PreparedOverflowRestore},
     trace_state::{
@@ -951,8 +951,8 @@ enum ExecutionTraceReservationKind {
     },
 }
 
-fn keyed_error(_: super::keyed::KeyedReplayError) -> ExecutionError {
-    ExecutionError::Internal("keyed trace preparation or validation failed")
+fn keyed_error(error: super::keyed::KeyedReplayError) -> ExecutionError {
+    ExecutionError::KeyedTrace(error)
 }
 
 impl Tracer for ExecutionTracer {
@@ -971,10 +971,17 @@ impl Tracer for ExecutionTracer {
         let bytes = size_of::<miden_core::program::ExecutionDescriptor>()
             .checked_add(size_of::<SessionBinding>())
             .ok_or(ExecutionError::InvalidExecutionState)?;
-        if bytes > self.trace_limits.max_retained_bytes
-            || bytes > self.trace_limits.max_prepare_peak_bytes
-        {
-            return Err(ExecutionError::Internal("keyed entry metadata exceeds trace limits"));
+        for (resource, limit) in [
+            (ReplayResource::RetainedBytes, self.trace_limits.max_retained_bytes),
+            (ReplayResource::PreparePeakBytes, self.trace_limits.max_prepare_peak_bytes),
+        ] {
+            if bytes > limit {
+                return Err(keyed_error(KeyedReplayError::LimitExceeded {
+                    resource,
+                    limit,
+                    requested: bytes,
+                }));
+            }
         }
         Ok(ExecutionTraceReservation(ExecutionTraceReservationKind::Entry(
             *descriptor,

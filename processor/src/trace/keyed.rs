@@ -48,8 +48,9 @@ pub struct ReplayReadLimits {
     pub max_validation_peak_bytes: usize,
 }
 
+/// An explicit resource bounded during keyed capture or replay validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReplayResource {
+pub enum ReplayResource {
     Events,
     RetainedBytes,
     PreparePeakBytes,
@@ -58,8 +59,9 @@ pub(crate) enum ReplayResource {
     WireBytes,
 }
 
+/// Failure while preparing keyed trace data or revalidating an execution witness.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum KeyedReplayError {
+pub enum KeyedReplayError {
     #[error("invalid keyed replay: {0}")]
     Invalid(&'static str),
     #[error("keyed replay {resource:?} limit {limit} is below requested {requested}")]
