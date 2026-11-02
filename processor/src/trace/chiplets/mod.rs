@@ -81,13 +81,14 @@ pub struct EidosCompressionTrace {
 ///
 /// The chiplet system uses `s_ctrl = column 0` to select the hasher controller.
 /// Columns 1-4 (`s1..s4`) subdivide the remaining region. The final shared data column is
-/// row-local: bitwise rows use it as normal/AEAD stream mode, while controller rows use it as
-/// the Merkle/padding flag.
+/// row-local: bitwise rows use it as normal/AEAD stream mode. Controller rows derive Merkle/
+/// padding mode from their row-kind bits.
 ///
 /// * Hasher segment: fills the first rows of the trace up to the hasher `trace_len`.
 ///   - column 0 (s_ctrl): ONE
-///   - columns 1-19: hasher-controller trace
-///   - column 22: Merkle/padding discriminator
+///   - columns 1-19: hasher-controller overlay
+///   - columns 20-21: operation-final marker and MRUPDATE id
+///   - column 22: unused, padded with ZERO
 ///
 /// * Bitwise segment: begins at the end of the hasher segment.
 ///   - column 0 (s_ctrl): ZERO
