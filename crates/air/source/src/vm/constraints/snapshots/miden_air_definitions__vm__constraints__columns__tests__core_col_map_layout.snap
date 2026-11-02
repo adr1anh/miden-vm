@@ -1,5 +1,6 @@
 ---
 source: crates/air/source/src/vm/constraints/columns.rs
+assertion_line: 436
 expression: CORE_COL_MAP
 ---
 CoreCols {
@@ -43,13 +44,15 @@ CoreCols {
             27,
             28,
         ],
-    },
-    stack: StackCols {
-        top: [
+        resolved_digest: [
             29,
             30,
             31,
             32,
+        ],
+    },
+    stack: StackCols {
+        top: [
             33,
             34,
             35,
@@ -62,9 +65,13 @@ CoreCols {
             42,
             43,
             44,
+            45,
+            46,
+            47,
+            48,
         ],
-        b0: 45,
-        b1: 46,
-        h0: 47,
+        b0: 49,
+        b1: 50,
+        h0: 51,
     },
 }

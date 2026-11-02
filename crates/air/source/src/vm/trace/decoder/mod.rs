@@ -1,4 +1,8 @@
-use miden_core::{Felt, ONE, ZERO, field::PrimeCharacteristicRing, operations::Operation};
+use core::ops::Range;
+
+use miden_core::{
+    Felt, ONE, WORD_SIZE, ZERO, field::PrimeCharacteristicRing, operations::Operation,
+};
 
 // CONSTANTS
 // ================================================================================================
@@ -34,3 +38,13 @@ pub const OP_BATCH_1_GROUPS: [Felt; NUM_OP_BATCH_ENCODING_COLS] = [ZERO, ZERO];
 
 /// Number of columns needed for degree reduction of the operation flags.
 pub const NUM_OP_BITS_EXTRA_COLS: usize = 2;
+
+/// Number of columns holding the implementation selected for a keyed invocation.
+pub const NUM_RESOLVED_DIGEST_COLUMNS: usize = WORD_SIZE;
+
+/// Decoder-local offset of the resolved implementation digest, after the legacy decoder fields.
+pub const DECODER_RESOLVED_DIGEST_OFFSET: usize = 23;
+
+/// Decoder-local columns holding the resolved implementation digest.
+pub const DECODER_RESOLVED_DIGEST_RANGE: Range<usize> =
+    DECODER_RESOLVED_DIGEST_OFFSET..DECODER_RESOLVED_DIGEST_OFFSET + NUM_RESOLVED_DIGEST_COLUMNS;

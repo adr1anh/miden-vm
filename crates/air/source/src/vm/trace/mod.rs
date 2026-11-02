@@ -1,3 +1,5 @@
+use core::ops::Range;
+
 pub mod chiplets;
 pub mod decoder;
 
@@ -17,14 +19,30 @@ pub const MIN_TRACE_LEN: usize = 64;
 // ------------------------------------------------------------------------------------------------
 
 //      system          decoder           stack          chiplets
-//    (6 columns)     (23 columns)    (19 columns)    (24 columns)
+//    (6 columns)     (27 columns)    (19 columns)    (24 columns)
 // ├───────────────┴───────────────┴───────────────┴─────────────────┤
 
 pub const SYS_TRACE_WIDTH: usize = 6;
 
-pub const DECODER_TRACE_WIDTH: usize = 23;
+pub const DECODER_TRACE_WIDTH: usize =
+    decoder::DECODER_RESOLVED_DIGEST_OFFSET + decoder::NUM_RESOLVED_DIGEST_COLUMNS;
 
 pub const STACK_TRACE_WIDTH: usize = 19;
+
+/// Offset and range of the decoder within the Core and unified traces.
+pub const DECODER_TRACE_OFFSET: usize = SYS_TRACE_WIDTH;
+pub const DECODER_TRACE_RANGE: Range<usize> =
+    DECODER_TRACE_OFFSET..DECODER_TRACE_OFFSET + DECODER_TRACE_WIDTH;
+
+/// Offset and range of the operand stack within the Core and unified traces.
+pub const STACK_TRACE_OFFSET: usize = DECODER_TRACE_RANGE.end;
+pub const STACK_TRACE_RANGE: Range<usize> =
+    STACK_TRACE_OFFSET..STACK_TRACE_OFFSET + STACK_TRACE_WIDTH;
+
+/// Unified-trace columns holding the four resolved implementation lanes.
+pub const RESOLVED_DIGEST_RANGE: Range<usize> = DECODER_TRACE_OFFSET
+    + decoder::DECODER_RESOLVED_DIGEST_OFFSET
+    ..DECODER_TRACE_OFFSET + DECODER_TRACE_WIDTH;
 
 pub mod log_deferred {
     use core::ops::Range;
@@ -107,7 +125,7 @@ pub const TRACE_WIDTH: usize =
 // ------------------------------------------------------------------------------------------------
 //
 // The auxiliary trace is the LogUp lookup-argument segment built per-AIR by `CoreAir`'s
-// and `ChipletsAir`'s `AuxBuilder` impls: 4 main-trace LogUp columns for Core and 4
+// and `ChipletsAir`'s `AuxBuilder` impls: 5 main-trace LogUp columns for Core and 4
 // chiplet-trace LogUp columns for Chiplets. See
 // [`crate::vm::constraints::lookup::main_air::MainLookupAir`] and
 // [`crate::vm::constraints::lookup::chiplet_air::emit_chiplet_lookup_columns`] for the

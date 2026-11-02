@@ -205,7 +205,7 @@ where
         // - 8: DYN            -  9: HORNERBASE
         // - 10: HORNEREXT      - 11: PUSH
         // - 12: DYNCALL        - 13: EVALCIRCUIT
-        // - 14: LOGDEFERRED  - 15: (unused)
+        // - 14: LOGDEFERRED    - 15: EXEC
         let degree5_extra: E = decoder.extra[0].into();
         let degree5_op_flags: [E; NUM_DEGREE_5_OPS] =
             array::from_fn(|i| degree5_extra.clone() * b3210[i].clone());
@@ -328,7 +328,7 @@ where
         // no_shift[d] = sum of op flags whose stack position d is unchanged.
         // Built incrementally via accumulate_depth_deltas.
 
-        let no_shift_depth0 = E::sum_array::<16>(&[
+        let no_shift_depth0 = E::sum_array::<17>(&[
             // +NOOP         — no-op
             op7(opcodes::NOOP),
             // +COMPRESS     — preserves the 8-felt block and updates only the CV
@@ -351,6 +351,8 @@ where
             op4(opcodes::RESPAN),
             // +HALT         — control flow: ends program
             op4(opcodes::HALT),
+            // +EXEC         — same-context keyed invocation
+            op5(opcodes::EXEC),
             // +CALL         — control flow: enters procedure
             op4(opcodes::CALL),
             // +SYSCALL      — control flow: enters kernel procedure
@@ -637,11 +639,11 @@ where
         // - Block starters: SPAN, JOIN, SPLIT, LOOP
         // - Block transitions: END, REPEAT, RESPAN, HALT
         // - Dynamic execution: DYN, DYNCALL
-        // - Procedure calls: CALL, SYSCALL
+        // - Immediate invocations: EXEC, CALL, SYSCALL
         //
         // IMPORTANT: If a new control flow operation is added, it MUST be included here,
         // otherwise the decoder constraint will fail when executing that operation.
-        let control_flow = E::sum_array::<6>(&[
+        let control_flow = E::sum_array::<7>(&[
             // +SPAN, JOIN, SPLIT, LOOP    — block starters
             bits[3][0].clone() * bits[2][1].clone() * decoder.extra[0],
             // +END, REPEAT, RESPAN, HALT  — block transitions
@@ -650,6 +652,8 @@ where
             op5(opcodes::DYNCALL),
             // +DYN                        — dynamic execution
             op5(opcodes::DYN),
+            // +EXEC                       — same-context invocation
+            op5(opcodes::EXEC),
             // +SYSCALL                    — procedure call
             op4(opcodes::SYSCALL),
             // +CALL                       — procedure call
@@ -721,7 +725,7 @@ where
     /// - Block starters: SPAN, JOIN, SPLIT, LOOP
     /// - Block transitions: END, REPEAT, RESPAN, HALT
     /// - Dynamic execution: DYN, DYNCALL
-    /// - Procedure calls: CALL, SYSCALL
+    /// - Immediate invocations: EXEC, CALL, SYSCALL
     ///
     /// Used by the decoder constraint: `in_span + control_flow = 1`
     ///
@@ -927,6 +931,8 @@ impl<E: PrimeCharacteristicRing> OpFlags<E> {
         push => opcodes::PUSH,
         /// Operation Flag of DYN operation.
         dyn_op => opcodes::DYN,
+        /// Operation Flag of EXEC operation.
+        exec => opcodes::EXEC,
         /// Operation Flag of DYNCALL operation.
         dyncall => opcodes::DYNCALL,
         /// Operation Flag of HORNERBASE operation.

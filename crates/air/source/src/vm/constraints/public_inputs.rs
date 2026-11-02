@@ -1,9 +1,11 @@
 //! Public input boundary constraints.
 //!
-//! Enforces that the stack trace entries match the claimed public inputs:
+//! Enforces that the stack and principal match the claimed public inputs:
 //! - First row: stack[0..16] == stack_inputs[0..16]
 //! - Last row:  stack[0..16] == stack_outputs[0..16]
+//! - First and last row: fn_hash == K_entry
 
+use miden_core::WORD_SIZE;
 use miden_stark::air::AirBuilder;
 
 use crate::vm::{CoreCols, MidenAirBuilder};
@@ -13,16 +15,17 @@ use crate::vm::{CoreCols, MidenAirBuilder};
 
 const STACK_DEPTH: usize = 16;
 
-/// Number of public values consumed by the stack boundary (stack_inputs + stack_outputs).
-const PUBLIC_LEN: usize = STACK_DEPTH + STACK_DEPTH;
+/// Exact Core public layout: stack inputs, stack outputs, then the entry key.
+const PUBLIC_LEN: usize = STACK_DEPTH + STACK_DEPTH + WORD_SIZE;
 
 // ENTRY POINTS
 // ================================================================================================
 
-/// Enforces public input boundary constraints for the stack.
+/// Enforces public boundaries for the stack and entry-established principal.
 ///
 /// - First row: `stack[i] == stack_inputs[i]` for i in 0..16
 /// - Last row:  `stack[i] == stack_outputs[i]` for i in 0..16
+/// - First and last row: `fn_hash == K_entry`
 pub fn enforce_main<AB>(builder: &mut AB, local: &CoreCols<AB::Var>)
 where
     AB: MidenAirBuilder,
@@ -30,9 +33,15 @@ where
     // Copy public values into local arrays to release the immutable borrow on builder.
     let pv = builder.public_values();
     let n = pv.len();
-    assert!(n >= PUBLIC_LEN, "public values too short: {n} < {PUBLIC_LEN}");
+    assert_eq!(n, PUBLIC_LEN, "Core requires exactly {PUBLIC_LEN} public values");
     let si: [AB::PublicVar; STACK_DEPTH] = core::array::from_fn(|i| pv[i]);
     let so: [AB::PublicVar; STACK_DEPTH] = core::array::from_fn(|i| pv[STACK_DEPTH + i]);
+    let entry: [AB::PublicVar; WORD_SIZE] = core::array::from_fn(|i| pv[2 * STACK_DEPTH + i]);
+
+    // Both ends of the trace carry K_entry. Principal preservation through HALT then binds the
+    // root END's next principal to the same public key, including root caller-frame returns.
+    builder.when_first_row().assert_eq_arrays(local.system.fn_hash, entry);
+    builder.when_last_row().assert_eq_arrays(local.system.fn_hash, entry);
 
     // First row: stack[i] == stack_inputs[i]
     {

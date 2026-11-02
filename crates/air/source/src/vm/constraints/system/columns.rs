@@ -3,7 +3,7 @@ use miden_core::WORD_SIZE;
 /// System columns in the main execution trace (6 columns).
 ///
 /// These columns track global execution state: clock cycle, execution context, and
-/// the function hash (digest) of the currently executing function.
+/// the principal key established by entry or the active ordinary call frame.
 #[repr(C)]
 #[derive(Debug, Clone, Default)]
 pub struct SystemCols<T> {
@@ -11,6 +11,7 @@ pub struct SystemCols<T> {
     pub clk: T,
     /// Context identifier.
     pub ctx: T,
-    /// Function hash (digest) of the currently executing function.
+    /// Principal key, retaining the legacy `fn_hash` column name during migration.
+    /// EXEC, DYN and SYSCALL preserve it; CALL and DYNCALL load their requested key.
     pub fn_hash: [T; WORD_SIZE],
 }

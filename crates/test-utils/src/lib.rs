@@ -1083,6 +1083,12 @@ const CORE_COL_NAMES: CoreCols<&'static str> = CoreCols {
         full_batch: "full_batch",
         batch_size_code: "batch_size_code",
         extra: ["op_bits_extra[0]", "op_bits_extra[1]"],
+        resolved_digest: [
+            "resolved_digest[0]",
+            "resolved_digest[1]",
+            "resolved_digest[2]",
+            "resolved_digest[3]",
+        ],
     },
     stack: StackCols {
         top: [
