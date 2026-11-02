@@ -17,7 +17,7 @@ use super::super::trace_state::{
     MemoryReadsReplay, StackOverflowReplay, StackState, SystemState,
 };
 use crate::{
-    BreakReason, ContextId, ExecutionError, Stopper,
+    BreakReason, ContextId, CycleProjection, ExecutionError, Stopper,
     continuation_stack::{Continuation, ContinuationStack},
     errors::OperationError,
     execution::{
@@ -431,7 +431,17 @@ impl StackInterface for ReplayProcessor {
         Ok(())
     }
 
+    fn preflight_decrement_size(&self) -> Result<(), OperationError> {
+        if self.stack.stack_depth() > MIN_STACK_DEPTH
+            && self.stack_overflow_replay.peek_replay_pop_overflow().is_none()
+        {
+            return Err(OperationError::Internal("no stack overflow pop recorded"));
+        }
+        Ok(())
+    }
+
     fn decrement_size(&mut self) -> Result<(), OperationError> {
+        self.preflight_decrement_size()?;
         // Shift all other elements up
         for write_idx in 0..(MIN_STACK_DEPTH - 1) {
             let read_idx = write_idx + 1;
@@ -510,6 +520,18 @@ pub(crate) struct ReplayStopper;
 impl Stopper for ReplayStopper {
     type Processor = ReplayProcessor;
     type Forest = Arc<SparseMastForest>;
+
+    fn preflight_cycle(
+        &self,
+        processor: &ReplayProcessor,
+        projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        if projection.row != processor.system.clk || projection.next_clock > processor.maximum_clock
+        {
+            return Err(ExecutionError::Internal("replay cycle exceeds fragment clock boundary"));
+        }
+        Ok(())
+    }
 
     fn should_stop(
         &self,

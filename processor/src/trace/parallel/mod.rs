@@ -1082,6 +1082,10 @@ fn translate_snapshot_continuation_stack(
             Continuation::FinishLoop(node_id) => Continuation::FinishLoop(node_id),
             Continuation::FinishCall(id) => Continuation::FinishCall(id),
             Continuation::FinishDyn(id) => Continuation::FinishDyn(id),
+            Continuation::FinishExec(id) => Continuation::FinishExec(id),
+            Continuation::RootBoundary { implementation, principal } => {
+                Continuation::RootBoundary { implementation, principal }
+            },
             Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
                 Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch }
             },

@@ -27,15 +27,15 @@ use crate::{
     continuation_stack::{Continuation, ContinuationStack},
     crypto::merkle::MerklePath,
     mast::{
-        BasicBlockNode, JoinNode, LoopNode, MastForest, MastForestId, MastNode, MastNodeExt,
-        MastNodeId, SparseMastForest, SparseMastForestBuilder, SplitNode, VisitKind,
+        BasicBlockNode, ExecNode, JoinNode, LoopNode, MastForest, MastForestId, MastNode,
+        MastNodeExt, MastNodeId, SparseMastForest, SparseMastForestBuilder, SplitNode, VisitKind,
     },
     processor::{Processor, StackInterface, SystemInterface},
     trace::chiplets::{
         CircuitEvaluation, PTR_OFFSET_ELEM, PTR_OFFSET_WORD,
         layout::{ControllerRow, LogicalControllerAddress},
     },
-    tracer::{OperationHelperRegisters, Tracer},
+    tracer::{CycleProjection, OperationHelperRegisters, Tracer},
     utils::Idx,
 };
 
@@ -415,6 +415,10 @@ impl ExecutionTracer {
                 Continuation::FinishLoop(node_id) => Continuation::FinishLoop(node_id),
                 Continuation::FinishCall(id) => Continuation::FinishCall(id),
                 Continuation::FinishDyn(id) => Continuation::FinishDyn(id),
+                Continuation::FinishExec(id) => Continuation::FinishExec(id),
+                Continuation::RootBoundary { implementation, principal } => {
+                    Continuation::RootBoundary { implementation, principal }
+                },
                 Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
                     Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch }
                 },
@@ -585,14 +589,18 @@ impl ExecutionTracer {
 
                 None
             },
-            MastNode::Call(node) => {
-                let callee_hash = current_forest
-                    .get_node_by_id(node.callee())
-                    .expect("call node's callee expected to be in the forest")
-                    .digest();
-
+            MastNode::Exec(node) => {
                 self.hasher_for_chiplet.record_hash_control_block(
-                    callee_hash,
+                    node.target().into_word(),
+                    EMPTY_WORD,
+                    ExecNode::DOMAIN,
+                    node.digest(),
+                );
+                None
+            },
+            MastNode::Call(node) => {
+                self.hasher_for_chiplet.record_hash_control_block(
+                    node.target().into_word(),
                     EMPTY_WORD,
                     node.domain(),
                     node.digest(),
@@ -752,6 +760,115 @@ impl Tracer for ExecutionTracer {
     type Processor = FastProcessor;
     type Forest = Arc<MastForest>;
 
+    fn prepare_clock_cycle(
+        &mut self,
+        processor: &FastProcessor,
+        continuation: &Continuation<Arc<MastForest>>,
+        _continuation_stack: &ContinuationStack<Arc<MastForest>>,
+        current_forest: &Arc<MastForest>,
+        projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        if projection.row != processor.system().clock()
+            || projection.row.as_usize().checked_add(1) != Some(projection.next_clock.as_usize())
+        {
+            return Err(ExecutionError::Internal("trace cycle projection does not match clock"));
+        }
+        if self.fragment_size == 0 {
+            return Err(ExecutionError::Internal("trace fragment size must be non-zero"));
+        }
+        if self.pending_address_error.is_some() || self.pending_restore_context {
+            return Err(ExecutionError::Internal("previous trace cycle was not finalized"));
+        }
+        if projection.row.as_usize().is_multiple_of(self.fragment_size) {
+            self.fragment_contexts
+                .try_reserve(1)
+                .map_err(|_| ExecutionError::Internal("trace fragment allocation failed"))?;
+        }
+        match continuation {
+            Continuation::StartNode(node_id) => {
+                let node = current_forest
+                    .get_node_by_id(*node_id)
+                    .ok_or(ExecutionError::Internal("trace start node is missing"))?;
+                if matches!(node, MastNode::External(_)) {
+                    return Err(ExecutionError::Internal("external trace node was not resolved"));
+                }
+                let mut missing_child = false;
+                node.for_each_child(|child| {
+                    missing_child |= current_forest.get_node_by_id(child).is_none();
+                });
+                if missing_child {
+                    return Err(ExecutionError::Internal("trace control child is missing"));
+                }
+                let count = match node {
+                    MastNode::Block(block) => {
+                        if block.op_batches().is_empty() {
+                            return Err(ExecutionError::Internal(
+                                "trace basic block has no batches",
+                            ));
+                        }
+                        block.num_op_batches()
+                    },
+                    _ => 1,
+                };
+                self.hasher_chiplet_shim.preflight_rows(count, CONTROLLER_ROWS_PER_HASHER_OP)?;
+                self.block_stack.prepare_push()?;
+            },
+            Continuation::Respan { .. } => {
+                self.block_stack
+                    .prepare_pop()?
+                    .addr
+                    .checked_advance(CONTROLLER_ROWS_PER_HASHER_OP)?;
+            },
+            Continuation::FinishLoop(_) if processor.stack_get(0) == ONE => {},
+            Continuation::FinishJoin(_)
+            | Continuation::FinishSplit(_)
+            | Continuation::FinishLoop(_)
+            | Continuation::FinishCall(_)
+            | Continuation::FinishDyn(_)
+            | Continuation::FinishExec(_)
+            | Continuation::FinishBasicBlock(_) => {
+                if self.block_stack.prepare_pop()?.ctx_info.is_some() {
+                    self.overflow_table.preflight_restore_context().map_err(|_| {
+                        ExecutionError::Internal("trace overflow context cannot be restored")
+                    })?;
+                }
+            },
+            Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
+                let block = current_forest
+                    .get_node_by_id(*node_id)
+                    .and_then(|node| match node {
+                        MastNode::Block(block) => Some(block),
+                        _ => None,
+                    })
+                    .ok_or(ExecutionError::Internal("trace basic block is missing"))?;
+                let op = block
+                    .op_batches()
+                    .get(*batch_index)
+                    .and_then(|batch| batch.ops().get(*op_idx_in_batch))
+                    .ok_or(ExecutionError::Internal("trace operation index is out of bounds"))?;
+                let rows = match op {
+                    Operation::Compress | Operation::LogDeferred => 1,
+                    Operation::MpVerify(_) => usize::try_from(
+                        processor.stack_get(4).as_canonical_u64(),
+                    )
+                    .map_err(|_| ExecutionError::Internal("Merkle depth is out of bounds"))?,
+                    Operation::MrUpdate => {
+                        usize::try_from(processor.stack_get(4).as_canonical_u64())
+                            .ok()
+                            .and_then(|depth| depth.checked_mul(2))
+                            .ok_or(ExecutionError::Internal("Merkle depth is out of bounds"))?
+                    },
+                    _ => 0,
+                };
+                self.hasher_chiplet_shim.preflight_rows(rows, CONTROLLER_ROWS_PER_HASHER_OP)?;
+            },
+            Continuation::EnterForest { .. } | Continuation::RootBoundary { .. } => {
+                return Err(ExecutionError::Internal("zero-cycle continuation cannot be traced"));
+            },
+        }
+        Ok(())
+    }
+
     /// When sufficiently many clock cycles have elapsed, starts a new trace state. Also updates the
     /// internal block stack.
     #[inline(always)]
@@ -802,7 +919,7 @@ impl Tracer for ExecutionTracer {
                 }
             },
             Continuation::StartNode(mast_node_id) => match &current_forest[mast_node_id] {
-                MastNode::Join(_) | MastNode::Loop(_) => {
+                MastNode::Join(_) | MastNode::Loop(_) | MastNode::Exec(_) => {
                     self.record_control_node_start(
                         &current_forest[mast_node_id],
                         processor,
@@ -878,6 +995,7 @@ impl Tracer for ExecutionTracer {
             | Continuation::FinishSplit(_)
             | Continuation::FinishCall(_)
             | Continuation::FinishDyn(_)
+            | Continuation::FinishExec(_)
             | Continuation::FinishLoop(_) // not a REPEAT, which is handled separately above
             | Continuation::FinishBasicBlock(_) => {
                 // The END of a loop drops the condition from the stack (the body always pushes it).
@@ -901,7 +1019,7 @@ impl Tracer for ExecutionTracer {
                     self.pending_restore_context = true;
                 }
             },
-            Continuation::EnterForest { .. } => {
+            Continuation::EnterForest { .. } | Continuation::RootBoundary { .. } => {
                 panic!("EnterForest continuations are guaranteed not to be passed here")
             },
         }
@@ -1250,12 +1368,13 @@ fn node_id_for_visit<F>(continuation: &Continuation<F>) -> Option<MastNodeId> {
         | Continuation::FinishSplit(id)
         | Continuation::FinishCall(id)
         | Continuation::FinishDyn(id)
+        | Continuation::FinishExec(id)
         | Continuation::FinishBasicBlock(id) => Some(id),
         Continuation::FinishLoop(id) => Some(id),
         Continuation::ResumeBasicBlock { node_id, .. } | Continuation::Respan { node_id, .. } => {
             Some(node_id)
         },
-        Continuation::EnterForest { .. } => None,
+        Continuation::EnterForest { .. } | Continuation::RootBoundary { .. } => None,
     }
 }
 
@@ -1285,6 +1404,11 @@ impl HasherChipletShim {
             hasher_replay: HasherResponseReplay::default(),
             block_addr_replay: BlockAddressReplay::default(),
         }
+    }
+
+    fn preflight_rows(&self, count: usize, rows_per_item: usize) -> Result<(), ExecutionError> {
+        self.next_row.checked_advance_many(count, rows_per_item)?;
+        Ok(())
     }
 
     /// Records the address returned from a call to `Hasher::hash_control_block()`.

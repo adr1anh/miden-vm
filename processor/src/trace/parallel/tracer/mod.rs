@@ -23,7 +23,7 @@ use crate::{
         chiplets::layout::ChipletsLayout,
         trace_state::{EndBlockFlags, EndBlockStackEntryKind},
     },
-    tracer::{OperationHelperRegisters, Tracer},
+    tracer::{CycleProjection, OperationHelperRegisters, Tracer},
 };
 
 mod trace_row;
@@ -212,6 +212,9 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                     current_forest,
                 )?;
             },
+            MastNode::Exec(exec_node) => {
+                self.fill_exec_start_trace_row(&processor.system, &processor.stack, exec_node)?;
+            },
             MastNode::Dyn(dyn_node) => {
                 let callee_hash = self.dyn_callee_hash.take().ok_or(ExecutionError::Internal(
                     "dyn callee hash not stored at start of clock cycle",
@@ -358,6 +361,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             },
             Continuation::FinishJoin(_)
             | Continuation::FinishSplit(_)
+            | Continuation::FinishExec(_)
             | Continuation::FinishBasicBlock(_) => {
                 Ok(EndBlockFlags::new(is_loop_body, EndBlockStackEntryKind::Continuation))
             },
@@ -404,6 +408,28 @@ impl<'a> CoreTraceGenerationTracer<'a> {
 impl Tracer for CoreTraceGenerationTracer<'_> {
     type Processor = ReplayProcessor;
     type Forest = Arc<SparseMastForest>;
+
+    fn prepare_clock_cycle(
+        &mut self,
+        processor: &ReplayProcessor,
+        continuation: &Continuation<Arc<SparseMastForest>>,
+        _continuation_stack: &ContinuationStack<Arc<SparseMastForest>>,
+        current_forest: &Arc<SparseMastForest>,
+        projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        if self.error_encountered.is_some() {
+            return Err(ExecutionError::Internal("core replay tracer has been invalidated"));
+        }
+        if projection.row != processor.system.clk
+            || projection.row.as_usize().checked_add(1) != Some(projection.next_clock.as_usize())
+        {
+            return Err(ExecutionError::Internal("core replay projection does not match clock"));
+        }
+        self.writer.preflight_write_row(self.row_write_index)?;
+        self.get_execution_context_for_dyncall(current_forest, continuation, processor)?;
+        self.get_dyn_callee_hash(continuation, processor, current_forest)?;
+        self.preflight_trace_row(continuation, processor, current_forest)
+    }
 
     fn start_clock_cycle(
         &mut self,
@@ -536,6 +562,21 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
                         flags.to_hasher_state_second_word(),
                     )?;
                 },
+                FinishExec(node_id) => {
+                    let node = get_node_in_forest(current_forest, *node_id)?;
+                    if !matches!(node, MastNode::Exec(_)) {
+                        return Err(ExecutionError::Internal(
+                            "expected exec node in FinishExec continuation",
+                        ));
+                    }
+                    let flags = self.compute_end_block_flags(continuation, current_forest)?;
+                    self.fill_end_trace_row(
+                        &processor.system,
+                        &processor.stack,
+                        node.digest(),
+                        flags.to_hasher_state_second_word(),
+                    )?;
+                },
                 FinishDyn(node_id) => {
                     let node = get_node_in_forest(current_forest, *node_id)?;
                     let flags = self.compute_end_block_flags(continuation, current_forest)?;
@@ -623,7 +664,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
                         flags.to_hasher_state_second_word(),
                     )?;
                 },
-                EnterForest { .. } => {
+                EnterForest { .. } | RootBoundary { .. } => {
                     unreachable!(
                         "Tracer contract guarantees that EnterForest continuations do not occur here"
                     )

@@ -384,6 +384,23 @@ pub struct BlockStackReplay {
 }
 
 impl BlockStackReplay {
+    /// Checks the next start record without advancing replay.
+    pub(crate) fn peek_node_start_parent_addr(
+        &self,
+    ) -> Result<LogicalControllerAddress, ExecutionError> {
+        self.node_start_parent_addr
+            .front()
+            .copied()
+            .ok_or(ExecutionError::Internal("no node start parent address recorded"))
+    }
+
+    /// Checks the next END record without advancing replay.
+    pub(crate) fn peek_node_end(&self) -> Result<&NodeEndData, ExecutionError> {
+        self.node_end
+            .front()
+            .ok_or(ExecutionError::Internal("no node address and flags recorded"))
+    }
+
     /// Records the node's parent address
     pub fn record_node_start_parent_addr(&mut self, parent_addr: LogicalControllerAddress) {
         self.node_start_parent_addr.push_back(parent_addr);
@@ -1085,6 +1102,14 @@ pub struct BlockAddressReplay {
 }
 
 impl BlockAddressReplay {
+    /// Checks the next Controller address without advancing replay.
+    pub(crate) fn peek_block_address(&self) -> Result<LogicalControllerAddress, ExecutionError> {
+        self.block_addresses
+            .front()
+            .copied()
+            .ok_or(ExecutionError::Internal("no block address operations recorded"))
+    }
+
     /// Records the address associated with a `Hasher::hash_control_block` or
     /// `Hasher::hash_basic_block` operation.
     pub fn record_block_address(&mut self, addr: LogicalControllerAddress) {

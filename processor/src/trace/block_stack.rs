@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use miden_core::{Felt, Word};
 
 use super::chiplets::layout::LogicalControllerAddress;
-use crate::ContextId;
+use crate::{ContextId, ExecutionError};
 
 // BLOCK STACK
 // ================================================================================================
@@ -22,6 +22,18 @@ pub struct BlockStack {
 impl BlockStack {
     // STATE ACCESSORS AND MUTATORS
     // --------------------------------------------------------------------------------------------
+
+    /// Reserves a start frame before any transition state is published.
+    pub(crate) fn prepare_push(&mut self) -> Result<(), ExecutionError> {
+        self.blocks
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("block-stack allocation failed"))
+    }
+
+    /// Checks an END frame without consuming it.
+    pub(crate) fn prepare_pop(&self) -> Result<&BlockInfo, ExecutionError> {
+        self.blocks.last().ok_or(ExecutionError::Internal("block stack is empty"))
+    }
 
     /// Pushes a new code block onto the block stack and returns the address of the block's parent.
     ///

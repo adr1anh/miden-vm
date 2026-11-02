@@ -170,12 +170,12 @@ impl OverflowTable {
         let _ = self.overflow.push(OverflowStack::new()); // discard returned index
     }
 
-    /// Restores the specified context.
+    /// Checks restoration of the previous context without consuming either stack.
     ///
     /// Returns an error if the overflow table has no stacks (i.e. there is no current context)
     /// or if the overflow stack for the current context is not empty (i.e. the caller should
     /// have drained it before calling this function).
-    pub fn restore_context(&mut self) -> Result<(), OperationError> {
+    pub(crate) fn preflight_restore_context(&self) -> Result<(), OperationError> {
         let len = self.overflow.len();
 
         if len <= 1 {
@@ -191,7 +191,13 @@ impl OverflowTable {
             ));
         }
 
-        self.overflow.swap_remove(len - 1);
+        Ok(())
+    }
+
+    /// Restores the previous context after checking that the child overflow stack is empty.
+    pub fn restore_context(&mut self) -> Result<(), OperationError> {
+        self.preflight_restore_context()?;
+        self.overflow.swap_remove(self.overflow.len() - 1);
         Ok(())
     }
 
