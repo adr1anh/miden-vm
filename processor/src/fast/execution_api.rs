@@ -1182,3 +1182,48 @@ mod tests {
             .install(|| assert!(FastProcessor::rayon_has_no_parallel_worker()));
     }
 }
+
+#[cfg(test)]
+mod completed_session_tests {
+    use super::*;
+    use crate as processor;
+    use crate::{ExecutionOptions, SessionPhase};
+
+    #[allow(dead_code)]
+    mod common {
+        include!("../../tests/common/keyed_witness.rs");
+    }
+
+    #[test]
+    fn full_execution_moves_the_original_completed_native_owner_into_replay() {
+        let common::ExecutionFixture { program, environment, mut host } =
+            common::execution_fixture(vec![miden_core::operations::Operation::Noop]);
+        let processor = FastProcessor::new(StackInputs::default())
+            .with_options(
+                ExecutionOptions::default().with_environment_trace_limits(common::trace_limits()),
+            )
+            .unwrap();
+        let mut tracer = ExecutionTracer::new(64, MIN_STACK_DEPTH, common::trace_limits()).unwrap();
+        let (_, session) = processor
+            .execute_with_tracer_and_session_sync(&program, environment, &mut host, &mut tracer)
+            .unwrap();
+        assert_eq!(session.phase(), SessionPhase::Completed);
+        let counters = session.finalize().unwrap();
+        let occurrences = session.ledger().occurrences().as_ptr();
+        let bindings = session.bindings().as_ptr();
+        let root_use = session.uses().next().unwrap() as *const crate::InvocationUse;
+        assert_eq!(session.bindings()[0].counts().normal, 1);
+        assert_eq!(session.bindings()[0].counts().syscall, 0);
+        assert_eq!(counters.committed_requests, 1);
+        assert_eq!(counters.reserved_requests, 0);
+
+        let trace = tracer.into_trace_replay(session).unwrap();
+        trace.require_validated().unwrap();
+        let retained = &trace.resolution_session;
+        assert_eq!(retained.finalize().unwrap(), counters);
+        assert_eq!(retained.ledger().occurrences().as_ptr(), occurrences);
+        assert_eq!(retained.bindings().as_ptr(), bindings);
+        assert_eq!(retained.uses().next().unwrap() as *const crate::InvocationUse, root_use);
+        assert_eq!(retained.bindings()[0].counts().normal, 1);
+    }
+}
