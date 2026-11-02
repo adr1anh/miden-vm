@@ -1386,3 +1386,41 @@ Next relay the existing owned completed session through execution-witness captur
 revalidation, account its actual retained storage, and share one pair/request walker for registration
 before exact admission and final writing afterward. Production packed/public/boundary/Controller/
 lookup/security/generated/recursive gates and all inherited checks remain open; PR06 stays in progress.
+
+
+### PR 06 Completed native owner relay and shared pre-admission walk
+
+`de1e70117` factors one fixed-stack pair/request traversal. Pre-admission visits stream compression
+requests without prefix storage; final writing uses the same canonical implementation without
+registering requests again. `a1691533b` preserves typed keyed-trace/resource errors without formatting
+or allocating on failure. Review caught threshold probes accepting every error as an expected
+retained-limit rejection; all probes now reject unrelated failures, including entry metadata's
+previously erased budget errors. `f34e805d4` separately factors the actual shared test fixture.
+
+`cf08681dc` moves the original completed ResolutionSession through every full proving/source/async/
+streamed path into required native TraceReplay storage. Public execute APIs discard the returned
+owner; stopped/resumable contexts keep theirs. Bounded reads retain the completed session already
+built by native revalidation. No cloned ledger, optional/default authority, new encoded field or
+wire-version change is introduced. Capture/root-END queue preparation, read and export account exact
+native retained capacities, including the final keyed-record delta. Trace preparation peak remains
+explicitly separate from native preparation; read allowances are clamped before native allocation,
+and final retained checks precede use/validation publication. Fixture budgets remain unchanged.
+
+`c35c3c5e2` adds private original-owner/entry-frequency/retention/drop/trust tests and migrates six
+stale replay serialization fixtures. These are reviewed but unrun behind the existing three assembly
+migration errors; inherited Controller address fixtures still need constructor migration. `d39735bbe`
+adds public mode/wire/claim/descriptor/full-matrix parity and independently measured exact capture,
+read, live-export and restored-export retained boundaries. Capacity differences do not imply equal
+thresholds. Neither private source review nor public replay parity establishes a proof relation.
+
+After AC/heavy guards: seven exact-source walker tests, eight public witness tests with both default
+and testing/source-async configurations, and sixteen public execution tests including all40 native
+mode/API cases passed. Strict processor library and source/public-test Clippy in both configurations,
+plus no-default-features processor, passed. Logs: `pr06-session-relay-*`. The isolated harness lock was
+refreshed offline for its real testing feature; no repository dependency/default changed.
+
+Next coordinate packed selectors, physical views/bands/writers, Controller entry/address relocation,
+periodic9 and `[4,4,3,2]` lookup redistribution with required public8/boundary inputs. The current
+materializer still discards the retained owner and uses a zero prefix. Production Library dispatch,
+Core Resolve/root-END/statement activation, full Range/And8 closure and all measured/generated/
+recursive/security gates remain open. PR06 stays in progress; no GitHub PR or push was created.
