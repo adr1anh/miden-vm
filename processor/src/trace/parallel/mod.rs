@@ -16,7 +16,7 @@ use miden_core::{
     field::{PrimeCharacteristicRing, batch_inversion_allow_zeros},
     mast::{MastForestId, SparseMastForest},
     operations::opcodes,
-    program::{KernelDescriptor, MIN_STACK_DEPTH},
+    program::MIN_STACK_DEPTH,
     utils::Idx,
 };
 use miden_stark::memory::ProvingBudget;
@@ -28,7 +28,7 @@ use super::{
     execution_tracer::TraceReplay,
     trace_state::{
         AceReplay, BitwiseOp, BitwiseReplay, BitwiseReplayEntry, CoreTraceFragmentContext,
-        CoreTraceState, HasherRequestReplay, KernelReplay, MemoryWritesReplay, RangeCheckerReplay,
+        CoreTraceState, HasherRequestReplay, MemoryWritesReplay, RangeCheckerReplay,
         ResolvedBasicBlockGroups, ResolvedHasherOp,
     },
 };
@@ -38,7 +38,7 @@ use crate::{
     errors::MapExecErrNoCtx,
     trace::{
         ChipletsLengths, TraceLenSummary, VmTrace, VmWitness,
-        chiplets::{Ace, Bitwise, Hasher, KernelRom, Memory, layout::ChipletsLayout},
+        chiplets::{Ace, Bitwise, Hasher, LibraryTrace, Memory, layout::ChipletsLayout},
         parallel::{processor::ReplayProcessor, tracer::CoreTraceGenerationTracer},
         range::RangeChecker,
         utils::RowMajorTraceWriter,
@@ -141,13 +141,13 @@ fn build_trace_inner(
 
     let TraceReplay {
         environment: _,
-        resolution_session: _,
+        resolution_session,
         core_trace_contexts,
         mast_forest_store,
         range_checker_replay,
         memory_writes,
         bitwise_replay: bitwise,
-        kernel_replay,
+        kernel_replay: _,
         hasher_for_chiplet,
         ace_replay,
         fragment_size,
@@ -179,21 +179,21 @@ fn build_trace_inner(
         return Err(ExecutionError::Internal("no trace fragments provided in the trace witness"));
     }
 
+    let library = LibraryTrace::new(&resolution_session)?;
     let chiplets = initialize_chiplets(
-        program_info.kernel().clone(),
+        &library,
         &core_trace_contexts,
         memory_writes,
         bitwise,
-        kernel_replay,
         hasher_for_chiplet,
         prebuilt_hasher,
         ace_replay,
         &mast_forest_store,
         max_trace_len,
     )?;
-    // Both buffered and prebuilt Controller producers converge before physical placement.
-    // PR 06 will supply the authenticated Library prefix here.
-    let layout = chiplets.layout(0)?;
+    // Buffered, replayed and streamed Controller producers converge before the sole logical-to-
+    // physical address conversion. Library requests are already interned into this same Hasher.
+    let layout = chiplets.layout(library.prefix_len())?;
 
     let eidos_compression_trace_len = chiplets.eidos_compression_trace_len();
     let eidos_compression_height = pad_to_trace_length(eidos_compression_trace_len);
@@ -244,11 +244,12 @@ fn build_trace_inner(
     let trace_len_summary = TraceLenSummary::new(
         core_trace_len,
         ChipletsLengths::from_parts(
+            layout.library().len(),
             layout.controller().len(),
-            layout.bitwise().len(),
+            layout.aead().len(),
             layout.memory().len(),
             layout.ace().len(),
-            layout.kernel_rom().len(),
+            layout.bitwise().len(),
         ),
         eidos_compression_trace_len,
         byte_pair_lookup_rows,
@@ -257,7 +258,7 @@ fn build_trace_inner(
 
     // Each segment is built at its own per-AIR height (no cross-padding to the unified max).
     let (chiplets_result, ()) = rayon::join(
-        || chiplets.into_traces(layout, chiplets_height, eidos_compression_height),
+        || chiplets.into_traces(&library, layout, chiplets_height, eidos_compression_height),
         || pad_core_row_major(&mut core_trace_data, core_height),
     );
     let (chiplets_trace, eidos_compression_trace, mut and8_counts) = chiplets_result?;
@@ -620,11 +621,10 @@ fn initialize_range_checker(
 /// Replays recorded operations to populate chiplet traces. Results were already used during
 /// execution; this pass only needs the trace-recording side effects.
 fn initialize_chiplets(
-    kernel: KernelDescriptor,
+    library: &LibraryTrace<'_>,
     core_trace_contexts: &[CoreTraceFragmentContext],
     memory_writes: MemoryWritesReplay,
     bitwise: BitwiseReplay,
-    kernel_replay: KernelReplay,
     hasher_for_chiplet: HasherRequestReplay,
     prebuilt_hasher: Option<Hasher>,
     ace_replay: AceReplay,
@@ -632,7 +632,7 @@ fn initialize_chiplets(
     max_trace_len: usize,
 ) -> Result<Chiplets, ExecutionError> {
     let non_hasher_trace_len = non_hasher_trace_len(
-        &kernel,
+        library.prefix_len(),
         core_trace_contexts,
         &memory_writes,
         &bitwise,
@@ -650,7 +650,7 @@ fn initialize_chiplets(
         return Err(ExecutionError::TraceLenExceeded(max_trace_len));
     }
 
-    let (hasher, (bitwise, (memory, (ace, kernel_rom)))) = rayon::join(
+    let (hasher, (bitwise, (memory, ace))) = rayon::join(
         || match prebuilt_hasher {
             Some(hasher) => Ok(hasher),
             None => build_hasher_chiplet(
@@ -671,31 +671,34 @@ fn initialize_chiplets(
                 || {
                     rayon::join(
                         || build_memory_chiplet(memory_writes, core_trace_contexts, max_trace_len),
-                        || {
-                            rayon::join(
-                                || build_ace_chiplet(ace_replay, max_trace_len),
-                                || build_kernel_rom_chiplet(kernel, kernel_replay, max_trace_len),
-                            )
-                        },
+                        || build_ace_chiplet(ace_replay, max_trace_len),
                     )
                 },
             )
         },
     );
 
-    let chiplets = Chiplets {
+    let mut chiplets = Chiplets {
         hasher: hasher?,
         bitwise: bitwise?,
         memory: memory?,
         ace: ace?,
-        kernel_rom: kernel_rom?,
     };
     debug_assert_eq!(
         non_hasher_trace_len,
-        chiplets.trace_len() - chiplets.hasher.trace_len(),
+        library.prefix_len() + chiplets.trace_len() - chiplets.hasher.trace_len(),
         "chiplet preflight length differs from the materialized trace",
     );
-    if chiplets.trace_len() > max_trace_len
+    // Register request-only traversal before deriving Eidos height, padded range multiplicities
+    // or exact prover admission. The final prefix writer must not register them a second time.
+    library.visit_compression_requests(|state| {
+        chiplets.hasher.record_packed_compression_request(state, 1)?;
+        if chiplets.eidos_compression_trace_len() > max_trace_len {
+            return Err(ExecutionError::TraceLenExceeded(max_trace_len));
+        }
+        Ok(())
+    })?;
+    if chiplets.layout(library.prefix_len())?.trace_len() > max_trace_len
         || chiplets.eidos_compression_trace_len() > max_trace_len
     {
         return Err(ExecutionError::TraceLenExceeded(max_trace_len));
@@ -704,7 +707,7 @@ fn initialize_chiplets(
 }
 
 fn non_hasher_trace_len(
-    kernel: &KernelDescriptor,
+    library_len: usize,
     core_trace_contexts: &[CoreTraceFragmentContext],
     memory_writes: &MemoryWritesReplay,
     bitwise: &BitwiseReplay,
@@ -722,7 +725,7 @@ fn non_hasher_trace_len(
         .ok_or_else(overflow)?;
     let ace_len = ace.trace_len().ok_or_else(overflow)?;
 
-    [1, kernel.proc_hashes().len(), bitwise_len, memory_len, ace_len]
+    [1, library_len, bitwise_len, memory_len, ace_len]
         .into_iter()
         .try_fold(0usize, usize::checked_add)
         .filter(|&total| total <= max_trace_len)
@@ -892,21 +895,6 @@ fn build_ace_chiplet(ace_replay: AceReplay, max_trace_len: usize) -> Result<Ace,
         }
     }
     Ok(ace)
-}
-
-fn build_kernel_rom_chiplet(
-    kernel: KernelDescriptor,
-    kernel_replay: KernelReplay,
-    max_trace_len: usize,
-) -> Result<KernelRom, ExecutionError> {
-    let mut kernel_rom = KernelRom::new(kernel);
-    for proc_hash in kernel_replay {
-        kernel_rom.access_proc(proc_hash).map_exec_err_no_ctx()?;
-        if kernel_rom.trace_len() > max_trace_len {
-            return Err(ExecutionError::TraceLenExceeded(max_trace_len));
-        }
-    }
-    Ok(kernel_rom)
 }
 
 /// Pads the core trace to `core_height` rows (HALT template, CLK incremented per row).

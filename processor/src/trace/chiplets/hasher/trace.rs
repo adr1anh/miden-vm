@@ -214,10 +214,10 @@ impl HasherTrace {
 
             trace.copy_rows_into(row_idx, &chunk[..n * row_width]);
 
-            // Write `s_ctrl = ONE` on controller and padding rows.
+            // Write packed `C = ONE` at c[1], leaving the Library selector c[0] zero.
             for i in 0..n {
                 let prefix = trace.prefix_mut(row_idx + i);
-                if let Some(s_ctrl) = prefix.first_mut() {
+                if let Some(s_ctrl) = prefix.get_mut(1) {
                     *s_ctrl = ONE;
                 }
             }

@@ -118,30 +118,38 @@ impl PhysicalControllerAddress {
 
 /// Immutable ownership of physical Chiplets placement at final trace materialization.
 ///
-/// Producers, snapshots and replay retain logical Controller addresses. The current relation
-/// supplies a zero prefix; the Library integration will supply its real prefix through this same
-/// constructor. Reserving a prefix here does not construct or authenticate a Library witness.
+/// Producers, snapshots and replay retain logical Controller addresses. Only this checked owner
+/// places the admitted Library prefix and the six row families in the final matrix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ChipletsLayout {
+    library: ChipletBand,
     controller: ChipletBand,
+    aead: ChipletBand,
     bitwise: ChipletBand,
     memory: ChipletBand,
     ace: ChipletBand,
-    kernel_rom: ChipletBand,
     padding_start: usize,
     trace_len: usize,
 }
 
 impl ChipletsLayout {
     pub(crate) fn new(
-        prefix_len: usize,
+        library_len: usize,
         controller_len: usize,
-        bitwise_len: usize,
+        aead_len: usize,
         memory_len: usize,
         ace_len: usize,
-        kernel_rom_len: usize,
+        bitwise_len: usize,
     ) -> Result<Self, ExecutionError> {
-        let mut next = prefix_len;
+        // These sections share the global period-eight phase. Check placement before any matrix
+        // allocation; row-local Memory/ACE/Bitwise sections need no additional alignment.
+        if !library_len.is_multiple_of(8)
+            || !controller_len.is_multiple_of(8)
+            || !aead_len.is_multiple_of(8)
+        {
+            return Err(ExecutionError::Internal("unaligned packed Chiplets trace band"));
+        }
+        let mut next = 0usize;
         let mut band = |len| {
             let start = next;
             next = next.checked_add(len).ok_or_else(trace_len_exceeded)?;
@@ -150,11 +158,12 @@ impl ChipletsLayout {
             }
             Ok(ChipletBand { start, len })
         };
+        let library = band(library_len)?;
         let controller = band(controller_len)?;
-        let bitwise = band(bitwise_len)?;
+        let aead = band(aead_len)?;
         let memory = band(memory_len)?;
         let ace = band(ace_len)?;
-        let kernel_rom = band(kernel_rom_len)?;
+        let bitwise = band(bitwise_len)?;
         let padding_start = next;
         // Auxiliary connector columns require one padding row after the final chiplet.
         let trace_len = next.checked_add(1).ok_or_else(trace_len_exceeded)?;
@@ -162,11 +171,12 @@ impl ChipletsLayout {
             return Err(trace_len_exceeded());
         }
         Ok(Self {
+            library,
             controller,
+            aead,
             bitwise,
             memory,
             ace,
-            kernel_rom,
             padding_start,
             trace_len,
         })
@@ -189,6 +199,14 @@ impl ChipletsLayout {
         }
     }
 
+    pub(crate) fn library(self) -> ChipletBand {
+        self.library
+    }
+
+    pub(crate) fn aead(self) -> ChipletBand {
+        self.aead
+    }
+
     pub(crate) fn controller(self) -> ChipletBand {
         self.controller
     }
@@ -203,10 +221,6 @@ impl ChipletsLayout {
 
     pub(crate) fn ace(self) -> ChipletBand {
         self.ace
-    }
-
-    pub(crate) fn kernel_rom(self) -> ChipletBand {
-        self.kernel_rom
     }
 
     pub(crate) fn trace_len(self) -> usize {
@@ -292,14 +306,16 @@ mod tests {
     }
 
     #[test]
-    fn physical_layout_preserves_absence_and_zero_prefix_identity() {
-        for prefix in [0, 13] {
-            let layout = ChipletsLayout::new(prefix, 3, 2, 1, 0, 1).unwrap();
+    fn physical_layout_preserves_absence_and_logical_zero() {
+        for prefix in [0, 16] {
+            let layout = ChipletsLayout::new(prefix, 8, 8, 1, 2, 3).unwrap();
+            assert_eq!(layout.library().start(), 0);
+            assert_eq!(layout.library().len(), prefix);
             assert_eq!(
                 layout.controller_address(LogicalControllerAddress::ABSENT).unwrap().to_felt(),
                 Felt::from_u32(0)
             );
-            for row in 0..3 {
+            for row in 0..8 {
                 let logical = ControllerRow::new(row).unwrap().logical_address();
                 let physical = layout.controller_address(logical).unwrap().to_felt();
                 assert_eq!(physical, Felt::from_u32((prefix + row + 1) as u32));
@@ -307,14 +323,14 @@ mod tests {
                     assert_eq!(physical, logical.to_felt());
                 }
             }
-            assert_eq!(layout.bitwise().start(), prefix + 3);
-            assert_eq!(layout.memory().start(), prefix + 5);
-            assert_eq!(layout.ace().start(), prefix + 6);
-            assert_eq!(layout.kernel_rom().start(), prefix + 6);
-            assert_eq!(layout.trace_len(), prefix + 8);
+            assert_eq!(layout.aead().start(), prefix + 8);
+            assert_eq!(layout.memory().start(), prefix + 16);
+            assert_eq!(layout.ace().start(), prefix + 17);
+            assert_eq!(layout.bitwise().start(), prefix + 19);
+            assert_eq!(layout.trace_len(), prefix + 23);
             assert!(
                 layout
-                    .controller_address(ControllerRow::new(3).unwrap().logical_address())
+                    .controller_address(ControllerRow::new(8).unwrap().logical_address())
                     .is_err()
             );
         }
@@ -322,11 +338,11 @@ mod tests {
 
     #[test]
     fn physical_bounds_are_separate_from_representable_end_cursors() {
-        let layout = ChipletsLayout::new(0, MAX_TRACE_LEN - 1, 0, 0, 0, 0).unwrap();
-        let last = ControllerRow::new(MAX_TRACE_LEN - 2).unwrap().logical_address();
+        let layout = ChipletsLayout::new(0, MAX_TRACE_LEN - 8, 0, 7, 0, 0).unwrap();
+        let last = ControllerRow::new(MAX_TRACE_LEN - 9).unwrap().logical_address();
         assert_eq!(
             layout.controller_address(last).unwrap().to_felt(),
-            Felt::from_u32(MAX_TRACE_LEN as u32 - 1)
+            Felt::from_u32(MAX_TRACE_LEN as u32 - 8)
         );
         assert_eq!(
             layout.padding(MAX_TRACE_LEN).unwrap().clock_at(0),
@@ -337,9 +353,12 @@ mod tests {
         assert!(layout.controller_address(end_cursor).is_err());
         assert_trace_len_exceeded(ChipletsLayout::new(0, MAX_TRACE_LEN, 0, 0, 0, 0));
         assert_trace_len_exceeded(ChipletsLayout::new(MAX_TRACE_LEN, 0, 0, 0, 0, 0));
-        assert_trace_len_exceeded(ChipletsLayout::new(usize::MAX, 1, 0, 0, 0, 0));
-        assert_trace_len_exceeded(ChipletsLayout::new(1, 1, usize::MAX, 0, 0, 0));
+        assert_trace_len_exceeded(ChipletsLayout::new(MAX_TRACE_LEN + 8, 8, 0, 0, 0, 0));
+        assert_trace_len_exceeded(ChipletsLayout::new(8, 8, 0, usize::MAX, 0, 0));
         assert_trace_len_exceeded(layout.padding(MAX_TRACE_LEN + 1));
         assert!(layout.padding(MAX_TRACE_LEN - 1).is_err());
+        for lengths in [(1, 8, 8), (8, 1, 8), (8, 8, 1)] {
+            assert!(ChipletsLayout::new(lengths.0, lengths.1, lengths.2, 0, 0, 0).is_err());
+        }
     }
 }

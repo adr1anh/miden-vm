@@ -1,10 +1,9 @@
-use alloc::{boxed::Box, vec, vec::Vec};
+use alloc::{vec, vec::Vec};
 use core::{borrow::BorrowMut, mem::size_of};
 
 use miden_air_definitions::vm::{
     AeadStreamCols, BitwiseCols,
     trace::{
-        CHIPLETS_STREAM_MODE_COL,
         and8_lookup::{BYTE_LOOKUP_COUNT_LEN, BytePairRelation, byte_pair_count_index},
         chiplets::{
             bitwise::{BITWISE_AND, BITWISE_XOR, OP_CYCLE_LEN, TRACE_WIDTH},
@@ -14,8 +13,7 @@ use miden_air_definitions::vm::{
 };
 use miden_core::{chiplets::eidos_compression, field::Field};
 
-use super::BITWISE_COL_START;
-use crate::{Felt, ONE, ZERO, operation::OperationError, trace::ChipletTraceFragment};
+use crate::{Felt, ZERO, operation::OperationError, trace::ChipletTraceFragment};
 
 #[cfg(test)]
 mod tests;
@@ -26,11 +24,7 @@ mod tests;
 /// Initial capacity, in ops.
 const INIT_OPS_CAPACITY: usize = 128;
 pub(crate) const AEAD_STREAM_CYCLE_LEN: usize = 8;
-const AEAD_STREAM_WIDTH: usize = size_of::<AeadStreamCols<u8>>();
-const STREAM_MODE_OFFSET: usize = AEAD_STREAM_WIDTH;
-pub(crate) const AEAD_STREAM_FRAGMENT_WIDTH: usize = STREAM_MODE_OFFSET + 1;
-
-const _: () = assert!(BITWISE_COL_START + STREAM_MODE_OFFSET == CHIPLETS_STREAM_MODE_COL);
+pub(crate) const AEAD_STREAM_FRAGMENT_WIDTH: usize = size_of::<AeadStreamCols<u8>>();
 const _: () = assert!(CONTROLLER_TRACE_ALIGNMENT.is_multiple_of(AEAD_STREAM_CYCLE_LEN));
 
 // BITWISE OPERATION
@@ -79,25 +73,6 @@ struct AeadStreamOp {
     ciphertext: [Felt; 8],
 }
 
-#[derive(Debug)]
-enum Entry {
-    Bitwise(BitwiseOp),
-    AeadStream(Box<AeadStreamOp>),
-}
-
-impl Entry {
-    fn row_count(&self) -> usize {
-        match self {
-            Self::Bitwise(_) => OP_CYCLE_LEN,
-            Self::AeadStream(_) => AEAD_STREAM_CYCLE_LEN,
-        }
-    }
-
-    fn is_aead_stream(&self) -> bool {
-        matches!(self, Self::AeadStream(_))
-    }
-}
-
 // BITWISE
 // ================================================================================================
 
@@ -120,8 +95,8 @@ impl Entry {
 /// - `c*` are bytewise `a & b` witnesses.
 #[derive(Debug)]
 pub struct Bitwise {
-    entries: Vec<Entry>,
-    trace_len: usize,
+    normal_ops: Vec<BitwiseOp>,
+    aead_ops: Vec<AeadStreamOp>,
 }
 
 impl Bitwise {
@@ -130,8 +105,8 @@ impl Bitwise {
     /// Returns a new [Bitwise] initialized with an empty op log.
     pub fn new() -> Self {
         Self {
-            entries: Vec::with_capacity(INIT_OPS_CAPACITY),
-            trace_len: 0,
+            normal_ops: Vec::with_capacity(INIT_OPS_CAPACITY),
+            aead_ops: Vec::new(),
         }
     }
 
@@ -141,7 +116,15 @@ impl Bitwise {
     /// Returns length of execution trace required to describe bitwise operations executed on the
     /// VM.
     pub fn trace_len(&self) -> usize {
-        self.trace_len
+        self.normal_trace_len() + self.aead_trace_len()
+    }
+
+    pub(crate) fn normal_trace_len(&self) -> usize {
+        self.normal_ops.len() * OP_CYCLE_LEN
+    }
+
+    pub(crate) fn aead_trace_len(&self) -> usize {
+        self.aead_ops.len() * AEAD_STREAM_CYCLE_LEN
     }
 
     // TRACE MUTATORS
@@ -166,8 +149,7 @@ impl Bitwise {
     fn record(&mut self, op: Op, a: Felt, b: Felt) -> Result<Felt, OperationError> {
         let a = assert_u32(a)?;
         let b = assert_u32(b)?;
-        self.entries.push(Entry::Bitwise(BitwiseOp { op, a, b }));
-        self.trace_len += OP_CYCLE_LEN;
+        self.normal_ops.push(BitwiseOp { op, a, b });
         Ok(Felt::from_u32(op.apply(a, b)))
     }
 
@@ -197,7 +179,7 @@ impl Bitwise {
             }
         }
 
-        self.entries.push(Entry::AeadStream(Box::new(AeadStreamOp {
+        self.aead_ops.push(AeadStreamOp {
             ctx,
             clk,
             src_ptr,
@@ -206,61 +188,39 @@ impl Bitwise {
             plaintext,
             keystream,
             ciphertext,
-        })));
-        self.trace_len += AEAD_STREAM_CYCLE_LEN;
+        });
         Ok(())
     }
 
     // EXECUTION TRACE GENERATION
     // --------------------------------------------------------------------------------------------
 
-    /// Fills the provided trace fragment with the row-major trace materialized from the recorded
-    /// op log: eight rows per AEAD stream entry followed by one row per normal bitwise op.
-    ///
-    /// AEAD stream entries are kept in execution order relative to each other and materialized
-    /// before the normal bitwise entries. The bitwise trace region starts on an 8-row boundary,
-    /// so this stable partition keeps every stream entry aligned with its period-8 constraints.
-    /// The interactions emitted by both entry kinds carry their execution metadata rather than a
-    /// trace-row address, so their relative placement in this trace is immaterial.
-    pub fn fill_trace(self, trace: &mut ChipletTraceFragment) -> Vec<u64> {
-        debug_assert_eq!(self.trace_len(), trace.len(), "inconsistent trace lengths");
-        debug_assert!(trace.width() >= TRACE_WIDTH, "inconsistent trace widths");
-        let has_stream_rows =
-            self.entries.iter().any(|entry| matches!(entry, Entry::AeadStream(_)));
-        debug_assert!(
-            !has_stream_rows || trace.width() >= AEAD_STREAM_FRAGMENT_WIDTH,
-            "trace fragment too narrow for AEAD stream rows",
+    /// Materializes the two typed family buffers into their separately admitted physical bands.
+    /// The mixed replay stream is routed once on insertion, preserving order within each family.
+    pub(crate) fn fill_trace(
+        self,
+        aead: &mut ChipletTraceFragment,
+        normal: &mut ChipletTraceFragment,
+    ) -> Vec<u64> {
+        debug_assert_eq!(self.aead_trace_len(), aead.len(), "inconsistent AEAD trace length");
+        debug_assert_eq!(
+            self.normal_trace_len(),
+            normal.len(),
+            "inconsistent bitwise trace length"
         );
-
-        let row_width = trace.width();
-        let mut row_offset = 0;
+        debug_assert!(aead.len() == 0 || aead.width() >= AEAD_STREAM_FRAGMENT_WIDTH);
+        debug_assert!(normal.width() >= TRACE_WIDTH);
         let mut and8_counts = vec![0u64; BYTE_LOOKUP_COUNT_LEN];
-
-        let entries = self
-            .entries
-            .iter()
-            .filter(|entry| entry.is_aead_stream())
-            .chain(self.entries.iter().filter(|entry| !entry.is_aead_stream()));
-
-        for entry in entries {
-            let row_count = entry.row_count();
-            if entry.is_aead_stream() {
-                debug_assert_eq!(row_offset % AEAD_STREAM_CYCLE_LEN, 0);
-            }
-            let mut chunk = vec![ZERO; row_width * row_count];
-            match entry {
-                Entry::Bitwise(op) => {
-                    fill_bitwise_chunk(&mut chunk, row_width, *op, &mut and8_counts);
-                },
-                Entry::AeadStream(op) => {
-                    fill_aead_stream_chunk(&mut chunk, row_width, **op, &mut and8_counts);
-                },
-            }
-            trace.copy_rows_into(row_offset, &chunk);
-            row_offset += row_count;
+        let mut aead_chunk = vec![ZERO; aead.width() * AEAD_STREAM_CYCLE_LEN];
+        for (index, op) in self.aead_ops.into_iter().enumerate() {
+            fill_aead_stream_chunk(&mut aead_chunk, aead.width(), op, &mut and8_counts);
+            aead.copy_rows_into(index * AEAD_STREAM_CYCLE_LEN, &aead_chunk);
         }
-        debug_assert_eq!(row_offset, trace.len());
-
+        let mut normal_chunk = vec![ZERO; normal.width()];
+        for (index, op) in self.normal_ops.into_iter().enumerate() {
+            fill_bitwise_chunk(&mut normal_chunk, normal.width(), op, &mut and8_counts);
+            normal.copy_rows_into(index * OP_CYCLE_LEN, &normal_chunk);
+        }
         and8_counts
     }
 }
@@ -333,11 +293,6 @@ fn fill_aead_stream_chunk(
         count_and8_witness(and8_counts, witness.bytes);
     }
 
-    for row_idx in 0..AEAD_STREAM_CYCLE_LEN {
-        let row = &mut chunk[row_idx * row_width..(row_idx + 1) * row_width];
-        row[STREAM_MODE_OFFSET] = ONE;
-    }
-
     // Each four-row half reads the same plaintext word and handles four consecutive u32 lanes.
     fill_stream_word_pair(
         &mut chunk[..4 * row_width],
@@ -377,7 +332,7 @@ fn fill_stream_word_pair(
 
     {
         let row = &mut chunk[0..row_width];
-        let cols: &mut AeadStreamCols<Felt> = row[..AEAD_STREAM_WIDTH].borrow_mut();
+        let cols: &mut AeadStreamCols<Felt> = row[..AEAD_STREAM_FRAGMENT_WIDTH].borrow_mut();
         let cols = cols.read_mut();
         cols.ctx = op.ctx;
         cols.clk = op.clk;
@@ -389,7 +344,7 @@ fn fill_stream_word_pair(
 
     {
         let row = &mut chunk[row_width..2 * row_width];
-        let cols: &mut AeadStreamCols<Felt> = row[..AEAD_STREAM_WIDTH].borrow_mut();
+        let cols: &mut AeadStreamCols<Felt> = row[..AEAD_STREAM_FRAGMENT_WIDTH].borrow_mut();
         let cols = cols.high_first_mut();
         cols.ctx = op.ctx;
         cols.clk = op.clk;
@@ -403,7 +358,7 @@ fn fill_stream_word_pair(
 
     {
         let row = &mut chunk[2 * row_width..3 * row_width];
-        let cols: &mut AeadStreamCols<Felt> = row[..AEAD_STREAM_WIDTH].borrow_mut();
+        let cols: &mut AeadStreamCols<Felt> = row[..AEAD_STREAM_FRAGMENT_WIDTH].borrow_mut();
         let cols = cols.low_second_mut();
         cols.ctx = op.ctx;
         cols.clk = op.clk;
@@ -418,7 +373,7 @@ fn fill_stream_word_pair(
 
     {
         let row = &mut chunk[3 * row_width..4 * row_width];
-        let cols: &mut AeadStreamCols<Felt> = row[..AEAD_STREAM_WIDTH].borrow_mut();
+        let cols: &mut AeadStreamCols<Felt> = row[..AEAD_STREAM_FRAGMENT_WIDTH].borrow_mut();
         let cols = cols.high_second_mut();
         cols.ctx = op.ctx;
         cols.clk = op.clk;
