@@ -235,11 +235,21 @@ Measure opening rows/compressions separately from invocation/context and Protoco
 
 **Checks after power guards:** repository `make exec`, `make exec-single`, `make format-check`, `make clippy`, `make test`, `make check-constraints`, `make check-pvm-proof-fixture`, `make test-masm-root-stability`; supported no_std surfaces including `cargo check -p miden-core -p miden-mast-package -p miden-assembly --no-default-features`; affected bounded fuzz/benchmark commands selected from the actual final changed graph. New test filters throughout this plan are provisional until registered test names exist; prefer the repository Make target where it supplies necessary features/stack settings. Resolve focused failures before broad suites, and repeat broad checks only for new changes/failures. Record exact commands/toolchains/features, commit SHAs and outcomes in the ledger/report. Verify deterministic regeneration with `git diff --exit-code` after intended generated changes are committed.
 
+## Resolved implementation decisions
+
+**D1 Environment-node preimage codec, agreed with the user on 2 November 2026:** own a VM v1
+record `version:u8=1 || kind:u8 || payload`, with Env=0, Mast=1, Data=2, Merkle=3, List=4.
+Fixed payload fields follow the selected hash-payload order and use existing canonical 32-byte
+Word encoding; Data's type is little-endian u32. List is a little-endian u32 child count followed
+by child words. Decoding requires exact input and a caller-supplied resource budget. This wire
+header/count encoding does not change the selected node hashes. Implement and test this codec
+separately from hash-only constructors. Protocol-specific codecs remain outside this decision.
+
 ## Open decisions and external gates
 
 | Gate | Required decision/evidence | Blocks |
 | --- | --- | --- |
-| Canonical cross-team wire contract | Confirm domain allocation collision check; Protocol/user/random wrappers; interface/release/resource codecs and full namespace provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
+| Canonical cross-team wire contract | VM node preimage codec is resolved in D1. Confirm remaining Protocol/user/random wrappers, interface/release/resource codecs and full namespace provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
 | Frontend syntax and eligibility | Agree explicit key/inline grammar, fixed-body inline eligibility and migration diagnostics; source alias versus published alias versus wrapper semantics. | 04, 09 |
 | Private reusable-instance ABI | Freeze runtime-base handle transport, typed relative suffix/procref lowering and validation. C/D must remain identical across randomized user mounts; no implicit relocation or caller-derived namespace. | 11, private-instance acceptance |
 | Shared/fresh-context ABI | Specify supported value/pointer layouts, global/heap/function-table ownership, initialization and reentrancy for supported libraries. Namespace authentication supplies no RAM isolation. Do not guess a fresh-context-only/stateless-only scope. | 11, 13, final supported launch claim |
