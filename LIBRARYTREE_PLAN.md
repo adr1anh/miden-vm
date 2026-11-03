@@ -495,7 +495,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; fresh processor/parallel/decoder/lookup migration evidence is at PR09, including 24 public-statement failures. Full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate now compiles and runs: 1,866 pass/24 legacy-public-statement failures/one existing ignore; 49 integrations and 69 concurrent replay tests pass. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
 | 09 Assembly/packages | implemented-awaiting-validation | Final review `0ec317994`; CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
-| 10 Projects/imports | in-progress | Target config `70cf38d0d`; kernel lowering `d78288727`; configured source/cache integration `86a8dc4ce`; prior expectation SHAs below; base `0ec317994` | Independent reviews; standard project63 pass; standard assembly575 pass/six existing skips; both crates pass all-target strict Clippy and no_std; configured source/kernel and forged-cache regressions pass | Readable catalog resolution, explicit source mounts, dependency aliases/distinct graph instances, routing and instance-aware caches/runtime supply metadata. Qualify authorized execution and all inherited proof/security/final gates |
+| 10 Projects/imports | in-progress | Shared mount `3573f5612`; catalogs `1019a35d7`; assembly mounts `1c3cd85cb`; catalog lowering `1f9600d7b`; prior SHAs below; base `0ec317994` | Independent reviews; standard project72 pass; standard assembly586 pass/six existing skips; both crates all-target strict Clippy/no_std pass; catalog and atomic route/debug/cache matrices pass | Wire explicit project source mounts; separate aliases/package names; distinct graph/solver instances and instance-aware local caches/runtime supply metadata. Qualify authorized execution and all inherited proof/security/final gates |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
 | 13 Core library | planned | — | — | Depends on 09–12 and supported ABI |
@@ -2911,3 +2911,32 @@ Kernel production uses its private linker field so no_std needs no std-only acce
 Independent review and source signatures pass. Readable catalogs, source mounts/aliases/instances,
 route-sensitive caches/runtime supply and every existing PR12/PR14/M1/security/final gate remain.
 No PR10 or goal completion, added skips, PRs or pushes.
+
+
+### PR10 readable catalogs and explicit assembly source mounts, 3 November 2026
+
+`3573f5612` defines normalized, component-aware PackageSourceMount. `1019a35d7` resolves explicit
+catalog references through caller-supplied opaque Word maps before effective typed configuration
+returns, across standard/custom/ancestor/expected/target positions. Bare strings stay literal IDs;
+missing selected names, conflicting maps and invalid catalog entries reject. Inactive workspace
+records retain ordinary override semantics; all table entries validate even unused. Normalized
+writers emit literals. This supplies no identity derivation, publication/profile or R_E authority.
+
+`1c3cd85cb` adds explicit assembly mount APIs and atomic descriptor/export-key projection, retaining
+canonical bindings, private/inner/reexport keys, exact artifacts and original debug linkage paths.
+Every known/new artifact route is preflighted before mutation/linkage upgrade; an artifact can have
+multiple routes. Private compiler-cache v2 includes normalized route assignments. Semantic quote
+normalization was reviewed/fixed, retaining literal root-text components. Nine assembly regressions
+cover equal-D/distinct pinned K, repeated artifacts, alias/cache order, root/submodules, atomic
+failure/capacity, kernel separation, mixed homes and both dynamic reexport debug import paths.
+
+`1f9600d7b` adds two real project catalog regressions, including six Latest/Pinned configurations,
+member-readable renaming, independently supplied IDs/full bindings, actual EXEC K, equal callee D,
+rename-stable caller D and construction rejection before lowering/cache promotion.
+
+Central AC/heavy-guarded standard project gate passes72; standard assembly gate passes586/six
+existing skips, including both packaging cases. Both crates pass all-target strict Clippy (assembly
+with testing) and no-default-features checks. Independent review/source signatures pass. Project
+edge mount configuration, alias/package distinction, graph instances, local cache/runtime supply
+multiplicity and all previous PR12/PR14/M1/security/final gates remain. No PR10/goal completion,
+new skips, publication, PRs or pushes.
