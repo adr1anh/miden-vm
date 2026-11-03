@@ -120,13 +120,16 @@ pub enum ManifestValidationError {
     InvalidExportPath { path: Arc<Path>, error: ast::PathError },
     #[error("invalid module path '{path}': {error}")]
     InvalidModulePath { path: Arc<Path>, error: ast::PathError },
-    #[error("package must contain at least one exported procedure")]
+    #[error("package must contain at least one callable procedure root")]
     NoProcedures,
 }
 
 impl PackageManifest {
     /// Construct a new [PackageManifest] by providing the set of exports for the corresponding
     /// package.
+    ///
+    /// A manifest may have no public procedure exports. Whether a code package contains callable
+    /// roots is validated by [`crate::Package`] against its MAST forest.
     pub fn new(
         exports: impl IntoIterator<Item = PackageExport>,
     ) -> Result<Self, ManifestValidationError> {
@@ -136,11 +139,9 @@ impl PackageManifest {
             dependencies: Default::default(),
             entrypoint: None,
         };
-        let mut has_procedures = false;
         for mut export in exports {
             normalize_export(&mut export)?;
             if let Some(proc) = export.as_procedure() {
-                has_procedures = true;
                 // The presence of `begin` in any exported module is automatically made the
                 // entrypoint for that package.
                 if proc.path.last().is_some_and(|name| name == ast::ProcedureName::MAIN_PROC_NAME) {
@@ -154,10 +155,6 @@ impl PackageManifest {
                 }
             }
             manifest.add_export(export)?;
-        }
-
-        if !has_procedures {
-            return Err(ManifestValidationError::NoProcedures);
         }
 
         Ok(manifest)

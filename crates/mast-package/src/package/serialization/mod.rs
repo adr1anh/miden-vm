@@ -33,6 +33,7 @@
 //! [`Package::read_from_trusted`] and [`Package::read_from_bytes_trusted`] are for local
 //! files/cache entries controlled by the same trusted build or execution system. They preserve
 //! package-owned debug sections and skip embedded MAST and manifest cross-check validation.
+//! Both reader modes require callable code-package structure and valid target/entrypoint metadata.
 //!
 //! Embedded kernel package bytes are stored in the opaque `kernel` custom section. Decoding an
 //! embedded kernel through the package API uses the untrusted reader, so nested package-owned debug
@@ -125,7 +126,7 @@ impl Package {
     ///
     /// This skips embedded MAST and manifest cross-check validation and trusts serialized node
     /// digests. Use it for a package written and retained by the same trusted system, such as a
-    /// local build cache.
+    /// local build cache. Required callable code-package structure is still checked.
     ///
     /// Do not use this for user-controlled packages, network input, or any other package that
     /// crosses a trust boundary. Use [`Package::read_from`] for those inputs.
@@ -142,8 +143,8 @@ impl Package {
     ///
     /// This skips embedded MAST and manifest cross-check validation and trusts serialized node
     /// digests. Use it for a package written and retained by the same trusted system, such as a
-    /// local build cache. This method still applies the finite byte-read budget used by
-    /// [`Package::read_from_bytes`].
+    /// local build cache. Required callable code-package structure is still checked, along with the
+    /// finite byte-read budget used by [`Package::read_from_bytes`].
     ///
     /// Do not use this for user-controlled packages, network input, or any other package that
     /// crosses a trust boundary. Use [`Package::read_from_bytes`] for those inputs.
@@ -257,6 +258,10 @@ impl Package {
             sections,
             debug_sections_trusted: true,
         };
+
+        package
+            .validate_code_structure()
+            .map_err(|err| DeserializationError::InvalidValue(err.to_string()))?;
 
         if validate_debug_sections {
             package.debug_info().map_err(|err| {

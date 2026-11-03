@@ -16,8 +16,8 @@ use miden_core::{
     Felt, Word,
     advice::AdviceMap,
     mast::{
-        BasicBlockNodeBuilder, DenseMastForestBuilder, ExecNodeBuilder, MastForest, MastNode,
-        MastNodeEntry, MastNodeExt, MastNodeId,
+        BasicBlockNodeBuilder, DenseMastForestBuilder, ExecNodeBuilder, ExternalNodeBuilder,
+        MastForest, MastNode, MastNodeEntry, MastNodeExt, MastNodeId,
     },
     operations::Operation,
     program::ProcedureKey,
@@ -182,6 +182,123 @@ fn package_serialization_roundtrip() {
         .unwrap_or_else(|err| {
             panic!("{err}");
         });
+}
+
+#[test]
+fn private_only_code_package_roundtrips_without_public_exports() {
+    let (forest, _) = build_forest();
+    // An explicit implementation reference is also a code candidate. Its root records the
+    // caller-supplied D without asserting code availability or creating a public export.
+    let mut builder = DenseMastForestBuilder::new();
+    let external = builder
+        .push_node(ExternalNodeBuilder::new(forest.procedure_digests().next().unwrap()))
+        .unwrap();
+    builder.mark_root(external);
+    let external_forest = builder.build().unwrap();
+
+    for mast in [forest, external_forest] {
+        for kind in [TargetType::Library, TargetType::Executable, TargetType::Kernel] {
+            let package = Package::create_with_modules(
+                PackageId::from("private"),
+                crate::Version::new(0, 0, 0),
+                kind,
+                Arc::new(mast.clone()),
+                [],
+                [PackageModule::new(absolute_path("private"), [])],
+                [],
+            )
+            .expect("private callable roots should form a package without a public API");
+            let bytes = package.to_bytes();
+
+            for decoded in [
+                Package::read_from_bytes(&bytes)
+                    .expect("safe reader should accept private callable roots"),
+                Package::read_from_bytes_trusted(&bytes)
+                    .expect("trusted reader should accept private callable roots"),
+            ] {
+                assert_eq!(package, decoded);
+                assert_eq!(decoded.manifest.num_exports(), 0);
+                assert_eq!(decoded.manifest.num_modules(), 1);
+                assert_eq!(decoded.entrypoint(), None);
+                assert_eq!(decoded.mast_forest().procedure_roots().len(), 1);
+                assert_eq!(decoded.code_commitment(), package.code_commitment());
+                assert_eq!(decoded.commitment(), package.commitment());
+                assert!(decoded.try_into_program().is_err());
+                assert!(decoded.to_kernel_descriptor().is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn package_readers_reject_empty_and_unrooted_private_code() {
+    let (unrooted, _) = build_single_node_forest(vec![Operation::Add], false);
+
+    for mast in [MastForest::new(), unrooted] {
+        for kind in [TargetType::Library, TargetType::Executable] {
+            let mut package = build_package();
+            package.kind = kind;
+            package.mast = Arc::new(mast.clone());
+            package.manifest = PackageManifest::new([])
+                .and_then(|manifest| {
+                    manifest.with_modules([PackageModule::new(absolute_path("declarations"), [])])
+                })
+                .unwrap();
+            let bytes = package.to_bytes();
+
+            for result in
+                [Package::read_from_bytes(&bytes), Package::read_from_bytes_trusted(&bytes)]
+            {
+                assert_matches!(
+                    result,
+                    Err(DeserializationError::InvalidValue(message))
+                        if message.contains("at least one callable procedure root")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn trusted_package_reader_still_requires_roots_for_public_code() {
+    let (forest, node) = build_single_node_forest(vec![Operation::Add], false);
+    let mut package = build_package();
+    package.manifest = PackageManifest::new([PackageExport::Procedure(ProcedureExport::new(
+        absolute_path("public::procedure"),
+        Some(node),
+        forest[node].digest(),
+        None,
+    ))])
+    .unwrap();
+    package.mast = Arc::new(forest);
+
+    let error = Package::read_from_bytes_trusted(&package.to_bytes())
+        .expect_err("trusted readers must reject code packages with no callable roots");
+    assert!(error.to_string().contains("at least one callable procedure root"));
+}
+
+#[test]
+fn package_readers_reject_non_executable_entrypoint() {
+    let mut package = build_package();
+    let node = package.mast.procedure_roots()[0];
+    let entrypoint =
+        Arc::from(AstPath::exec_path().join(ProcedureName::MAIN_PROC_NAME).into_boxed_path());
+    package.manifest = PackageManifest::new([PackageExport::Procedure(ProcedureExport::new(
+        entrypoint,
+        Some(node),
+        package.mast[node].digest(),
+        None,
+    ))])
+    .unwrap();
+    let bytes = package.to_bytes();
+
+    for result in [Package::read_from_bytes(&bytes), Package::read_from_bytes_trusted(&bytes)] {
+        assert_matches!(
+            result,
+            Err(DeserializationError::InvalidValue(message))
+                if message.contains("entrypoint in a package declared with non-executable type")
+        );
+    }
 }
 
 #[test]
@@ -592,6 +709,22 @@ fn package_manifest_new_rejects_duplicate_export_paths() {
 }
 
 #[test]
+fn package_manifest_without_procedure_exports_roundtrips_independently_of_code() {
+    let manifest = PackageManifest::new([])
+        .and_then(|manifest| manifest.with_modules([PackageModule::new(absolute_path("api"), [])]))
+        .and_then(|manifest| manifest.with_dependencies([build_dependency()]))
+        .expect("declaration metadata does not require public procedures");
+    let bytes = manifest.to_bytes();
+    let decoded = PackageManifest::read_from_bytes(&bytes).unwrap();
+
+    assert_eq!(decoded, manifest);
+    assert_eq!(decoded.num_exports(), 0);
+    assert_eq!(decoded.entrypoint(), None);
+    assert_eq!(decoded.num_modules(), 1);
+    assert_eq!(decoded.num_dependencies(), 1);
+}
+
+#[test]
 fn package_manifest_roundtrips_module_surfaces() {
     let export = PackageExport::Procedure(ProcedureExport::new(
         absolute_path("test::api::foo"),
@@ -815,7 +948,7 @@ fn trusted_package_deserialisation_accepts_spoofed_mast_hashes() {
     //     push.1
     // end
     let (forest, node_id) =
-        build_single_node_forest(vec![Operation::Push(Felt::from_u32(1))], false);
+        build_single_node_forest(vec![Operation::Push(Felt::from_u32(1))], true);
     let digest = forest[node_id].digest();
 
     let path = absolute_path("lib::p");
@@ -961,7 +1094,7 @@ fn trusted_kernel_package_deserialisation_accepts_spoofed_mast_hashes() {
     //     push.1
     // end
     let (forest, node_id) =
-        build_single_node_forest(vec![Operation::Push(Felt::from_u32(1))], false);
+        build_single_node_forest(vec![Operation::Push(Felt::from_u32(1))], true);
     let digest = forest[node_id].digest();
 
     let path = absolute_path("$kernel::k1");

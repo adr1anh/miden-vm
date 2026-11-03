@@ -239,10 +239,6 @@ impl Package {
             .with_modules(modules)?
             .with_dependencies(dependencies)?;
 
-        if manifest.entrypoint().is_some() && !kind.is_executable() {
-            return Err(ManifestValidationError::NonExecutableEntrypoint);
-        }
-
         // Validate that procedure export node provenance is valid when present
         for export in manifest.exports() {
             if let Some(proc) = export.as_procedure()
@@ -266,9 +262,28 @@ impl Package {
             debug_sections_trusted: true,
         };
 
+        package.validate_code_structure()?;
         package.interface_commitment()?;
 
         Ok(package)
+    }
+
+    /// Validates required code-package structure independently from public exports and reader
+    /// trust. This does not grant an execution binding or infer an executable entrypoint.
+    fn validate_code_structure(&self) -> Result<(), ManifestValidationError> {
+        if self.manifest.entrypoint().is_some() && !self.kind.is_executable() {
+            return Err(ManifestValidationError::NonExecutableEntrypoint);
+        }
+
+        // Roots describe callable code independently from the public API. They may hold local
+        // bodies or explicit External(D) references; neither form grants execution authority or
+        // establishes that the referenced code is available. Declaration metadata alone does not
+        // supply a root.
+        if self.mast.procedure_roots().is_empty() {
+            return Err(ManifestValidationError::NoProcedures);
+        }
+
+        Ok(())
     }
 
     /// Produces a new library with the existing [`MastForest`] and where all key/values in the
@@ -341,7 +356,8 @@ impl Package {
 
     /// Returns the commitment to the package's code.
     ///
-    /// This binds the public interface to the complete MAST forest which implements it.
+    /// This binds any exported procedure roots to the complete MAST forest, including private
+    /// callable roots and explicit external code references.
     pub fn code_commitment(&self) -> Word {
         PackageCommitment::new(self).code_commitment()
     }
@@ -1775,6 +1791,85 @@ mod tests {
 
     fn build_kernel_package(name: &str) -> Package {
         build_package(name, TargetType::Kernel, &format!("{name}::boot"), [], Vec::new())
+    }
+
+    #[test]
+    fn private_only_package_keeps_code_identity_without_public_exports() {
+        let private_package = |operation| {
+            let mut builder = DenseMastForestBuilder::new();
+            let root = builder.push_node(BasicBlockNodeBuilder::new(vec![operation])).unwrap();
+            builder.mark_root(root);
+            Package::create(
+                PackageId::from("private"),
+                Version::new(1, 0, 0),
+                TargetType::Library,
+                Arc::new(builder.build().unwrap()),
+                [],
+                [],
+            )
+            .expect("a private callable root is sufficient for a code package")
+        };
+        let first = private_package(Operation::Add);
+        let second = private_package(Operation::Mul);
+
+        assert_eq!(first.manifest.num_exports(), 0);
+        assert_eq!(first.entrypoint(), None);
+        assert!(!first.is_program());
+        assert!(first.try_into_program().is_err());
+        assert!(first.to_kernel_descriptor().is_err());
+        assert_eq!(first.interface_commitment().unwrap(), second.interface_commitment().unwrap());
+        assert_ne!(first.mast_forest_commitment(), second.mast_forest_commitment());
+        assert_ne!(first.code_commitment(), second.code_commitment());
+        assert_ne!(first.dependency_commitment(), second.dependency_commitment());
+        assert_ne!(first.commitment(), second.commitment());
+    }
+
+    #[test]
+    fn code_package_requires_callable_roots_instead_of_declarations_or_unrooted_nodes() {
+        let unrooted = {
+            let mut builder = DenseMastForestBuilder::new();
+            builder.push_node(BasicBlockNodeBuilder::new(vec![Operation::Add])).unwrap();
+            builder.build().unwrap()
+        };
+        for mast in [MastForest::new(), unrooted] {
+            for kind in [TargetType::Library, TargetType::Executable] {
+                let result = Package::create_with_modules(
+                    PackageId::from("no_code"),
+                    Version::new(1, 0, 0),
+                    kind,
+                    Arc::new(mast.clone()),
+                    [],
+                    [PackageModule::new(absolute_path("declarations"), [])],
+                    [],
+                );
+                assert_matches!(result, Err(ManifestValidationError::NoProcedures));
+            }
+        }
+    }
+
+    #[test]
+    fn public_external_procedure_alias_remains_a_valid_package() {
+        let mut builder = DenseMastForestBuilder::new();
+        let digest = Word::from([1_u32, 2, 3, 4]);
+        let root = builder.push_node(ExternalNodeBuilder::new(digest)).unwrap();
+        builder.mark_root(root);
+        let (forest, remapping) = builder.build_with_id_map().unwrap();
+        let root = remapping.get(root).unwrap();
+        let export = PackageExport::Procedure(ProcedureExport::new(
+            absolute_path("aliases::procedure"),
+            Some(root),
+            digest,
+            None,
+        ));
+        Package::create(
+            PackageId::from("aliases"),
+            Version::new(1, 0, 0),
+            TargetType::Library,
+            Arc::new(forest),
+            [export],
+            [],
+        )
+        .expect("public aliases to selected external code remain supported");
     }
 
     #[test]
