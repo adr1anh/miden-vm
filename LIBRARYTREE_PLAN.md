@@ -35,6 +35,22 @@ Included: core identities/MAST, processor and replay, packed AIR/proofs, assembl
 
 ## Workflow and completion rules
 
+**Overall goal and milestones:** complete the full approved implementation and qualification in this
+plan, incorporating subsequent user-approved revisions across every affected consumer and artifact.
+Milestones organize work within that goal; they do not replace its scope or establish completion.
+The user has requested continuation under this general goal after the design discussion.
+
+**Initial milestone M1 — D6–D8 alignment under revised D3/D7 model C:** implement fixed-root syscall
+semantics and public-kernel/private-helper placement, remove configurable kernel inputs, and carry
+the generic code-package/publication separation through required consumers and formats. Validate
+affected runtime/replay/assembler/AIR/public-input/native/recursive/generated contracts. This may
+span several existing PRs: source-only correction is a substep, not proof that the milestone is done.
+The current slice is the fixed-root correction before Package9 and project routing. Record partial
+progress and downstream gates honestly; close M1 only with actual acceptance evidence. Then select
+the next milestone from the remaining plan without closing, shrinking or recreating the overall goal.
+Final completion still requires every required integration, regeneration and qualification gate;
+external-profile obligations stay scoped to an explicitly selected integration.
+
 The first goal commit contains this plan only. Subagents perform the main research, implementation and review work; the orchestrator owns integration, signed commits, branch transitions and acceptance. Prefer fresh bounded agents (`fork_turns: none`) with explicit task/file ownership, applicable user/repository instructions and selected references. Assign an independent reviewer who did not implement the change. Subagents must not commit or switch branches unless the orchestrator explicitly delegates that responsibility.
 
 Use `LIBRARYTREE_CURRENT.md` for the current handoff, then read only the active PR and relevant invariant/spec sections it names. This plan remains the sole backlog/scope/dependency/acceptance authority, and its ledger/evidence owns durable completion. The brief is not a second status ledger. Routine source snapshots live in uncommitted `.scratch/librarytree/reference-cache/` with Page/date/SHA-256 provenance; superseded proposals/handoffs and raw artifacts are reference-only archives, not agent input. Preserve shared temporary sources for other readers.
@@ -422,8 +438,9 @@ helper homes may be package/revision-qualified using D5/custom bindings; this de
 freeze the exact prefix spelling or configuration/API representation, require an own LibraryId
 for code-only packages, or derive names from implementation D. Existing source imports remain.
 
-Implementation remains paused for discussion at the user's request. Revised D3/D7 and D6/D8 are approved design,
-not claims that source, public-input layouts, readers or acceptance checks have been migrated.
+The user has requested continuation under the general implementation goal and M1 above. Revised
+D3/D7 and D6/D8 are approved design, not claims that source, public-input layouts, readers or
+acceptance checks have been migrated.
 
 ## Open decisions and external gates
 
@@ -2150,3 +2167,12 @@ external/open; selected-profile validation and all VM/security/acceptance gates 
 This checkpoint changes only plan/handoff documentation, preserves the committed implementation
 and leaves implementation paused. No new architecture question blocks the fixed-N0 correction;
 dependency default-selection UX remains unfrozen. No source/test/format migration is claimed.
+
+### General goal and milestone handoff
+
+At verified HEAD `bbce64812` (source `108dc3607`), the user requested a general continuing goal
+covering the full approved plan, with an intermediary D6–D8 milestone. The goal tool reported no
+attached goal; retain all existing implementation/evidence and establish a replacement broad goal,
+not a narrowed D6–D8 objective. Workflow/M1 and the current brief now express the completion
+boundary and next slice. This checkpoint changes documentation only; no new source/test evidence
+or milestone completion is claimed. Existing branch/commit, power, review and no-PR/push rules apply.
