@@ -258,6 +258,8 @@ const OOD_CORRECTION_FP = 75640
 const LDR_QUERY_NUMERATOR_FP = 189097
 const LDR_QUERY_LIMIT_FP = 98304
 
+# Hot log and probe calls explicitly inline their fixed local leaf bodies.
+
 #! Monotone upper bound on `log2(x) * FP_ONE` for `1 <= x <= 65536`: the chord across each
 #! octave, raised by its largest gap below log2 (5641/FP_ONE, at most 0.086 bits excess).
 #! Inputs: [x, ...]. Outputs: [log_upper_fp, ...].
@@ -317,7 +319,7 @@ proc proven_ldr_endpoint
             end
         end
     end
-    exec.proven_ldr_probe
+    inline.proven_ldr_probe
 end
 
 #! Computes the proven security level: the better of the unique-decoding (UDR) and
@@ -355,7 +357,7 @@ pub proc compute_proven_security_level(descriptor: types::StackSecurityDescripto
 
     # Lookup before its list-size loss: 125.5 - U(A) - h - R, with the half bit from L+. It
     # exceeds U(2M+1)+1/2 by over four bits, so the list-scaled subtractions cannot underflow.
-    add.2 dup.2 mul exec.proven_log2_upper movdn.3
+    add.2 dup.2 mul inline.proven_log2_upper movdn.3
     exec.lookup_boundary_correction
     # => [R, log_height, U(A), ...]
     movup.2 add dup.1 mul.FP_ONE add
@@ -370,7 +372,7 @@ pub proc compute_proven_security_level(descriptor: types::StackSecurityDescripto
     loc_load.15 mul loc_load.16 add loc_load.12 u32min loc_store.19
     loc_load.3 neq.1
     if.true
-        loc_load.3 sub.1 exec.proven_log2_upper loc_store.23
+        loc_load.3 sub.1 inline.proven_log2_upper loc_store.23
         push.PROVEN_SAMPLE_BITS_FP loc_load.10 mul.FP_ONE add
         loc_load.23 sub loc_load.7 add.3 mul.FP_ONE sub loc_store.18
         loc_load.19 loc_load.18 u32min loc_store.19
@@ -388,7 +390,7 @@ pub proc compute_proven_security_level(descriptor: types::StackSecurityDescripto
         push.OOD_CORRECTION_FP sub.1 loc_load.17 u32div add.1 add
         loc_load.1 sub.1 loc_load.17 u32div u32gte.8
         if.true
-            loc_load.1 exec.proven_log2_upper u32max
+            loc_load.1 inline.proven_log2_upper u32max
         end
         # If composed<=8H, U(composed)<=h+3+5641/FP_ONE<h+log2(10), so OOD dominates.
         push.PROVEN_AIR_BASE_FP swap sub
@@ -424,7 +426,7 @@ pub proc compute_proven_security_level(descriptor: types::StackSecurityDescripto
             # The M endpoint stays below K for the probe chain. The lower endpoint uses exact
             # constants for U(7) and its rational query rate.
             movdn.9 movdn.9 movdn.9
-            push.185865.83671 exec.proven_ldr_probe
+            push.185865.83671 inline.proven_ldr_probe
             # => [Q(3), B(3), U(7), 0, 0, E, G, queries, grinding, K, Q(M), B(M), U(2M+1), ...]
             dup dup.2 u32gte
             if.true
@@ -436,21 +438,21 @@ pub proc compute_proven_security_level(descriptor: types::StackSecurityDescripto
                 # Adjacent nonquery losses and the final 35..M query increase are below
                 # three bits, so the resulting whole-bit search needs at most two tests.
                 movup.2 drop movup.2 drop movup.2 drop
-                push.243209.90727 exec.proven_ldr_probe
+                push.243209.90727 inline.proven_ldr_probe
                 dup dup.2 u32lt
                 if.true
                     movup.2 drop movup.2 drop movup.2 drop
-                    push.304649.94443 exec.proven_ldr_probe
+                    push.304649.94443 inline.proven_ldr_probe
                     dup dup.2 u32lt
                     if.true
                         movup.2 drop movup.2 drop movup.2 drop
-                        push.368137.96354 exec.proven_ldr_probe
+                        push.368137.96354 inline.proven_ldr_probe
                         dup dup.2 u32lt
                         if.true
                             movup.2 drop movup.2 drop movup.2 drop
                             loc_load.7 u32gt.6
                             if.true
-                                push.406025.96962 exec.proven_ldr_probe
+                                push.406025.96962 inline.proven_ldr_probe
                                 dup dup.2 u32lt
                                 if.true
                                     movup.2 drop movup.2 drop movup.2 drop
