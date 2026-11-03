@@ -19,8 +19,8 @@ pub use miden_core::{
 };
 pub use miden_precompiles_stark::prover::PrecompileProvingError;
 pub use miden_processor::{
-    ExecutionError, ExecutionOptions, ExecutionOutput, ExecutionWitness, FutureMaybeSend, Host,
-    SyncHost, VmWitness,
+    ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionOutput, ExecutionWitness,
+    FutureMaybeSend, Host, SyncHost, VmWitness,
 };
 pub use prover::{Prover, ProverError, prove_sync};
 
