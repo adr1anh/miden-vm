@@ -12,6 +12,9 @@ use miden_assembly::{
     debuginfo::DefaultSourceManager,
     diagnostics::{IntoDiagnostic, reporting::PrintDiagnostic},
 };
+
+mod naming_sidecar;
+mod source_naming;
 // CONSTANTS
 // ================================================================================================
 
@@ -213,6 +216,8 @@ fn main() -> Result<(), Report> {
     // generated core-library MASM, or the builder changed:
     println!("cargo:rerun-if-changed=asm");
     println!("cargo:rerun-if-changed=codegen");
+    println!("cargo:rerun-if-changed=source_naming.rs");
+    println!("cargo:rerun-if-changed=naming_sidecar.rs");
     println!("cargo:rerun-if-env-changed=MIDEN_BUILD_LIB_DOCS");
     // NOTE: path is relative to the package root (crates/lib/core/), so we need
     // ../../ to reach crates/assembly/src.
@@ -227,8 +232,7 @@ fn main() -> Result<(), Report> {
     // Enable debug tracing to stderr via the MIDEN_LOG environment variable, if present
     env_logger::Builder::from_env("MIDEN_LOG").format_timestamp(None).init();
 
-    // Build the precompiles package first so that the core package can resolve its dynamic
-    // dependency against the exact embedded artifact.
+    // Generate the precompiles sources before loading the single core library target.
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let asm_dir = Path::new(manifest_dir).join(ASM_DIR_PATH);
     let precompiles_asm_dir = asm_dir.join("precompiles");
@@ -239,10 +243,19 @@ fn main() -> Result<(), Report> {
     let assembler = Assembler::default();
     let mut project_assembler =
         assembler.for_project_at_path(asm_dir.join("miden-project.toml"), &mut registry)?;
-    let core_package =
-        project_assembler.assemble(miden_assembly::ProjectTargetSelector::Library, "release")?;
+    project_assembler.with_namespace_inputs_provider(|_, sources, _| {
+        source_naming::source_namespace_inputs(
+            miden_mast_package::NamespacePlan::new(vec![]),
+            core::iter::once(sources.root.as_ref()).chain(sources.support.iter().map(Box::as_ref)),
+        )
+    });
+    let core = project_assembler
+        .assemble_with_naming(miden_assembly::ProjectTargetSelector::Library, "release")?;
 
-    core_package.write_masp_file(build_dir.join(PKG_OUT_DIR)).into_diagnostic()?;
+    core.package.check_naming(&core.naming).into_diagnostic()?;
+    core.package.write_masp_file(build_dir.join(PKG_OUT_DIR)).into_diagnostic()?;
+    fs::write(build_dir.join("core_naming.rs"), naming_sidecar::render(&core.naming)?)
+        .into_diagnostic()?;
 
     // Generate documentation
     if env::var("MIDEN_BUILD_LIB_DOCS").is_ok() {
