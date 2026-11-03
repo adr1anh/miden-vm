@@ -10,8 +10,7 @@ use super::{
 use crate::{
     Word,
     serde::{
-        BudgetedReader, ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable,
-        SliceReader, validate_bounded_len,
+        ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable, SliceReader,
     },
 };
 
@@ -23,6 +22,8 @@ const MERKLE: u8 = 3;
 const LIST: u8 = 4;
 const HEADER_LEN: usize = 2;
 const LIST_HEADER_LEN: usize = HEADER_LEN + size_of::<u32>();
+const PAIR_RECORD_LEN: usize = HEADER_LEN + 2 * Word::SERIALIZED_SIZE;
+const DATA_RECORD_LEN: usize = LIST_HEADER_LEN + 2 * Word::SERIALIZED_SIZE;
 
 impl EnvNode {
     /// Returns the v1 preimage's byte length without allocating.
@@ -31,10 +32,8 @@ impl EnvNode {
     /// constructed List exceeds the hash framing or allocation bounds.
     pub fn encoded_len(&self) -> Result<usize, EnvNodeError> {
         Ok(match self {
-            Self::Env { .. } | Self::Mast { .. } | Self::Merkle { .. } => {
-                HEADER_LEN + 2 * Word::SERIALIZED_SIZE
-            },
-            Self::Data { .. } => LIST_HEADER_LEN + 2 * Word::SERIALIZED_SIZE,
+            Self::Env { .. } | Self::Mast { .. } | Self::Merkle { .. } => PAIR_RECORD_LEN,
+            Self::Data { .. } => DATA_RECORD_LEN,
             Self::List(children) => checked_list_record_len(children.len())?,
         })
     }
@@ -86,6 +85,52 @@ impl EnvNode {
         Ok(bytes)
     }
 
+    /// Checks one v1 record's framing without allocating node storage or validating Word values.
+    ///
+    /// Returns the immediate child count for a List, or `None` for a fixed-size node. The budget
+    /// covers the entire exact record. Unknown versions or kinds, truncated or trailing bytes,
+    /// and List hash-framing/allocation-layout overflow reject before constructing any List.
+    /// Errors may allocate fixed-size diagnostic text.
+    ///
+    /// This is only a resource preflight. Callers must still use [`Self::from_bytes`] to validate
+    /// canonical Word fields before authenticating a node or using its references.
+    pub fn preflight_bytes(
+        bytes: &[u8],
+        byte_budget: usize,
+    ) -> Result<Option<usize>, DeserializationError> {
+        if bytes.len() > byte_budget {
+            return Err(DeserializationError::InvalidValue(
+                "environment node input exceeds byte budget".into(),
+            ));
+        }
+        let mut source = SliceReader::new(bytes);
+        if source.read_u8()? != VERSION {
+            return Err(DeserializationError::InvalidValue(
+                "unknown environment node version".into(),
+            ));
+        }
+        let (byte_len, list_count) = match source.read_u8()? {
+            ENV | MAST | MERKLE => (PAIR_RECORD_LEN, None),
+            DATA => (DATA_RECORD_LEN, None),
+            LIST => {
+                let count = usize::try_from(source.read_u32()?).map_err(|_| list_length_error())?;
+                let byte_len = checked_list_record_len(count).map_err(|_| list_length_error())?;
+                (byte_len, Some(count))
+            },
+            _ => {
+                return Err(DeserializationError::InvalidValue(
+                    "unknown environment node kind".into(),
+                ));
+            },
+        };
+        if bytes.len() != byte_len {
+            return Err(DeserializationError::InvalidValue(
+                "invalid environment node record length".into(),
+            ));
+        }
+        Ok(list_count)
+    }
+
     /// Decodes exactly one v1 environment-node preimage within the caller's byte budget.
     ///
     /// The budget includes the entire record, including its header and any List count. Unknown
@@ -94,20 +139,14 @@ impl EnvNode {
     /// allocation. Successful decoding does not authenticate referenced children or establish
     /// a complete environment.
     pub fn from_bytes(bytes: &[u8], byte_budget: usize) -> Result<Self, DeserializationError> {
-        // BudgetedReader::has_more_bytes returns false once its budget is exhausted, even when
-        // the underlying input has a suffix. Bound the complete input before wrapping it.
-        if bytes.len() > byte_budget {
-            return Err(DeserializationError::InvalidValue(
-                "environment node input exceeds byte budget".into(),
-            ));
-        }
-        let mut source = BudgetedReader::new(SliceReader::new(bytes), byte_budget);
-        if source.read_u8()? != VERSION {
-            return Err(DeserializationError::InvalidValue(
-                "unknown environment node version".into(),
-            ));
-        }
-        let node = match source.read_u8()? {
+        let list_count = Self::preflight_bytes(bytes, byte_budget)?;
+        let payload_start = if list_count.is_some() {
+            LIST_HEADER_LEN
+        } else {
+            HEADER_LEN
+        };
+        let mut source = SliceReader::new(&bytes[payload_start..]);
+        let node = match bytes[1] {
             ENV => Self::Env {
                 label: LabelCommitment::read_from(&mut source)?,
                 child: EnvironmentRoot::read_from(&mut source)?,
@@ -126,14 +165,7 @@ impl EnvNode {
                 right: EnvironmentRoot::read_from(&mut source)?,
             },
             LIST => {
-                let count = usize::try_from(source.read_u32()?).map_err(|_| list_length_error())?;
-                let byte_len = checked_list_record_len(count).map_err(|_| list_length_error())?;
-                validate_bounded_len(&source, "environment List", count, Word::SERIALIZED_SIZE)?;
-                if bytes.len() != byte_len {
-                    return Err(DeserializationError::InvalidValue(
-                        "invalid environment List record length".into(),
-                    ));
-                }
+                let count = list_count.expect("preflight reports the List child count");
                 let mut children = Vec::new();
                 children.try_reserve_exact(count).map_err(|_| {
                     DeserializationError::InvalidValue("environment List allocation failed".into())
@@ -143,11 +175,7 @@ impl EnvNode {
                 }
                 Self::List(children)
             },
-            _ => {
-                return Err(DeserializationError::InvalidValue(
-                    "unknown environment node kind".into(),
-                ));
-            },
+            _ => unreachable!("preflight rejects unknown environment node kinds"),
         };
         if source.has_more_bytes() {
             return Err(DeserializationError::InvalidValue(
@@ -200,19 +228,48 @@ mod tests {
     }
 
     #[test]
+    fn node_preflight_reports_list_counts_without_validating_word_fields() {
+        for (node, _) in fixtures() {
+            let expected_count = match &node {
+                EnvNode::List(children) => Some(children.len()),
+                _ => None,
+            };
+            let mut bytes = node.to_bytes().unwrap();
+            assert_eq!(EnvNode::preflight_bytes(&bytes, bytes.len()).unwrap(), expected_count);
+
+            // Resource admission can inspect the complete shape first. Canonical field values
+            // still require the mandatory decoder, including for every fixed-size node variant.
+            let word_start = match &node {
+                EnvNode::Data { .. } | EnvNode::List(_) => LIST_HEADER_LEN,
+                _ => HEADER_LEN,
+            };
+            if word_start < bytes.len() {
+                bytes[word_start..word_start + size_of::<u64>()]
+                    .copy_from_slice(&Felt::ORDER.to_le_bytes());
+                assert_eq!(EnvNode::preflight_bytes(&bytes, bytes.len()).unwrap(), expected_count);
+                assert!(EnvNode::from_bytes(&bytes, bytes.len()).is_err());
+            }
+        }
+    }
+
+    #[test]
     fn every_truncation_and_suffix_is_rejected() {
         for (node, _) in fixtures() {
             let bytes = node.to_bytes().unwrap();
             for len in 0..bytes.len() {
+                assert!(EnvNode::preflight_bytes(&bytes[..len], bytes.len()).is_err());
                 assert!(EnvNode::from_bytes(&bytes[..len], bytes.len()).is_err());
             }
             let mut suffixed = bytes.clone();
             suffixed.push(0);
+            assert!(EnvNode::preflight_bytes(&suffixed, suffixed.len()).is_err());
             assert!(EnvNode::from_bytes(&suffixed, suffixed.len()).is_err());
             // Exhausting the budget on the valid prefix must never hide trailing data.
+            assert!(EnvNode::preflight_bytes(&suffixed, bytes.len()).is_err());
             assert!(EnvNode::from_bytes(&suffixed, bytes.len()).is_err());
             let mut concatenated = bytes.clone();
             concatenated.extend_from_slice(&bytes);
+            assert!(EnvNode::preflight_bytes(&concatenated, concatenated.len()).is_err());
             assert!(EnvNode::from_bytes(&concatenated, concatenated.len()).is_err());
         }
     }
@@ -222,9 +279,11 @@ mod tests {
         for (node, _) in fixtures() {
             let bytes = node.to_bytes().unwrap();
             for budget in 0..bytes.len() {
+                assert!(EnvNode::preflight_bytes(&bytes, budget).is_err());
                 assert!(EnvNode::from_bytes(&bytes, budget).is_err());
             }
             for budget in [bytes.len(), bytes.len() + 1, usize::MAX] {
+                assert!(EnvNode::preflight_bytes(&bytes, budget).is_ok());
                 assert_eq!(EnvNode::from_bytes(&bytes, budget).unwrap(), node);
             }
         }
@@ -235,11 +294,13 @@ mod tests {
         let mut bytes = fixtures()[0].0.to_bytes().unwrap();
         for version in [0, 2, u8::MAX] {
             bytes[0] = version;
+            assert!(EnvNode::preflight_bytes(&bytes, bytes.len()).is_err());
             assert!(EnvNode::from_bytes(&bytes, bytes.len()).is_err());
         }
         bytes[0] = VERSION;
         for kind in 5..=u8::MAX {
             bytes[1] = kind;
+            assert!(EnvNode::preflight_bytes(&bytes, bytes.len()).is_err());
             assert!(EnvNode::from_bytes(&bytes, bytes.len()).is_err());
         }
     }
@@ -269,12 +330,15 @@ mod tests {
         for count in [1, u32::MAX / 4, u32::MAX / 4 + 1, u32::MAX] {
             let mut bytes = vec![VERSION, LIST];
             bytes.extend_from_slice(&count.to_le_bytes());
+            assert!(EnvNode::preflight_bytes(&bytes, bytes.len()).is_err());
+            assert!(EnvNode::preflight_bytes(&bytes, usize::MAX).is_err());
             assert!(EnvNode::from_bytes(&bytes, bytes.len()).is_err());
             assert!(EnvNode::from_bytes(&bytes, usize::MAX).is_err());
         }
         // A count smaller than the actual payload is also a malformed exact record.
         let mut bytes = fixtures().pop().unwrap().0.to_bytes().unwrap();
         bytes[HEADER_LEN..LIST_HEADER_LEN].copy_from_slice(&3_u32.to_le_bytes());
+        assert!(EnvNode::preflight_bytes(&bytes, bytes.len()).is_err());
         assert!(EnvNode::from_bytes(&bytes, bytes.len()).is_err());
     }
 

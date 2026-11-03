@@ -31,12 +31,12 @@ pub mod field {
 }
 
 pub mod serde {
-    #[cfg(feature = "std")]
-    pub use miden_serde_utils::read_file_bounded;
     pub use miden_serde_utils::{
         BudgetedReader, ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable,
         SliceReader, read_bounded_len, validate_bounded_len,
     };
+    #[cfg(feature = "std")]
+    pub use miden_serde_utils::{open_regular_file, read_file_bounded};
 }
 
 pub mod crypto {

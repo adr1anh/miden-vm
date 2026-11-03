@@ -97,7 +97,7 @@ pub use byte_writer::ByteWriter;
 #[cfg(feature = "std")]
 mod file;
 #[cfg(feature = "std")]
-pub use file::read_file_bounded;
+pub use file::{open_regular_file, read_file_bounded};
 
 // BOUNDED LENGTH HELPERS
 // ================================================================================================

@@ -19,7 +19,23 @@ pub fn read_file_bounded(path: impl AsRef<Path>, max_bytes: usize) -> io::Result
     read_file_after_metadata(path, max_bytes)
 }
 
+/// Opens a regular file after checking its reported size against `max_bytes`.
+///
+/// Symlinks to regular files are accepted. Nonregular files reject before opening; Unix
+/// nonblocking opening also prevents a replacement FIFO from blocking. Opened metadata is
+/// checked again. This does not bound subsequent reads or a file growing after opening: the
+/// caller must enforce its own read/allocation limits, including an overflow probe if needed.
+pub fn open_regular_file(path: impl AsRef<Path>, max_bytes: usize) -> io::Result<File> {
+    let path = path.as_ref();
+    check_metadata(&fs::metadata(path)?, max_bytes)?;
+    open_file_after_metadata(path, max_bytes)
+}
+
 fn read_file_after_metadata(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>> {
+    read_bounded(open_file_after_metadata(path, max_bytes)?, max_bytes)
+}
+
+fn open_file_after_metadata(path: &Path, max_bytes: usize) -> io::Result<File> {
     #[cfg(unix)]
     let file = {
         use rustix::fs::{Mode, OFlags, open};
@@ -29,7 +45,7 @@ fn read_file_after_metadata(path: &Path, max_bytes: usize) -> io::Result<Vec<u8>
     #[cfg(not(unix))]
     let file = File::open(path)?;
     check_metadata(&file.metadata()?, max_bytes)?;
-    read_bounded(file, max_bytes)
+    Ok(file)
 }
 
 fn check_metadata(metadata: &Metadata, max_bytes: usize) -> io::Result<()> {
