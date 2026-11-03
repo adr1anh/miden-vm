@@ -160,6 +160,13 @@ pub enum ExecutionError {
     HostError(#[from] HostError),
     #[error(transparent)]
     PackageDebugInfoError(#[from] PackageDebugInfoError),
+    #[error("invalid executable package code: {0}")]
+    InvalidPackageExecutable(String),
+    #[error("package entry {expected:?} differs from the requested descriptor entry {requested:?}")]
+    PackageEntryMismatch {
+        expected: ProcedureKey,
+        requested: ProcedureKey,
+    },
 }
 
 impl ExecutionError {
