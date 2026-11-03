@@ -1896,3 +1896,6 @@ pub(crate) struct BodyWrapper {
 pub(super) struct ResolvedProcedure {
     pub key: ProcedureKey,
 }
+
+#[cfg(test)]
+mod callable_identity_tests;
