@@ -22,6 +22,69 @@ const MAX_BINDINGS: usize = 16_384;
 const MAX_NAMING_RECORDS: usize = 262_144;
 type FixturePath = Vec<(EnvironmentRoot, Option<usize>)>;
 
+/// A fixture owner's exact code, canonical inventory and locally authorized finite environment.
+#[derive(Clone)]
+pub struct NamedProgram {
+    pub program: miden_core::program::Program,
+    pub environment: FixtureEnvironment,
+    pub package: Arc<miden_mast_package::Package>,
+    pub naming: Arc<PackageNaming>,
+}
+
+/// Selects the source-test naming convention for local definitions in the same parsing context.
+/// Imported inventories remain exactly as supplied by their compiler/admission owner. This helper
+/// chooses fixture authority only; it supplies no production home or publication admission.
+#[cfg(feature = "std")]
+pub fn assemble_fixture_program(
+    assembler: miden_assembly::Assembler,
+    name: &str,
+    source: impl miden_assembly::Parse,
+    imports: &[&PackageNaming],
+) -> NamedProgram {
+    let root = source
+        .parse(assembler.warnings_as_errors(), assembler.source_manager())
+        .expect("fixture source must parse");
+    let mut fixture = miden_assembly::testing::FixtureNamespace::assembly_tests();
+    fixture
+        .add_module(&root)
+        .expect("fixture source must have canonical local definitions");
+    let assembler = fixture
+        .configure(assembler, [root.as_ref()])
+        .expect("fixture source must have explicit local naming");
+    let product = assembler
+        .assemble_executable_modules(name.into(), root, [])
+        .expect("fixture source must compile");
+    fixture_from_product(product, imports)
+}
+
+/// Retains exact compiler metadata during code extraction and finite environment construction.
+/// Imports are canonical owner inputs, never raw artifact metadata or a fallback admission policy.
+pub fn fixture_from_product(
+    product: miden_assembly::AssemblyProduct,
+    imports: &[&PackageNaming],
+) -> NamedProgram {
+    try_fixture_from_product(product, imports)
+        .expect("fixture product and selections must form a valid named execution environment")
+}
+
+/// Fallible conversion for fixture consumers which report assembly or resource-policy errors.
+pub fn try_fixture_from_product(
+    product: miden_assembly::AssemblyProduct,
+    imports: &[&PackageNaming],
+) -> Result<NamedProgram, Report> {
+    let naming = Arc::new(product.naming().clone());
+    let entry = naming
+        .entry_key()
+        .ok_or_else(|| Report::msg("fixture program must have an explicit entry"))?;
+    let environment = FixtureEnvironment::new(
+        entry,
+        core::iter::once(naming.as_ref()).chain(imports.iter().copied()),
+    )?;
+    let package: Arc<miden_mast_package::Package> = product.into_artifact(true)?.into();
+    let program = package.try_into_program(&naming)?;
+    Ok(NamedProgram { program, environment, package, naming })
+}
+
 /// A test owner's selected canonical naming/code bindings and their complete local environment.
 ///
 /// Naming must come from exact local compilation or explicit selected-profile admission. This
@@ -287,6 +350,65 @@ mod tests {
     use miden_mast_package::{CallableProcedurePath, NamespacePlan, PackageCallables};
 
     use super::*;
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn fallible_fixture_conversion_reports_a_valid_products_environment_limit() {
+        use miden_assembly::{Assembler, Parse, testing::FixtureNamespace};
+        let assembler = Assembler::default();
+        let root = Parse::parse("begin nop end", false, assembler.source_manager()).unwrap();
+        let deep_home = NamespacePlan::new(alloc::vec![CanonicalLabel::text("deep").unwrap(); 257]);
+        let mut fixture = FixtureNamespace::new(deep_home);
+        fixture.add_module(&root).unwrap();
+        let product = fixture
+            .configure(assembler, [root.as_ref()])
+            .unwrap()
+            .assemble_executable_modules("deep_fixture".into(), root, [])
+            .unwrap();
+        let Err(error) = try_fixture_from_product(product, &[]) else {
+            panic!("the finite environment path policy must reject an overly deep valid product");
+        };
+        assert!(alloc::format!("{error}").contains("fixture callable path depth limit"));
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn shared_source_fixture_retains_exact_artifact_names_and_executes() {
+        let fixture = assemble_fixture_program(
+            miden_assembly::Assembler::default(),
+            "shared_fixture",
+            "proc helper push.5 end begin exec.helper swap drop end",
+            &[],
+        );
+        fixture.package.check_naming(&fixture.naming).unwrap();
+        let execution = fixture.environment.execution();
+        let entry = fixture.naming.entry_key().unwrap();
+        assert_eq!(execution.descriptor().entry_key(), entry);
+        assert_ne!(entry.into_word(), fixture.program.hash());
+        let implementation = fixture.naming.callables().selected_implementation(entry).unwrap();
+        assert_eq!(implementation.into_word(), fixture.program.hash());
+        let request = EnvironmentWitnessRequest {
+            root: execution.descriptor().environment_root(),
+            key: entry,
+            limits: execution.opening_limits(),
+        };
+        let resolved = fixture
+            .environment
+            .source()
+            .get(request)
+            .unwrap()
+            .unwrap()
+            .verify(request.root, entry, request.limits)
+            .unwrap();
+        assert_eq!(resolved.implementation_root(), implementation);
+        let mut host = miden_processor::DefaultHost::default()
+            .with_environment_source(fixture.environment.source());
+        let output =
+            miden_processor::FastProcessor::new(miden_core::program::StackInputs::default())
+                .execute_sync(&fixture.program, execution, &mut host)
+                .unwrap();
+        assert_eq!(output.stack.get_element(0), Some(Felt::from_u32(5)));
+    }
 
     fn naming(name: &str, implementation: u32) -> PackageNaming {
         let binding = CallableBinding::new(
