@@ -52,6 +52,7 @@ tracing.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+miden-mast-package = { workspace = true, features = ["arbitrary"] }
 miden-air.workspace = true
 miden-vm-stark = { workspace = true, features = ["std"] }
 miden-air-definitions = { workspace = true, features = ["testing"] }

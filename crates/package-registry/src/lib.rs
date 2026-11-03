@@ -304,6 +304,15 @@ mod tests {
     #[test]
     fn no_package_store_cache_package_is_noop() {
         let (mast, exports) = build_package_exports("test::pkg::entry");
+        let home = miden_mast_package::NamespacePlan::new(vec![
+            miden_core::program::CanonicalLabel::text("registry-fixtures").unwrap(),
+        ]);
+        let naming = miden_mast_package::arbitrary::fixture_naming(
+            home,
+            TargetType::Library,
+            &mast,
+            &exports,
+        );
         let package = Arc::new(
             Package::create(
                 PackageId::from("pkg"),
@@ -312,6 +321,7 @@ mod tests {
                 mast,
                 exports,
                 [],
+                &naming,
             )
             .expect("test package should be valid"),
         );

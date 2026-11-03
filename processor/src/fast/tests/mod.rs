@@ -1781,6 +1781,37 @@ fn absolute_path(name: &str) -> Arc<Path> {
     Arc::from(Path::validate(&format!("::{name}")).unwrap())
 }
 
+fn package_fixture_home() -> miden_mast_package::NamespacePlan {
+    miden_mast_package::NamespacePlan::new(vec![
+        miden_core::program::CanonicalLabel::text("processor-package-fixtures").unwrap(),
+    ])
+}
+
+struct PackageFixtureHomes;
+
+impl miden_mast_package::interface::serialization::TypedIdProfile for PackageFixtureHomes {
+    type Context = miden_mast_package::NamespacePlan;
+    type Error = &'static str;
+
+    fn validate_typed_id(&self, _: &Self::Context, _: u32, _: &[u8]) -> Result<(), Self::Error> {
+        Err("no external TypedId codec belongs to this fixture")
+    }
+}
+
+impl miden_mast_package::interface::serialization::HomeProfile for PackageFixtureHomes {
+    fn validate_home(
+        &self,
+        context: &Self::Context,
+        home: &[miden_core::program::CanonicalLabel],
+    ) -> Result<(), Self::Error> {
+        if context.home() == home {
+            Ok(())
+        } else {
+            Err("unexpected fixture home")
+        }
+    }
+}
+
 fn host_loaded_package_fixture(
     source_manager: Arc<DefaultSourceManager>,
     operations: Vec<Operation>,
@@ -1797,13 +1828,22 @@ fn host_loaded_package_fixture(
         ProcedureExport::new(export_path, Some(root_id), target_digest, None)
             .with_source_node(Some(DebugSourceNodeId::from(0))),
     );
+    let mast = Arc::new(forest);
+    let exports = vec![export];
+    let naming = miden_mast_package::arbitrary::fixture_naming(
+        package_fixture_home(),
+        TargetType::Library,
+        &mast,
+        &exports,
+    );
     let mut package = Package::create(
         PackageId::from("loaded"),
         Version::new(1, 0, 0),
         TargetType::Library,
-        Arc::new(forest),
-        [export],
+        mast,
+        exports,
         None,
+        &naming,
     )
     .unwrap();
 
@@ -1846,13 +1886,22 @@ fn host_loaded_forwarder_package(target_digest: Word) -> (Package, Word) {
         forwarder_digest,
         None,
     ));
+    let mast = Arc::new(forest);
+    let exports = vec![export];
+    let naming = miden_mast_package::arbitrary::fixture_naming(
+        package_fixture_home(),
+        TargetType::Library,
+        &mast,
+        &exports,
+    );
     let package = Package::create(
         PackageId::from("forwarder"),
         Version::new(1, 0, 0),
         TargetType::Library,
-        Arc::new(forest),
-        [export],
+        mast,
+        exports,
         None,
+        &naming,
     )
     .unwrap();
 
@@ -1981,18 +2030,33 @@ fn same_digest_entrypoint_fixture(
     builder.add_root(source_alias_b);
     let package_debug_info = builder.build();
 
+    let mast = Arc::new(forest);
+    let naming = miden_mast_package::arbitrary::fixture_naming(
+        package_fixture_home(),
+        TargetType::Library,
+        &mast,
+        &exports,
+    );
     let mut package = Package::create(
         PackageId::from("app"),
         Version::new(1, 0, 0),
         TargetType::Library,
-        Arc::new(forest),
+        mast,
         exports,
         None,
+        &naming,
     )
     .unwrap();
     package.sections = vec![debug_info_section(&package_debug_info)];
     let executable = package
-        .make_executable(&QualifiedProcedureName::from_str("app::alias_b").unwrap())
+        .make_executable(
+            &QualifiedProcedureName::from_str("app::alias_b").unwrap(),
+            &PackageFixtureHomes,
+            &package_fixture_home(),
+            miden_mast_package::interface::serialization::CodecLimits::new(
+                1_000_000, 10_000, 10_000, 1_000_000,
+            ),
+        )
         .unwrap();
     let entrypoint_source_node_id = executable
         .entrypoint_source_node()
