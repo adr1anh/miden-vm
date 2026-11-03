@@ -30,6 +30,10 @@ pub use miden_core::{
 };
 use miden_core::{chiplets::hasher::compress_state, events::EventName};
 use miden_mast_package::{Package, debug_info::PackageDebugInfo};
+// Unit tests of the processor itself compile a distinct crate instance. Re-export the
+// dependency so their test-only adapters can name its native request/policy types without
+// guessing identity.
+pub use miden_processor as processor;
 #[cfg(not(target_family = "wasm"))]
 use miden_processor::trace::build_trace;
 pub use miden_processor::{
@@ -37,7 +41,8 @@ pub use miden_processor::{
     advice::{AdviceInputs, AdviceProvider, AdviceStack},
 };
 use miden_processor::{
-    DefaultHost, ExecutionOptions, ExecutionOutput, ExecutionWitness, FastProcessor, Program,
+    DefaultHost, ExecutionEnvironment, ExecutionOptions, ExecutionOutput, ExecutionWitness,
+    FastProcessor, Program,
     event::{EventHandler, TraceHandler},
 };
 pub use miden_prover::Prover;
@@ -63,6 +68,7 @@ pub mod rand;
 
 pub mod recursive_verifier;
 
+pub mod librarytree;
 mod test_builders;
 #[cfg(all(feature = "arbitrary", not(target_family = "wasm")))]
 pub use proptest;
@@ -86,8 +92,12 @@ fn new_vm_default_processor(
     advice_inputs: AdviceInputs,
     options: ExecutionOptions,
 ) -> Result<FastProcessor, ExecutionError> {
-    FastProcessor::new_with_options(stack_inputs, advice_inputs, options)
-        .map_err(ExecutionError::advice_error_no_context)
+    FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        options.with_environment_trace_limits(librarytree::trace_limits()),
+    )
+    .map_err(ExecutionError::advice_error_no_context)
 }
 
 // CONSTANTS
@@ -124,7 +134,7 @@ struct CompileCacheKey {
     source: SourceCacheKey,
     kernel_source: Option<SourceCacheKey>,
     add_modules: Vec<(String, String)>,
-    library_digests: Vec<Word>,
+    library_artifacts: Vec<Word>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -136,8 +146,21 @@ struct SourceCacheKey {
 
 pub type CompiledTest = (Program, Option<Arc<Package>>, Option<PackageDebugInfo>);
 
+/// Retains exact compiler/admitted names beside the code and its locally validated environment.
+#[derive(Clone)]
+struct PreparedTest {
+    compiled: CompiledTest,
+    // Cache keys use this instance's address; retain it so the allocator cannot recycle that
+    // identity for another manager while the compiled source/debug mappings remain cached.
+    _source_manager: Arc<DefaultSourceManager>,
+    _local_naming: miden_mast_package::PackageNaming,
+    _kernel_naming: Option<miden_mast_package::PackageNaming>,
+    _import_naming: Vec<miden_mast_package::PackageNaming>,
+    environment: librarytree::FixtureEnvironment,
+}
+
 #[cfg(all(feature = "std", not(target_family = "wasm")))]
-type CompileCacheValue = CompiledTest;
+type CompileCacheValue = PreparedTest;
 
 #[cfg(all(feature = "std", not(target_family = "wasm")))]
 type CompileCache = std::collections::HashMap<CompileCacheKey, CompileCacheValue>;
@@ -406,7 +429,7 @@ impl Test {
         expected_mem: &[u64],
     ) {
         // compile the program
-        let (program, host, _debug_info) = self.get_program_and_host();
+        let (program, environment, host, _debug_info) = self.get_program_and_host();
         let mut host = host.with_source_manager(self.source_manager.clone());
 
         // execute the test
@@ -416,7 +439,7 @@ impl Test {
             ExecutionOptions::default(),
         )
         .expect("test processor should initialize with default precompiles");
-        let execution_output = processor.execute_sync(&program, &mut host).unwrap();
+        let execution_output = processor.execute_sync(&program, environment, &mut host).unwrap();
 
         // validate the memory state
         for (addr, mem_value) in ((mem_start_addr as usize)
@@ -486,10 +509,26 @@ impl Test {
     /// # Errors
     /// Returns an error if compilation of the program source or the kernel fails.
     pub fn compile(&self) -> Result<CompiledTest, Report> {
+        self.prepare().map(|prepared| prepared.compiled)
+    }
+
+    /// Returns the exact environment prepared with this test's canonical entry and code inputs.
+    ///
+    /// This uses the shared source fixture convention and its finite import-home policy. Callers
+    /// executing [`Self::compile`]'s code directly must install this environment's witness source
+    /// on their host and pass its explicit execution configuration to the processor.
+    pub fn fixture_environment(&self) -> Result<librarytree::FixtureEnvironment, Report> {
+        self.prepare().map(|prepared| prepared.environment)
+    }
+
+    fn prepare(&self) -> Result<PreparedTest, Report> {
         use miden_assembly::{
             Assembler,
             ast::{Module, ModuleKind},
+            testing::{FixtureNamespace, fixture_package_naming},
         };
+        use miden_assembly_syntax::Parse;
+        use miden_mast_package::TargetType;
 
         #[cfg(all(feature = "std", not(target_family = "wasm")))]
         let cache_key = self.compile_cache_key();
@@ -499,57 +538,112 @@ impl Test {
             let mut cache_guard = COMPILE_CACHE.lock().unwrap();
             let cache = cache_guard.get_or_insert_with(Default::default);
             if let Some(cached) = cache.get(&cache_key) {
-                return Ok((cached.0.clone(), cached.1.clone(), cached.2.clone()));
+                return Ok(cached.clone());
             }
         }
 
-        // Enable debug tracing to stderr via the MIDEN_LOG environment variable, if present
+        // Enable debug tracing to stderr via the MIDEN_LOG environment variable, if present.
         #[cfg(not(target_family = "wasm"))]
         {
             let _ = env_logger::Builder::from_env("MIDEN_LOG").format_timestamp(None).try_init();
         }
 
-        let (mut assembler, kernel_lib) = if let Some(kernel) = self.kernel_source.clone() {
+        // Raw library imports are admitted only under the finite source fixture convention and N0.
+        // A foreign home needs a separate caller-selected admission API, never a permissive
+        // fallback.
+        let import_naming = self
+            .libraries
+            .iter()
+            .map(|package| fixture_package_naming(package))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (mut assembler, kernel_lib, kernel_naming) = if let Some(kernel) =
+            self.kernel_source.clone()
+        {
             let mut parser = Module::parser(Some(ModuleKind::Kernel));
             let kernel = parser.parse(Some(Path::KERNEL), kernel, self.source_manager.clone())?;
-            let kernel_lib = Assembler::new(self.source_manager.clone())
-                .assemble_kernel("kernel", kernel, None)
-                .map(Arc::<Package>::from)?;
-
+            let base = Assembler::new(self.source_manager.clone());
+            let mut fixture = FixtureNamespace::assembly_tests();
+            fixture.add_kernel_modules(&base, &[kernel.as_ref()])?;
+            let assembler = fixture.configure(base, [kernel.as_ref()])?;
+            let product = assembler.assemble_library_modules(
+                "kernel".into(),
+                kernel,
+                [],
+                TargetType::Kernel,
+            )?;
+            let naming = product.naming().clone();
+            let package = Arc::<Package>::from(product.into_artifact(true)?);
             (
-                Assembler::with_kernel(self.source_manager.clone(), kernel_lib.clone())?,
-                Some(kernel_lib),
+                Assembler::with_kernel(
+                    self.source_manager.clone(),
+                    package.clone(),
+                    naming.clone(),
+                )?,
+                Some(package),
+                Some(naming),
             )
         } else {
-            (Assembler::new(self.source_manager.clone()), None)
+            (Assembler::new(self.source_manager.clone()), None, None)
         };
 
-        for (path, source) in &self.add_modules {
-            let module = Module::parser(None).parse_str(
-                Some(path.as_ref()),
-                source,
-                self.source_manager.clone(),
-            )?;
+        let program = self.source.clone().parse(false, self.source_manager.clone())?;
+        let modules = self
+            .add_modules
+            .iter()
+            .map(|(path, source)| {
+                Module::parser(None).parse_str(
+                    Some(path.as_ref()),
+                    source,
+                    self.source_manager.clone(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        for (package, naming) in self.libraries.iter().zip(&import_naming) {
+            assembler.link_package(package.clone(), Linkage::Dynamic, naming.clone())?;
+        }
+        let mut fixture = FixtureNamespace::assembly_tests();
+        fixture.add_module(&program)?;
+        for module in &modules {
+            fixture.add_module(module)?;
+        }
+        assembler = fixture.configure(
+            assembler,
+            core::iter::once(program.as_ref()).chain(modules.iter().map(|module| module.as_ref())),
+        )?;
+        for module in modules {
             assembler.compile_and_statically_link(module)?;
         }
-        // Debug mode is now always enabled
-        for package in &self.libraries {
-            assembler.link_package(package.clone(), Linkage::Dynamic)?;
-        }
-
-        let package = assembler.assemble_program("program", self.source.clone())?;
+        let product = assembler.assemble_executable_modules("program".into(), program, [])?;
+        let local_naming = product.naming().clone();
+        let package = product.into_artifact(true)?;
         let debug_info = package
             .debug_info()
             .map_err(|err| Report::msg(format!("failed to decode test debug info: {err}")))?;
-        let result = (package.unwrap_program(), kernel_lib, debug_info);
+        let program = package.try_into_program(&local_naming)?;
+        let entry = local_naming
+            .entry_key()
+            .ok_or_else(|| Report::msg("compiled test has no explicit entry key"))?;
+        let environment = librarytree::FixtureEnvironment::new(
+            entry,
+            core::iter::once(&local_naming)
+                .chain(kernel_naming.iter())
+                .chain(import_naming.iter()),
+        )?;
+        let result = PreparedTest {
+            compiled: (program, kernel_lib, debug_info),
+            _source_manager: self.source_manager.clone(),
+            _local_naming: local_naming,
+            _kernel_naming: kernel_naming,
+            _import_naming: import_naming,
+            environment,
+        };
 
         #[cfg(all(feature = "std", not(target_family = "wasm")))]
         {
             let mut cache_guard = COMPILE_CACHE.lock().unwrap();
             let cache = cache_guard.get_or_insert_with(Default::default);
-            cache.insert(cache_key, (result.0.clone(), result.1.clone(), result.2.clone()));
+            cache.insert(cache_key, result.clone());
         }
-
         Ok(result)
     }
 
@@ -589,7 +683,7 @@ impl Test {
         // generation logic - though not too big so as to over-allocate memory.
         const FRAGMENT_SIZE: usize = 1 << 16;
 
-        let (program, host, debug_info) = self.get_program_and_host();
+        let (program, environment, host, debug_info) = self.get_program_and_host();
         let mut host = host.with_source_manager(self.source_manager.clone());
         let debug_info = self.in_tracing_mode.then_some(debug_info).flatten();
 
@@ -603,10 +697,13 @@ impl Test {
             )?;
             if let Some(debug_info) = debug_info.as_ref() {
                 fast_processor.execute_for_proving_with_package_debug_info_sync(
-                    &program, debug_info, &mut host,
+                    &program,
+                    environment,
+                    debug_info,
+                    &mut host,
                 )
             } else {
-                fast_processor.execute_for_proving_sync(&program, &mut host)
+                fast_processor.execute_for_proving_sync(&program, environment, &mut host)
             }
         };
 
@@ -627,7 +724,7 @@ impl Test {
     /// Returns the [`ExecutionOutput`] once execution is finished.
     #[cfg(not(target_family = "wasm"))]
     pub fn execute_for_output(&self) -> Result<(ExecutionOutput, DefaultHost), ExecutionError> {
-        let (program, host, debug_info) = self.get_program_and_host();
+        let (program, environment, host, debug_info) = self.get_program_and_host();
         let mut host = host.with_source_manager(self.source_manager.clone());
         let debug_info = self.in_tracing_mode.then_some(debug_info).flatten();
 
@@ -639,10 +736,12 @@ impl Test {
 
         if let Some(debug_info) = debug_info.as_ref() {
             processor
-                .execute_with_package_debug_info_sync(&program, debug_info, &mut host)
+                .execute_with_package_debug_info_sync(&program, environment, debug_info, &mut host)
                 .map(|output| (output, host))
         } else {
-            processor.execute_sync(&program, &mut host).map(|output| (output, host))
+            processor
+                .execute_sync(&program, environment, &mut host)
+                .map(|output| (output, host))
         }
     }
 
@@ -655,7 +754,7 @@ impl Test {
     /// verifier logic, or precompile request handling).
     #[cfg(not(target_family = "wasm"))]
     pub fn prove_and_verify(&self, pub_inputs: Vec<u64>, test_fail: bool) {
-        let (program, mut host, debug_info) = self.get_program_and_host();
+        let (program, environment, mut host, debug_info) = self.get_program_and_host();
         let debug_info = self.in_tracing_mode.then_some(debug_info).flatten();
         let stack_inputs = stack_inputs_from_ints(pub_inputs);
         let processor = new_vm_default_processor(
@@ -665,10 +764,14 @@ impl Test {
         )
         .unwrap();
         let witness = if let Some(debug_info) = debug_info.as_ref() {
-            processor
-                .execute_for_proving_with_package_debug_info_sync(&program, debug_info, &mut host)
+            processor.execute_for_proving_with_package_debug_info_sync(
+                &program,
+                environment,
+                debug_info,
+                &mut host,
+            )
         } else {
-            processor.execute_for_proving_sync(&program, &mut host)
+            processor.execute_for_proving_sync(&program, environment, &mut host)
         }
         .unwrap();
         let stack_outputs = *witness.claim().stack_outputs();
@@ -741,9 +844,14 @@ impl Test {
     /// The host is initialized with the advice inputs provided in the test, as well as the kernel
     /// and library MAST forests.
     #[cfg(not(target_family = "wasm"))]
-    fn get_program_and_host(&self) -> (Program, DefaultHost, Option<PackageDebugInfo>) {
-        let (program, kernel, debug_info) = self.compile().expect("Failed to compile test source.");
-        let mut host = DefaultHost::default();
+    fn get_program_and_host(
+        &self,
+    ) -> (Program, ExecutionEnvironment, DefaultHost, Option<PackageDebugInfo>) {
+        let prepared = self.prepare().expect("Failed to compile test source.");
+        let environment = prepared.environment.execution();
+        let mut host =
+            DefaultHost::default().with_environment_source(prepared.environment.source());
+        let (program, kernel, debug_info) = prepared.compiled;
         if let Some(kernel) = kernel {
             host.load_library(kernel.mast_forest()).unwrap();
         }
@@ -762,7 +870,7 @@ impl Test {
                 });
         }
 
-        (program, host, debug_info)
+        (program, environment, host, debug_info)
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -817,7 +925,7 @@ impl Test {
             }
         }
 
-        let (program, host, debug_info) = self.get_program_and_host();
+        let (program, environment, host, debug_info) = self.get_program_and_host();
         let mut host = host.with_source_manager(self.source_manager.clone());
         let debug_info = self.in_tracing_mode.then_some(debug_info).flatten();
         let compare_error_diagnostics = debug_info.is_none();
@@ -830,10 +938,14 @@ impl Test {
             )
             .expect("test processor should initialize with default precompiles");
             if let Some(debug_info) = debug_info.as_ref() {
-                fast_process
-                    .execute_by_step_with_package_debug_info_sync(&program, debug_info, &mut host)
+                fast_process.execute_by_step_with_package_debug_info_sync(
+                    &program,
+                    environment,
+                    debug_info,
+                    &mut host,
+                )
             } else {
-                fast_process.execute_by_step_sync(&program, &mut host)
+                fast_process.execute_by_step_sync(&program, environment, &mut host)
             }
         };
 
@@ -857,10 +969,12 @@ impl Test {
                 .iter()
                 .map(|(path, source)| (path.to_string(), source.clone()))
                 .collect(),
-            library_digests: self
+            library_artifacts: self
                 .libraries
                 .iter()
-                .map(|library| library.dependency_commitment())
+                // This binds code, exact required canonical naming and semantic sections. The
+                // fixture profile is fixed for this helper; unknown homes reject on preparation.
+                .map(|library| library.commitment())
                 .collect(),
         }
     }
@@ -900,6 +1014,44 @@ mod tests {
 
         assert!(result.is_ok(), "invalid extra module source caused Test::compile() to panic");
         assert!(result.unwrap().is_err(), "invalid extra module source should return an error");
+    }
+
+    #[test]
+    fn explicit_environment_executes_nested_helpers_and_procref() {
+        let test = Test::new(
+            "keyed_helpers",
+            r#"
+            proc helper
+                push.7
+            end
+            proc nested
+                exec.helper
+            end
+            begin
+                procref.nested mem_storew_le.100 dropw push.100 dynexec swap drop
+            end
+        "#,
+            false,
+        );
+        let (output, _) = test.execute_for_output().expect("named helper execution");
+        crate::assert_eq!(stack_outputs_as_int_vec(&output.stack)[0], 7);
+    }
+
+    #[test]
+    fn explicit_environment_executes_root_kernel_and_private_helper() {
+        let test = Test::new("keyed_kernel", "begin syscall.answer end", true).with_kernel_source(
+            "keyed_kernel_source",
+            r#"
+                proc helper
+                    push.9
+                end
+                pub proc answer
+                    exec.helper swap drop
+                end
+            "#,
+        );
+        let (output, _) = test.execute_for_output().expect("root kernel/private helper execution");
+        crate::assert_eq!(stack_outputs_as_int_vec(&output.stack)[0], 9);
     }
 
     #[test]
