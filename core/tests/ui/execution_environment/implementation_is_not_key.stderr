@@ -1,7 +1,7 @@
 error[E0308]: mismatched types
-  --> tests/ui/execution_environment/implementation_is_not_key.rs:11:38
+  --> tests/ui/execution_environment/implementation_is_not_key.rs:10:38
    |
-11 |     let _ = ExecutionDescriptor::new(implementation, environment, kernel_namespace);
+10 |     let _ = ExecutionDescriptor::new(implementation, environment);
    |             ------------------------ ^^^^^^^^^^^^^^ expected `ProcedureKey`, found `ImplementationRoot`
    |             |
    |             arguments to this function are incorrect
@@ -9,5 +9,5 @@ error[E0308]: mismatched types
 note: associated function defined here
   --> src/program/environment.rs
    |
-   |     pub const fn new(
+   |     pub const fn new(entry_key: ProcedureKey, environment_root: EnvironmentRoot) -> Self {
    |                  ^^^

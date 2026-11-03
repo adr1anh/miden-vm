@@ -365,7 +365,6 @@ pub struct ExecutableForestFixture {
     forest: Arc<MastForest>,
     environment: ValidatedEnvironment,
     procedures: Vec<ExecutableForestProcedure>,
-    kernel_namespace: Namespace,
 }
 
 impl ExecutableForestFixture {
@@ -382,11 +381,6 @@ impl ExecutableForestFixture {
     /// Includes a binding for every materialized procedure root, as well as invocation aliases.
     pub fn procedures(&self) -> &[ExecutableForestProcedure] {
         &self.procedures
-    }
-
-    /// The full accumulated namespace containing every generated syscall target.
-    pub const fn kernel_namespace(&self) -> Namespace {
-        self.kernel_namespace
     }
 
     /// Returns actual committed preimages and selected child indices for a generated binding.
@@ -703,11 +697,6 @@ fn fixture_label(kind: &str, index: usize) -> LabelCommitment {
         .commitment()
 }
 
-fn fixture_namespace_labels() -> [LabelCommitment; 2] {
-    ["arbitrary-fixture", "kernel"]
-        .map(|text| CanonicalLabel::text(text).expect("constant ASCII fixture label").commitment())
-}
-
 /// Key words are stored using the existing dynamic invocation memory convention. The preparation
 /// restores the original stack depth, then pushes the address consumed by DYN/DYNCALL.
 fn dynamic_setup(target: ProcedureKey) -> Vec<Operation> {
@@ -742,17 +731,16 @@ fn build_executable_forest(
         forest.mark_root(root);
     }
 
-    let namespace_labels = fixture_namespace_labels();
-    let kernel_namespace = namespace_labels
-        .iter()
-        .fold(Namespace::initial(), |namespace, &label| namespace.child(label));
+    // This synthetic environment makes every target a fixed-root export. Collection grouping
+    // preserves the initial namespace, so generated SYSCALLs need no configurable namespace.
+    let namespace = Namespace::initial();
     let mut bindings = Vec::new();
     for (mode, picks) in [(0, &seeds.call_picks), (1, &seeds.exec_picks), (2, &seeds.syscall_picks)]
     {
         for pick in picks {
             let body = choose(&node_ids, pick.body);
             let label = fixture_label("target", bindings.len());
-            let key = kernel_namespace.procedure_key(label);
+            let key = namespace.procedure_key(label);
             bindings.push((label, body));
             let id = match mode {
                 0 => forest.push_node(CallNodeBuilder::new(key)).expect("call"),
@@ -766,7 +754,7 @@ fn build_executable_forest(
     }
     for &(dyncall, body) in &seeds.dyn_selectors {
         let label = fixture_label("target", bindings.len());
-        let key = kernel_namespace.procedure_key(label);
+        let key = namespace.procedure_key(label);
         bindings.push((label, choose(&node_ids, body)));
         let setup = forest
             .push_node(BasicBlockNodeBuilder::new(dynamic_setup(key)))
@@ -795,7 +783,7 @@ fn build_executable_forest(
     let procedures: Vec<_> = bindings
         .into_iter()
         .map(|(label, root)| ExecutableForestProcedure {
-            key: kernel_namespace.procedure_key(label),
+            key: namespace.procedure_key(label),
             label,
             root: remapping.get(root).expect("every generated binding retains its body"),
         })
@@ -810,15 +798,11 @@ fn build_executable_forest(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut root = environment.insert(EnvNode::List(leaves))?;
-    for label in namespace_labels.into_iter().rev() {
-        root = environment.insert(EnvNode::Env { label, child: root })?;
-    }
+    let root = environment.insert(EnvNode::List(leaves))?;
     Ok(ExecutableForestFixture {
         forest: Arc::new(forest),
         environment: environment.finish(root)?,
         procedures,
-        kernel_namespace,
     })
 }
 
@@ -1197,7 +1181,7 @@ mod tests {
             assert!(forest.is_procedure_root(procedure.root));
             let binding = fixture.environment().binding(procedure.key).expect("validated binding");
             assert_eq!(binding.label(), procedure.label);
-            assert_eq!(binding.namespace(), fixture.kernel_namespace());
+            assert_eq!(binding.namespace(), Namespace::initial());
             assert_eq!(binding.implementation().into_word(), forest[procedure.root].digest());
         }
         assert_pruned(forest);
@@ -1385,7 +1369,7 @@ mod tests {
                 let binding = fixture.environment().binding(procedure.key).expect("complete binding");
                 prop_assert_eq!(binding.key(), binding.namespace().procedure_key(procedure.label));
                 prop_assert_eq!(binding.implementation().into_word(), forest[procedure.root].digest());
-                prop_assert_eq!(binding.namespace(), fixture.kernel_namespace());
+                prop_assert_eq!(binding.namespace(), Namespace::initial());
                 let opening = fixture.opening(procedure.key).expect("committed opening");
                 prop_assert_eq!(opening[0].0.commitment().unwrap(), fixture.environment().root());
                 for pair in opening.windows(2) {

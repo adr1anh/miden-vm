@@ -24,17 +24,76 @@ fn configurations_match_complete_frozen_vectors() {
         input.reverse();
         let config = configuration(input);
         let payload = config.preimage_elements().unwrap();
-        assert_eq!(payload.len(), 14 + 8 * count);
+        assert_eq!(payload.len(), 10 + 8 * count);
         assert_eq!(
             payload,
             expected.payload.iter().copied().map(Felt::new_unchecked).collect::<Vec<_>>()
         );
         assert_eq!(config.commitment().unwrap().into_word(), word(expected.digest));
         assert_eq!(config.entry_implementation(), ImplementationRoot::new(word([1, 2, 3, 4])));
-        assert_eq!(config.kernel_namespace(), Namespace::new(word([5, 6, 7, 8])));
         assert_eq!(config.resource_inventory(), word([9, 10, 11, 12]));
         assert_eq!(config.mounts(), &mounts[..count]);
     }
+}
+
+#[test]
+fn legacy_configurations_are_domain_separated_and_change_derived_identity() {
+    use miden_crypto::hash::eidos::{Eidos, EidosFrame};
+
+    let legacy = vector("legacy_v2_verifier_config_empty_mounts");
+    let legacy_tag = domain::DomainTag::from_u32(legacy.domain_tag).unwrap();
+    assert_eq!(legacy.domain_tag, 0x0101_0a02);
+    assert!(domain::MidenVmDomainRegistry::resolve(legacy_tag).is_none());
+    assert_eq!(domain::domain_tag(domain::EXEC_VERIFIER_CONFIG).as_canonical_u64(), 0x0101_0a03);
+
+    // Reconstruct only the historical FeltSequence hash to preserve the persisted v2 anchor.
+    // This helper does not admit or reinterpret historical configurations.
+    let hash_legacy_payload = |payload: &[Felt]| {
+        let mut digest =
+            EidosFrame::new(legacy_tag, [payload.len() as u32, 0, 0]).initial_chaining_word();
+        for chunk in payload.chunks(8) {
+            let mut block = [Felt::ZERO; 8];
+            block[..chunk.len()].copy_from_slice(chunk);
+            digest = Eidos::compress(digest, block);
+        }
+        digest
+    };
+    let old_payload = legacy.payload.iter().copied().map(Felt::new_unchecked).collect::<Vec<_>>();
+    let old_commitment = word(legacy.digest);
+    assert_eq!(hash_legacy_payload(&old_payload), old_commitment);
+
+    let config = configuration(vec![]);
+    let payload = config.preimage_elements().unwrap();
+    assert_eq!(payload, [3, 1, 2, 3, 4, 0, 9, 10, 11, 12].map(Felt::new_unchecked));
+    let commitment = config.commitment().unwrap();
+    assert_ne!(commitment.into_word(), old_commitment);
+    assert_ne!(hash_legacy_payload(&payload), commitment.into_word());
+    assert_ne!(
+        hasher::hash_elements_in_domain(&old_payload, domain::EXEC_VERIFIER_CONFIG),
+        old_commitment,
+    );
+
+    let relation = word([1, 2, 3, 4]);
+    let entry = ProcedureKey::new(word([5, 6, 7, 8]));
+    let identity = VerifierIdentity::derive(relation, entry, commitment);
+    let expected = vector("verifier_identity_v3_empty_config");
+    assert_eq!(
+        u64::from(expected.domain_tag),
+        domain::domain_tag(domain::EXEC_VERIFIER_IDENTITY).as_canonical_u64(),
+    );
+    assert_eq!(identity.into_word(), word(expected.digest));
+    assert_eq!(
+        VerifierIdentity::preimage_elements(relation, entry, commitment).as_slice(),
+        expected.payload.iter().copied().map(Felt::new_unchecked).collect::<Vec<_>>()
+    );
+    assert_ne!(
+        identity,
+        VerifierIdentity::derive(
+            relation,
+            entry,
+            VerifierConfigurationCommitment::new(old_commitment),
+        ),
+    );
 }
 
 #[test]
@@ -140,7 +199,7 @@ fn equal_namespaces_sort_by_forward_fragment_coordinates() {
     // disjoint.
     let config = configuration(vec![second, first]);
     assert_eq!(config.mounts(), &[first, second]);
-    assert_eq!(config.preimage_elements().unwrap().len(), 30);
+    assert_eq!(config.preimage_elements().unwrap().len(), 26);
 }
 
 #[test]
@@ -151,7 +210,6 @@ fn duplicate_mount_pairs_reject_even_when_initially_separated() {
         assert_eq!(
             VerifierConfiguration::new(
                 ImplementationRoot::new(word([1, 2, 3, 4])),
-                Namespace::new(word([5, 6, 7, 8])),
                 mounts,
                 word([9, 10, 11, 12]),
             ),
@@ -162,15 +220,13 @@ fn duplicate_mount_pairs_reject_even_when_initially_separated() {
 
 #[test]
 fn every_configuration_word_coordinate_changes_the_commitment() {
-    // D_v, N_kernel, mount namespace, mount fragment, and resource inventory.
-    let original =
-        [[1, 2, 3, 4], [5, 6, 7, 8], [13, 14, 15, 16], [17, 18, 19, 20], [9, 10, 11, 12]];
-    let from_words = |values: [[u64; 4]; 5]| {
+    // D_v, mount namespace, mount fragment, and resource inventory.
+    let original = [[1, 2, 3, 4], [13, 14, 15, 16], [17, 18, 19, 20], [9, 10, 11, 12]];
+    let from_words = |values: [[u64; 4]; 4]| {
         VerifierConfiguration::new(
             ImplementationRoot::new(word(values[0])),
-            Namespace::new(word(values[1])),
-            vec![mount(values[2], values[3])],
-            word(values[4]),
+            vec![mount(values[1], values[2])],
+            word(values[3]),
         )
         .unwrap()
     };
@@ -185,7 +241,7 @@ fn every_configuration_word_coordinate_changes_the_commitment() {
     // Adding a mount changes both the committed count and the logical framing length.
     assert_ne!(
         configuration(vec![
-            mount(original[2], original[3]),
+            mount(original[1], original[2]),
             mount([21, 22, 23, 24], [25, 26, 27, 28])
         ])
         .commitment()
@@ -199,7 +255,7 @@ fn version_count_and_domain_substitutions_change_the_commitment() {
     let config = configuration(vec![mount([13, 14, 15, 16], [17, 18, 19, 20])]);
     let payload = config.preimage_elements().unwrap();
     let expected = config.commitment().unwrap().into_word();
-    for index in [0, 9] {
+    for index in [0, 5] {
         let mut changed = payload.clone();
         changed[index] += Felt::ONE;
         assert_ne!(
@@ -216,9 +272,9 @@ fn version_count_and_domain_substitutions_change_the_commitment() {
 
 #[test]
 fn configuration_length_bounds_reject_without_allocating() {
-    assert_eq!(checked_configuration_element_len(0), Ok(14));
-    assert_eq!(checked_configuration_element_len(1), Ok(22));
-    assert_eq!(checked_configuration_element_len(2), Ok(30));
+    assert_eq!(checked_configuration_element_len(0), Ok(10));
+    assert_eq!(checked_configuration_element_len(1), Ok(18));
+    assert_eq!(checked_configuration_element_len(2), Ok(26));
     for count in [usize::MAX, usize::MAX / 8 + 1, u32::MAX as usize] {
         assert_eq!(
             checked_configuration_element_len(count),
@@ -228,8 +284,8 @@ fn configuration_length_bounds_reject_without_allocating() {
 
     // Framing bounds dominate on wide targets; contiguous Felt layout dominates on narrow ones.
     let max_elements = (u32::MAX as usize).min(isize::MAX as usize / size_of::<Felt>());
-    let max_mounts = (max_elements - 14) / 8;
-    assert_eq!(checked_configuration_element_len(max_mounts), Ok(14 + 8 * max_mounts));
+    let max_mounts = (max_elements - 10) / 8;
+    assert_eq!(checked_configuration_element_len(max_mounts), Ok(10 + 8 * max_mounts));
     assert_eq!(
         checked_configuration_element_len(max_mounts + 1),
         Err(VerifierConfigurationError::LengthOverflow)
@@ -239,7 +295,6 @@ fn configuration_length_bounds_reject_without_allocating() {
 fn configuration(mounts: Vec<VerifierMount>) -> VerifierConfiguration {
     VerifierConfiguration::new(
         ImplementationRoot::new(word([1, 2, 3, 4])),
-        Namespace::new(word([5, 6, 7, 8])),
         mounts,
         word([9, 10, 11, 12]),
     )
