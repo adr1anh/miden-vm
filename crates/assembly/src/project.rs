@@ -385,6 +385,7 @@ where
                 None,
                 None,
                 &mut cache,
+                None,
             )? {
                 ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
                 ControlFlow::Continue(resolved) => Some(resolved),
@@ -403,6 +404,7 @@ where
             None,
             None,
             &mut cache,
+            None,
         )
         .map(|resolved| resolved.map_continue(|r| r.package))
     }
@@ -423,6 +425,9 @@ where
     ///
     /// * `package_id` must be the package identifier for `project` in the current dependency graph
     /// * `target` must be a target extracted from `project`
+    /// * `requested_binding`, when present, is the parent's source-target default-home request; its
+    ///   exact home is checked against namespace inputs before any cache reuse. It does not approve
+    ///   public callable mappings or replace complete Bound declarations.
     /// * `required_lib` must be set if assembly of `target` would depend on another target of the
     ///   same project (i.e. an executable target implicitly depends on the library target).
     ///
@@ -439,6 +444,7 @@ where
         sources: Option<ProjectSourceInputs>,
         source_provenance: Option<ProjectSourceProvenanceInputs>,
         cache: &mut BTreeMap<PackageId, ResolvedPackage>,
+        requested_binding: Option<&miden_project::DependencyBinding>,
     ) -> Result<ControlFlow<AssemblyInterrupted, ResolvedPackage>, Report> {
         assert!(
             source_provenance.is_none() || sources.is_some(),
@@ -484,11 +490,15 @@ where
         let node = self.dependency_graph.get(&package_id)?;
         let dependencies = node.dependencies.clone();
         for edge in dependencies.iter() {
-            let dependency_package =
-                match self.resolve_dependency_package(&edge.dependency, profile_name, cache)? {
-                    ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
-                    ControlFlow::Continue(pkg) => pkg,
-                };
+            let dependency_package = match self.resolve_dependency_package(
+                &edge.dependency,
+                profile_name,
+                cache,
+                edge.binding.as_ref(),
+            )? {
+                ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
+                ControlFlow::Continue(pkg) => pkg,
+            };
             if !dependency_package.package.is_library() {
                 return Err(Report::msg(format!(
                     "dependency '{}' resolved to executable package '{}', but only library-like packages can be linked",
@@ -496,6 +506,16 @@ where
                 )));
             }
 
+            // Custom homes state the caller's exact package-default metadata expectation. They
+            // do not claim ownership of visible paths or constrain retained foreign bindings.
+            if let Some(miden_project::DependencyBinding::Custom(home)) = &edge.binding
+                && dependency_package.naming.namespace_plan() != home
+            {
+                return Err(Report::msg(format!(
+                    "dependency '{}' default home differs from its explicit custom home",
+                    edge.dependency
+                )));
+            }
             if !dependency_package.package.is_kernel() {
                 assembler.link_package(
                     dependency_package.package.clone(),
@@ -534,15 +554,24 @@ where
                     target.name.inner()
                 ))
             })?;
-            let context = self.get_target_assembly_context(
+            let mut context = self.get_target_assembly_context(
                 &project,
                 target,
                 profile,
                 manually_provided_sources,
             )?;
+            context.dependency_binding = requested_binding;
             provider(&context, &sources, &assembler)?
         };
         // Validate even when inherited AST inputs prevent persistent cache reuse.
+        if let Some(binding) = requested_binding
+            && namespace_inputs.namespace_plan() != Some(&binding.namespace_plan())
+        {
+            return Err(Report::msg(format!(
+                "source target '{}' namespace inputs differ from its requested dependency home",
+                target.name.inner()
+            )));
+        }
         namespace_inputs.cache_commitment()?;
         assembler = assembler.with_namespace_inputs(namespace_inputs);
 
@@ -672,9 +701,23 @@ where
         package_id: &PackageId,
         profile_name: &str,
         cache: &mut BTreeMap<PackageId, ResolvedPackage>,
+        requested_binding: Option<&miden_project::DependencyBinding>,
     ) -> Result<ControlFlow<AssemblyInterrupted, ResolvedPackage>, Report> {
         let node = self.dependency_graph.get(package_id)?;
         let node_version = node.version.clone();
+        if matches!(requested_binding, Some(miden_project::DependencyBinding::Standard(_)))
+            && !matches!(
+                &node.provenance,
+                ProjectDependencyNodeProvenance::Source(ProjectSource::Real {
+                    library_path: Some(_),
+                    ..
+                })
+            )
+        {
+            return Err(Report::msg(format!(
+                "standard namespace selection for artifact dependency '{package_id}' requires explicit expected callable mappings; use an admitted custom binding or compile its source",
+            )));
+        }
 
         let (package, should_cache) = match &node.provenance {
             ProjectDependencyNodeProvenance::Source(ProjectSource::Virtual { .. }) => {
@@ -711,6 +754,7 @@ where
                     None,
                     None,
                     cache,
+                    requested_binding,
                 )? {
                     ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
                     ControlFlow::Continue(package) => package,

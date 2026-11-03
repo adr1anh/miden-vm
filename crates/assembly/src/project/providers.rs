@@ -13,6 +13,10 @@ use super::*;
 /// This struct provides important context about the current target being assembled to
 /// implementations of the [ProjectSourceProvider] trait.
 pub struct TargetAssemblyContext<'a> {
+    /// Parent's explicit source-target default-home request, supplied to the namespace-inputs
+    /// provider. Source hooks start without this request. This supplies no artifact ownership or
+    /// expected public-callable mapping; explicitly bound declarations remain separate inputs.
+    pub dependency_binding: Option<&'a miden_project::DependencyBinding>,
     /// The package manifest for the target being assembled
     pub package: Arc<ProjectPackage>,
     /// The resolved/canonicalized package manifest path
@@ -76,6 +80,7 @@ impl<'a> TargetAssemblyContext<'a> {
         })?;
         let root_path = project_root.join(target_path);
         Ok(Self {
+            dependency_binding: None,
             package: package.clone(),
             manifest_path,
             project_root: project_root.into(),
@@ -116,6 +121,7 @@ impl<'a> TargetAssemblyContext<'a> {
             ))
         })?;
         Ok(TargetAssemblyContext {
+            dependency_binding: None,
             package,
             manifest_path,
             project_root: project_root.into(),
@@ -151,6 +157,7 @@ impl<'a> TargetAssemblyContext<'a> {
             .map(std::path::Path::to_path_buf)
             .unwrap_or(PathBuf::from("."));
         Ok(TargetAssemblyContext {
+            dependency_binding: None,
             package,
             manifest_path: std::path::Path::new(""),
             project_root: project_root.into(),
