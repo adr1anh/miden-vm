@@ -32,5 +32,6 @@ cargo_metadata = { workspace = true }
 # `testing` provides the in-memory package cache the project assembler needs.
 miden-assembly = { workspace = true, features = ["std", "testing"] }
 miden-processor = { workspace = true, features = ["std"] }
+miden-utils-testing.workspace = true
 tempfile = { workspace = true, features = ["getrandom"] }
 wat.workspace = true
