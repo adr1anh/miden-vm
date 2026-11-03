@@ -286,12 +286,30 @@ impl Test {
     pub fn new(name: &str, source: &str, in_tracing_mode: bool) -> Self {
         let source_manager = Arc::new(DefaultSourceManager::default());
         let source = source_manager.load(SourceLanguage::Masm, name.into(), source.to_string());
+        Self::from_source_parts(
+            source_manager,
+            source,
+            StackInputs::default(),
+            AdviceInputs::default(),
+            in_tracing_mode,
+        )
+    }
+
+    /// Creates a test from an already loaded source and its original source manager.
+    #[doc(hidden)]
+    pub fn from_source_parts(
+        source_manager: Arc<DefaultSourceManager>,
+        source: Arc<SourceFile>,
+        stack_inputs: StackInputs,
+        advice_inputs: AdviceInputs,
+        in_tracing_mode: bool,
+    ) -> Self {
         Self {
             source_manager,
             source,
             kernel_source: None,
-            stack_inputs: StackInputs::default(),
-            advice_inputs: AdviceInputs::default(),
+            stack_inputs,
+            advice_inputs,
             in_tracing_mode,
             libraries: Vec::default(),
             library_naming: Vec::new(),
@@ -333,6 +351,10 @@ impl Test {
 
     /// Adds a library to link in during assembly.
     pub fn with_library(mut self, package: Arc<Package>) -> Self {
+        // This call selects raw admission. Public vector edits must not let its new slot
+        // inherit an earlier owned inventory, or leave removed tail slots attached.
+        let index = self.libraries.len();
+        self.library_naming.retain(|(slot, _)| *slot < index);
         self.libraries.push(package);
         self
     }
@@ -347,7 +369,9 @@ impl Test {
         package: Arc<Package>,
         naming: Arc<miden_mast_package::PackageNaming>,
     ) -> Self {
-        self.library_naming.push((self.libraries.len(), naming));
+        let index = self.libraries.len();
+        self.library_naming.retain(|(slot, _)| *slot < index);
+        self.library_naming.push((index, naming));
         self.libraries.push(package);
         self
     }
@@ -1160,6 +1184,38 @@ mod tests {
             .compile()
             .expect_err("a raw import still requires current fixture admission");
         assert!(error.to_string().contains("unexpected fixture home"));
+    }
+
+    #[test]
+    fn raw_reselection_after_clear_does_not_inherit_owned_naming_or_cache() {
+        let (package, naming, _) = compiler_owned_library("selected-foreign-owner");
+        let mut test =
+            Test::new("owned_clear_raw", "use foreign\nbegin exec.foreign::answer end", false)
+                .with_library_and_naming(package.clone(), naming);
+        test.compile().expect("owned import should warm the cache");
+        let warmed_key = test.compile_cache_key();
+
+        test.libraries.clear();
+        let raw = test.with_library(package);
+        crate::assert_eq!(raw.compile_cache_key(), warmed_key);
+        let error =
+            raw.compile().expect_err("a new raw selection must not inherit owned authority");
+        assert!(error.to_string().contains("unexpected fixture home"));
+    }
+
+    #[test]
+    fn owned_reselection_after_clear_replaces_removed_slot_metadata() {
+        let (package, naming, _) = compiler_owned_library("selected-foreign-owner");
+        let (replacement, replacement_naming, _) = compiler_owned_library("replacement-owner");
+        let mut test =
+            Test::new("owned_clear_owned", "use foreign\nbegin exec.foreign::answer end", false)
+                .with_library_and_naming(package, naming);
+        test.compile().expect("the original owned import should compile");
+
+        test.libraries.clear();
+        test.with_library_and_naming(replacement, replacement_naming)
+            .compile()
+            .expect("the explicit new owned selection must replace removed slot metadata");
     }
 
     #[test]

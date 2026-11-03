@@ -216,18 +216,13 @@ macro_rules! build_test_by_mode {
         let source_manager = ::alloc::sync::Arc::new($crate::DefaultSourceManager::default());
         let source = source_manager.load($crate::SourceLanguage::Masm, name.into(), $source.into());
 
-        $crate::Test {
+        $crate::Test::from_source_parts(
             source_manager,
             source,
-            kernel_source: None,
             stack_inputs,
             advice_inputs,
-            in_tracing_mode: $in_tracing_mode,
-            libraries: ::alloc::vec::Vec::default(),
-            handlers: ::alloc::vec::Vec::new(),
-            trace_handlers: ::alloc::vec::Vec::new(),
-            add_modules: ::alloc::vec::Vec::default(),
-        }
+            $in_tracing_mode,
+        )
     }};
     ($in_tracing_mode:expr, $source:expr, $stack_inputs:expr, $advice_stack:expr) => {{
         use $crate::SourceManager;
@@ -243,18 +238,13 @@ macro_rules! build_test_by_mode {
         let source_manager = ::alloc::sync::Arc::new($crate::DefaultSourceManager::default());
         let source = source_manager.load($crate::SourceLanguage::Masm, name.into(), $source.into());
 
-        $crate::Test {
+        $crate::Test::from_source_parts(
             source_manager,
             source,
-            kernel_source: None,
             stack_inputs,
             advice_inputs,
-            in_tracing_mode: $in_tracing_mode,
-            libraries: ::alloc::vec::Vec::default(),
-            handlers: ::alloc::vec::Vec::new(),
-            trace_handlers: ::alloc::vec::Vec::new(),
-            add_modules: ::alloc::vec::Vec::default(),
-        }
+            $in_tracing_mode,
+        )
     }};
     (
         $in_tracing_mode:expr,
@@ -275,18 +265,13 @@ macro_rules! build_test_by_mode {
         let source_manager = ::alloc::sync::Arc::new($crate::DefaultSourceManager::default());
         let source = source_manager.load($crate::SourceLanguage::Masm, name.into(), $source.into());
 
-        $crate::Test {
+        $crate::Test::from_source_parts(
             source_manager,
             source,
-            kernel_source: None,
             stack_inputs,
             advice_inputs,
-            in_tracing_mode: $in_tracing_mode,
-            libraries: ::alloc::vec::Vec::default(),
-            handlers: ::alloc::vec::Vec::new(),
-            trace_handlers: ::alloc::vec::Vec::new(),
-            add_modules: ::alloc::vec::Vec::default(),
-        }
+            $in_tracing_mode,
+        )
     }};
     (
         $in_tracing_mode:expr,
@@ -309,18 +294,13 @@ macro_rules! build_test_by_mode {
         let source_manager = ::alloc::sync::Arc::new($crate::DefaultSourceManager::default());
         let source = source_manager.load($crate::SourceLanguage::Masm, name.into(), $source.into());
 
-        $crate::Test {
+        $crate::Test::from_source_parts(
             source_manager,
             source,
-            kernel_source: None,
             stack_inputs,
             advice_inputs,
-            in_tracing_mode: $in_tracing_mode,
-            libraries: ::alloc::vec::Vec::default(),
-            handlers: ::alloc::vec::Vec::new(),
-            trace_handlers: ::alloc::vec::Vec::new(),
-            add_modules: ::alloc::vec::Vec::default(),
-        }
+            $in_tracing_mode,
+        )
     }};
 }
 
