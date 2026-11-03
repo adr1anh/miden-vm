@@ -46,3 +46,7 @@ mod repeat_loop_schema_soundness_repro;
 mod repro_harness;
 #[cfg(all(test, feature = "std"))]
 mod span_entry_soundness_repro;
+
+#[cfg(test)]
+#[path = "test_utils/named_fixture.rs"]
+mod named_fixture;

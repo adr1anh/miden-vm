@@ -49,10 +49,17 @@ fn verifier_rejects_forged_overflow_pop_order() {
     // Top first: [16, 15, ..., 2, 1]. The two PUSH operations create overflow records for 1 and 2.
     let stack_values = (1..17).rev().map(Felt::new_unchecked).collect::<Vec<_>>();
     let stack_inputs = StackInputs::new(&stack_values).unwrap();
-    let mut host = DefaultHost::default();
+    let environment = crate::named_fixture::raw_environment(&program, "overflow-pointer");
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(stack_inputs)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
         .execute_and_build_trace_sync(
             &program,
+            environment.execution(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

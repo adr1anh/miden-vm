@@ -50,9 +50,20 @@ fn build_basic_program(ops: Vec<Operation>) -> Program {
 
 fn execute(program: &Program, stack: &[u64]) -> VmTrace {
     let stack = stack.iter().map(|&v| Felt::new_unchecked(v)).collect::<Vec<_>>();
-    let mut host = DefaultHost::default();
+    let environment = crate::named_fixture::raw_environment(program, "repeat-loop-schema");
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(StackInputs::new(&stack).unwrap())
-        .execute_and_build_trace_sync(program, &mut host, &miden_vm_stark::memory::default_budget())
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
+        .execute_and_build_trace_sync(
+            program,
+            environment.execution(),
+            &mut host,
+            &miden_vm_stark::memory::default_budget(),
+        )
         .unwrap();
     assert!(precompile_witness.is_none());
     trace

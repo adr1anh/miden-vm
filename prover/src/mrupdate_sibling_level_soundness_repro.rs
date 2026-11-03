@@ -93,12 +93,19 @@ fn build_fixture() -> Fixture {
     let (forest, mapping) = builder.build_with_id_map().unwrap();
     let program = Program::new(forest.into(), mapping.get(root).unwrap());
 
-    let mut host = DefaultHost::default();
+    let environment = crate::named_fixture::raw_environment(&program, "mrupdate-sibling-level");
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default().with_merkle_store(store))
         .unwrap()
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
         .execute_and_build_trace_sync(
             &program,
+            environment.execution(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

@@ -22,7 +22,7 @@
 use alloc::{format, vec, vec::Vec};
 
 use miden_air_definitions::vm::trace::RowIndex;
-use miden_core::{Felt, Word, field::Field, operations::opcodes, utils::RowMajorMatrix};
+use miden_core::{Felt, field::Field, operations::opcodes, utils::RowMajorMatrix};
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 
 use crate::repro_harness::{ReproTrace, core_row_mut};
@@ -60,30 +60,28 @@ fn build_fixture_with_setup(dyncall_setup: &str, pre_dyncall_depth: u64) -> Fixt
         end
     "
     );
-    let program = miden_assembly::Assembler::default()
-        .assemble_program("program", source.as_str())
-        .unwrap()
-        .unwrap_program();
-    let root = program.hash();
-    // `foo` is the first-declared procedure, so the first non-root digest; assert exactly one
-    // dyncall below confirms it resolved to the no-op rather than recursing into `bar`.
-    let foo_digest: Word = program
-        .mast_forest()
-        .procedure_digests()
-        .find(|d| *d != root)
-        .expect("a non-root procedure digest");
+    let fixture = crate::named_fixture::named_source(source.as_str());
+    let foo_key = fixture.key("foo").into_word();
+    let program = fixture.program;
+    let environment = fixture.environment;
 
     let mut stack_values = vec![Felt::ZERO; 16];
-    for (i, limb) in foo_digest.as_elements().iter().enumerate() {
+    for (i, limb) in foo_key.as_elements().iter().enumerate() {
         stack_values[i] = *limb;
     }
     stack_values[4] = Felt::new_unchecked(ADDR);
     let stack_inputs = StackInputs::new(&stack_values).unwrap();
 
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(stack_inputs)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
         .execute_and_build_trace_sync(
             &program,
+            environment.execution(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )
