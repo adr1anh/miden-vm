@@ -482,7 +482,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 fresh normal attempt passes assembly compilation, then stops at two prover calls missing ExecutionEnvironment; no processor tests ran. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Fuzz `108dc3607`, lock `54f7db5af`; namespace inputs `a16c005aa`/`2a9b8db73`; earlier refs below; base `82935d673` | Independent reviews; namespace11/full assembly465 pass/43 project failures/6 ignored; strict assembly Clippy/no_std/testing pass. Codec fuzz locked check/strict Clippy and ASan smoke5916 runs/31s pass with LSan disabled for host ptrace. Prior codec11/package251 pass/one manual seed ignored and shared-codec evidence remain applicable | Required live package9 admission/commitments/readers, D6/D7 source/format migration, per-target project/cache matching, final Program/kernel conversion, prover consumer migration, full fuzz qualification and all inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Fixed-root/D8 `dfdbc42b3`, assembler `1615fc816`; fuzz `108dc3607`, lock `54f7db5af`; earlier refs below; base `82935d673` | Independent reviews; current syntax319/D8 construction5, assembly471 pass/43 project failures/6 ignored; strict syntax/assembly Clippy/no_std pass. Earlier namespace11/testing, codec11/package251 and ASan5916/31s (LSan disabled for host ptrace) evidence remains in the ledger below | Required live package9 admission/commitments/readers, per-target project/cache matching, final Program/kernel conversion, prover consumer migration, native/generated/recursive D6 statement cutover, full fuzz qualification and all inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -2234,3 +2234,32 @@ external identity policy, with unchanged mandatory selected-profile callbacks. G
 must not acquire publication requirements. Its future reader/admission boundary must keep current
 profile validation explicit rather than preserving context-free readers with a permissive profile.
 No Package9/native/recursive/generated closure or M1 completion is claimed.
+
+### Kernel construction placement and alias validation
+
+Source `dfdbc42b3` validates kernel construction against resolved public export keys and canonical
+parents: public executable exports must occupy N0; nonexported retained concrete helpers must be
+beneath a child Env. Foreign compiled/declaration-only dependencies are not misclassified as local
+private helpers. No extra serialized syscall list or key rebasing is introduced. Public submodule
+exports use root bindings; aliases preserve defining keys; distinct concrete root-label collisions
+still reject. Ordinary nonkernel construction and actual VM authorization remain visibility-agnostic.
+
+Removed obsolete kernel item-reexport bans in AST/sema/linker. Executable export restrictions,
+module/item validity, source visibility, conflicts and import cycles remain. Both original reexport
+regression sources now assert defining K and absence of alias definitions; child/textual-kernel SYS
+rejection remains. The existing module-capacity/rollback test retains its two-module source and
+failure/retry assertions, with explicit public export bindings corrected to N0.
+
+Independent bounded reviews found no actionable issue across production, frontend and fixtures.
+Fresh guarded syntax319 and construction5 pass; the compiled dependency matrix includes child
+reexport rejection, root reexport identity and unexported foreign root/child acceptance. Full
+assembly471 passed/43 existing project missing-home failures/6 ignored. Strict test-inclusive
+syntax/assembly Clippy, no-default-features checks, scoped pinned-nightly rustfmt and whitespace
+checks pass. The earlier four/five construction result is superseded by these final checks.
+
+Scratch assembler/project/inline findings now contain short current source indices; superseded
+research is preserved under `.scratch/librarytree/archive/`, outside routine input. The reference
+cache and shared /tmp sources remain intact. Documentation `bfe2b1aec` is separately committed and
+its SSH signature verified. Next is Package9 required metadata and explicit raw/admitted boundaries,
+using existing enclosing-Budget seams, before project routing/cache matching. No production profile,
+native/recursive/generated closure, normal processor suite or M1 completion is claimed.
