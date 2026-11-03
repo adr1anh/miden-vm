@@ -14,6 +14,8 @@ use crate::{
     SourceNamingConvention, TargetType, Word, Workspace,
 };
 
+mod catalog_tests;
+
 struct TestContext {
     pub source_manager: Arc<dyn SourceManager>,
 }

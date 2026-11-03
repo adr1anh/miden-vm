@@ -10,7 +10,17 @@ pub struct SourceNamingSpec {
 
 impl SourceNamingSpec {
     pub fn resolve(&self, ty: TargetType) -> Result<SourceNaming, Report> {
-        let naming = SourceNaming::new(self.convention, self.binding.resolve()?);
+        self.resolve_with_catalog(ty, &LibraryCatalog::default())
+    }
+
+    /// Resolves explicit identity references before validating the selected target convention.
+    pub fn resolve_with_catalog(
+        &self,
+        ty: TargetType,
+        catalog: &LibraryCatalog,
+    ) -> Result<SourceNaming, Report> {
+        let naming =
+            SourceNaming::new(self.convention, self.binding.resolve_with_catalog(catalog)?);
         naming.validate_target_type(ty)?;
         Ok(naming)
     }

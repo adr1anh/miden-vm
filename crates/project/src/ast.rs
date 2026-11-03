@@ -28,7 +28,9 @@ use serde::{Deserialize, Serialize};
 
 pub use self::{
     dependency::DependencySpec,
-    dependency_binding::{DependencyBindingSpec, ExpectedCallableSpec, HomeLabelSpec},
+    dependency_binding::{
+        DependencyBindingSpec, ExpectedCallableSpec, HomeLabelSpec, LibraryIdSpec,
+    },
     package::{PackageConfig, PackageDetail, PackageTable, ProjectFile},
     profile::Profile,
     target::{BinTarget, LibTarget, SourceNamingSpec},

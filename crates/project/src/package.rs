@@ -354,11 +354,13 @@ impl Package {
 
         // Extract project dependencies, using the workspace to resolve workspace-relative
         // dependencies
-        let dependencies = package_ast.extract_dependencies(source.clone(), workspace)?;
+        let catalog = package_ast.resolve_library_catalog(workspace)?;
+        let dependencies =
+            package_ast.extract_dependencies_with_catalog(source.clone(), workspace, &catalog)?;
 
         // Extract the build targets for this project
-        let lib = package_ast.extract_library_target()?;
-        let bins = package_ast.extract_executable_targets()?;
+        let lib = package_ast.extract_library_target_with_catalog(&catalog)?;
+        let bins = package_ast.extract_executable_targets_with_catalog(&catalog)?;
 
         let mut lints = workspace.map(|ws| ws.workspace.config.lints.clone()).unwrap_or_default();
         lints.extend(package_ast.config.lints.clone());
@@ -406,6 +408,7 @@ impl Package {
                 },
             },
             config: ast::PackageConfig {
+                library_catalog: Map::default(),
                 dependencies: self
                     .dependencies()
                     .iter()
