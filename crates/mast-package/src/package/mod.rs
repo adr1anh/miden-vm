@@ -1,5 +1,6 @@
 #[cfg(any(test, feature = "arbitrary"))]
 pub mod arbitrary;
+mod callables;
 mod error;
 mod event_handlers;
 mod id;
@@ -37,6 +38,7 @@ use miden_core::{
 };
 
 pub use self::{
+    callables::{PackageCallables, PackageCallablesError},
     error::{PackageDebugInfoError, PackageStripError},
     event_handlers::{
         EventHandlerManifestEntry, EventHandlerSection, EventHandlerSectionError, MAX_HANDLERS,
