@@ -10,7 +10,7 @@ use miden_project::Linkage;
 use crate::{
     Assembler,
     diagnostics::{IntoDiagnostic, Report},
-    testing::TestContext,
+    testing::{FixtureNamespace, TestContext},
 };
 
 fn merge_programs(
@@ -19,15 +19,21 @@ fn merge_programs(
 ) -> Result<(MastForest, MastForest, MastForest, MastForestRootMap), Report> {
     let context = TestContext::new();
     let module = context.parse_module(program_a)?;
+    let mut naming = FixtureNamespace::assembly_tests();
+    naming.add_module(&module)?;
 
-    let lib_a = Assembler::new(context.source_manager())
+    let lib_a = naming
+        .configure(Assembler::new(context.source_manager()), [&*module])?
         .assemble_library("lib-a", module, None::<Box<ast::Module>>)
         .map(Arc::from)?;
 
     let mut assembler = Assembler::new(context.source_manager());
     assembler.link_package(Arc::clone(&lib_a), Linkage::Dynamic)?;
-    let lib_b = assembler
-        .assemble_library("lib-b", program_b, None::<Box<ast::Module>>)?
+    let module = context.parse_module(program_b)?;
+    naming.add_module(&module)?;
+    let lib_b = naming
+        .configure(assembler, [&*module])?
+        .assemble_library("lib-b", module, None::<Box<ast::Module>>)?
         .mast_forest()
         .as_ref()
         .clone();

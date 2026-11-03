@@ -10,7 +10,7 @@ use miden_core::{
 use miden_mast_package::{CallableProcedurePath, NamespacePlan};
 
 use super::*;
-use crate::CallableBinding;
+use crate::{CallableBinding, testing::FixtureNamespace};
 
 #[test]
 fn nested_blocks() -> Result<(), Report> {
@@ -627,16 +627,21 @@ fn explicit_fully_qualified_procedure_references() -> Result<(), Report> {
     let root = context.parse_module(ROOT)?;
     let bar = context.parse_module(BAR)?;
     let baz = context.parse_module(BAZ)?;
-    let library = context.assemble_library("foo", None, root, [bar, baz]).unwrap();
+    let (library, mut naming) =
+        context.assemble_library_with_fixture("foo", None, root, [bar, baz])?;
 
     let assembler = Assembler::new(context.source_manager())
         .with_package(library.into(), Linkage::Dynamic)
         .unwrap();
 
-    let program = r#"
+    let program = context.parse_module(
+        r#"
     begin
         exec.::foo::baz::baz
-    end"#;
+    end"#,
+    )?;
+    naming.add_module(&program)?;
+    let assembler = naming.configure(assembler, [&*program])?;
 
     assert_matches!(assembler.assemble_program("program", program), Ok(_));
     Ok(())
@@ -663,13 +668,16 @@ fn re_exports() -> Result<(), Report> {
     let context = TestContext::new();
     let bar = context.parse_module(BAR)?;
     let baz = context.parse_module(BAZ)?;
-    let library = context.assemble_library("foo", None, baz, [bar]).unwrap();
+    let (library, mut naming) = context.assemble_library_with_fixture("foo", None, baz, [bar])?;
+    let baz_binding = naming.binding(Path::new("::foo::bar::baz")).unwrap().clone();
+    naming.add_binding(Arc::from(Path::new("::foo::baz::baz")), baz_binding)?;
 
     let assembler = Assembler::new(context.source_manager())
         .with_package(library.into(), Linkage::Dynamic)
         .unwrap();
 
-    let program = r#"
+    let program = context.parse_module(
+        r#"
     use foo::baz
 
     begin
@@ -677,7 +685,10 @@ fn re_exports() -> Result<(), Report> {
         exec.baz::baz
         push.3 push.4
         exec.baz::qux
-    end"#;
+    end"#,
+    )?;
+    naming.add_module(&program)?;
+    let assembler = naming.configure(assembler, [&*program])?;
 
     assert_matches!(assembler.assemble_program("test", program), Ok(_));
     Ok(())
@@ -710,9 +721,14 @@ fn module_ordering_can_be_arbitrary() -> Result<(), Report> {
     let a = context.parse_module(A)?;
     let b = context.parse_module(B)?;
     let c = context.parse_module(C)?;
+    let mut naming = FixtureNamespace::assembly_tests();
+    for module in [&*a, &*b, &*c] {
+        naming.add_module(module)?;
+    }
 
     let mut assembler = Assembler::new(context.source_manager());
     assembler.compile_and_statically_link(b)?.compile_and_statically_link(a)?;
+    let assembler = naming.configure(assembler, [&*c])?;
     assembler.assemble_library("lib", c, None::<Box<Module>>)?;
 
     Ok(())

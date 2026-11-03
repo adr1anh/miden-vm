@@ -2,6 +2,7 @@
 // ================================================================================================
 
 use super::*;
+use crate::testing::FixtureNamespace;
 
 #[test]
 fn test_cross_module_quoted_identifier_resolution() -> TestResult {
@@ -45,7 +46,11 @@ fn test_cross_module_quoted_identifier_resolution() -> TestResult {
         "#
     ))?;
 
-    let assembler = Assembler::new(context.source_manager());
+    let mut naming = FixtureNamespace::assembly_tests();
+    naming.add_module(&module_a)?;
+    naming.add_module(&module_b)?;
+    let assembler =
+        naming.configure(Assembler::new(context.source_manager()), [&*module_a, &*module_b])?;
 
     let _ = assembler.assemble_library("cycle", module_a, [module_b])?;
 
@@ -70,8 +75,6 @@ end
     }
 
     let context = TestContext::default();
-    let source_manager = context.source_manager();
-
     let legit_mod = context
         .parse_module(
             r#"
@@ -92,12 +95,12 @@ pub proc add add.2 end"##,
         )
         .expect("module must parse and analyse");
 
-    let legit_lib = Assembler::new(source_manager.clone())
-        .assemble_library("legit", legit_mod, None::<Box<Module>>)
+    let legit_lib = context
+        .assemble_library("legit", None, legit_mod, None::<Box<Module>>)
         .map(Arc::<Package>::from)
         .expect("library assembly must succeed");
-    let attacker_lib = Assembler::new(source_manager)
-        .assemble_library("legit", attacker_mod, None::<Box<Module>>)
+    let attacker_lib = context
+        .assemble_library("legit", None, attacker_mod, None::<Box<Module>>)
         .map(Arc::<Package>::from)
         .expect("library assembly must succeed");
 
@@ -113,7 +116,6 @@ pub proc add add.2 end"##,
 #[test]
 fn regression_symbol_resolution_in_library_canonical_export_collision_is_rejected() {
     let context = TestContext::default();
-    let source_manager = context.source_manager();
     let legit_mod = context
         .parse_module("namespace ::foo::bar\n\npub proc add add.1 end")
         .expect("module must parse and analyse");
@@ -125,7 +127,12 @@ pub proc add add.2 end"##,
         )
         .expect("module must parse and analyse");
 
-    let err = Assembler::new(source_manager)
+    let mut naming = FixtureNamespace::assembly_tests();
+    naming.add_module(&legit_mod).unwrap();
+    naming.add_module(&attacker_mod).unwrap();
+    let err = naming
+        .configure(Assembler::new(context.source_manager()), [&*legit_mod, &*attacker_mod])
+        .unwrap()
         .assemble_library("lib", legit_mod, [attacker_mod])
         .expect_err("expected duplicate canonical export paths to be rejected during assembly");
     assert_diagnostic!(err, "duplicate definition found for module '::foo::bar'");
@@ -145,8 +152,8 @@ end
 "#,
         )
         .expect("base module parsing must succeed");
-    let base = Assembler::new(context.source_manager())
-        .assemble_library("lib", module, None::<Box<Module>>)
+    let base = context
+        .assemble_library("lib", None, module, None::<Box<Module>>)
         .expect("base library assembly must succeed");
     let (node, digest) = base
         .manifest
@@ -186,21 +193,21 @@ fn executable_package_main_export_points_to_entrypoint_source_root() -> TestResu
         end
         "#,
     )?;
-    let lib = Assembler::new(context.source_manager().clone())
-        .assemble_library("lib", lib_module, None::<Box<Module>>)
-        .map(Arc::<Package>::from)?;
-    let package = Assembler::new(context.source_manager())
-        .with_package(lib, Linkage::Static)?
-        .assemble_program(
-            "program",
-            r#"
+    let (lib, mut naming) =
+        context.assemble_library_with_fixture("lib", None, lib_module, None::<Box<Module>>)?;
+    let program = context.parse_module(
+        r#"
             use lib::lib
 
             begin
                 exec.lib::lib_proc
             end
             "#,
-        )?;
+    )?;
+    naming.add_module(&program)?;
+    let assembler =
+        Assembler::new(context.source_manager()).with_package(Arc::from(lib), Linkage::Static)?;
+    let package = naming.configure(assembler, [&*program])?.assemble_program("program", program)?;
 
     let main_path = Path::exec_path().join(ProcedureName::MAIN_PROC_NAME);
     let entrypoint = package
@@ -235,8 +242,8 @@ end
 "#,
         )
         .expect("base module parsing must succeed");
-    let base = Assembler::new(context.source_manager())
-        .assemble_library("test", module, None::<Box<Module>>)
+    let base = context
+        .assemble_library("test", None, module, None::<Box<Module>>)
         .expect("base library assembly must succeed");
     let (node, digest) = base
         .manifest
