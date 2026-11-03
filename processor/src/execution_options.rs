@@ -11,9 +11,10 @@ use crate::{LedgerLimits, OpeningLimits, SessionLimits};
 
 /// Immutable execution authority and explicit native resolution resource policies.
 ///
-/// The descriptor fixes the entry key, environment root and authorized kernel namespace. Its
-/// authority must come from the caller; neither this configuration nor available code authenticates
-/// those identities. Opening verification and the resolution session enforce the supplied policies.
+/// The descriptor fixes the entry key and environment root. Its authority must come from the caller;
+/// neither this configuration nor available code authenticates those identities. Syscalls require an
+/// authenticated immediate parent equal to the fixed initial namespace. Opening verification and the
+/// resolution session enforce the supplied policies.
 /// No deployment defaults are provided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionEnvironment {

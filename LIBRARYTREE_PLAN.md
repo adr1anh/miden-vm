@@ -494,7 +494,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Fresh normal/parallel/streamed fixture evidence and 32 reviewed snapshots are at PR09; 24 unit checks stop at the legacy public-statement adapter. Full production forged matrices/Range+And8 closure, claim12, generated/MASM/recursive/security/qualification remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; fresh processor/parallel/decoder/lookup migration evidence is at PR09, including 24 public-statement failures. Full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate now compiles and runs: 1,866 pass/24 legacy-public-statement failures/one existing ignore; 49 integrations and 69 concurrent replay tests pass. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Latest consumer checkpoint `ed5d3006d`; shared fixtures `22f5089f4`, benchmarks `ef12fb33b`; prior source and fixture SHAs below; base `82935d673` | Independent reviews; three benchmark packages pass all-target compilation/strict Clippy; VM integrations compile and pass arbitrary-feature strict Clippy; scoped native/cache/helper checks and earlier package/assembly/processor/Wasm/fuzz evidence below | VM-owned benchmark and CLI runtime fixtures; fresh PR09 package/assembly gates; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; PR12 statement cutover and renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
+| 09 Assembly/packages | in-progress | Latest CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -2819,3 +2819,30 @@ Next close VM-owned benchmark/CLI fixture consumers and fresh PR09 package/assem
 CLI verification compile error, PR12 statement transport, PR14 proof-request/compatibility roots,
 security-counterfactual/guest/project/performance and final gates remain. PR09/M1/overall completion
 is not claimed; PR10 and all later planned scope remain intact.
+
+
+### PR09 parallel consumer and acceptance checkpoint, 3 November 2026
+
+`7bd9765b1` retains owned naming/environments and fresh host witness sources in the three VM
+benchmarks; their scoped `cargo check --locked -p miden-vm --features internal --bench build_trace
+--bench program_execution_fast --bench program_execution_for_trace` passes. No performance claim.
+`953eed44b` independently derives estimator K, preserves separate D/getter assertions and passes
+both native `security_estimator_key_matches_procref` tests. `c9b9c7b44` supplies explicit fixture
+custom dependency homes: full package units pass 289/one existing ignore, and standard
+`make test-assembly EXTRA=--locked NEXTEST_PROFILE=ci` passes 544/six existing skips.
+
+`fb4d1c7be` migrates CLI run/prove/bundle fixture inputs and adds Package9/optional-sidecar compile
+coverage. Full naming expectations remain independent owned products; selected local bindings
+supply K_entry/R_E, with at most128 native opening paths/4 MiB evidence and explicit finite policies.
+Security, error ordering, atomic writes, handler deduplication and complete/deferred oracles remain.
+The actual internal naming/opening file-admission plus native execution regression passes.
+Strict `cargo clippy --locked -p miden-vm --features internal --test miden-cli -- --cfg
+'feature="executable"' -D warnings` passes, compiling its precompile fixture module without claiming
+production CLI qualification.
+
+An existing VM binary runs flow-control nine pass/11 fail and caller one fail: native K output
+assertions precede the preserved failing constraints, all at expected36/actual32 public values.
+Production CLI legacy verification, PR12 statements, PR14 proof identities and previous final gates
+remain open. Independent reviews and source signatures verified; documentation follows separately.
+Root centralized guarded checks; agents ran no builds. No skips added, proof constants refreshed,
+pushes or GitHub PRs. PR09/M1/overall completion is not claimed.
