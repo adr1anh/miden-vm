@@ -36,7 +36,8 @@ impl Assembler {
         // Determine whether this instruction can create a new node
         let can_create_node = matches!(
             instruction.inner(),
-            Instruction::Call(_)
+            Instruction::Exec(_)
+                | Instruction::Call(_)
                 | Instruction::SysCall(_)
                 | Instruction::DynExec
                 | Instruction::DynCall
@@ -51,7 +52,7 @@ impl Assembler {
         // since no operations have been added yet for this instruction).
         let pending_node_asm_op = if can_create_node {
             // The returned AssemblyOp will have cycle_count=0, but we'll set it to 1
-            // since the instruction creates exactly one node (call/syscall/dyn).
+            // since the instruction creates exactly one invocation node.
             block_builder.set_instruction_cycle_count().map(|mut asm_op| {
                 asm_op.set_num_cycles(1);
                 asm_op
@@ -550,7 +551,7 @@ impl Assembler {
                         proc_ctx.id(),
                         span,
                         block_builder.mast_forest_builder_mut(),
-                        None,
+                        Some(node_asm_op.expect("exec instructions must provide an AssemblyOp")),
                         inline_calls,
                     )
                     .map(Into::into);
