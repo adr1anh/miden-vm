@@ -1,4 +1,8 @@
-use miden_core::{Felt, Word, proof::ExecutionProofCompatibility};
+use miden_core::{
+    Felt, Word,
+    program::{EnvironmentRoot, ExecutionDescriptor, ProcedureKey},
+    proof::ExecutionProofCompatibility,
+};
 use miden_verifier::Verifier;
 use miden_vm::ProgramInfo;
 
@@ -7,11 +11,19 @@ mod cache_key;
 
 use cache_key::tx_proof_cache_key;
 
+fn descriptor(entry: u32, root: u32) -> ExecutionDescriptor {
+    ExecutionDescriptor::new(
+        ProcedureKey::new(Word::new([Felt::from_u32(entry); 4])),
+        EnvironmentRoot::new(Word::new([Felt::from_u32(root); 4])),
+    )
+}
+
 #[test]
 fn verifier_roots_separate_transaction_cache_entries() {
     let program = ProgramInfo::new(Word::default(), Default::default());
     let compatibility = Verifier::proof_compatibility();
-    let key = tx_proof_cache_key(&program, &[0, 1], &compatibility);
+    let environment = descriptor(7, 11);
+    let key = tx_proof_cache_key(&program, environment, &[0, 1], &compatibility);
     let other_root = Word::new([Felt::ONE; 4]);
 
     for (vm_roots, pvm_roots) in [
@@ -19,7 +31,17 @@ fn verifier_roots_separate_transaction_cache_entries() {
         (compatibility.vm_verifier_roots().to_vec(), vec![other_root]),
     ] {
         let changed = ExecutionProofCompatibility::new(vm_roots, pvm_roots).unwrap();
-        assert_ne!(key, tx_proof_cache_key(&program, &[0, 1], &changed));
+        assert_ne!(key, tx_proof_cache_key(&program, environment, &[0, 1], &changed));
     }
-    assert_eq!(key, tx_proof_cache_key(&program, &[0, 1], &compatibility));
+    assert_eq!(key, tx_proof_cache_key(&program, environment, &[0, 1], &compatibility));
+}
+
+#[test]
+fn equal_program_code_does_not_reuse_a_different_entry_or_environment() {
+    let program = ProgramInfo::new(Word::default(), Default::default());
+    let compatibility = Verifier::proof_compatibility();
+    let key = tx_proof_cache_key(&program, descriptor(7, 11), &[0, 1], &compatibility);
+    for changed in [descriptor(8, 11), descriptor(7, 12)] {
+        assert_ne!(key, tx_proof_cache_key(&program, changed, &[0, 1], &compatibility));
+    }
 }

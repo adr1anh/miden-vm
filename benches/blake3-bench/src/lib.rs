@@ -5,6 +5,7 @@ use std::{
 };
 
 use miden_core_lib::CoreLibrary;
+use miden_utils_testing::librarytree::{self, FixtureEnvironment, assemble_fixture_program};
 use miden_vm::{
     Assembler, DefaultHost, ExecutionOptions, ExecutionOutput, ExecutionProof, ExecutionWitness,
     FastProcessor, HashFunction, Program, Prover, StackInputs, StackOutputs, Verifier, VmTrace,
@@ -43,6 +44,7 @@ const PROGRAM_RELATIVE_PATH: &str = "miden-vm/masm-examples/hashing/blake3_1to1/
 #[derive(Clone)]
 pub struct Blake3Fixture {
     pub program: Program,
+    pub environment: FixtureEnvironment,
     pub stack_inputs: StackInputs,
     pub advice_inputs: AdviceInputs,
     pub debug_info: Option<PackageDebugInfo>,
@@ -73,15 +75,13 @@ impl Blake3Fixture {
                 core_lib.naming().clone(),
             )
             .expect("failed to load core library");
-        let package = assembler
-            .assemble_program("program", ast)
-            .expect("failed to assemble Blake3 benchmark program");
-        let debug_info = package.debug_info().expect("failed to read Blake3 debug info");
-        let entrypoint_source_node = package.entrypoint_source_node();
-        let program = package.unwrap_program();
+        let named = assemble_fixture_program(assembler, "program", ast, &[core_lib.naming()]);
+        let debug_info = named.package.debug_info().expect("failed to read Blake3 debug info");
+        let entrypoint_source_node = named.package.entrypoint_source_node();
 
         Self {
-            program,
+            program: named.program,
+            environment: named.environment,
             stack_inputs: input_file.parse_stack_inputs().expect("failed to parse stack inputs"),
             advice_inputs: input_file.parse_advice_inputs().expect("failed to parse advice inputs"),
             debug_info,
@@ -102,6 +102,7 @@ pub fn execution_options() -> ExecutionOptions {
         ExecutionOptions::DEFAULT_CORE_TRACE_FRAGMENT_SIZE,
     )
     .expect("CLI-compatible Blake3 execution options should be valid")
+    .with_environment_trace_limits(librarytree::trace_limits())
 }
 
 pub fn default_host() -> DefaultHost {
@@ -111,7 +112,9 @@ pub fn default_host() -> DefaultHost {
 }
 
 fn host_for_fixture(fixture: &Blake3Fixture) -> DefaultHost<DefaultSourceManager> {
-    default_host().with_source_manager(fixture.source_manager.clone())
+    default_host()
+        .with_source_manager(fixture.source_manager.clone())
+        .with_environment_source(fixture.environment.source())
 }
 
 pub fn execute_for_proving(fixture: &Blake3Fixture) -> ExecutionWitness {
@@ -126,6 +129,7 @@ pub fn execute_for_proving(fixture: &Blake3Fixture) -> ExecutionWitness {
         (Some(debug_info), Some(entrypoint_source_node)) => processor
             .execute_for_proving_with_package_debug_info_at_source_node_sync(
                 &fixture.program,
+                fixture.environment.execution(),
                 debug_info,
                 entrypoint_source_node,
                 &mut host,
@@ -134,12 +138,13 @@ pub fn execute_for_proving(fixture: &Blake3Fixture) -> ExecutionWitness {
         (Some(debug_info), None) => processor
             .execute_for_proving_with_package_debug_info_sync(
                 &fixture.program,
+                fixture.environment.execution(),
                 debug_info,
                 &mut host,
             )
             .expect("failed to execute Blake3 benchmark"),
         (None, _) => processor
-            .execute_for_proving_sync(&fixture.program, &mut host)
+            .execute_for_proving_sync(&fixture.program, fixture.environment.execution(), &mut host)
             .expect("failed to execute Blake3 benchmark"),
     }
 }
@@ -153,7 +158,7 @@ pub fn execute_program(fixture: &Blake3Fixture) -> ExecutionOutput {
     )
     .expect("processor advice inputs should fit advice map limits");
     processor
-        .execute_sync(&fixture.program, &mut host)
+        .execute_sync(&fixture.program, fixture.environment.execution(), &mut host)
         .expect("failed to execute Blake3 benchmark")
 }
 

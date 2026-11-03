@@ -131,6 +131,7 @@ pub fn memory_max_iters() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use miden_utils_testing::librarytree::assemble_fixture_program;
     use miden_vm::Assembler;
 
     use super::*;
@@ -155,9 +156,7 @@ mod tests {
         // Catch it in unit tests instead.
         for snippet in SNIPPETS {
             let source = wrap_program(&render(snippet, 4));
-            Assembler::default()
-                .assemble_program("program", &source)
-                .unwrap_or_else(|e| panic!("snippet {:?} failed to assemble: {e}", snippet.name));
+            assemble_fixture_program(Assembler::default(), snippet.name, source.as_str(), &[]);
         }
     }
 

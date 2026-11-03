@@ -26,7 +26,10 @@ use miden_assembly::Linkage;
 use miden_core::Word;
 use miden_core_lib::CoreLibrary;
 use miden_processor::{DefaultHost, advice::AdviceInputs};
-use miden_vm::{Assembler, Program};
+use miden_utils_testing::librarytree::{
+    FixtureEnvironment, NamedProgram, assemble_fixture_program,
+};
+use miden_vm::Assembler;
 use miden_vm_synthetic_bench::{
     calibrator::calibrate,
     snapshot::DEFAULT_SCENARIOS,
@@ -55,8 +58,15 @@ use measurements::{
 struct RecursionCase {
     scenario: String,
     composition: ProofComposition,
-    program: Program,
+    program: NamedProgram,
+    core_lib: CoreLibrary,
     advice_inputs: AdviceInputs,
+}
+
+impl RecursionCase {
+    fn host(&self) -> DefaultHost {
+        recursive_host(&self.program.environment, &self.core_lib)
+    }
 }
 
 fn push_word_masm(source: &mut String, word: Word) {
@@ -124,14 +134,11 @@ fn recursive_verifier_program_masm(verify_calls: &str) -> String {
     )
 }
 
-fn assemble_recursive_program(source: &str) -> Program {
-    let core_lib = CoreLibrary::default();
-    Assembler::default()
+fn assemble_recursive_program(source: &str, core_lib: &CoreLibrary) -> NamedProgram {
+    let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
-        .expect("link core library")
-        .assemble_program("recursive_verifier", source)
-        .expect("assemble recursive verifier")
-        .unwrap_program()
+        .expect("link core library");
+    assemble_fixture_program(assembler, "recursive_verifier", source, &[core_lib.naming()])
 }
 
 fn dump_recursive_program_source(scenario: &str, composition: ProofComposition, source: &str) {
@@ -151,6 +158,7 @@ fn dump_recursive_program_source(scenario: &str, composition: ProofComposition, 
 }
 
 fn build_recursive_verifier_case(
+    core_lib: &CoreLibrary,
     fixtures: &[TxProofFixture],
     composition: ProofComposition,
     pvm_advice: &RecursiveProofAdvice,
@@ -164,7 +172,7 @@ fn build_recursive_verifier_case(
     );
     let mut verify_calls = String::new();
     let mut advice_inputs = AdviceInputs::default();
-    let mvm_verifier_root = CoreLibrary::default().vm_recursive_verifier_root();
+    let mvm_verifier_root = core_lib.vm_recursive_verifier_root();
 
     for fixture in fixtures.iter().take(composition.mvm_count()) {
         let proof_advice = recursive_proof_advice(fixture, mvm_verifier_root);
@@ -186,20 +194,21 @@ fn build_recursive_verifier_case(
     RecursionCase {
         scenario: scenario.to_string(),
         composition,
-        program: assemble_recursive_program(&source),
+        program: assemble_recursive_program(&source, core_lib),
+        core_lib: core_lib.clone(),
         advice_inputs,
     }
 }
 
-fn recursive_host() -> DefaultHost {
-    let core_lib = CoreLibrary::default();
-    let mut host = DefaultHost::default();
-    host.load_library(&core_lib).expect("load core library");
+fn recursive_host(environment: &FixtureEnvironment, core_lib: &CoreLibrary) -> DefaultHost {
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(core_lib).expect("load core library");
     host
 }
 
 fn bench_recursive_verify(c: &mut Criterion) {
     let config = BenchConfig::from_env();
+    let core_lib = CoreLibrary::default();
     let prover = config.outer_prover();
     let max_proof_count = config
         .compositions()
@@ -217,16 +226,20 @@ fn bench_recursive_verify(c: &mut Criterion) {
     let pvm_fixtures: Vec<_> = config
         .compositions()
         .iter()
-        .map(|&composition| (composition, load_pvm_advice(&config, composition.mvm_count())))
+        .map(|&composition| {
+            (composition, load_pvm_advice(&core_lib, &config, composition.mvm_count()))
+        })
         .collect();
     let mut cases = Vec::new();
     for scenario in scenarios {
         let slug = format!("{}/{}", scenario.producer, slugify(&scenario.name));
         let generated = synthesize(&calibration, &scenario.snapshot);
         println!("\n=== recursive MVM workload: {slug}\n{}", generated.report);
-        let fixtures = load_tx_fixtures(&config, max_proof_count, &generated.source, &slug);
+        let fixtures =
+            load_tx_fixtures(&core_lib, &config, max_proof_count, &generated.source, &slug);
         for (composition, pvm_advice) in &pvm_fixtures {
             cases.push(build_recursive_verifier_case(
+                &core_lib,
                 &fixtures,
                 *composition,
                 pvm_advice,
@@ -260,7 +273,7 @@ fn bench_recursive_verify(c: &mut Criterion) {
         let label = case.composition.label();
         group.bench_function(BenchmarkId::new(format!("execute/{label}"), &case.scenario), |b| {
             b.iter_batched(
-                || (case.clone(), recursive_host()),
+                || (case.clone(), case.host()),
                 execute_recursive_case,
                 BatchSize::PerIteration,
             );
@@ -270,7 +283,7 @@ fn bench_recursive_verify(c: &mut Criterion) {
             BenchmarkId::new(format!("build_trace/{label}"), &case.scenario),
             |b| {
                 b.iter_batched(
-                    || execute_trace_inputs(case.clone(), recursive_host()),
+                    || execute_trace_inputs(case.clone(), case.host()),
                     build_trace_case,
                     BatchSize::PerIteration,
                 );
@@ -279,7 +292,7 @@ fn bench_recursive_verify(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new(format!("total/{label}"), &case.scenario), |b| {
             b.iter_batched(
-                || (case.clone(), recursive_host()),
+                || (case.clone(), case.host()),
                 execute_and_build_case,
                 BatchSize::PerIteration,
             );
@@ -287,7 +300,7 @@ fn bench_recursive_verify(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new(format!("prove/{label}"), &case.scenario), |b| {
             b.iter_batched(
-                || (case.clone(), recursive_host()),
+                || (case.clone(), case.host()),
                 |input| prove_recursive_case(&prover, input),
                 BatchSize::PerIteration,
             );
