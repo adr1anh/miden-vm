@@ -23,6 +23,9 @@ const MAX_CYCLE_LEN_LOG = 7
 # Number of AIR instances in the relation.
 const NUM_AIRS = 12
 
+# Number of felts in the authenticated ACE circuit stream.
+const ACE_STREAM_FELTS = 14584
+
 # Number of 8-felt blocks in the authenticated ACE circuit stream.
 const ACE_STREAM_BLOCKS = 1823
 
@@ -50,6 +53,7 @@ const ACE_CIRCUIT_DIGEST_3 = 7747458865038124780
 # ERRORS
 # =================================================================================================
 
+const ERR_CIRCUIT_STREAM_LENGTH_MISMATCH = "ACE circuit stream length does not match the compiled-in circuit length"
 const ERR_CIRCUIT_DIGEST_MISMATCH = "ACE circuit stream does not match the compiled-in circuit digest"
 
 # CONSTRAINT EVALUATION CHECKER
@@ -88,7 +92,8 @@ end
 proc load_and_authenticate_ace_circuit
     push.ACE_CIRCUIT_DIGEST_3.ACE_CIRCUIT_DIGEST_2.ACE_CIRCUIT_DIGEST_1.ACE_CIRCUIT_DIGEST_0
     # => [ACE_CIRCUIT_DIGEST]
-    adv.push_mapval
+    adv.push_mapvaln
+    adv_push eq.ACE_STREAM_FELTS assert.err=ERR_CIRCUIT_STREAM_LENGTH_MISMATCH
     exec.layout::ace_circuit_stream_ptr
     push.ACE_STREAM_INIT_CV_3.ACE_STREAM_INIT_CV_2.ACE_STREAM_INIT_CV_1.ACE_STREAM_INIT_CV_0
     padw padw

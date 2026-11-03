@@ -15,6 +15,7 @@ use miden::core::pcs::fri::helper
 
 # Initial CV for the Eidos LMCS leaf hasher over one opened FRI row (8 Felts).
 const FRI_ROW_HASH_INIT_CV = [13503953893947607809, 11912009168875159560, 11170449401267093504, 6620516959492505600]
+const FRI_LAYER_LEAF_LENGTH_MISMATCH = "FRI layer leaf length mismatch"
 const FRI_LAYER_LEAF_DIGEST_MISMATCH = "FRI layer leaf hash mismatch"
 
 #! Checks that, for a query with index p at layer i, the folding procedure to create layer (i + 1)
@@ -65,7 +66,10 @@ pub proc verify_query_layer(
 
     movup.5             # [t_depth, f_pos, C, f_pos, coset, poe, e0, e1, a0, a1, layer_ptr, rem_ptr, ...]
     mtree_get           # [V, C, f_pos, coset, poe, e0, e1, a0, a1, layer_ptr, rem_ptr, ...]
-    adv.push_mapval
+    # Require exactly one eight-felt row before copying any values.
+    adv.push_mapvaln
+    adv_push
+    eq.8 assert.err=FRI_LAYER_LEAF_LENGTH_MISMATCH
     swapw
     # => [C, V, f_pos, coset, poe, e0, e1, a0, a1, layer_ptr, rem_ptr, ...]
 
