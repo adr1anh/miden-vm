@@ -42,16 +42,17 @@ It is intentionally implementation-first. Where the current behavior appears sur
 
 ### Accepted manifest forms
 
-Project dependencies in `miden-project.toml` may currently be expressed as:
+Project dependency tables require an explicit `binding` selecting Latest, Pinned or a custom
+home. Workspace members may inherit a binding explicitly declared in `[workspace.dependencies]`.
+Omission rejects, including programmatically constructed source-project dependencies. Bare
+requirement-string shorthand cannot carry a selection and is rejected on project loading.
 
-- a semantic version requirement string, e.g. `dep = "=1.2.3"`
-- a digest-only requirement string, e.g. `dep = "0x..."`
-- an exact published package requirement string, e.g. `dep = "1.2.3#0x..."`
-- a path dependency table, e.g. `dep = { path = "../dep" }`
-- a path dependency table with requirement, e.g. `dep = { path = "../dep", version = "^1.2.0" }`
-- a git dependency table, e.g. `dep = { git = "...", branch = "main" }`
-- a git dependency table with semantic version requirement, e.g. `dep = { git = "...", rev = "deadbeef", version = "^1.2.0" }`
-- a workspace-inherited dependency entry, e.g. `dep.workspace = true` or `dep = { workspace = true, linkage = "static" }`
+Source/version fields remain `version`, `path`, `git`, `branch`/`rev`, or `workspace = true`.
+The [README binding examples](README.md#dependency-management) describe the configuration fields
+and current source/artifact support. `LibraryImport` constructs standard typed homes from an
+explicit complete base, opaque Word ID and `LibrarySelection`; it does not derive an ID, pin D,
+claim artifact ownership or grant execution/publication authority. Source-target default homes
+are checked before cache reuse. Complete callable mappings and reexports remain independent.
 
 ### Registry-hosted dependencies
 

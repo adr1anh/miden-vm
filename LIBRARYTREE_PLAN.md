@@ -193,7 +193,7 @@ their source paths have several components. Source aliases never manufacture a s
 
 D7 selects model C: generic Package9 carries complete naming/callable/code information without own_library_id or own_interface_commitment fields; a separate publication/release wrapper owns the library/revision and profile-specific associations. Wrapper and package may be distributed together. IDs are supplied opaque Words, not inferred from homes, D, package names or readable aliases. This grants no publication admission: any selected profile must enforce its required identity/interface, publisher/home, release and closure evidence under D3. Implement the generic package and publication boundary without inventing external ReleaseRecord bytes. Missing required naming/code metadata still rejects. Preserve independent callable-root retention and the in-flight builder/frontend/graph work. Exact required naming must affect artifact commitments and deduplication/cache matching: equal D or source provenance with changed home/canonical binding cannot reuse old symbols or artifacts.
 
-D5 selects a standard assembler/project Latest/Pinned naming convention over these generic bindings, with an explicit custom-home/binding escape hatch. Preserve selected homes and callable identities without making the VM recognize path names. D6/D7 resolve the former kernel-input and code-only-package applicability questions; the convention and manifest routing remain unimplemented.
+D5 selects a standard assembler/project Latest/Pinned naming convention over these generic bindings, with an explicit custom-home/binding escape hatch. Preserve selected homes and callable identities without making the VM recognize path names. D6/D7 resolve the former kernel-input and code-only-package applicability questions. Standard home helpers and explicit source default-home configuration now exist; complete artifact callable expectations, automatic target naming and distinct instances remain PR10. A source default home is not a package ownership/public-surface claim.
 
 Package9 retains required naming as opaque transport in the generic code container. Decoding code
 and transport does not approve a home or unknown TypedId; canonical naming admission uses explicit
@@ -214,7 +214,7 @@ agree with that K. A target tag does not manufacture an entry or public API.
 
 Separate source aliases, supplied opaque Word library IDs, optional readable-name catalogs, dependency instances, explicit namespace bindings and optional code/artifact supply. Resolve configured readable names before assembly; missing or ambiguous names reject. Replace PackageId-only graph/manifest/cache ownership where it prevents distinct bound artifacts from coexisting. Bundling supplies code without changing K or implying inlining. Propagate required callable/helper mounts and the D6 reserved-root convention; no configurable kernel namespace is supplied. Generic consumers need not implement registry storage or release codecs. Retained Latest dependencies remain dynamic across authorized environments, including inside pinned releases; selected publication adapters must validate their required release/closure inputs before claiming profile behavior. D3 leaves identity derivation and interface policy external.
 
-Implement D5's standard Latest/Pinned selectors as assembler/project conveniences producing explicit NamespacePlan/callable bindings; retain raw custom bindings as a supported path. Route caller-supplied full ancestor bases and opaque IDs through configuration/API metadata, not special MASM import spelling. Use the existing miden-project.toml project layer when adding file configuration; exact fields and ergonomic builder names remain implementation design, not already supported syntax. Keep code supply (bundled/external) independent from namespace selection and expected implementation bindings. Test standard and custom homes, stable Latest K across selected bodies, distinct revision-qualified K, unchanged source aliases, naming-aware caches and equivalent bundled/external invocation behavior. This adds no registry, ID generator or interface-commitment requirement to generic assembly.
+Complete D5's standard Latest/Pinned project/import routing over the implemented LibraryImport helpers and explicit source-default manifest choices; retain custom homes and complete Bound declarations. Artifact imports need explicit expected visible-path/callable mappings, preserving defining keys for reexports and mixed helper/dependency homes. Do not infer public ownership from PackageNaming.namespace_plan or require every retained binding to share a home. Route caller-supplied full ancestor bases and opaque IDs through configuration/API metadata, not special MASM import spelling. Use the existing miden-project.toml project layer when adding file configuration; exact fields and ergonomic builder names remain implementation design, not already supported syntax. Keep code supply (bundled/external) independent from namespace selection and expected implementation bindings. Test standard and custom homes, stable Latest K across selected bodies, distinct revision-qualified K, unchanged source aliases, naming-aware caches and equivalent bundled/external invocation behavior. This adds no registry, ID generator or interface-commitment requirement to generic assembly.
 
 **Acceptance:** distinct explicitly bound dependency instances coexist with equal module paths or D; ambiguous/conflicting callable bindings reject rather than selecting a body from an alias or ID alone; bundled/external code preserves K and runtime invocation semantics; source semver/Git provenance remains separate from runtime naming; required self/helper mounts propagate. Do not freeze a new generic artifact-ID or release-history algorithm merely to support this. **Checks:** `make test-project`; `make test-assembly test=project::tests`; `cargo test -p miden-assembly --test packaging`.
 
@@ -398,11 +398,11 @@ supply do not enter K derivation. Namespace spelling alone does not authenticate
 the caller's authorized environment/expected bindings establish it. Changing a complete home
 requires relinking or an explicitly supported runtime-base mechanism, not silent relocation.
 Keep D4's inner runtime keys and every VM/security acceptance gate. D6/D7 below resolve kernel-input timing
-and code-only package identity/interface applicability; exact configuration fields remain open,
+and code-only package identity/interface applicability; exact configuration fields remain implementation design,
 while the explicit-selection requirement above is settled.
 
-This records an approved implementation direction for PR09/10; it does not claim a completed
-Latest/Pinned enum, project configuration, package9 format or Protocol profile.
+This records an approved implementation direction for PR09/10; approval alone is not implementation
+evidence. Consult the ledger for completed helpers/configuration and remaining artifact/profile gates.
 
 **D6 Fixed-root kernel, agreed with the user on 3 November 2026:** replace configurable/public
 N_kernel with the fixed `N0 = Namespace::initial() = H_ENV_INITIAL_NAMESPACE([])`, independent of
@@ -494,7 +494,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Fresh normal/parallel/streamed fixture evidence and 32 reviewed snapshots are at PR09; 24 unit checks stop at the legacy public-statement adapter. Full production forged matrices/Range+And8 closure, claim12, generated/MASM/recursive/security/qualification remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; fresh processor/parallel/decoder/lookup migration evidence is at PR09, including 24 public-statement failures. Full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate now compiles and runs: 1,866 pass/24 legacy-public-statement failures/one existing ignore; 49 integrations and 69 concurrent replay tests pass. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Processor migration `ff5a05c2d`/`128cad6ba`/`a817c2af5`/`0377a45ee`; reviewed snapshots `1df0163c4`; integrations `7d15864e0`; D5 decision `5010a7b72`; prior refs below; base `82935d673` | Independent reviews; full processor unit crate compiles, 1,866 pass/one existing ignore; all 49 integrations and 69 concurrent replay tests pass; strict library/test Clippy, no_std and formatting. Prior test-utils12, prover regression1/both modes, assembly Nextest540/6 skips and package289/one ignored evidence below | All 24 unit failures are Core36/legacy32 public-statement construction pending PR12; migrate remaining CLI/tooling/test/fuzz callers. D5 explicit-selection configuration, PR10 distinct instances, legacy claim cutover and complete inherited AST snapshots remain; inherited native/generated/MASM/recursive/security/fuzz gates stay open |
+| 09 Assembly/packages | in-progress | D5 helpers `db3b3b668`, config `dbebdfd51`, source routing `520574869`; prover fixtures `b33d07fab`; prior refs below; base `82935d673` | Independent source reviews; project 48, assembly project 54/callable 13; strict project/prover library+test and assembly-library Clippy, project no_std/formatting. Previous processor 1,866/49 integrations/69 concurrent, assembly Nextest540/6 skips and package289/one ignored evidence below | Complete artifact-callable expectations, automatic target naming/distinct instances (PR10); remaining VM/CLI/wasm/fuzz/tooling consumers. PR12 statement cutover still gates 24 unit checks; zero-root-principal security fixtures require renewed counterfactual evidence. Inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -2524,3 +2524,52 @@ Logs stay separate in local scratch; source findings route to exact helpers, not
 PR09/M1 remain in progress. Remaining CLI/tooling/test/fuzz consumers, D5 explicit-selection file/API
 configuration, PR10 distinct instances, PR12 canonical claim/statement/proof cutover and all inherited
 native/generated/MASM/recursive/security/qualification gates remain. No pushes or GitHub PRs.
+
+
+### PR09 explicit project source homes and prover consumers, 3 November 2026
+
+`db3b3b668` adds LibraryImport/LibrarySelection over generic NamespacePlan/CallableBinding. The
+caller supplies the complete ancestor base, opaque Word ID and explicit Latest/Pinned selection;
+Pinned requires nonzero revision. Names remain independent of D/code, source aliases and artifact
+provenance. Existing custom bindings and externally validated TypedId ancestors remain supported
+in memory. Compiler checks cover declaration-only/selected-code parity and revision-qualified keys.
+
+`dbebdfd51` requires explicit binding configuration on file and programmatic source-project
+dependencies, preserving inheritance/override, source version/linkage independence, serialization
+and graph-edge metadata. No implicit Latest or invented I is supplied. Preassembled-manifest-derived
+edges retain missing project metadata without inventing a namespace. Built-in label/Word decoding
+remains canonical; unknown TypedIds have no permissive decoder. Generic manifest writing rejects
+externally validated TypedId homes without an owner-aware writer rather than emitting files the
+reader cannot reload. Existing graph/examples/tests now supply explicit custom fixture inputs.
+
+`520574869` routes a source default-home request to TargetAssemblyContext::dependency_binding and
+checks returned NamespaceInputs before memory/registered cache reuse. Complete Bound declarations,
+reexports and retained foreign/helper homes stay independent. Standard selection on preassembled
+artifacts explicitly rejects pending consumer expected-callable mappings. A package's primary home
+cannot establish its public surface or ownership of I; neither an all-bindings check nor a single
+matching binding would be sound. Custom artifact requests check only their requested default
+metadata; the independent naming provider still admits the full inventory/profile. Automatic
+target/public/helper naming and distinct bound source instances remain PR10, not completed here.
+
+`b33d07fab` migrates ten prover security modules and async/advice-fixture integrations to retained
+naming and bounded environment/trace policies. Dynamic targets use retained canonical foo keys,
+not body digests or forest order. Raw forests use independent test-owned names and code-only D.
+All mutation/precondition/oracle/proof assertions and the existing regeneration ignore remain.
+Independent review found no new source regressions; compilation does not qualify attack attribution.
+
+**Newly identified inherited security gates:** ctx_continuation_end_soundness_repro:129 requires
+zero root fn_hash; dyncall_end_relabel_repro:91 relies on zero saved-root principal and a degenerate
+caller-frame payload. Actual ENTRY/root-END use authenticated K_entry. Those prerequisites cannot
+be made true by substituting zero keys or removing assertions. Renew the valid-principal attack
+construction and counterfactual rejection attribution after PR12; also recheck block-stack entry-kind
+tag-isolation claims against the new principal constraints. Keep honest-proof/generated/native/MASM/
+recursive/security qualification open until actual evidence proves them.
+
+**Fresh guarded checks:** project full 48 pass; assembly project 54 and callable-identity13 pass;
+strict project/prover library+test Clippy and assembly-library Clippy pass; project no-default-features
+and scoped formatting pass. The 17 earlier prover unit API errors now compile through normal Clippy.
+Three bounded source/review agents ran no builds/tests. Root batched essential checks; no broad
+processor/proof run or regeneration was launched. All four source commits have verified signatures.
+Separate README/SPEC updates describe actual configuration and current limits; scratch findings
+index exact source locations, while logs remain separate. No pushes or GitHub PRs. Overall goal,
+PR09/M1 and the remaining CLI/wasm/fuzz/PR10/PR12/inherited acceptance gates remain active.
