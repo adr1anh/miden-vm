@@ -380,7 +380,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Earlier normal private attempt stopped at three assembly errors, now resolved by PR09; fresh normal private/relocation/sidecar checks remain unrun, as do complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates |
-| 09 Assembly/packages | in-progress | Fixture helper `e4cb2fbaa`; tests `9fd347f4f`; inline and earlier refs below; base `82935d673` | Independent reviews; seven fixture tests, strict assembly library/test Clippy with testing and no_std/testing pass; configured-stack full assembly332 pass/157 fail/6 ignored. Earlier keyed/syntax/package passes below | Full run still149 missing-home failures plus invocation snapshots/diagnostics and masked assertions. Raw fixture and pure CallableBinding ownership edits are in flight; package9/admission, project inputs/cache matching, fresh normal processor and all inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Binding ownership `caac542d3`; straight-line fixtures `355a8ef12`; callable fixtures `61a54fc10`; earlier refs below; base `82935d673` | Independent reviews; package223/one manual seed ignored; combined strict package/assembly library/test Clippy with assembly/testing and no_std/testing pass; full assembly347 pass/142 fail/6 ignored. All newly migrated groups pass | Full run still139 missing-home failures plus three invocation snapshots; later assertions remain masked. Package9/admission, project inputs/naming cache matching, fresh normal processor and all inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -1815,3 +1815,36 @@ profile/context/budget boundary and D3 external inputs remain required. Short so
 `findings-pr09-project.md` and `findings-pr09-package.md` in uncommitted scratch. No target-input API,
 wire9/commitment/admission activation, final Program/kernel conversion or production cache fix is
 claimed. PR09 and all inherited/external acceptance gates remain open.
+
+
+### PR 09 Shared binding ownership and callable fixture closure
+
+`caac542d3` moves CallableBinding byte-identically into mast-package and preserves the assembly
+root re-export. It changes ownership only: no manifest field, codec, wire version, descriptor,
+commitment or profile activation. This avoids a future syntax/package dependency cycle and a
+competing callable-binding model. Independent review is clean; all223 package tests pass with
+one manual seed ignored.
+
+`355a8ef12` configures five emission/serde/debug-budget fixtures with exact parsed-module metadata;
+all sources, cost tables/differencing, operations, roundtrip and decoder-budget assertions remain.
+`61a54fc10` configures callable fixtures, derives four literal CALL targets as K, preserves procref's
+reversed key pushes and re-export identity, and verifies independent callable roots. Three inspected
+procedure snapshots now show real keyed EXEC; direct body assertions preserve nested procedure
+operations and all27 original non-padding locals/FMP operations omitted by that display. The masked
+constructor-panic and locals-limit expectations pass unchanged after configuration. No retained
+exec was replaced by inline. Independent fixture/snapshot review is clean.
+
+Configured16MiB full assembly now347 pass/142 fail/6 ignored. Every newly migrated group passes:
+cycle costs, serialization, product debug-budget, procedures, procref, main-call, key-literal calls
+and locals. Remaining failures are139 missing caller homes and three reviewed-but-unaccepted
+invocation snapshots; setup failures still mask later assertions. Combined strict package/assembly
+library/test Clippy with assembly/testing and no-default-features/testing checks pass. Logs:
+`pr09-callable-binding-move-package-tests`, `pr09-full-assembly-lib-callable-fixtures-third`,
+`pr09-move-callable-fixtures-clippy-first`, `pr09-move-callable-fixtures-no-std-testing`. All Rust
+commands passed AC/heavy guards; compile-only assertion constructor/inference fixes changed no
+expected values or policy.
+
+Only scratch and three .snap.new review artifacts remain untracked at this source checkpoint.
+Next work continues required callable inventory/package9 and remaining fixture migration;
+production homes/ID codecs, admission, project naming/cache matching, final Program/kernel
+conversion and all inherited gates remain open. PR09 is not complete.
