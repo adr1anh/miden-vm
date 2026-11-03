@@ -171,7 +171,7 @@ Split identity resolution from body supply, runtime reachability/SCCs from acycl
 
 Generic package metadata covers the opaque typed library ID and naming/callable/code information needed by VM/toolchain consumers, independently of Protocol artifacts. This separation grants no Protocol admission: its profile must derive/verify D3's I and validate publisher/home, immutable interface association, release and closure inputs before acceptance. Missing required naming/code metadata still rejects. Preserve independent callable-root retention and the in-flight builder/frontend/graph work. Exact required naming must affect artifact commitments and deduplication/cache matching: equal D or source provenance with changed home/canonical binding cannot reuse old symbols or artifacts.
 
-**Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old serialized callable formats reject and required metadata survives debug stripping. Existing MASM invocation/procref source rebuilds under D2, using K and real EXEC without digest fallback. **Checks:** `make test-assembly test=namespaced_execution`; `cargo test -p miden-mast-package --lib package::serialization`; then `make test-assembly` and package lib tests after focused failures resolve.
+**Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old serialized callable formats reject and required metadata survives debug stripping. Existing MASM invocation/procref source rebuilds under D2, using K and real EXEC without digest fallback. **Checks:** scoped `assembler::callable_identity_tests`, `assembler::inline::tests` and `tests::link_cycles` within `RUST_MIN_STACK=16777216 cargo test --locked -p miden-assembly --lib`; full package `cargo test --locked -p miden-mast-package --lib`; then full unit run and standard `make test-assembly EXTRA=--locked NEXTEST_PROFILE=ci` after focused failures resolve. The Makefile forwards `test=` to its filter; the previous `namespaced_execution` filter names no current assembly test. Use existing modules and verify nonzero execution counts.
 
 ### PR 10 Revision-aware projects and code supply
 
@@ -380,7 +380,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Earlier normal private attempt stopped at three assembly errors, now resolved by PR09; fresh normal private/relocation/sidecar checks remain unrun, as do complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates |
-| 09 Assembly/packages | in-progress | Binding ownership `caac542d3`; straight-line fixtures `355a8ef12`; callable fixtures `61a54fc10`; earlier refs below; base `82935d673` | Independent reviews; package223/one manual seed ignored; combined strict package/assembly library/test Clippy with assembly/testing and no_std/testing pass; full assembly347 pass/142 fail/6 ignored. All newly migrated groups pass | Full run still139 missing-home failures plus three invocation snapshots; later assertions remain masked. Package9/admission, project inputs/naming cache matching, fresh normal processor and all inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Callable inventory `15d543940`/`a206ab680`; constant/library fixtures `6fa2541f8`; kernel fixtures `eb84810b9`/`b8ab72a92`; earlier refs below; base `82935d673` | Independent reviews; inventory9/full package232 pass/one manual seed ignored; strict package and combined assembly/test Clippy with testing pass; package no_std pass; full assembly379 pass/110 fail/6 ignored; kernel14 pass after helper lint fix | Full run still107 missing-home failures plus three invocation snapshots; later assertions remain masked. Aggregate home-validation and import/link fixture edits are in flight; package9/admission, project inputs/naming cache matching, fresh normal processor and all inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -1848,3 +1848,39 @@ Only scratch and three .snap.new review artifacts remain untracked at this sourc
 Next work continues required callable inventory/package9 and remaining fixture migration;
 production homes/ID codecs, admission, project naming/cache matching, final Program/kernel
 conversion and all inherited gates remain open. PR09 is not complete.
+
+
+### PR 09 Detached callable inventory and kernel namespace fixture checkpoint
+
+`15d543940` introduces detached PackageCallables using the existing full CallableBinding: bindings,
+visible semantic paths to existing K, and independently optional selected D. Duplicate rows and
+dangling alias/selection keys reject; private/helper/address-taken declarations survive without
+visibility or code. Empty inventories are model candidates, not empty runnable code packages.
+Tests `a206ab680` all9 pass; full package232 pass/one manual seed ignored, strict library/test Clippy
+and no-default-features pass. No live Package8 field, codec, commitment or admission is activated.
+
+`6fa2541f8` supplies explicit constant/library fixture homes and imported sidecars without changing
+MASM bodies or constant/type/visibility negatives. Its sole accepted snapshot replaces External(D)
+with keyed EXEC; added assertions retain exact producer D, constant-folded [PAD, INCR] and target K.
+`eb84810b9` tests full accumulated kernel parents, literal-K semantics, ordinary kernel-key access,
+source alias precedence, equal-D/different-K and kernel-owned library retention. `b8ab72a92` isolates
+the generic candidate/runnable distinction: real private submodule code may form a candidate with
+no public root exports, while both descriptor and with_kernel conversions still reject. Wholly
+empty code still rejects. Existing unimported-name rejection remains; an explicitly imported
+variant tests wrong-parent rejection and exact-parent acceptance with unchanged target spelling.
+No production authority rule changed. Independent source/snapshot reviews and delta rereviews are clean.
+
+Configured16MiB full assembly379 pass/110 fail/6 ignored; constants60, cross-module constants9,
+libraries3 (one ignored), compiled libraries2, forest merge2 and kernels14 pass. Remaining failures
+are107 missing caller homes and three invocation snapshots. Strict combined package/assembly
+library/test Clippy with assembly/testing passes after replacing a Vec<Box<Module>> helper parameter
+with an iterator; focused kernel14 passes after that change. Logs: `pr09-callable-inventory-*`,
+`pr09-full-assembly-lib-constant-kernel-fixtures-third`, `pr09-inventory-constant-kernel-clippy-second`,
+`pr09-kernel-fixtures-final`. All Rust commands passed AC/heavy guards. These are default libtest
+results, not a pass of the still-pending standard test-dev/nextest suite.
+
+Next aggregate validation must use explicit HomeProfile/context and one cumulative budget across
+all owned inventory relations, retain existing HomeV1 bytes/checks, and store no admitted flag.
+Current implementation and import/link fixtures are uncommitted and untested at this checkpoint.
+Actual wire9 admission, artifact-kind identity/entry/full-kernel requirements, source/cache naming
+matching and all D3/native/proof/recursive/security gates remain required; PR09 stays in progress.
