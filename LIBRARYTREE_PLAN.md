@@ -2176,3 +2176,26 @@ attached goal; retain all existing implementation/evidence and establish a repla
 not a narrowed D6–D8 objective. Workflow/M1 and the current brief now express the completion
 boundary and next slice. This checkpoint changes documentation only; no new source/test evidence
 or milestone completion is claimed. Existing branch/commit, power, review and no-PR/push rules apply.
+
+### Fixed-root core and AIR correction
+
+Core `45bf6ccd4` removes configurable kernel authority from `ExecutionDescriptor` and
+`VerifierConfiguration`. Descriptor identities are `(K_entry, R_E)`; configuration uses v3 domain
+`0x01010a03` and checked `10 + 8*n` Felt framing. Historical v2 vectors remain explicit legacy
+anchors. Executable arbitrary fixtures use authenticated N0 bindings. Independent bounded review
+found no actionable issue. Fresh guarded checks passed: program88, full arbitrary-feature core408
+with one ignored, public API/trybuild, strict test-inclusive core/AIR Clippy and no-default-features
+library checks. Scoped pinned-nightly formatting and whitespace checks passed.
+
+AIR `91c8cc96b` independently constrains each syscall supplier's four namespace coordinates to
+fixed N0 and requires Chiplets public4 = R_E. Root List/Merkle positives, child/zero/coordinate
+forgeries and rooted signed-frequency cancellation regressions pass. Independent bounded review
+found no actionable issue. Full handwritten AIR: 387 passed, one failure at
+`statement.rs:71` copying Core36 into legacy claim32; this known statement-cutover gate remains
+required at PR12. Actual packed layout/lookup/periodic/degree tests pass; no generated/native/MASM/
+recursive relation closure or milestone completion is claimed. Logs stay in scratch, separate from
+this durable evidence. Reviewed processor/assembler changes remain uncommitted at this checkpoint.
+Guarded exact-source opening/session harness52 and actual-processor public-source harness checks
+native/source22, execution22 and witness10 pass, including full arbitrary-stack generation and
+exact replay-v5 budgets. These avoid the existing prover dev-dependency compile break and do not
+establish a passing normal processor suite or proof-system qualification.
