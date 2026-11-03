@@ -6,16 +6,19 @@ use std::{
 };
 
 use miden_assembly::{
-    Assembler, DefaultSourceManager, Path as LibraryPath, SourceManager,
+    Assembler, DefaultSourceManager, NamespaceInputs, Path as LibraryPath, SourceManager,
     ast::{Module, ModuleKind},
     diagnostics::{Report, WrapErr},
-    report,
     serde::Deserializable,
 };
 use miden_core::{Felt, field::QuotientMap, serde::read_file_bounded};
 use miden_core_lib::CoreLibrary;
 use miden_mast_package::Package;
-use miden_vm::{ExecutionProof, Program, StackOutputs, Word, serde::SliceReader};
+use miden_vm::{
+    ExecutionProof, StackOutputs, Word,
+    internal::naming_inputs::{LoadedPackage, NamingInputs, NamingRole},
+    serde::SliceReader,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{field::Empty, instrument};
 
@@ -200,35 +203,59 @@ where
         Ok(Self { ast, source_manager })
     }
 
-    /// Compiles this program file into an executable [Package].
+    /// Compiles with explicit declarations and retains exact compiler-owned naming.
     #[instrument(name = "compile_package", skip_all)]
-    pub fn compile_package<I>(&self, libraries: I) -> Result<Box<Package>, Report>
+    pub fn compile_package<I>(
+        &self,
+        libraries: I,
+        inputs: NamespaceInputs,
+    ) -> Result<LoadedPackage, Report>
     where
-        I: IntoIterator<Item = Arc<Package>>,
+        I: IntoIterator<Item = LoadedPackage>,
     {
-        let mut assembler = Assembler::new(self.source_manager.clone());
+        self.compile_package_with_kernel(libraries, inputs, None)
+    }
+
+    pub fn compile_package_with_kernel<I>(
+        &self,
+        libraries: I,
+        inputs: NamespaceInputs,
+        kernel: Option<&LoadedPackage>,
+    ) -> Result<LoadedPackage, Report>
+    where
+        I: IntoIterator<Item = LoadedPackage>,
+    {
+        let mut assembler = match kernel {
+            Some(kernel) => Assembler::with_kernel(
+                self.source_manager.clone(),
+                kernel.package.clone(),
+                kernel.naming.clone(),
+            )?,
+            None => Assembler::new(self.source_manager.clone()),
+        }
+        .with_namespace_inputs(inputs);
+        let core_lib = CoreLibrary::default();
         assembler
-            .link_package(CoreLibrary::default().package(), miden_assembly::Linkage::Dynamic)
+            .link_package(
+                core_lib.package(),
+                miden_assembly::Linkage::Dynamic,
+                core_lib.naming().clone(),
+            )
             .wrap_err("Failed to load core library")?;
 
         for library in libraries {
             assembler
-                .link_package(library, miden_assembly::Linkage::Dynamic)
+                .link_package(library.package, miden_assembly::Linkage::Dynamic, library.naming)
                 .wrap_err("Failed to load libraries")?;
         }
 
-        assembler
-            .assemble_program("program", self.ast.clone())
-            .wrap_err("Failed to compile program")
-    }
-
-    /// Compiles this program file into a [Program].
-    #[instrument(name = "compile_program", skip_all)]
-    pub fn compile<I>(&self, libraries: I) -> Result<Program, Report>
-    where
-        I: IntoIterator<Item = Arc<Package>>,
-    {
-        Ok(self.compile_package(libraries)?.unwrap_program())
+        let product = assembler
+            .assemble_executable_modules("program".into(), self.ast.clone(), [])
+            .wrap_err("Failed to compile program")?;
+        let naming = Arc::new(product.naming().clone());
+        let package: Arc<Package> = product.into_artifact(true)?.into();
+        package.check_naming(&naming).map_err(Report::msg)?;
+        Ok(LoadedPackage { package, naming })
     }
 
     /// Returns the source manager for this program file.
@@ -325,28 +352,30 @@ impl ProgramHash {
 // LIBRARY FILE
 // ================================================================================================
 pub struct Libraries {
-    pub libraries: Vec<Arc<Package>>,
+    pub libraries: Vec<LoadedPackage>,
 }
 
 impl Libraries {
     /// Creates a new instance of [Libraries] from a list of library paths.
     #[instrument(name = "read_library_files", skip_all)]
-    pub fn new<P, I>(paths: I) -> Result<Self, Report>
+    pub fn new<P, I>(paths: I, naming: &NamingInputs) -> Result<Self, Report>
     where
         P: AsRef<Path>,
         I: IntoIterator<Item = P>,
     {
         let mut libraries = Vec::new();
 
-        for path in paths {
+        for (index, path) in paths.into_iter().enumerate() {
             let path_str = path.as_ref().to_string_lossy().into_owned();
 
             let library = Package::deserialize_from_file(path).map(Arc::new).map_err(|err| {
-                report!("Failed to read package from file `{}`: {}", path_str, err)
+                Report::msg(format!("Failed to read package from file `{}`: {}", path_str, err))
             })?;
 
-            libraries.push(library);
+            libraries.push(naming.admit(NamingRole::Library(index), library)?);
         }
+
+        naming.check_library_count(libraries.len())?;
 
         Ok(Self { libraries })
     }

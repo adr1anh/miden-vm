@@ -2,18 +2,15 @@ use std::{path::PathBuf, time::Instant};
 
 use clap::Parser;
 use miden_assembly::diagnostics::{Report, WrapErr};
-use miden_core_lib::CoreLibrary;
 use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor};
 use miden_vm::{HashFunction, PrecompileLimits, PrecompileStatus, Prover, internal::InputFile};
 
 use super::{
     data::{Libraries, OutputFile, ProofFile},
     execution_inputs::ExecutionArgs,
+    naming_inputs::NamingArgs,
     precompile_limits::PrecompileArgs,
-    utils::{
-        get_masm_program, get_masp_package, load_package_with_handlers,
-        load_program_package_with_handlers, parse_byte_size,
-    },
+    utils::{load_program, load_program_libraries, parse_byte_size},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -31,7 +28,7 @@ pub struct ProveCmd {
     #[arg(short = 'i', long = "input", value_parser)]
     input_file: Option<PathBuf>,
 
-    /// Paths to .masp library files
+    /// Library code packages; also provide assembly imports for source programs
     #[arg(short = 'l', long = "libraries", value_parser)]
     library_paths: Vec<PathBuf>,
 
@@ -59,6 +56,9 @@ pub struct ProveCmd {
 
     #[command(flatten)]
     execution: ExecutionArgs,
+
+    #[command(flatten)]
+    naming: NamingArgs,
 
     /// Generate a complete proof, including a STARK for any precompile work (the default)
     ///
@@ -146,72 +146,24 @@ impl ProveCmd {
         println!("Prove program: {}", self.program_file.display());
         println!("-------------------------------------------------------------------------------");
 
-        // determine file type based on extension
-        let ext = self
-            .program_file
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if !matches!(ext.as_str(), "masm" | "masp") {
-            return Err(Report::msg("The provided file must have a .masm or .masp extension"));
-        }
-
-        // load libraries from files
-        let libraries = Libraries::new(&self.library_paths)?;
-
-        // validate kernel file if provided
-        if let Some(ref kernel_path) = self.kernel_file
-            && !kernel_path.is_file()
-        {
-            return Err(Report::msg(format!(
-                "Kernel file `{}` must be a file.",
-                kernel_path.display()
-            )));
-        }
-
+        let naming = self.naming.read()?;
+        let libraries = Libraries::new(&self.library_paths, &naming)?;
+        let loaded = load_program(
+            &self.program_file,
+            &libraries,
+            self.kernel_file.as_deref(),
+            &naming,
+            inputs.environment().descriptor().entry_key(),
+        )?;
         let input_data = InputFile::read(&self.input_file, &self.program_file)?;
-
-        let mut host = DefaultHost::default()
-            .with_environment_source(inputs.source())
-            .with_library(&CoreLibrary::default())?;
-        // Use a single match expression to load the program.
-        let (program, package_debug_info, entrypoint_source_node) = match ext.as_str() {
-            "masp" => {
-                if self.kernel_file.is_some() {
-                    return Err(Report::msg(
-                        "The `--kernel` option applies to source assembly; a `.masp` package carries its embedded kernel code.",
-                    ));
-                }
-                let package = get_masp_package(&self.program_file)?;
-                let program = package.try_into_program()?;
-                load_program_package_with_handlers(&mut host, &package, &mut Vec::new())?;
-                (program, None, None)
-            },
-            "masm" => {
-                let (
-                    program,
-                    package_debug_info,
-                    entrypoint_source_node,
-                    source_manager,
-                    kernel_package,
-                ) = get_masm_program(&self.program_file, &libraries, self.kernel_file.as_deref())?;
-                host = host.with_source_manager(source_manager);
-                let mut loaded_handler_sections = Vec::new();
-                for library in &libraries.libraries {
-                    load_package_with_handlers(&mut host, library, &mut loaded_handler_sections)?;
-                }
-                if let Some(kernel_package) = &kernel_package {
-                    load_package_with_handlers(
-                        &mut host,
-                        kernel_package,
-                        &mut loaded_handler_sections,
-                    )?;
-                }
-                (program, package_debug_info, entrypoint_source_node)
-            },
-            _ => unreachable!("program file extension was validated above"),
-        };
+        let mut host = DefaultHost::default().with_environment_source(inputs.source());
+        if let Some(source_manager) = loaded.source_manager.clone() {
+            host = host.with_source_manager(source_manager);
+        }
+        load_program_libraries(&mut host, &loaded, &libraries)?;
+        let package_debug_info = loaded.target.package.debug_info().map_err(Report::msg)?;
+        let entrypoint_source_node = loaded.target.package.entrypoint_source_node();
+        let program = loaded.program;
 
         let program_hash: [u8; 32] = program.hash().into();
         println!("Proving program with hash {}...", hex::encode(program_hash));
@@ -316,6 +268,7 @@ mod tests {
                 ["prove", "program.masm"]
                     .into_iter()
                     .chain(crate::cli::execution_inputs::tests::required_args())
+                    .chain(["--naming-inputs", "naming.json", "--max-naming-input-bytes", "8192"])
                     .chain(args),
             )
             .unwrap();
@@ -342,7 +295,8 @@ mod tests {
             let cmd = ProveCmd::try_parse_from(
                 ["prove", "program.masm", args[0], args[1]]
                     .into_iter()
-                    .chain(crate::cli::execution_inputs::tests::required_args()),
+                    .chain(crate::cli::execution_inputs::tests::required_args())
+                    .chain(["--naming-inputs", "naming.json", "--max-naming-input-bytes", "8192"]),
             )
             .unwrap();
             let options = cmd.get_execution_options().unwrap();

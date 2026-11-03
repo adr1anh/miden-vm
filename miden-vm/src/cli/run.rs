@@ -1,8 +1,7 @@
 use std::{path::PathBuf, time::Instant};
 
 use clap::Parser;
-use miden_assembly::diagnostics::{IntoDiagnostic, Report, WrapErr};
-use miden_core_lib::CoreLibrary;
+use miden_assembly::diagnostics::{Report, WrapErr};
 use miden_processor::{
     DefaultHost, ExecutionOptions, FastProcessor,
     trace::{VmTrace, build_trace},
@@ -14,11 +13,9 @@ use tracing::instrument;
 use super::{
     data::{Libraries, OutputFile},
     execution_inputs::ExecutionArgs,
+    naming_inputs::NamingArgs,
     precompile_limits::PrecompileArgs,
-    utils::{
-        get_masm_program, get_masp_package, load_package_with_handlers,
-        load_program_package_with_handlers, parse_byte_size,
-    },
+    utils::{load_program, load_program_libraries, parse_byte_size},
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -36,7 +33,7 @@ pub struct RunCmd {
     #[arg(short = 'i', long = "input", value_parser)]
     input_file: Option<PathBuf>,
 
-    /// Paths to .masp library files (only used for assembly files)
+    /// Library code packages; also provide assembly imports for source programs
     #[arg(short = 'l', long = "libraries", value_parser)]
     library_paths: Vec<PathBuf>,
 
@@ -63,6 +60,9 @@ pub struct RunCmd {
 
     #[command(flatten)]
     execution: ExecutionArgs,
+
+    #[command(flatten)]
+    naming: NamingArgs,
 
     /// Number of outputs
     #[arg(short = 'n', long = "num-outputs", default_value = "16")]
@@ -98,22 +98,12 @@ impl RunCmd {
         println!("Run program: {}", self.program_file.display());
         println!("-------------------------------------------------------------------------------");
 
-        // determine file type based on extension
-        let ext = self
-            .program_file
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_lowercase();
-
         let now = Instant::now();
 
-        // use a single match expression based on file extension
-        let (trace, program_hash) = match ext.as_str() {
-            "masp" => run_masp_program(self, execution_options, &inputs)?,
-            "masm" => run_masm_program(self, execution_options, &inputs)?,
-            _ => return Err(Report::msg("The provided file must have a .masm or .masp extension")),
-        };
+        let naming = self.naming.read()?;
+        let libraries = Libraries::new(&self.library_paths, &naming)?;
+        let (trace, program_hash) =
+            run_program(self, execution_options, &inputs, &naming, &libraries)?;
 
         println!(
             "Executed the program with hash {} in {} ms",
@@ -176,127 +166,57 @@ impl RunCmd {
 // ================================================================================================
 
 #[instrument(name = "run_program", skip_all)]
-fn run_masp_program(
+fn run_program(
     params: &RunCmd,
     exec_options: ExecutionOptions,
     inputs: &AdmittedExecutionInputs,
+    naming: &miden_vm::internal::naming_inputs::NamingInputs,
+    libraries: &Libraries,
 ) -> Result<(VmTrace, [u8; 32]), Report> {
-    if params.kernel_file.is_some() {
-        return Err(Report::msg(
-            "The `--kernel` option applies to source assembly; a `.masp` package carries its embedded kernel code.",
-        ));
-    }
-
-    let package = get_masp_package(&params.program_file)?;
-    let program = package.try_into_program()?;
-
-    // use simplified input data reading
+    let loaded = load_program(
+        &params.program_file,
+        libraries,
+        params.kernel_file.as_deref(),
+        naming,
+        inputs.environment().descriptor().entry_key(),
+    )?;
     let input_data = InputFile::read(&params.input_file, &params.program_file)?;
-
     let stack_inputs = input_data.parse_stack_inputs().map_err(Report::msg)?;
     let advice_inputs = input_data
         .parse_advice_inputs_with_options(&exec_options)
         .map_err(Report::msg)?;
-    let mut host = DefaultHost::default()
-        .with_environment_source(inputs.source())
-        .with_library(&CoreLibrary::default())?;
-    load_program_package_with_handlers(&mut host, &package, &mut Vec::new())?;
-
-    let program_hash: [u8; 32] = program.hash().into();
-
+    let mut host = DefaultHost::default().with_environment_source(inputs.source());
+    if let Some(source_manager) = loaded.source_manager.clone() {
+        host = host.with_source_manager(source_manager);
+    }
+    load_program_libraries(&mut host, &loaded, libraries)?;
+    let program_hash = loaded.program.hash().into();
+    let debug_info = loaded.target.package.debug_info().map_err(Report::msg)?;
+    let entry_source = loaded.target.package.entrypoint_source_node();
     let processor = FastProcessor::new_with_options(stack_inputs, advice_inputs, exec_options)
-        .map_err(|err| Report::msg(format!("{err}")))?;
-
-    let witness = processor
-        .execute_for_proving_sync(&program, inputs.environment(), &mut host)
-        .wrap_err("Failed to execute program")?;
+        .map_err(Report::msg)?;
+    let witness = match (debug_info.as_ref(), entry_source) {
+        (Some(debug_info), Some(source_node)) => processor
+            .execute_for_proving_with_package_debug_info_at_source_node_sync(
+                &loaded.program,
+                inputs.environment(),
+                debug_info,
+                source_node,
+                &mut host,
+            ),
+        (Some(debug_info), None) => processor.execute_for_proving_with_package_debug_info_sync(
+            &loaded.program,
+            inputs.environment(),
+            debug_info,
+            &mut host,
+        ),
+        (None, _) => {
+            processor.execute_for_proving_sync(&loaded.program, inputs.environment(), &mut host)
+        },
+    }
+    .wrap_err("Failed to execute program")?;
     let (vm_witness, _) = witness.into_parts();
     let trace = build_trace(vm_witness, &canonical_budget(params.max_prover_memory))
         .wrap_err("Failed to build trace")?;
-
-    Ok((trace, program_hash))
-}
-
-#[instrument(name = "run_program", skip_all)]
-fn run_masm_program(
-    params: &RunCmd,
-    exec_options: ExecutionOptions,
-    inputs: &AdmittedExecutionInputs,
-) -> Result<(VmTrace, [u8; 32]), Report> {
-    for lib in &params.library_paths {
-        if !lib.is_file() {
-            let name = lib.display();
-            return Err(Report::msg(format!("{name} must be a file.")));
-        }
-    }
-
-    // load libraries from files
-    let libraries = Libraries::new(&params.library_paths)?;
-
-    // validate kernel file if provided
-    if let Some(ref kernel_path) = params.kernel_file
-        && !kernel_path.is_file()
-    {
-        return Err(Report::msg(format!(
-            "Kernel file `{}` must be a file.",
-            kernel_path.display()
-        )));
-    }
-
-    // load program from file and compile
-    let (program, package_debug_info, entrypoint_source_node, source_manager, kernel_package) =
-        get_masm_program(&params.program_file, &libraries, params.kernel_file.as_deref())?;
-    let input_data = InputFile::read(&params.input_file, &params.program_file)?;
-
-    // fetch the stack and program inputs from the arguments
-    let stack_inputs = input_data.parse_stack_inputs().map_err(Report::msg)?;
-    let advice_inputs = input_data
-        .parse_advice_inputs_with_options(&exec_options)
-        .map_err(Report::msg)?;
-    let mut host = DefaultHost::default()
-        .with_environment_source(inputs.source())
-        .with_source_manager(source_manager);
-    host.load_library(&CoreLibrary::default())
-        .into_diagnostic()
-        .wrap_err("Failed to load core library")?;
-    let mut loaded_handler_sections = Vec::new();
-    for lib in &libraries.libraries {
-        load_package_with_handlers(&mut host, lib, &mut loaded_handler_sections)?;
-    }
-    if let Some(kernel_package) = &kernel_package {
-        load_package_with_handlers(&mut host, kernel_package, &mut loaded_handler_sections)?;
-    }
-
-    let program_hash: [u8; 32] = program.hash().into();
-
-    let processor = FastProcessor::new_with_options(stack_inputs, advice_inputs, exec_options)
-        .map_err(|err| Report::msg(format!("{err}")))?;
-
-    let execution_witness = match (package_debug_info.as_ref(), entrypoint_source_node) {
-        (Some(debug_info), Some(entrypoint_source_node_id)) => processor
-            .execute_for_proving_with_package_debug_info_at_source_node_sync(
-                &program,
-                inputs.environment(),
-                debug_info,
-                entrypoint_source_node_id,
-                &mut host,
-            )
-            .wrap_err("Failed to execute program")?,
-        (Some(debug_info), None) => processor
-            .execute_for_proving_with_package_debug_info_sync(
-                &program,
-                inputs.environment(),
-                debug_info,
-                &mut host,
-            )
-            .wrap_err("Failed to execute program")?,
-        (None, _) => processor
-            .execute_for_proving_sync(&program, inputs.environment(), &mut host)
-            .wrap_err("Failed to execute program")?,
-    };
-    let (vm_witness, _) = execution_witness.into_parts();
-    let trace = build_trace(vm_witness, &canonical_budget(params.max_prover_memory))
-        .wrap_err("Failed to build trace")?;
-
     Ok((trace, program_hash))
 }
