@@ -154,7 +154,7 @@ pub fn enforce_memory_constraints<AB>(
     // When same_ctx = 0, f_sca' = 0 and addr_changed may be non-Boolean.
     builder.assert_bool(same_ctx_and_addr);
     builder.when(same_ctx_and_addr).assert_zero(addr_delta.clone());
-    builder.assert_eq(same_ctx_and_addr, same_ctx.clone() * same_addr.clone());
+    builder.assert_eq(same_ctx_and_addr, same_ctx.clone() * same_addr);
 
     // --- monotonicity ---
     // The priority-selected delta must equal the range-checked decomposition.

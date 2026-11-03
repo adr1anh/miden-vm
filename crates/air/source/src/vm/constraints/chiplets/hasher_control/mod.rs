@@ -46,7 +46,7 @@ pub fn enforce_controller_constraints<AB>(
 
     let controller_padding =
         chiplet.is_active.clone() * merkle_or_padding.clone() * controller_s0.not();
-    let controller_merkle = chiplet.is_active.clone() * merkle_or_padding.clone() * controller_s0;
+    let controller_merkle = chiplet.is_active.clone() * merkle_or_padding * controller_s0;
 
     // The first Controller follows the terminal Library PAD B row. Its complete operation
     // initialization belongs to that boundary, rather than to global trace row zero.

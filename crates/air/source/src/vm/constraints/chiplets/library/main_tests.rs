@@ -12,7 +12,7 @@ use miden_core::{
 use miden_crypto::hash::eidos::{Eidos, EidosFrame};
 use miden_stark::air::{
     AirBuilder, WindowAccess,
-    symbolic::{AirLayout, SymbolicAirBuilder},
+    symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpr},
 };
 
 use super::{constraints::enforce_library_constraints, *};
@@ -464,7 +464,7 @@ fn library_main_checks_each_syscall_supplier_namespace_without_frequency_ranges(
         cols_mut(&mut forged[1]).a = -Felt::ONE;
         assert_accept(&forged); // Ordinary use may authenticate under any namespace.
     }
-    let mut unrestricted = valid.clone();
+    let mut unrestricted = valid;
     cols_mut(&mut unrestricted[1]).a = -Felt::from_u8(2);
     cols_mut(&mut unrestricted[1]).b = -Felt::from_u8(3);
     assert_accept(&unrestricted); // Matching demands, rather than local ranges, bind frequencies.
@@ -527,11 +527,7 @@ fn library_main_symbolic_degree_is_nine_with_explicit_shared_inputs() {
     };
     enforce_library_constraints(&mut builder, local.library(), next.library(), &context);
     assert_eq!(
-        builder
-            .base_constraints()
-            .iter()
-            .map(|constraint| constraint.degree_multiple())
-            .max(),
+        builder.base_constraints().iter().map(SymbolicExpr::degree_multiple).max(),
         Some(9),
     );
     assert!(builder.extension_constraints().is_empty());

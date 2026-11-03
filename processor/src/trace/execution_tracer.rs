@@ -122,7 +122,7 @@ impl TraceReplay {
             .and_then(|bytes| {
                 bytes
                     .checked_add(self.resolution_session.counters().retained_bytes)
-                    .ok_or(super::keyed::KeyedReplayError::LengthOverflow)
+                    .ok_or(KeyedReplayError::LengthOverflow)
             })
             .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?;
         let mut events = 0usize;
@@ -290,16 +290,14 @@ fn validate_trace_generation_context_invariants(
     }
     if max_stack_depth < MIN_STACK_DEPTH {
         return Err(DeserializationError::InvalidValue(format!(
-            "trace generation max_stack_depth {} is below minimum {MIN_STACK_DEPTH}",
-            max_stack_depth
+            "trace generation max_stack_depth {max_stack_depth} is below minimum {MIN_STACK_DEPTH}"
         )));
     }
     for (fragment_index, fragment) in core_trace_contexts.iter().enumerate() {
         let stack_depth = fragment.state.stack.stack_depth();
         if stack_depth > max_stack_depth {
             return Err(DeserializationError::InvalidValue(format!(
-                "fragment {fragment_index}: stack depth {stack_depth} exceeds max_stack_depth {}",
-                max_stack_depth
+                "fragment {fragment_index}: stack depth {stack_depth} exceeds max_stack_depth {max_stack_depth}"
             )));
         }
     }
@@ -989,7 +987,7 @@ enum ExecutionTraceReservationKind {
     },
 }
 
-fn keyed_error(error: super::keyed::KeyedReplayError) -> ExecutionError {
+fn keyed_error(error: KeyedReplayError) -> ExecutionError {
     ExecutionError::KeyedTrace(error)
 }
 
@@ -1134,9 +1132,14 @@ impl Tracer for ExecutionTracer {
                 .map_err(|_| ExecutionError::Internal("forest index allocation failed"))?;
             (id, Some((id, SparseMastForestBuilder::new(target.forest.clone()))))
         };
-        let staged_bytes = self.pending_environment.as_ref().map_or(0, |p| p.retained_bytes());
-        let native_retained_bytes =
-            self.pending_environment.as_ref().map_or(0, |p| p.native_retained_bytes());
+        let staged_bytes = self
+            .pending_environment
+            .as_ref()
+            .map_or(0, PreparedEnvironmentReplay::retained_bytes);
+        let native_retained_bytes = self
+            .pending_environment
+            .as_ref()
+            .map_or(0, PreparedEnvironmentReplay::native_retained_bytes);
         let total_bytes = self
             .keyed_retained_bytes
             .checked_add(staged_bytes)
@@ -2415,8 +2418,8 @@ mod serialization_tests {
             .unwrap_err();
         assert!(matches!(
             error,
-            super::super::keyed::KeyedReplayError::LimitExceeded {
-                resource: super::super::keyed::ReplayResource::RetainedBytes,
+            KeyedReplayError::LimitExceeded {
+                resource: ReplayResource::RetainedBytes,
                 ..
             }
         ));

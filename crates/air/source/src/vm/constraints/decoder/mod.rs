@@ -871,7 +871,7 @@ mod tests {
         missing_root[1].decoder.hasher_state[7] = Felt::ZERO;
         assert!(!eval_at(&missing_root, 1), "END before HALT must carry the root flag");
 
-        let mut skipped_end = rows.clone();
+        let mut skipped_end = rows;
         skipped_end[1] = join.clone();
         assert!(!eval_at(&skipped_end, 1), "an interior non-END cannot enter the HALT suffix");
 
@@ -879,7 +879,7 @@ mod tests {
         // cannot omit HALT/root completion, even though the transition selector is zero there.
         let ordinary_end = generate_test_row(opcodes::END.into());
         assert!(decoder_accepts(&ordinary_end, &join));
-        let no_halt = [join.clone(), join.clone(), join.clone(), ordinary_end];
+        let no_halt = [join.clone(), join.clone(), join, ordinary_end];
         assert!(!eval_at(&no_halt, 3), "the physical final row must still be HALT");
 
         // Moving a matching END(r=1) -> HALT edge across the wrap also fails independently at

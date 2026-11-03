@@ -1410,9 +1410,7 @@ fn buffered_and_prebuilt_controllers_share_the_checked_physical_writer() {
         );
         assert_eq!(
             layout
-                .controller_address(
-                    crate::trace::chiplets::layout::LogicalControllerAddress::ABSENT
-                )
+                .controller_address(chiplets::layout::LogicalControllerAddress::ABSENT)
                 .unwrap()
                 .to_felt(),
             ZERO

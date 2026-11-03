@@ -128,7 +128,7 @@ fn chiplets_open_boundary_uses_public_root_without_legacy_aux_authority() {
             .unwrap(),
         expected
     );
-    let mut wrong_root = public.clone();
+    let mut wrong_root = public;
     wrong_root[0] += Felt::ONE;
     assert_ne!(
         MidenAir::CHIPLETS.boundary_correction(&challenges, &wrong_root, &[]).unwrap(),

@@ -751,7 +751,7 @@ fn library_combined_binds_each_commitment_namespace_depth_key_implementation_and
         cols_mut(row).d = -Felt::ONE;
     }
     assert_lookup_reject(&forged);
-    let mut forged = fixture.clone();
+    let mut forged = fixture;
     cols_mut(&mut forged.rows[1]).a = Felt::from_u8(3);
     cols_mut(&mut forged.rows[1]).b = Felt::from_u8(2);
     assert_lookup_reject(&forged); // Identical K/D cannot exchange normal and syscall demand.
@@ -785,7 +785,7 @@ fn library_combined_rejects_incomplete_midchain_and_merged_lists_after_rehashing
         assert_lookup_reject(&shorter);
     }
 
-    let mut merged = fixture.clone();
+    let mut merged = fixture;
     // Replace the final reverse block by a different List's fully recomputed block/CV. All
     // preceding outputs and the outer Env commitment are repaired, but the length frame stays 20.
     let other = list_fixture(2, false);
@@ -859,7 +859,7 @@ fn library_combined_captures_exact_lookup_metadata_and_degree_nine_including_sco
     use miden_stark::{
         air::{
             AirBuilder,
-            symbolic::{AirLayout, SymbolicAirBuilder},
+            symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpr},
         },
         lookup::debug::{ValidateLayout, ValidateLookupAir},
     };
@@ -897,9 +897,12 @@ fn library_combined_captures_exact_lookup_metadata_and_degree_nine_including_sco
     let mut lookup = ConstraintLookupBuilder::new(&mut builder, &RelationLookup);
     RelationLookup.eval(&mut lookup);
     lookup.finish();
-    assert_eq!(builder.base_constraints().iter().map(|c| c.degree_multiple()).max(), Some(9));
     assert_eq!(
-        builder.extension_constraints().iter().map(|c| c.degree_multiple()).max(),
+        builder.base_constraints().iter().map(SymbolicExpr::degree_multiple).max(),
+        Some(9)
+    );
+    assert_eq!(
+        builder.extension_constraints().iter().map(SymbolicExpr::degree_multiple).max(),
         Some(9)
     );
     assert_eq!(SHAPE, [4, 4, 3, 2]);

@@ -79,8 +79,8 @@ where
         builder.assert_one(bitwise.clone());
     }
 
-    let q_controller = after_library * controller.clone();
-    let q_aead = after_controller * aead.clone();
+    let q_controller = after_library * controller;
+    let q_aead = after_controller * aead;
     let q_memory = remaining.clone() * memory.not();
     let q_ace = after_memory.clone() * ace.not();
     let q_bitwise = after_ace.clone() * bitwise.not();
@@ -121,7 +121,7 @@ where
         library,
         controller: ChipletFlags {
             is_active: q_controller.clone(),
-            is_transition: transition.clone() * q_controller * controller_next.clone(),
+            is_transition: transition.clone() * q_controller * controller_next,
             is_last: controller_last.clone(),
             next_is_first: library_exit,
         },

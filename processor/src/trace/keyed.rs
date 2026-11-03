@@ -554,7 +554,8 @@ impl EnvironmentReplay {
                 }
                 context.replay.keyed.validated = true;
             }
-            debug_assert!(uses.next().is_none());
+            let extra_use = uses.next();
+            debug_assert!(extra_use.is_none());
         }
         self.validated = true;
         Ok(session)

@@ -1737,7 +1737,7 @@ fn external_exec_propagates_inline_context_into_the_loaded_package() {
     let (library, library_naming) =
         named_library("dep", source_manager.clone(), library_module, []);
     let assembler = Assembler::new(source_manager.clone())
-        .with_package(library.clone(), Linkage::Dynamic, library_naming.clone())
+        .with_package(library.clone(), Linkage::Dynamic, library_naming)
         .unwrap();
     let mut program_parser = Module::parser(Some(ModuleKind::Executable));
     let mut program_module = program_parser
@@ -1894,7 +1894,7 @@ fn named_library(
     manager: Arc<DefaultSourceManager>,
     root: Box<Module>,
     support: impl IntoIterator<Item = Box<Module>>,
-) -> (Arc<Package>, miden_mast_package::PackageNaming) {
+) -> (Arc<Package>, PackageNaming) {
     let support = support.into_iter().collect::<Vec<_>>();
     let mut names = miden_assembly::testing::FixtureNamespace::assembly_tests();
     for module in core::iter::once(root.as_ref()).chain(support.iter().map(Box::as_ref)) {
@@ -1925,7 +1925,7 @@ fn fixture_binding(path: &[&str]) -> miden_mast_package::CallableBinding {
 }
 
 /// Explicit fixture names and selected implementations remain separate inputs.
-fn synthetic_library_naming(declarations: &[(&[&str], Word)]) -> miden_mast_package::PackageNaming {
+fn synthetic_library_naming(declarations: &[(&[&str], Word)]) -> PackageNaming {
     let bindings = declarations.iter().map(|(path, _)| fixture_binding(path)).collect::<Vec<_>>();
     let visible = bindings.iter().map(|binding| (binding.path().clone(), binding.key()));
     let selected = bindings
@@ -1935,7 +1935,7 @@ fn synthetic_library_naming(declarations: &[(&[&str], Word)]) -> miden_mast_pack
     let callables =
         miden_mast_package::PackageCallables::new(bindings.iter().cloned(), visible, selected)
             .unwrap();
-    miden_mast_package::PackageNaming::new(package_fixture_home(), callables, None).unwrap()
+    PackageNaming::new(package_fixture_home(), callables, None).unwrap()
 }
 
 /// ENTRY uses a fixed child-home name; runtime targets are separately declared by each fixture.
@@ -2136,8 +2136,8 @@ fn external_then_fail_program_for_digest(
 
 struct SameDigestEntrypointFixture {
     package: Arc<Package>,
-    naming: miden_mast_package::PackageNaming,
-    environment: crate::ExecutionEnvironment,
+    naming: PackageNaming,
+    environment: ExecutionEnvironment,
     source: Arc<dyn crate::EnvironmentWitnessSource>,
     program: Program,
     debug_info: PackageDebugInfo,

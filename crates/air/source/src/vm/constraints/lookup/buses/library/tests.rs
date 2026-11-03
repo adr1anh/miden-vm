@@ -359,7 +359,7 @@ fn library_open_seed_uses_explicit_root_and_canonical_initial_namespace() {
 #[test]
 fn library_actual_emitter_metadata_and_lookup_constraints_have_degree_at_most_nine() {
     use miden_stark::{
-        air::symbolic::{AirLayout, SymbolicAirBuilder},
+        air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpr},
         lookup::{
             ConstraintLookupBuilder,
             debug::{ValidateLayout, ValidateLookupAir},
@@ -393,7 +393,7 @@ fn library_actual_emitter_metadata_and_lookup_constraints_have_degree_at_most_ni
     let degrees: Vec<_> = symbolic
         .extension_constraints()
         .iter()
-        .map(|constraint| constraint.degree_multiple())
+        .map(SymbolicExpr::degree_multiple)
         .collect();
     assert_eq!(degrees.iter().copied().max(), Some(9));
     assert!(degrees.iter().all(|degree| *degree <= 9), "{degrees:?}");
