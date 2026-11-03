@@ -2623,3 +2623,47 @@ owned naming. Embedded kernel remains code/handler supply, not authority. Verify
 independently authorized expected statement; PR12 owns actual claim/proof activation. Existing
 CLI methods still call superseded APIs and old program-hash/kernel authority, so remain unqualified.
 Scratch source index records exact sites. PR09/M1/overall goal and all remaining acceptance stay open.
+
+### PR09 bounded CLI execution evidence checkpoint, 3 November 2026
+
+`625580803` adds EnvNode v1 framing preflight without List allocation, shared by exact decoding, so callers
+can check List child/storage limits before allocation. Preflight does not validate canonical Words
+or authenticate membership; exact decoding and native verification remain required. The regular-file
+opener extracts the existing metadata/nonblocking/recheck path; callers still bound reads/growth.
+
+`694e2b5ce` adds `miden-vm/src/internal/execution_inputs.rs`. Its caller supplies ExecutionEnvironment,
+trace policy and explicit finite file/source limits. Strict versioned JSON echoes K_entry/R_E and
+supplies existing EnvNode v1 bytes plus exact child selections; it carries no authority, private
+advice, code or policy defaults. Admission verifies every supplied path under caller opening limits,
+requires entry evidence and rejects duplicate keys. The source retains immutable encoded evidence,
+checks tighter request limits before decoding, and returns candidates for independent consumer
+verification. Each factory-produced host source has its own atomic request quota; Arc clones share
+that quota, including failed/missing/wrong-root requests. Ledger/session/trace policies are preserved,
+including zero limits, rather than silently expanded during evidence admission.
+
+Input size, schema depth/unescaped ASCII, streaming borrowed parsing, aggregate paths/encoded bytes,
+retained payload and preparation budgets are checked before associated allocation requests and
+returned capacities before publication. Accounting scope/exclusions are documented on
+ExecutionInputLimits; it does not claim an allocator/RSS bound. File loading uses the shared
+nonblocking regular-file opener, bounded chunks and an overflow probe. All hashes, canonical Words
+and membership checks reuse existing core/native implementations; no parallel commitment scheme.
+
+**Fresh guarded validation:** the focused prover integration target includes the actual production
+module by path, avoiding the unrelated CoreLibrary producer build. Its 21 tests pass: real named
+program execution, complete List/Merkle/Env paths and slots, independent descriptors/policies,
+canonical/malformed encodings, strict/escaped/deep JSON, file/allocation bounds, each native opening
+axis, missing/duplicate/foreign evidence and concurrent quotas. Core codec 8 and file-helper 6 tests
+pass, including isolated replacement-FIFO safety. Strict Clippy passes for both support libraries
+and the focused integration target; support-library no_std and scoped formatting/whitespace pass.
+No new ignores, altered security oracles, broad workspace build or whole-VM/proof qualification.
+Both source commits have verified signatures. Bounded source/test/review agents ran no builds;
+root centralized these AC/heavy-guarded checks. No pushes or GitHub PRs.
+
+**Remaining:** this is admission, not runnable CLI closure. Next shared CLI arguments must supply
+the expected descriptor/policies independently of evidence. CoreLibrary's producer still needs
+explicit namespace/declaration inputs. Locally compiled source must retain AssemblyProduct naming;
+raw package conversion requires separately admitted naming through a caller-selected profile/context,
+not a permissive production fallback. `cli/{run,prove,data,utils}.rs` still use superseded APIs;
+verify retains legacy statement handling until PR12. PR10 artifact expectations, PR12 claim transport,
+core generation, whole-VM/CLI and final security/qualification gates remain open. Scratch audit
+findings retain exact source sites. Overall scope, PR09 and M1 are unchanged.
