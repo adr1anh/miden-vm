@@ -1,18 +1,30 @@
-# PR09: keyed assembly and Package9 cutover
+# PR10: explicit project naming, instances and code supply
 
-Assembly now resolves callable identity before supplying bodies: retained exec/call/syscall and procref use K, declaration-only Latest calls need no implementation D, runtime recursion retains independent roots, and explicit eligible inline alone composes bodies. Package9 and MAST0.0.6 carry required canonical naming and callable roots through safe/trusted readers, imports, commitments, cache matching and debug stripping. Fixed-N0 kernel construction places public exports at root and private helpers beneath Env, preserving defining keys across aliases. Shared runtime, benchmark and CLI fixtures now select naming and bounded authenticated environments explicitly.
+Projects can import the same source package and semantic version under distinct explicit bindings
+and source routes. Dependency aliases, actual package provenance, supplied opaque library IDs,
+canonical callable homes and available code remain separate. Catalog references resolve before
+assembly; target naming and independent artifact callable expectations are explicit. Kernel naming
+shares the fixed-root public-export/private-helper convention.
 
-The execution descriptor fixes `(K_entry, R_E)`; actual syscalls authenticate their immediate parent against fixed nonzero N0, with no separate export list or configurable kernel namespace. Processor/replay/witness and Library AIR interfaces carry this correction while downstream statement/proof qualification remains open. Generic Package9 has no own-library identity/interface fields; selected external profiles retain their required admission checks.
+Component-aware source mounts preserve defining/private/reexport keys and inner runtime calls.
+Graph-local instances, full exact runtime records and local build candidates let distinct bound
+artifacts coexist without overwriting canonical registry publications. Cache checks retain exact
+compiler/source provenance, selected homes, profile admission and public expectations. Ambiguous
+binding contexts reject deterministically with alias guidance. Returned dependency code travels
+with exact naming and grants no environment authority.
 
-**Stack base:** PR08 `82935d6733278d871ab1f3f5a7e94f88b6e468d9`. Semantic dependencies: PR02/04/05; proof checks require PR12.
+**Stack base:** PR09 `0ec317994771993823dd504a1eb5f4c614ad7de3`. Semantic dependencies: PR04/09.
 
-Recorded checks, run centrally after AC/heavy guards with 16MiB stacks:
+Central AC/heavy-guarded checks with 16MiB stacks:
 
-- `cargo test --locked -p miden-mast-package --lib`: 289 passed, one existing ignore.
-- `make test-assembly EXTRA=--locked NEXTEST_PROFILE=ci`: 544 passed, six existing skips.
-- `cargo test --locked -p miden-core-lib --test core-lib security_estimator_key_matches_procref`: two passed.
-- `cargo test --locked -p miden-vm --features internal --test miden-cli selected_fixture_files_admit_and_execute_without_cli_output`: one passed.
-- `cargo check --locked -p miden-vm --features internal --bench build_trace --bench program_execution_fast --bench program_execution_for_trace`: passed.
-- `cargo clippy --locked -p miden-vm --features internal --test miden-cli -- --cfg 'feature="executable"' -D warnings`: passed; this includes precompile test fixtures, not production CLI qualification.
+- Project: 90 passed. Assembly: 596 unit plus two packaging tests passed; six existing skips.
+- Package and both registries: 379 passed; one existing skip.
+- Three native processor regressions pass: distinct pinned K/equal D, bundled/external execution,
+  private/reexport/retained Latest calls and conflicting owner selections.
+- Mast-package, both registries, project and assembly pass all-target strict Clippy; the native target passes focused strict
+  Clippy. Four shared crates pass no-default-features checks. Independent reviews/signatures pass.
 
-**Remaining gates:** PR09 is implemented-awaiting-validation. PR10 still owns artifact callable expectations, automatic target naming and distinct dependency instances. Native K assertions reach preserved constraint checks failing expected36/actual32; PR12 owns that public-statement cutover and the production CLI's legacy descriptor call at `miden-vm/src/cli/verify.rs:228`. PR14 owns recursive claim/request identities and compatibility-root regeneration/qualification. Full CLI, proof/native/generated/MASM/recursive, malicious-input/security-counterfactual, guest/project, fuzz, performance and final acceptance gates remain open. No assertion weakening, new skips, proof-constant refresh or release-readiness claim.
+PR10 remains implemented-awaiting-validation. Public-statement/proof cutover at PR12, recursive
+identity/compatibility work at PR14, selected external publication profiles and all inherited
+security, guest/project, fuzz, performance and final qualification gates remain open. No GitHub
+PRs or pushes; no proof-constant refresh or release-readiness claim.
