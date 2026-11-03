@@ -261,6 +261,11 @@ impl Assembler {
         self
     }
 
+    /// Returns the explicitly configured home for locally defined callables, if supplied.
+    pub fn namespace_plan(&self) -> Option<&NamespacePlan> {
+        self.namespace_plan.as_ref()
+    }
+
     /// Supplies the complete typed namespace authorized for actual syscalls.
     pub fn with_kernel_namespace_plan(mut self, plan: NamespacePlan) -> Self {
         self.kernel_namespace_plan = Some(plan);
