@@ -4,7 +4,7 @@
 //! Combined tests of the dormant Library MAIN and existing-group lookup entry points.
 //!
 //! These fixtures use the actual 24-cell shared rows and fixed nine-column periodic order.
-//! They do not register an AIR or activate Library in production. Packed selectors, public8,
+//! They do not register an AIR or activate Library in production. Packed selectors, public4,
 //! Controller initialization, and statement-boundary propagation remain integration obligations.
 
 use alloc::{vec, vec::Vec};
@@ -107,7 +107,6 @@ struct Demand {
 struct Fixture {
     rows: Vec<SharedRow>,
     public_root: [Felt; 4],
-    kernel: [Felt; 4],
     demands: Vec<Demand>,
 }
 
@@ -222,7 +221,6 @@ fn mast_fixture() -> Fixture {
     cols_mut(&mut pair[1]).b = Felt::from_u8(3);
     Fixture {
         public_root: cols(&pair[0]).z,
-        kernel: namespace,
         demands: vec![demand(&pair, false, 2), demand(&pair, true, 3)],
         rows: finish(pair.into()),
     }
@@ -238,27 +236,33 @@ fn merkle_fixture() -> Fixture {
     let public_root = cols(&root[0]).z;
     let demands = vec![demand(&left, false, 1), demand(&right, true, 1)];
     let rows = root.into_iter().chain(left).chain(right).collect();
-    Fixture {
-        rows: finish(rows),
-        public_root,
-        kernel: namespace,
-        demands,
-    }
+    Fixture { rows: finish(rows), public_root, demands }
 }
 
 /// Build Env -> complete List -> selected Mast openings. Unselected commitments remain hashed.
 fn list_fixture(num_children: usize, open_all: bool) -> Fixture {
+    list_fixture_at_home(num_children, open_all, false)
+}
+
+fn list_fixture_at_home(num_children: usize, open_all: bool, at_root: bool) -> Fixture {
     let initial = Namespace::initial().into_word().into_elements();
     let label = word(10);
-    let namespace =
-        compress(fixed_input(domain::domain_tag(domain::ENV_NAMESPACE)), initial, label);
-    let mut children: Vec<_> = (0..num_children).map(|i| mast(namespace, 2, i)).collect();
+    let namespace = if at_root {
+        initial
+    } else {
+        compress(fixed_input(domain::domain_tag(domain::ENV_NAMESPACE)), initial, label)
+    };
+    let depth = usize::from(!at_root);
+    let mut children: Vec<_> = (0..num_children).map(|i| mast(namespace, depth + 1, i)).collect();
     let mut demands = Vec::new();
     for (index, pair) in children.iter_mut().enumerate() {
         if open_all || index == 0 {
             cols_mut(&mut pair[1]).a = Felt::from_u8(2);
-            cols_mut(&mut pair[1]).b = Felt::from_u8(3);
-            demands.extend([demand(pair, false, 2), demand(pair, true, 3)]);
+            demands.push(demand(pair, false, 2));
+            if at_root {
+                cols_mut(&mut pair[1]).b = Felt::from_u8(3);
+                demands.push(demand(pair, true, 3));
+            }
         }
     }
     let mut cv = EidosFrame::for_domain(domain::ENV_LIST, [4 * num_children as u32, 0, 0])
@@ -277,7 +281,7 @@ fn list_fixture(num_children: usize, open_all: bool) -> Fixture {
             c.y = y;
             c.z = if phase == 0 { output } else { cv };
             c.w = namespace;
-            c.d = Felt::ONE;
+            c.d = Felt::from_usize(depth);
             if phase == 1 && num_children != 0 {
                 let low = open_all || block == 0;
                 let high = open_all && 2 * block + 1 < num_children;
@@ -288,7 +292,8 @@ fn list_fixture(num_children: usize, open_all: bool) -> Fixture {
         cv = output;
     }
     let env = ordinary_pair(ENV, label, cv, initial, 0);
-    let mut rows = env.to_vec();
+    let public_root = if at_root { cv } else { cols(&env[0]).z };
+    let mut rows = if at_root { Vec::new() } else { env.to_vec() };
     for (index, mut pair) in pairs.into_iter().rev().enumerate() {
         for (phase, row) in pair.iter_mut().enumerate() {
             let c = cols_mut(row);
@@ -315,12 +320,25 @@ fn list_fixture(num_children: usize, open_all: bool) -> Fixture {
             rows.extend(pair);
         }
     }
-    Fixture {
-        rows: finish(rows),
-        public_root: cols(&env[0]).z,
-        kernel: namespace,
-        demands,
+    Fixture { rows: finish(rows), public_root, demands }
+}
+
+/// Add a selected Merkle grouping level without changing inherited namespaces or Resolve keys.
+fn group_root_in_merkle(mut fixture: Fixture) -> Fixture {
+    let namespace = Namespace::initial().into_word().into_elements();
+    let mut root = ordinary_pair(MERKLE, fixture.public_root, word(900), namespace, 0);
+    cols_mut(&mut root[1]).b = Felt::ONE;
+    let mut rows = root.to_vec();
+    for mut child in fixture.rows.into_iter().take_while(|row| row[0] == Felt::ONE) {
+        if cols(&child).k == PAD {
+            continue;
+        }
+        cols_mut(&mut child).d += Felt::ONE;
+        rows.push(child);
     }
+    fixture.public_root = cols(&root[0]).z;
+    fixture.rows = finish(rows);
+    fixture
 }
 
 fn periodic_columns() -> Vec<Vec<Felt>> {
@@ -464,13 +482,7 @@ fn main_accepts(fixture: &Fixture) -> bool {
             phase: Felt::from_usize(index % 2),
             exit_aligned: Felt::from_bool(index % 8 == 7),
         };
-        enforce_library_constraints(
-            &mut builder,
-            cols(local),
-            cols(next),
-            &context,
-            &fixture.kernel,
-        );
+        enforce_library_constraints(&mut builder, cols(local), cols(next), &context);
         builder.evaluations.iter().all(|value| *value == QuadFelt::ZERO)
     })
 }
@@ -619,9 +631,51 @@ fn rehash_env_header(fixture: &mut Fixture) {
 fn library_combined_accepts_rooted_env_mast_merkle_and_complete_lists() {
     assert_accept(&mast_fixture());
     assert_accept(&merkle_fixture());
+    assert_accept(&group_root_in_merkle(list_fixture_at_home(3, true, true)));
+    assert_accept(&group_root_in_merkle(list_fixture_at_home(3, false, true)));
     for count in 0..8 {
         assert_accept(&list_fixture(count, true));
         assert_accept(&list_fixture(count, false));
+        assert_accept(&list_fixture_at_home(count, true, true));
+        assert_accept(&list_fixture_at_home(count, false, true));
+    }
+}
+
+#[test]
+fn library_combined_rejects_syscall_under_env_but_keeps_the_same_ordinary_key() {
+    let ordinary = list_fixture(3, false);
+    assert_accept(&ordinary);
+    let mut syscall = ordinary.clone();
+    let mast_a = 2 + 2 * 3_usize.div_ceil(2);
+    let pair = [syscall.rows[mast_a], syscall.rows[mast_a + 1]];
+    cols_mut(&mut syscall.rows[mast_a + 1]).b = Felt::from_u8(3);
+    syscall.demands.push(demand(&pair, true, 3));
+    assert!(!main_accepts(&syscall));
+    assert!(lookup_accepts(&syscall, true)); // Genuine Env/List openings authenticate the child N.
+    assert_eq!(cols(&ordinary.rows[mast_a + 1]).z, cols(&syscall.rows[mast_a + 1]).z);
+    assert_eq!(ordinary.demands[0].key, syscall.demands[0].key);
+}
+
+#[test]
+fn library_combined_rejects_every_forged_root_namespace_coordinate_for_syscall() {
+    let fixture = mast_fixture();
+    let initial = Namespace::initial().into_word().into_elements();
+    assert_ne!(initial, [Felt::ZERO; 4]);
+    for coordinate in 0..4 {
+        let mut forged = fixture.clone();
+        cols_mut(&mut forged.rows[0]).w[coordinate] += Felt::ONE;
+        cols_mut(&mut forged.rows[1]).x[coordinate] += Felt::ONE;
+        let b = cols_mut(&mut forged.rows[1]);
+        assert_ne!(b.b, Felt::ZERO);
+        b.z = compress(fixed_input(domain::domain_tag(domain::ENV_PROCEDURE)), b.x, b.y);
+        // Update both consumers to the genuine recomputed key. The unchanged root seed still
+        // rejects the false namespace, and the supplier-local fixed-N0 equation also rejects it.
+        let key = b.z;
+        for demand in &mut forged.demands {
+            demand.key = key;
+        }
+        assert!(!main_accepts(&forged));
+        assert!(!lookup_accepts(&forged, true));
     }
 }
 
@@ -701,12 +755,6 @@ fn library_combined_binds_each_commitment_namespace_depth_key_implementation_and
     cols_mut(&mut forged.rows[1]).a = Felt::from_u8(3);
     cols_mut(&mut forged.rows[1]).b = Felt::from_u8(2);
     assert_lookup_reject(&forged); // Identical K/D cannot exchange normal and syscall demand.
-    for coordinate in 0..4 {
-        let mut forged = fixture.clone();
-        forged.kernel[coordinate] += Felt::ONE;
-        assert!(!main_accepts(&forged));
-        assert!(lookup_accepts(&forged, true)); // Each public namespace coordinate binds locally.
-    }
 }
 
 #[test]
@@ -729,7 +777,7 @@ fn library_combined_rejects_incomplete_midchain_and_merged_lists_after_rehashing
     assert!(!lookup_accepts(&midchain, true));
 
     // A complete shorter chain has a valid shorter frame and recomputed List and Env headers.
-    // Its sole selected leaf and both fixed Resolve consumers are identical to the original.
+    // Its sole selected leaf and fixed ordinary Resolve consumer are identical to the original.
     for count in [1, 2, 3, 4] {
         let mut shorter = list_fixture(count, false);
         assert_accept(&shorter);
@@ -766,39 +814,35 @@ fn library_combined_rejects_odd_padding_with_all_hashes_recomputed() {
 #[test]
 fn library_combined_rejects_weighted_syscall_namespace_cancellation_locally() {
     let initial = Namespace::initial().into_word().into_elements();
-    let labels = [word(700), word(800)];
-    let namespaces = labels.map(|label| {
-        compress(fixed_input(domain::domain_tag(domain::ENV_NAMESPACE)), initial, label)
-    });
-    let mut leaves = [mast(namespaces[0], 2, 0), mast(namespaces[1], 2, 1)];
-    for pair in &mut leaves {
-        cols_mut(&mut pair[1]).b = Felt::ONE;
+    let label = word(700);
+    let namespace =
+        compress(fixed_input(domain::domain_tag(domain::ENV_NAMESPACE)), initial, label);
+    assert_ne!(namespace, initial);
+    let mut leaves = [mast(namespace, 2, 0), mast(namespace, 2, 1)];
+    for (pair, frequency) in leaves.iter_mut().zip([Felt::ONE, -Felt::ONE]) {
+        cols_mut(&mut pair[1]).b = frequency;
     }
-    let envs = core::array::from_fn::<_, 2, _>(|i| {
-        ordinary_pair(ENV, labels[i], cols(&leaves[i][0]).z, initial, 1)
-    });
-    let root = ordinary_pair(MERKLE, cols(&envs[0][0]).z, cols(&envs[1][0]).z, initial, 0);
-    let kernel = core::array::from_fn(|i| {
-        (namespaces[0][i] + namespaces[1][i]) * Felt::from_u8(2).inverse()
-    });
-    assert_ne!(namespaces[0], kernel);
-    assert_ne!(namespaces[1], kernel);
+    let merkle = ordinary_pair(MERKLE, cols(&leaves[0][0]).z, cols(&leaves[1][0]).z, namespace, 1);
+    let root = ordinary_pair(ENV, label, cols(&merkle[0]).z, initial, 0);
     let fixture = Fixture {
         public_root: cols(&root[0]).z,
-        kernel,
-        demands: leaves.iter().map(|pair| demand(pair, true, 1)).collect(),
-        rows: finish(
-            root.into_iter()
-                .chain(envs.into_iter().flatten())
-                .chain(leaves.into_iter().flatten())
-                .collect(),
-        ),
+        demands: leaves
+            .iter()
+            .map(|pair| Demand {
+                multiplicity: cols(&pair[1]).b,
+                syscall: Felt::ONE,
+                key: cols(&pair[1]).z,
+                implementation: cols(&pair[1]).w,
+            })
+            .collect(),
+        rows: finish(root.into_iter().chain(merkle).chain(leaves.into_iter().flatten()).collect()),
     };
-    // The aggregate equation is zero in all four coordinates, despite both suppliers being bad.
-    for (coordinate, authorized) in kernel.into_iter().enumerate() {
+    // Nonzero field frequencies can cancel in every aggregate coordinate. Each supplier must
+    // still satisfy the fixed-N0 equations independently, even with genuine rooted openings.
+    for (coordinate, authorized) in initial.into_iter().enumerate() {
         assert_eq!(
-            cols(&fixture.rows[7]).b * (cols(&fixture.rows[7]).x[coordinate] - authorized)
-                + cols(&fixture.rows[9]).b * (cols(&fixture.rows[9]).x[coordinate] - authorized),
+            cols(&fixture.rows[5]).b * (cols(&fixture.rows[5]).x[coordinate] - authorized)
+                + cols(&fixture.rows[7]).b * (cols(&fixture.rows[7]).x[coordinate] - authorized),
             Felt::ZERO,
         );
     }
@@ -849,8 +893,7 @@ fn library_combined_captures_exact_lookup_metadata_and_degree_nine_including_sco
         phase: builder.periodic_values()[8].into(),
         exit_aligned: builder.periodic_values()[7].into(),
     };
-    let kernel = core::array::from_fn(|i| builder.public_values()[i].into());
-    enforce_library_constraints(&mut builder, local.library(), next.library(), &context, &kernel);
+    enforce_library_constraints(&mut builder, local.library(), next.library(), &context);
     let mut lookup = ConstraintLookupBuilder::new(&mut builder, &RelationLookup);
     RelationLookup.eval(&mut lookup);
     lookup.finish();

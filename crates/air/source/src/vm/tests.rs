@@ -43,7 +43,7 @@ fn chiplets_packed_relation_shape_and_degree_match_design() {
     assert_eq!(air.width(), 24);
     assert_eq!(LiftedAir::<Felt, QuadFelt>::aux_width(&air), 4);
     assert_eq!(AIRS.len(), 4);
-    assert_eq!(air.num_public_values(), 8);
+    assert_eq!(air.num_public_values(), 4);
     assert_eq!(air.column_shape(), &[4, 4, 3, 2]);
     let periodic = air.periodic_columns();
     assert_eq!(periodic.len(), 9);
@@ -94,12 +94,12 @@ fn packed_statement_rejects_missing_and_malformed_air_public_inputs() {
             statement::eval_external(&challenges, &public, &aux, &sums, &[6, 6, 6, 16]).is_err()
         );
     }
-    for count in [0, 4, 7, 9] {
+    for count in [0, 1, 3, 5, 8, 9] {
         let mut public = valid.clone();
         public[1].resize(count, Felt::ZERO);
         let error = statement::eval_external(&challenges, &public, &aux, &sums, &[6, 6, 6, 16])
             .unwrap_err();
-        assert!(error.to_string().contains("Chiplets expects 8 public values"));
+        assert!(error.to_string().contains("Chiplets expects 4 public values"));
     }
 }
 
@@ -111,7 +111,7 @@ fn chiplets_open_boundary_uses_public_root_without_legacy_aux_authority() {
         MIDEN_MAX_MESSAGE_WIDTH,
         BusId::COUNT,
     );
-    let public: Vec<_> = (1..=8).map(Felt::from_u32).collect();
+    let public: Vec<_> = (1..=4).map(Felt::from_u32).collect();
     let expected = MidenAir::CHIPLETS.boundary_correction(&challenges, &public, &[]).unwrap();
     let unrelated_aux = vec![Felt::from_u32(91); 12];
     assert_eq!(
@@ -326,7 +326,7 @@ fn observe_matches_execution_claim_commitment() {
     // air_inputs = I ‖ O; aux_inputs = P ‖ D ‖ kernel digest felts.
     let mut air_inputs = [Felt::ZERO; NUM_PUBLIC_VALUES];
     air_inputs[0..MIN_STACK_DEPTH].copy_from_slice(&stack_inputs[..]);
-    air_inputs[MIN_STACK_DEPTH..].copy_from_slice(&stack_outputs[..]);
+    air_inputs[MIN_STACK_DEPTH..2 * MIN_STACK_DEPTH].copy_from_slice(&stack_outputs[..]);
     let air_inputs = [
         air_inputs.to_vec(),
         vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],

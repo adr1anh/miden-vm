@@ -2,7 +2,7 @@
 //!
 //! This module enforces:
 //! - chiplet selector constraints (including hasher internal selectors)
-//! - Library authentication routing and public kernel-namespace constraints
+//! - Library authentication routing and fixed initial-namespace syscall constraints
 //! - controller sub-chiplet main-trace constraints
 //! - AEAD stream and normal bitwise main-trace constraints
 //! - memory chiplet main-trace constraints
@@ -42,7 +42,6 @@ pub fn enforce_main<AB>(
     local: &ChipletCols<AB::Var>,
     next: &ChipletCols<AB::Var>,
     selectors: &ChipletSelectors<AB::Expr>,
-    kernel: &[AB::Expr; 4],
 ) where
     AB: MidenAirBuilder,
 {
@@ -67,7 +66,6 @@ pub fn enforce_main<AB>(
         local.library(),
         next.library(),
         &library_context,
-        kernel,
     );
 
     // Hasher controller.
