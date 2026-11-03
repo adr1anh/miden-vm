@@ -110,6 +110,8 @@ pub struct ProjectDependencyEdge {
     pub linkage: Linkage,
     /// Explicit requested home; absent only for low-level/raw or preassembled inputs.
     pub binding: Option<crate::DependencyBinding>,
+    /// Caller-supplied exact visible mapping, independent from default home and artifact supply.
+    pub expected_callables: Option<crate::ExpectedVisibleCallables>,
 }
 
 /// Represents provenance of a package in the [ProjectDependencyGraph], i.e. how it was obtained.
@@ -413,6 +415,7 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
                 dependency: dependency_name.clone(),
                 linkage: dependency.linkage(),
                 binding: dependency.binding().cloned(),
+                expected_callables: dependency.expected_callables().cloned(),
             });
             solver_dependencies.insert(dependency_name, resolved.solver_requirement());
 
@@ -812,6 +815,7 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
                 dependency: dependency.name.clone(),
                 linkage: Linkage::Dynamic,
                 binding: None,
+                expected_callables: None,
             });
         }
 
@@ -1212,6 +1216,26 @@ mod tests {
         let dependency_dir = tempdir.path().join("dep");
         write_package(&dependency_dir, "dep", "1.0.0", "export.foo\nend\n", []);
 
+        let expected = crate::ExpectedVisibleCallables::new([(
+            miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
+                "dep".into(),
+                "foo".into(),
+            ])
+            .unwrap(),
+            miden_mast_package::CallableBinding::new(
+                miden_mast_package::NamespacePlan::new(vec![
+                    miden_core::program::CanonicalLabel::text("defining-home").unwrap(),
+                ]),
+                miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
+                    "original".into(),
+                    "foo".into(),
+                ])
+                .unwrap(),
+            )
+            .unwrap(),
+        )])
+        .unwrap();
+
         let root_dir = tempdir.path().join("root");
         let root_manifest = write_package(
             &root_dir,
@@ -1225,7 +1249,8 @@ mod tests {
                     version: None,
                 },
                 Linkage::Dynamic,
-            )],
+            )
+            .with_expected_callables(expected.clone())],
         );
 
         let registry = TestRegistry::default();
@@ -1236,6 +1261,10 @@ mod tests {
         assert!(graph.get(&PackageId::from("root")).is_some());
         assert!(graph.get(&PackageId::from("dep")).is_some());
         assert_eq!(graph.get(&PackageId::from("root")).unwrap().dependencies.len(), 1);
+        assert_eq!(
+            graph.get(&PackageId::from("root")).unwrap().dependencies[0].expected_callables,
+            Some(expected)
+        );
         assert_eq!(
             graph.get(&PackageId::from("root")).unwrap().dependencies[0].binding,
             Some(crate::DependencyBinding::Custom(miden_mast_package::NamespacePlan::new(vec![
@@ -1744,6 +1773,7 @@ mod tests {
                 dependency: PackageId::from("runtime"),
                 linkage: Linkage::Dynamic,
                 binding: None,
+                expected_callables: None,
             }]
         );
         assert_matches!(
@@ -1790,6 +1820,7 @@ mod tests {
                 dependency: PackageId::from("kernelpkg"),
                 linkage: Linkage::Dynamic,
                 binding: None,
+                expected_callables: None,
             }]
         );
         assert_eq!(

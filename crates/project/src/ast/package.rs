@@ -368,10 +368,18 @@ impl ProjectFile {
                                 .ok_or_else(|| Report::msg(format!(
                                     "dependency '{}' requires an explicit Latest/Pinned binding or custom home", dependency.name)))?
                                 .resolve()?;
-                            dependencies.push(
-                                Dependency::new(dep.name.clone(), version, linkage)
-                                    .with_binding(binding),
-                            );
+                            let expected = dependency
+                                .expected_callables
+                                .as_deref()
+                                .or(dep.expected_callables.as_deref())
+                                .map(|specs| ExpectedCallableSpec::resolve_all(specs))
+                                .transpose()?;
+                            let mut resolved = Dependency::new(dep.name.clone(), version, linkage)
+                                .with_binding(binding);
+                            if let Some(expected) = expected {
+                                resolved = resolved.with_expected_callables(expected);
+                            }
+                            dependencies.push(resolved);
                         },
                         None => {
                             return Err(ProjectFileError::InvalidPackageDependency {
@@ -393,12 +401,17 @@ impl ProjectFile {
                 }
             } else {
                 let linkage = dependency.linkage.as_deref().copied().unwrap_or_default();
-                dependencies.push(Dependency::new(
+                let mut resolved = Dependency::new(
                     dependency.name.clone(),
                     DependencyVersionScheme::try_from(dependency.as_ref())?,
                     linkage,
                 ).with_binding(dependency.binding.as_ref().ok_or_else(|| Report::msg(format!(
-                    "dependency '{}' requires an explicit Latest/Pinned binding or custom home", dependency.name)))?.resolve()?));
+                    "dependency '{}' requires an explicit Latest/Pinned binding or custom home", dependency.name)))?.resolve()?);
+                if let Some(specs) = dependency.expected_callables.as_deref() {
+                    resolved =
+                        resolved.with_expected_callables(ExpectedCallableSpec::resolve_all(specs)?);
+                }
+                dependencies.push(resolved);
             }
         }
 

@@ -415,6 +415,10 @@ impl Package {
                             dep.name()
                         )))?;
                         let binding = Some(Span::unknown(ast::DependencyBindingSpec::try_from(binding)?));
+                        let expected_callables = dep.expected_callables().map(|expected| {
+                            expected.mappings().iter().map(ast::ExpectedCallableSpec::try_from)
+                                .collect::<Result<Vec<_>, _>>().map(Span::unknown)
+                        }).transpose()?;
                         let name = Span::unknown(dep.name().clone());
                         let linkage = if matches!(dep.linkage(), Linkage::Dynamic) {
                             None
@@ -431,6 +435,7 @@ impl Package {
                                 branch: None,
                                 rev: None,
                                 binding: binding.clone(),
+                                expected_callables: expected_callables.clone(),
                                 linkage,
                             },
                             DependencyVersionScheme::WorkspacePath { path, version } => {
@@ -443,6 +448,7 @@ impl Package {
                                     branch: None,
                                     rev: None,
                                     binding: binding.clone(),
+                                    expected_callables: expected_callables.clone(),
                                     linkage,
                                 }
                             },
@@ -455,6 +461,7 @@ impl Package {
                                 branch: None,
                                 rev: None,
                                 binding: binding.clone(),
+                                expected_callables: expected_callables.clone(),
                                 linkage,
                             },
                             DependencyVersionScheme::Path { path, version } => {
@@ -467,6 +474,7 @@ impl Package {
                                     branch: None,
                                     rev: None,
                                     binding: binding.clone(),
+                                    expected_callables: expected_callables.clone(),
                                     linkage,
                                 }
                             },
@@ -490,6 +498,7 @@ impl Package {
                                     branch,
                                     rev,
                                     binding: binding.clone(),
+                                    expected_callables: expected_callables.clone(),
                                     linkage,
                                 }
                             },

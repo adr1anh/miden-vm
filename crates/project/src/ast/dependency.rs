@@ -44,6 +44,12 @@ pub struct DependencySpec {
     /// Explicit default-home selection; independent of source version and linkage.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub binding: Option<Span<super::DependencyBindingSpec>>,
+    /// Independently expected exact visible paths and complete defining callable bindings.
+    #[cfg_attr(
+        feature = "serde",
+        serde(rename = "expected-callables", default, skip_serializing_if = "Option::is_none")
+    )]
+    pub expected_callables: Option<Span<Vec<super::ExpectedCallableSpec>>>,
     /// If present, specifies the desired linkage for this dependency during assembly
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub linkage: Option<Span<Linkage>>,
@@ -86,6 +92,10 @@ impl SetSourceId for DependencySpec {
         self.name.set_source_id(source_id);
         if let Some(binding) = &mut self.binding {
             binding.set_source_id(source_id);
+        }
+        if let Some(expected) = &mut self.expected_callables {
+            // Records contain owned semantic values; only the enclosing list carries a span.
+            Span::set_source_id(expected, source_id);
         }
         if let Some(version_or_digest) = self.version_or_digest.as_mut() {
             version_or_digest.set_source_id(source_id);
@@ -146,6 +156,8 @@ mod serialization {
         linkage: Option<Span<crate::Linkage>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         binding: Option<Span<super::super::DependencyBindingSpec>>,
+        #[serde(rename = "expected-callables", default, skip_serializing_if = "Option::is_none")]
+        expected_callables: Option<Span<alloc::vec::Vec<super::super::ExpectedCallableSpec>>>,
     }
 
     impl From<DependencySpecTable> for DependencySpec {
@@ -160,6 +172,7 @@ mod serialization {
                 rev: table.rev,
                 linkage: table.linkage,
                 binding: table.binding,
+                expected_callables: table.expected_callables,
             }
         }
     }
@@ -183,6 +196,7 @@ mod serialization {
                             rev: None,
                             linkage: None,
                             binding: None,
+                            expected_callables: None,
                         },
                     )
                 })

@@ -39,7 +39,7 @@ pub use toml::Value;
 
 pub use self::{
     dependencies::*,
-    library_import::{LibraryImport, LibrarySelection},
+    library_import::{ExpectedVisibleCallables, LibraryImport, LibrarySelection},
     linkage::Linkage,
     package::Package,
     profile::Profile,

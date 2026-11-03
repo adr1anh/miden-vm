@@ -554,3 +554,110 @@ fn workspace_binding_inheritance_is_explicit_and_member_override_wins() {
         );
     }
 }
+
+#[test]
+fn expected_callables_roundtrip_independently_from_source_supply_and_default_home() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    let records = "[{visible-path = ['api::module', 'alias'], home = [{text = 'foreign-owner'}], canonical-path = ['defining', 'run']}, {visible-path = ['api', 'helper'], home = [{text = 'other-owner'}, {revision = 3}], canonical-path = ['helper']}]";
+    for scheme in [
+        "version = '=2.0.0'",
+        "path = '../dep', version = '=2.0.0'",
+        "git = 'https://example.invalid/dep', branch = 'main', version = '=2.0.0'",
+    ] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\ndep = {{{scheme}, linkage = 'static', binding = {{selection = 'custom', home = [{{text = 'source-default'}}]}}, expected-callables = {records}}}\n")).unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        let dependency = &package.dependencies()[0];
+        let expected = dependency.expected_callables().unwrap();
+        assert_eq!(expected.mappings().len(), 2);
+        let alias = miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
+            "api::module".into(),
+            "alias".into(),
+        ])
+        .unwrap();
+        let binding = expected.mappings().get(&alias).unwrap();
+        assert_eq!(binding.path().components(), &["defining", "run"]);
+        assert_eq!(
+            binding.namespace_plan().home(),
+            &[miden_core::program::CanonicalLabel::text("foreign-owner").unwrap()]
+        );
+        assert_ne!(binding.namespace_plan(), &dependency.binding().unwrap().namespace_plan());
+        fs::write(&manifest, package.to_toml().unwrap()).unwrap();
+        let restored = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert_eq!(restored.dependencies(), package.dependencies());
+    }
+}
+
+#[test]
+fn workspace_expected_callables_inherit_and_override_separately_from_default_home() {
+    let temp = TempDir::new().unwrap();
+    let app = temp.path().join("app");
+    fs::create_dir(&app).unwrap();
+    fs::write(temp.path().join("miden-project.toml"), "[workspace]\nmembers = ['app']\n[workspace.dependencies]\ndep = {version = '1.0', binding = {selection = 'custom', home = [{text = 'workspace-default'}]}, expected-callables = [{visible-path = ['api', 'alias'], home = [{text = 'workspace-defining'}], canonical-path = ['origin', 'run']}] }\n").unwrap();
+    let manifest = app.join("miden-project.toml");
+    for (extra, default_home, defining_home) in [
+        ("", "workspace-default", Some("workspace-defining")),
+        (
+            ", binding = {selection = 'custom', home = [{text = 'member-default'}]}",
+            "member-default",
+            Some("workspace-defining"),
+        ),
+        (
+            ", expected-callables = [{visible-path = ['api', 'alias'], home = [{text = 'member-defining'}], canonical-path = ['origin', 'run']}]",
+            "workspace-default",
+            Some("member-defining"),
+        ),
+        (", expected-callables = []", "workspace-default", None),
+    ] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\ndep = {{workspace = true{extra}}}\n")).unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        let dependency = &package.dependencies()[0];
+        assert_eq!(
+            dependency.binding().unwrap().namespace_plan().home(),
+            &[miden_core::program::CanonicalLabel::text(default_home).unwrap()]
+        );
+        let expected = dependency.expected_callables().unwrap();
+        if let Some(home) = defining_home {
+            assert_eq!(expected.mappings().len(), 1);
+            assert_eq!(
+                expected.mappings().values().next().unwrap().namespace_plan().home(),
+                &[miden_core::program::CanonicalLabel::text(home).unwrap()]
+            );
+        } else {
+            assert!(
+                expected.mappings().is_empty(),
+                "an explicit empty list overrides inherited expectations"
+            );
+        }
+        fs::write(&manifest, package.to_toml().unwrap()).unwrap();
+        let restored = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert_eq!(restored.dependencies()[0].expected_callables(), Some(expected));
+        assert_eq!(restored.dependencies()[0].binding(), dependency.binding());
+    }
+}
+
+#[test]
+fn project_expected_callables_reject_duplicate_paths_and_do_not_supply_a_default_home() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    let record = "{visible-path = ['api', 'alias'], home = [], canonical-path = ['origin', 'run']}";
+    for (extra, expected_error) in [
+        (
+            format!(
+                ", binding = {{selection = 'custom', home = []}}, expected-callables = [{record}, {record}]"
+            ),
+            "duplicate expected visible callable path",
+        ),
+        (
+            format!(", expected-callables = [{record}]"),
+            "requires an explicit Latest/Pinned binding or custom home",
+        ),
+    ] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\ndep = {{version = '1.0'{extra}}}\n")).unwrap();
+        let context = TestContext::default();
+        let error = Project::load(&manifest, &context.source_manager).unwrap_err();
+        assert!(error.to_string().contains(expected_error), "{error}");
+    }
+}

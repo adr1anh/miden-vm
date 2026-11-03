@@ -43,6 +43,8 @@ pub struct Dependency {
     linkage: Linkage,
     /// Missing only for incomplete low-level API inputs; manifest dependencies require a choice.
     binding: Option<DependencyBinding>,
+    /// Independently expected complete public mapping, separate from the default-home choice.
+    expected_callables: Option<crate::ExpectedVisibleCallables>,
 }
 
 impl Dependency {
@@ -52,7 +54,13 @@ impl Dependency {
         version: DependencyVersionScheme,
         linkage: Linkage,
     ) -> Self {
-        Self { name, version, linkage, binding: None }
+        Self {
+            name,
+            version,
+            linkage,
+            binding: None,
+            expected_callables: None,
+        }
     }
 
     /// Sets an explicit standard or custom runtime home without changing source resolution.
@@ -63,6 +71,16 @@ impl Dependency {
 
     pub fn binding(&self) -> Option<&DependencyBinding> {
         self.binding.as_ref()
+    }
+
+    /// Supplies the caller's exact expected visible mapping without changing naming or supply.
+    pub fn with_expected_callables(mut self, expected: crate::ExpectedVisibleCallables) -> Self {
+        self.expected_callables = Some(expected);
+        self
+    }
+
+    pub fn expected_callables(&self) -> Option<&crate::ExpectedVisibleCallables> {
+        self.expected_callables.as_ref()
     }
 
     /// Get the name of this dependency
