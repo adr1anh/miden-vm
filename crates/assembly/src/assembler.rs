@@ -522,6 +522,21 @@ impl Assembler {
         root: impl AsRef<std::path::Path>,
         namespace: Option<&Path>,
     ) -> Result<Box<Package>, Report> {
+        let emit_debug_info = self.emit_debug_info;
+        self.assemble_library_from_root_with_naming(root, namespace)?
+            .into_artifact(emit_debug_info)
+    }
+
+    /// Assembles a library from `root`, retaining the compiler's exact naming inventory.
+    ///
+    /// `namespace` controls source-module lookup. Canonical callable identities and homes come
+    /// from the explicitly configured [`NamespaceInputs`].
+    #[cfg(feature = "std")]
+    pub fn assemble_library_from_root_with_naming(
+        self,
+        root: impl AsRef<std::path::Path>,
+        namespace: Option<&Path>,
+    ) -> Result<AssemblyProduct, Report> {
         use miden_assembly_syntax::parser;
 
         let root = root.as_ref().to_path_buf();
@@ -537,9 +552,7 @@ impl Assembler {
         // Derive the package name from the namespace of the root module
         let name = root.path().to_relative().as_str().replace("::", "-");
 
-        let emit_debug_info = self.emit_debug_info;
-        self.assemble_library_modules(name.into(), root, support, TargetType::Library)?
-            .into_artifact(emit_debug_info)
+        self.assemble_library_modules(name.into(), root, support, TargetType::Library)
     }
 
     /// Assembles the provided module into a kernel package.
@@ -577,6 +590,21 @@ impl Assembler {
         name: impl Into<PackageId>,
         sys_module_path: impl AsRef<std::path::Path>,
     ) -> Result<Box<Package>, Report> {
+        let emit_debug_info = self.emit_debug_info;
+        self.assemble_kernel_from_root_with_naming(name, sys_module_path)?
+            .into_artifact(emit_debug_info)
+    }
+
+    /// Assembles a kernel from `sys_module_path`, retaining the compiler's exact naming inventory.
+    ///
+    /// Source modules use the `$kernel` namespace. `name` selects package metadata; canonical
+    /// syscall and helper bindings come from the explicitly configured [`NamespaceInputs`].
+    #[cfg(feature = "std")]
+    pub fn assemble_kernel_from_root_with_naming(
+        self,
+        name: impl Into<PackageId>,
+        sys_module_path: impl AsRef<std::path::Path>,
+    ) -> Result<AssemblyProduct, Report> {
         let sys_module_path = sys_module_path.as_ref();
         let namespace = Some(Path::KERNEL.into());
         let (root, support) = miden_assembly_syntax::parser::read_modules_from_root(
@@ -587,9 +615,7 @@ impl Assembler {
             self.warnings_as_errors,
         )?;
 
-        let emit_debug_info = self.emit_debug_info;
-        self.assemble_library_modules(name.into(), root, support, TargetType::Kernel)?
-            .into_artifact(emit_debug_info)
+        self.assemble_library_modules(name.into(), root, support, TargetType::Kernel)
     }
 
     /// Shared code used by both [`Self::assemble_library`] and [`Self::assemble_kernel`].
