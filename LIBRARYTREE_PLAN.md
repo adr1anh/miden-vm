@@ -171,6 +171,8 @@ Split identity resolution from body supply, runtime reachability/SCCs from acycl
 
 Generic package metadata covers the opaque typed library ID and naming/callable/code information needed by VM/toolchain consumers, independently of Protocol artifacts. This separation grants no Protocol admission: its profile must derive/verify D3's I and validate publisher/home, immutable interface association, release and closure inputs before acceptance. Missing required naming/code metadata still rejects. Preserve independent callable-root retention and the in-flight builder/frontend/graph work. Exact required naming must affect artifact commitments and deduplication/cache matching: equal D or source provenance with changed home/canonical binding cannot reuse old symbols or artifacts.
 
+D5 selects a standard assembler/project Latest/Pinned naming convention over these generic bindings, with an explicit custom-home/binding escape hatch. Preserve selected homes and callable identities without making the VM recognize path names. This approval does not settle either pending kernel-input or code-only-package applicability question, and does not claim that the convention or manifest routing is implemented.
+
 **Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old serialized callable formats reject and required metadata survives debug stripping. Existing MASM invocation/procref source rebuilds under D2, using K and real EXEC without digest fallback. **Checks:** scoped `assembler::callable_identity_tests`, `assembler::inline::tests` and `tests::link_cycles` within `RUST_MIN_STACK=16777216 cargo test --locked -p miden-assembly --lib`; full package `cargo test --locked -p miden-mast-package --lib`; then full unit run and standard `make test-assembly EXTRA=--locked NEXTEST_PROFILE=ci` after focused failures resolve. The Makefile forwards `test=` to its filter; the previous `namespaced_execution` filter names no current assembly test. Use existing modules and verify nonzero execution counts.
 
 ### PR 10 Revision-aware projects and code supply
@@ -180,6 +182,8 @@ Generic package metadata covers the opaque typed library ID and naming/callable/
 **Existing files:** `crates/project/src/{dependencies.rs,dependencies/graph.rs,linkage.rs,package.rs,ast/dependency.rs,ast/package.rs,ast/parsing.rs}`, project tests, `crates/mast-package/src/dependency/mod.rs`, manifest, `crates/assembly/src/project/{dependency_graph.rs,runtime_dependencies.rs,build_provenance.rs,post_process.rs,tests.rs}`, linker module ownership and packaging fixtures. **New if justified:** `crates/project/src/library_import.rs`.
 
 Separate source aliases, opaque typed library IDs, dependency instances, explicit namespace bindings and optional code/artifact supply. Replace PackageId-only graph/manifest/cache ownership where it prevents distinct bound artifacts from coexisting. Bundling supplies code without changing K or implying inlining. Propagate required callable/helper mounts and separately authorized N_kernel. Generic consumers need not implement registry storage or release codecs. Protocol adapters must retain D3: revisions may change bodies/helpers/pinned choices, while retained Latest dependencies remain dynamic; validate required release/closure inputs before claiming that behavior.
+
+Implement D5's standard Latest/Pinned selectors as assembler/project conveniences producing explicit NamespacePlan/callable bindings; retain raw custom bindings as a supported path. Route caller-supplied full ancestor bases and opaque IDs through configuration/API metadata, not special MASM import spelling. Use the existing miden-project.toml project layer when adding file configuration; exact fields and ergonomic builder names remain implementation design, not already supported syntax. Keep code supply (bundled/external) independent from namespace selection and expected implementation bindings. Test standard and custom homes, stable Latest K across selected bodies, distinct revision-qualified K, unchanged source aliases, naming-aware caches and equivalent bundled/external invocation behavior. This adds no registry, ID generator or interface-commitment requirement to generic assembly.
 
 **Acceptance:** distinct explicitly bound dependency instances coexist with equal module paths or D; ambiguous/conflicting callable bindings reject rather than selecting a body from an alias or ID alone; bundled/external code preserves K and runtime invocation semantics; source semver/Git provenance remains separate from runtime naming; required self/helper mounts propagate. Do not freeze a new generic artifact-ID or release-history algorithm merely to support this. **Checks:** `make test-project`; `make test-assembly test=project::tests`; `cargo test -p miden-assembly --test packaging`.
 
@@ -350,12 +354,40 @@ Sources: [LibraryTree proposal](https://chatgpt.com/space/page_d5d09034b1e881919
 local fixed body or an explicitly pinned import, rejects Latest imports and structural cycles,
 and preserves inner runtime keys. Approval selects syntax/eligibility, not completed implementation.
 
+**D5 Standard assembler namespace convention with explicit custom bindings, approved by the user
+on 3 November 2026:** provide first-class assembler/project support for Latest/Pinned dependency
+naming over the generic VM namespace primitives. Under the caller-supplied complete ancestor base,
+the standard convention is:
+
+```text
+Latest(I):    base / Text("latest") / LibraryId(I) / module... / export
+Pinned(I,r):  base / Text("pinned") / LibraryId(I) / Revision(r) / module... / export
+```
+
+These are typed labels, not source path strings or VM namespace classes. Preserve an explicit
+custom-home/callable-binding path; the standard convention does not restrict the generic API to
+these layouts. Existing MASM `use`, `exec`, `call` and `procref` spelling remains; import/project
+configuration selects bindings. Exact manifest fields, helper API names and default-selection UX
+are not frozen by this approval. In particular, raw NamespaceInputs still has no implicit N0 home.
+
+LibraryId is supplied as an opaque Word to generic assembly; this convention supplies no identity
+hash or mandatory publisher/interface/registration metadata. Selected implementation D and code
+supply do not enter K derivation. Namespace spelling alone does not authenticate a pinned body;
+the caller's authorized environment/expected bindings establish it. Changing a complete home
+requires relinking or an explicitly supported runtime-base mechanism, not silent relocation.
+Keep D4's inner runtime keys and every VM/security acceptance gate. Kernel-input timing and
+code-only package identity/interface applicability remain the two separately pending decisions.
+
+This records an approved implementation direction for PR09/10; it does not claim a completed
+Latest/Pinned enum, project configuration, package9 format or Protocol profile.
+
 ## Open decisions and external gates
 
 | Gate | Required decision/evidence | Blocks |
 | --- | --- | --- |
 | Generic VM/toolchain interchange | D1 fixes VM node preimages. D3 permits opaque typed I/declarations/explicit homes at generic boundaries, while retaining selected Protocol identity/interface semantics and required external validation. Audit mandatory InterfaceArtifact/Profile consumer coupling without weakening canonical/budget/malformed-input/code-root checks. | 04, 09–10, public API closure |
 | Frontend syntax and eligibility | D2 preserves existing MASM name/path/word syntax; D4 approves optional inline.<target> for local fixed bodies or explicitly pinned imports, rejecting Latest and structural cycles. Implement source-alias versus published-alias/wrapper behavior and diagnostics without changing inner runtime keys. | 04, 09 |
+| Standard namespace convention implementation | D5 approves standard assembler/project Latest/Pinned naming plus explicit custom bindings. Implement configuration/routing, metadata persistence and cache matching; exact fields/default-selection UX remain unfrozen. No new MASM import syntax, VM path interpretation, implicit N0 or generic ID/registry/interface-commitment requirement. | 09–10, public API closure |
 | Executable kernel input (user decision pending) | Require the complete kernel namespace path at build time, including programs without SYSCALL, or require it from the execution caller when binding code to an authorized environment? K_entry remains explicit; neither choice permits an implicit N0 or weakens fixed `(K_entry, R_E, N_kernel)` authority. Independent raw producer-inventory work may continue. | Dependent package9 executable manifest/build/read/finalizer policy |
 | Package9 own-interface applicability (user decision pending) | May code-only artifacts omit their own LibraryId/public-interface association when all callables have explicit naming, or must every Package9 carry I and declarations? TargetType usage tags do not establish publication roles. Do not infer ownership from a home, D, source alias or package name; selected release/Protocol profiles still require D3 validation. | Container identity, artifact-kind constructors and dependent manifest/read/admission policy |
 | Private reusable-instance ABI (deferred extension) | If later adopted, specify authenticated runtime-base transport and relative-key/procref lowering before claiming immutable randomized-instance support. Current explicit absolute homes still require final linking; no implicit relocation or caller-derived namespace. | Future optional ABI adoption only |
@@ -2030,3 +2062,14 @@ Logs: `pr09-cargo-fuzz-install`, `pr09-callables-fuzz-check-{first,refresh-lock,
 install and fuzz commands passed AC/heavy guards; no concurrent heavy suites ran. Corpus, build,
 tool and host-failure artifacts remain uncommitted scratch outside routine agent input. Live
 package9 and both required container decisions remain unresolved; no inherited gate is waived.
+
+
+### PR 09/10 Standard namespace convention decision checkpoint
+
+At verified HEAD `c0c6ef28c48326cd0219d5b886d2ea53800431e8` on
+`adr1anh/librarytree-09-keyed-packages`, the user approved the standard assembler/project
+Latest/Pinned naming convention with an explicit custom-binding path. D5 records the boundary;
+PR09/10 now route implementation without changing generic VM/AIR semantics, source import spelling
+or opaque-ID ownership. Exact configuration UX is not selected, and the two existing kernel-input
+and code-only-package applicability questions remain open. This checkpoint changes only the plan
+and brief, preserves the committed implementation and adds no code/test/format acceptance claim.
