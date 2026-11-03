@@ -47,10 +47,10 @@ pub use miden_mast_package::CallableBinding;
 pub use self::linker::LinkerError;
 #[cfg(feature = "std")]
 pub use self::project::{
-    AssemblyInterrupted, InterruptedTargetRole, MasmSourceProvider, PackagePostProcessor,
-    PostProcessContext, ProjectAssembler, ProjectSourceInputs, ProjectSourceProvenanceInputs,
-    ProjectSourceProvider, ProjectTargetSelector, ResolvedPackage, SourceFileProvenance,
-    SourceProviderRegistry, TargetAssemblyContext,
+    AssemblyInterrupted, DependencyNamingRequest, InterruptedTargetRole, MasmSourceProvider,
+    PackagePostProcessor, PostProcessContext, ProjectAssembler, ProjectSourceInputs,
+    ProjectSourceProvenanceInputs, ProjectSourceProvider, ProjectTargetSelector, ResolvedPackage,
+    SourceFileProvenance, SourceProviderRegistry, TargetAssemblyContext,
 };
 pub use self::{
     assembler::{Assembler, AssemblyProduct, NamespaceInputs},

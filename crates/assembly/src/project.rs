@@ -10,8 +10,8 @@ use miden_core::serde::Deserializable;
 use miden_mast_package::{Package as MastPackage, PackageNaming, SectionId, TargetType};
 use miden_package_registry::{PackageCache, PackageId, Version as PackageVersion};
 use miden_project::{
-    Linkage, Package as ProjectPackage, PreassembledDependencyMetadata, Profile,
-    ProjectDependencyNodeProvenance, ProjectSource, Target,
+    ExpectedVisibleCallables, Linkage, Package as ProjectPackage, PreassembledDependencyMetadata,
+    Profile, ProjectDependencyNodeProvenance, ProjectSource, Target,
 };
 
 use crate::{Assembler, NamespaceInputs, ast::Module};
@@ -33,6 +33,8 @@ pub use self::{
     target_selector::ProjectTargetSelector,
 };
 
+#[cfg(test)]
+mod artifact_expectation_tests;
 #[cfg(test)]
 mod tests;
 
@@ -123,6 +125,17 @@ impl Assembler {
 
 // PROJECT ASSEMBLER
 // ================================================================================================
+
+/// Independent caller naming requirements for a dependency source target.
+///
+/// A default-home request does not describe public ownership. The optional exact public mapping
+/// remains separate and constrains fresh products and every reuse candidate. Empty requests supply
+/// no implicit home, callable metadata, profile admission or execution authority.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DependencyNamingRequest<'a> {
+    pub binding: Option<&'a miden_project::DependencyBinding>,
+    pub expected_callables: Option<&'a ExpectedVisibleCallables>,
+}
 
 pub struct ProjectSourceInputs {
     pub root: Box<Module>,
@@ -411,7 +424,7 @@ where
                 None,
                 None,
                 &mut cache,
-                None,
+                DependencyNamingRequest::default(),
             )? {
                 ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
                 ControlFlow::Continue(resolved) => Some(resolved),
@@ -430,7 +443,7 @@ where
             None,
             None,
             &mut cache,
-            None,
+            DependencyNamingRequest::default(),
         )
     }
 
@@ -450,9 +463,11 @@ where
     ///
     /// * `package_id` must be the package identifier for `project` in the current dependency graph
     /// * `target` must be a target extracted from `project`
-    /// * `requested_binding`, when present, is the parent's source-target default-home request; its
+    /// * `naming.binding`, when present, is the parent's source-target default-home request; its
     ///   exact home is checked against namespace inputs before any cache reuse. It does not approve
     ///   public callable mappings or replace complete Bound declarations.
+    /// * `naming.expected_callables`, when present, is the parent's independently chosen exact
+    ///   public mapping. It is checked on fresh products and before returning any cached candidate.
     /// * `required_lib` must be set if assembly of `target` would depend on another target of the
     ///   same project (i.e. an executable target implicitly depends on the library target).
     ///
@@ -469,8 +484,12 @@ where
         sources: Option<ProjectSourceInputs>,
         source_provenance: Option<ProjectSourceProvenanceInputs>,
         cache: &mut BTreeMap<PackageId, ResolvedPackage>,
-        requested_binding: Option<&miden_project::DependencyBinding>,
+        naming: DependencyNamingRequest<'_>,
     ) -> Result<ControlFlow<AssemblyInterrupted, ResolvedPackage>, Report> {
+        let DependencyNamingRequest {
+            binding: requested_binding,
+            expected_callables,
+        } = naming;
         assert!(
             source_provenance.is_none() || sources.is_some(),
             "source provenance may only be provided with sources"
@@ -520,6 +539,7 @@ where
                 profile_name,
                 cache,
                 edge.binding.as_ref(),
+                edge.expected_callables.as_ref(),
             )? {
                 ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
                 ControlFlow::Continue(pkg) => pkg,
@@ -531,16 +551,6 @@ where
                 )));
             }
 
-            // Custom homes state the caller's exact package-default metadata expectation. They
-            // do not claim ownership of visible paths or constrain retained foreign bindings.
-            if let Some(miden_project::DependencyBinding::Custom(home)) = &edge.binding
-                && dependency_package.naming.namespace_plan() != home
-            {
-                return Err(Report::msg(format!(
-                    "dependency '{}' default home differs from its explicit custom home",
-                    edge.dependency
-                )));
-            }
             if !dependency_package.package.is_kernel() {
                 assembler.link_package(
                     dependency_package.package.clone(),
@@ -637,6 +647,9 @@ where
         {
             Self::check_source_dependency_sections(&cached.package)?;
             cached.package.check_naming(&cached.naming).map_err(Report::msg)?;
+            if let Some(expected) = expected_callables {
+                expected.check(&cached.naming)?;
+            }
             return Ok(ControlFlow::Continue(cached.clone()));
         }
 
@@ -651,6 +664,9 @@ where
         };
         if let RegisteredSourcePackage::Loaded(package) = &reuse {
             let resolved = self.resolve_loaded_package(package.clone())?;
+            if let Some(expected) = expected_callables {
+                expected.check(&resolved.naming)?;
+            }
             cache.insert(cache_key, resolved.clone());
             return Ok(ControlFlow::Continue(resolved));
         }
@@ -694,6 +710,9 @@ where
         }
 
         package.check_naming(&naming).map_err(|error| Report::msg(error.to_string()))?;
+        if let Some(expected) = expected_callables {
+            expected.check(&naming)?;
+        }
         let package = Arc::from(package);
 
         let resolved = ResolvedPackage {
@@ -727,20 +746,20 @@ where
         profile_name: &str,
         cache: &mut BTreeMap<PackageId, ResolvedPackage>,
         requested_binding: Option<&miden_project::DependencyBinding>,
+        expected_callables: Option<&ExpectedVisibleCallables>,
     ) -> Result<ControlFlow<AssemblyInterrupted, ResolvedPackage>, Report> {
         let node = self.dependency_graph.get(package_id)?;
         let node_version = node.version.clone();
-        if matches!(requested_binding, Some(miden_project::DependencyBinding::Standard(_)))
-            && !matches!(
-                &node.provenance,
-                ProjectDependencyNodeProvenance::Source(ProjectSource::Real {
-                    library_path: Some(_),
-                    ..
-                })
-            )
-        {
+        let is_source = matches!(
+            &node.provenance,
+            ProjectDependencyNodeProvenance::Source(ProjectSource::Real {
+                library_path: Some(_),
+                ..
+            })
+        );
+        if !is_source && expected_callables.is_none() {
             return Err(Report::msg(format!(
-                "standard namespace selection for artifact dependency '{package_id}' requires explicit expected callable mappings; use an admitted custom binding or compile its source",
+                "artifact dependency '{package_id}' requires explicit expected callable mappings",
             )));
         }
 
@@ -779,7 +798,10 @@ where
                     None,
                     None,
                     cache,
-                    requested_binding,
+                    DependencyNamingRequest {
+                        binding: requested_binding,
+                        expected_callables,
+                    },
                 )? {
                     ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
                     ControlFlow::Continue(package) => package,
@@ -818,6 +840,18 @@ where
             },
         };
 
+        if let Some(expected) = expected_callables {
+            expected.check(&package.naming)?;
+        }
+        // Custom requests constrain only the exact package-default metadata, independently of
+        // the complete public mapping and any retained private or foreign binding homes.
+        if let Some(miden_project::DependencyBinding::Custom(home)) = requested_binding
+            && package.naming.namespace_plan() != home
+        {
+            return Err(Report::msg(format!(
+                "dependency '{package_id}' default home differs from its explicit custom home"
+            )));
+        }
         if should_cache {
             self.cache_resolved_package(&package)?;
         }
