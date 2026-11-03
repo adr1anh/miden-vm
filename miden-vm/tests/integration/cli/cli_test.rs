@@ -6,13 +6,11 @@ use std::{
 };
 
 use assert_cmd::prelude::*;
-use miden_assembly::{
-    Assembler, DefaultSourceManager,
-    ast::{Module, ModuleKind, Path as SourcePath},
-    testing::FixtureNamespace,
-};
 use miden_mast_package::Package;
-use miden_utils_testing::librarytree::assemble_fixture_program;
+
+#[path = "fixture_inputs.rs"]
+pub(super) mod fixture_inputs;
+use fixture_inputs::{LibraryFixture, ProgramFixture, bundle_inputs};
 use miden_wasm_event_handlers::{
     WasmHandlerLimits, section_from_module, test_append_manifest_section,
 };
@@ -40,10 +38,8 @@ fn advice_budget_is_checked_before_merkle_loading_in_run_and_prove() {
     let masm_path = working_dir.path().join("budget.masm");
     let masp_path = working_dir.path().join("budget.masp");
     fs::write(&masm_path, source).unwrap();
-    assemble_fixture_program(Assembler::default(), "budget", source, &[])
-        .package
-        .write_to_file(&masp_path)
-        .unwrap();
+    let inputs = ProgramFixture::new(working_dir.path(), &masm_path, None, &[]);
+    inputs.write_package(&masp_path);
 
     // The map alone fills the default allowance before accounting for its key and the
     // default Merkle store. A legacy parser decodes the malformed SMT leaf first instead.
@@ -57,8 +53,7 @@ fn advice_budget_is_checked_before_merkle_loading_in_run_and_prove() {
 
     for command in ["run", "prove"] {
         for program in [&masm_path, &masp_path] {
-            let mut cmd = bin_under_test(working_dir.path());
-            cmd.arg(command).arg(program);
+            let mut cmd = inputs.command(working_dir.path(), command, program);
             cmd.assert()
                 .failure()
                 .stderr(predicate::str::contains("advice provider size budget exceeded"))
@@ -77,8 +72,7 @@ fn advice_budget_is_checked_before_merkle_loading_in_run_and_prove() {
     )
     .unwrap();
     for program in [&masm_path, &masp_path] {
-        let mut cmd = bin_under_test(working_dir.path());
-        cmd.arg("run").arg(program);
+        let mut cmd = inputs.command(working_dir.path(), "run", program);
         cmd.assert().success();
     }
 }
@@ -89,10 +83,11 @@ fn cli_advice_budget_is_configurable_for_run_and_prove() {
     let program_path = working_dir.path().join("advice-budget.masm");
     fs::write(&program_path, "begin push.1 end").unwrap();
     fs::write(program_path.with_extension("inputs"), r#"{"operand_stack":[]}"#).unwrap();
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
 
     for command in ["run", "prove"] {
-        let mut cmd = bin_under_test(working_dir.path());
-        cmd.arg(command).arg(&program_path).args(["--max-advice-size", "0"]);
+        let mut cmd = inputs.command(working_dir.path(), command, &program_path);
+        cmd.args(["--max-advice-size", "0"]);
         cmd.assert()
             .failure()
             .stderr(predicate::str::contains("advice provider size budget"));
@@ -104,16 +99,11 @@ fn cli_advice_budget_is_configurable_for_run_and_prove() {
 // by the `run` command.
 fn cli_run() {
     let working_dir = TempDir::new().unwrap();
-    let mut cmd = bin_under_test(working_dir.path());
+    let program = fixture("masm-examples/fib/fib.masm");
+    let inputs = ProgramFixture::new(working_dir.path(), &program, None, &[]);
+    let mut cmd = inputs.command(working_dir.path(), "run", &program);
 
-    cmd.arg("run")
-        .arg(fixture("masm-examples/fib/fib.masm"))
-        .arg("-n")
-        .arg("1")
-        .arg("-m")
-        .arg("8192")
-        .arg("-e")
-        .arg("8192");
+    cmd.arg("-n").arg("1").arg("-m").arg("8192").arg("-e").arg("8192");
 
     let output = cmd.unwrap();
 
@@ -131,8 +121,8 @@ fn run_rejects_missing_inferred_inputs_file() {
     let program_path = working_dir.path().join("miden-vm-cli-missing-run-inputs-test.masm");
     fs::write(&program_path, "begin push.1 end").unwrap();
 
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("run").arg(&program_path);
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
+    let mut cmd = inputs.command(working_dir.path(), "run", &program_path);
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("Failed to open input file"))
@@ -147,8 +137,8 @@ fn prove_rejects_missing_inferred_inputs_file() {
     let program_path = working_dir.path().join("miden-vm-cli-missing-prove-inputs-test.masm");
     fs::write(&program_path, "begin push.1 end").unwrap();
 
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("prove").arg(&program_path);
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
+    let mut cmd = inputs.command(working_dir.path(), "prove", &program_path);
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("Failed to open input file"))
@@ -163,14 +153,51 @@ fn prove_rejects_invalid_program_extension_before_inferred_inputs_file() {
     let program_path = working_dir.path().join("miden-vm-cli-invalid-prove-extension-test.txt");
     fs::write(&program_path, "begin push.1 end").unwrap();
 
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("prove").arg(&program_path);
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
+    let mut cmd = inputs.command(working_dir.path(), "prove", &program_path);
     cmd.assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "The provided file must have a .masm or .masp extension",
-        ))
+        .stderr(predicate::str::contains("program input must be .masm or .masp"))
         .stderr(predicate::str::contains("Failed to open input file").not());
+}
+
+#[test]
+fn cli_compile_emits_package_with_independently_expected_naming() {
+    let working_dir = TempDir::new().unwrap();
+    let source = working_dir.path().join("compiled.masm");
+    let output = source.with_extension("masp");
+    let sidecar = working_dir.path().join("compiled.naming");
+    fs::write(&source, "proc helper push.3 end begin exec.helper drop end").unwrap();
+    fs::write(source.with_extension("inputs"), r#"{"operand_stack":[]}"#).unwrap();
+    let inputs = ProgramFixture::new(working_dir.path(), &source, None, &[]);
+
+    let mut cmd = bin_under_test(working_dir.path());
+    cmd.arg("compile")
+        .arg("--assembly")
+        .arg(&source)
+        .arg("--naming-output")
+        .arg(&sidecar);
+    inputs.compile(&mut cmd);
+    cmd.assert().success();
+
+    let package = Package::deserialize_from_file(&output).unwrap();
+    package.check_naming(&inputs.named.naming).unwrap();
+    assert_eq!(fs::read(&sidecar).unwrap(), fs::read(&inputs.expected_naming).unwrap());
+    inputs.command(working_dir.path(), "run", &output).assert().success();
+
+    // Export is optional; selecting a second package output creates no new naming sidecar.
+    let second = working_dir.path().join("explicit.masp");
+    let previous_sidecar = fs::read(&sidecar).unwrap();
+    let mut cmd = bin_under_test(working_dir.path());
+    cmd.arg("compile").arg("--assembly").arg(&source).arg("--output").arg(&second);
+    inputs.compile(&mut cmd);
+    cmd.assert().success();
+    Package::deserialize_from_file(&second)
+        .unwrap()
+        .check_naming(&inputs.named.naming)
+        .unwrap();
+    assert_eq!(fs::read(&sidecar).unwrap(), previous_sidecar);
+    assert!(!second.with_extension("naming").exists());
 }
 
 #[test]
@@ -178,6 +205,12 @@ fn cli_bundle_debug() {
     let working_dir = TempDir::new().unwrap();
     let output_file = working_dir.path().join("cli_bundle_debug.masp");
 
+    let naming = bundle_inputs(
+        working_dir.path(),
+        &fixture("tests/integration/cli/data/lib/mod.masm"),
+        false,
+        Some("lib"),
+    );
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("bundle")
         .arg(fixture("tests/integration/cli/data/lib/mod.masm"))
@@ -185,6 +218,7 @@ fn cli_bundle_debug() {
         .arg("lib")
         .arg("--output")
         .arg(output_file.as_path());
+    naming.apply(&mut cmd);
     cmd.assert().success();
 
     let lib = Package::deserialize_from_file_trusted(&output_file).unwrap();
@@ -206,17 +240,28 @@ fn rejects_oversized_kernel_packages_in_run_prove_and_verify() {
     fs::write(&program_path, "begin push.1 drop end").unwrap();
     fs::write(program_path.with_extension("inputs"), r#"{"operand_stack":[]}"#).unwrap();
 
+    let naming = bundle_inputs(
+        working_dir.path(),
+        &fixture("tests/integration/cli/data/kernel_main.masm"),
+        true,
+        None,
+    );
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("bundle")
         .arg(fixture("tests/integration/cli/data/kernel_main.masm"))
         .arg("--kernel")
         .arg("--output")
         .arg(&kernel_path);
+    naming.apply(&mut cmd);
     cmd.assert().success();
 
+    let kernel =
+        LibraryFixture::new(&fixture("tests/integration/cli/data/kernel_main.masm"), true, None);
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, Some(&kernel), &[]);
+
     // Exercise both loaders successfully with a valid kernel before checking their size limits.
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("prove").arg(&program_path).arg("--kernel").arg(&kernel_path);
+    let mut cmd = inputs.command(working_dir.path(), "prove", &program_path);
+    cmd.arg("--kernel").arg(&kernel_path);
     let stdout = String::from_utf8(cmd.assert().success().get_output().stdout.clone()).unwrap();
     let program_hash = stdout
         .lines()
@@ -224,6 +269,7 @@ fn rejects_oversized_kernel_packages_in_run_prove_and_verify() {
         .and_then(|line| line.strip_suffix("..."))
         .expect("prove prints the program hash");
 
+    // PR12 debt: this legacy program-hash/kernel verifier path needs an expected statement.
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("verify")
         .arg("--proof")
@@ -249,11 +295,12 @@ fn rejects_oversized_kernel_packages_in_run_prove_and_verify() {
             .contains("file exceeds size limit of 536870912 bytes")
     };
     for command in ["run", "prove"] {
-        let mut cmd = bin_under_test(working_dir.path());
-        cmd.arg(command).arg(&program_path).arg("--kernel").arg(&kernel_path);
+        let mut cmd = inputs.command(working_dir.path(), command, &program_path);
+        cmd.arg("--kernel").arg(&kernel_path);
         cmd.assert().failure().stderr(predicate::function(oversized_error));
     }
 
+    // PR12 debt: this legacy program-hash/kernel verifier path needs an expected statement.
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("verify")
         .arg("--proof")
@@ -277,9 +324,9 @@ fn atomic_artifact_writes_preserve_existing_files_on_io_failure() {
     fs::write(&proof_path, b"stale proof").unwrap();
     fs::write(&outputs_path, b"stale outputs").unwrap();
 
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
     // Bare filenames exercise temporary-file creation in the current directory.
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("prove").arg("program.masm");
+    let mut cmd = inputs.command(working_dir.path(), "prove", "program.masm");
     let stdout = String::from_utf8(cmd.assert().success().get_output().stdout.clone()).unwrap();
     let program_hash = stdout
         .lines()
@@ -288,6 +335,7 @@ fn atomic_artifact_writes_preserve_existing_files_on_io_failure() {
         .expect("prove prints the program hash");
     let previous_proof = fs::read(&proof_path).unwrap();
     let previous_outputs = fs::read(&outputs_path).unwrap();
+    let previous_files = fs::read_dir(working_dir.path()).unwrap().count();
 
     let binary = bin_under_test(working_dir.path()).get_program().to_owned();
     for (args, diagnostic) in [
@@ -307,14 +355,16 @@ fn atomic_artifact_writes_preserve_existing_files_on_io_failure() {
             .args(["-c", "set -eu; trap '' XFSZ; ulimit -f 0; exec \"$@\"", "sh"])
             .arg(&binary)
             .args(args);
+        inputs.apply(&mut cmd, false);
         cmd.assert().failure().stderr(predicate::str::contains(diagnostic));
 
         assert_eq!(fs::read(&proof_path).unwrap(), previous_proof);
         assert_eq!(fs::read(&outputs_path).unwrap(), previous_outputs);
-        assert_eq!(fs::read_dir(working_dir.path()).unwrap().count(), 4);
+        assert_eq!(fs::read_dir(working_dir.path()).unwrap().count(), previous_files);
     }
 
     // The old artifacts remain usable after both write failures.
+    // PR12 debt: retain this legacy verifier oracle until expected-statement migration.
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("verify")
         .arg("--proof")
@@ -344,14 +394,27 @@ fn cli_bundle_release_strips_debug_info() {
         let debug_output = working_dir.path().join(format!("{name}-debug.masp"));
         let release_output = working_dir.path().join(format!("{name}-release.masp"));
 
+        let naming = bundle_inputs(
+            working_dir.path(),
+            &source,
+            name == "kernel",
+            (name == "library").then_some("lib"),
+        );
         let mut cmd = bin_under_test(working_dir.path());
         cmd.arg("bundle")
             .arg(&source)
             .args(&extra_args)
             .arg("--output")
             .arg(&debug_output);
+        naming.apply(&mut cmd);
         cmd.assert().success();
 
+        let naming = bundle_inputs(
+            working_dir.path(),
+            &source,
+            name == "kernel",
+            (name == "library").then_some("lib"),
+        );
         let mut cmd = bin_under_test(working_dir.path());
         cmd.arg("bundle")
             .arg(&source)
@@ -359,6 +422,7 @@ fn cli_bundle_release_strips_debug_info() {
             .arg("--release")
             .arg("--output")
             .arg(&release_output);
+        naming.apply(&mut cmd);
         cmd.assert().success();
 
         let debug_bytes = fs::read(&debug_output).unwrap();
@@ -418,6 +482,12 @@ fn cli_bundle_version() {
         let requested_output = working_dir.path().join(format!("{name}-versioned.masp"));
         let default_output = working_dir.path().join(format!("{name}-default-version.masp"));
 
+        let naming = bundle_inputs(
+            working_dir.path(),
+            &source,
+            name == "kernel",
+            (name == "library").then_some("lib"),
+        );
         let mut cmd = bin_under_test(working_dir.path());
         cmd.arg("bundle")
             .arg(&source)
@@ -426,17 +496,25 @@ fn cli_bundle_version() {
             .arg("1.2.3")
             .arg("--output")
             .arg(&requested_output);
+        naming.apply(&mut cmd);
         cmd.assert().success();
 
         let package = Package::deserialize_from_file_trusted(&requested_output).unwrap();
         assert_eq!(package.version, "1.2.3".parse().unwrap());
 
+        let naming = bundle_inputs(
+            working_dir.path(),
+            &source,
+            name == "kernel",
+            (name == "library").then_some("lib"),
+        );
         let mut cmd = bin_under_test(working_dir.path());
         cmd.arg("bundle")
             .arg(&source)
             .args(&extra_args)
             .arg("--output")
             .arg(&default_output);
+        naming.apply(&mut cmd);
         cmd.assert().success();
 
         let package = Package::deserialize_from_file_trusted(&default_output).unwrap();
@@ -444,6 +522,12 @@ fn cli_bundle_version() {
     }
 
     let invalid_output = working_dir.path().join("invalid-version.masp");
+    let naming = bundle_inputs(
+        working_dir.path(),
+        &fixture("tests/integration/cli/data/lib/mod.masm"),
+        false,
+        Some("lib"),
+    );
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("bundle")
         .arg(fixture("tests/integration/cli/data/lib/mod.masm"))
@@ -453,6 +537,7 @@ fn cli_bundle_version() {
         .arg("not-a-version")
         .arg("--output")
         .arg(&invalid_output);
+    naming.apply(&mut cmd);
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("invalid value 'not-a-version'"))
@@ -463,11 +548,18 @@ fn cli_bundle_version() {
 #[test]
 fn cli_bundle_no_exports() {
     let working_dir = TempDir::new().unwrap();
+    let naming = bundle_inputs(
+        working_dir.path(),
+        &fixture("tests/integration/cli/data/lib_noexports/mod.masm"),
+        false,
+        Some("lib"),
+    );
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("bundle")
         .arg("--namespace")
         .arg("lib")
         .arg(fixture("tests/integration/cli/data/lib_noexports/mod.masm"));
+    naming.apply(&mut cmd);
     cmd.assert()
         .failure()
         .stderr(predicate::str::contains("package must contain at least one exported procedure"));
@@ -478,12 +570,19 @@ fn cli_bundle_kernel() {
     let working_dir = TempDir::new().unwrap();
     let output_file = working_dir.path().join("cli_bundle_kernel.masp");
 
+    let naming = bundle_inputs(
+        working_dir.path(),
+        &fixture("tests/integration/cli/data/kernel_main.masm"),
+        true,
+        None,
+    );
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("bundle")
         .arg(fixture("tests/integration/cli/data/kernel_main.masm"))
         .arg("--kernel")
         .arg("--output")
         .arg(output_file.as_path());
+    naming.apply(&mut cmd);
     cmd.assert().success();
 }
 
@@ -493,12 +592,19 @@ fn cli_bundle_kernel_noexports() {
     let working_dir = TempDir::new().unwrap();
     let output_file = working_dir.path().join("cli_bundle_kernel_noexports.masp");
 
+    let naming = bundle_inputs(
+        working_dir.path(),
+        &fixture("tests/integration/cli/data/kernel_noexports.masm"),
+        true,
+        None,
+    );
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("bundle")
         .arg(fixture("tests/integration/cli/data/kernel_noexports.masm"))
         .arg("--kernel")
         .arg("--output")
         .arg(output_file.as_path());
+    naming.apply(&mut cmd);
     cmd.assert().success();
 }
 
@@ -506,6 +612,12 @@ fn cli_bundle_kernel_noexports() {
 fn cli_bundle_output() {
     let working_dir = TempDir::new().unwrap();
     let output_file = working_dir.path().join("cli_bundle_output.masp");
+    let naming = bundle_inputs(
+        working_dir.path(),
+        &fixture("tests/integration/cli/data/lib/mod.masm"),
+        false,
+        Some("lib"),
+    );
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("bundle")
         .arg(fixture("tests/integration/cli/data/lib/mod.masm"))
@@ -513,6 +625,7 @@ fn cli_bundle_output() {
         .arg("lib")
         .arg("--output")
         .arg("cli_bundle_output.masp");
+    naming.apply(&mut cmd);
     cmd.assert().success();
     assert!(output_file.exists());
 }
@@ -522,6 +635,12 @@ fn cli_bundle_output() {
 fn cli_run_with_lib() {
     let working_dir = TempDir::new().unwrap();
     let output_file = working_dir.path().join("cli_run_with_lib.masp");
+    let naming = bundle_inputs(
+        working_dir.path(),
+        &fixture("tests/integration/cli/data/lib/mod.masm"),
+        false,
+        Some("lib"),
+    );
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("bundle")
         .arg(fixture("tests/integration/cli/data/lib/mod.masm"))
@@ -529,25 +648,37 @@ fn cli_run_with_lib() {
         .arg("lib")
         .arg("--output")
         .arg("cli_run_with_lib.masp");
+    naming.apply(&mut cmd);
     cmd.assert().success();
 
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("run")
-        .arg(fixture("tests/integration/cli/data/main.masm"))
-        .arg("-l")
-        .arg(&output_file);
+    let library = LibraryFixture::new(
+        &fixture("tests/integration/cli/data/lib/mod.masm"),
+        false,
+        Some("lib"),
+    );
+    let program = fixture("tests/integration/cli/data/main.masm");
+    let inputs = ProgramFixture::new(working_dir.path(), &program, None, &[&library]);
+    let mut cmd = inputs.command(working_dir.path(), "run", &program);
+    cmd.arg("-l").arg(&output_file);
     cmd.assert().success();
 }
 
 /// Bundles the `kernel_main.masm` fixture into `<working_dir>/<name>` as a kernel package.
 fn bundle_kernel_package(working_dir: &Path, name: &str) -> PathBuf {
     let output_file = working_dir.join(name);
+    let naming = bundle_inputs(
+        working_dir,
+        &fixture("tests/integration/cli/data/kernel_main.masm"),
+        true,
+        None,
+    );
     let mut cmd = bin_under_test(working_dir);
     cmd.arg("bundle")
         .arg(fixture("tests/integration/cli/data/kernel_main.masm"))
         .arg("--kernel")
         .arg("--output")
         .arg(&output_file);
+    naming.apply(&mut cmd);
     cmd.assert().success();
     output_file
 }
@@ -557,31 +688,31 @@ fn run_rejects_kernel_for_masp_package() {
     let working_dir = TempDir::new().unwrap();
     let package_path = bundle_kernel_package(working_dir.path(), "prog.masp");
 
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("run")
-        .arg(&package_path)
-        .arg("--kernel")
-        .arg(fixture("tests/integration/cli/data/kernel_main.masm"));
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("does not apply to a `.masp` package"));
+    let authority_path = working_dir.path().join("authority.masm");
+    fs::write(&authority_path, "begin nop end").unwrap();
+    let inputs = ProgramFixture::new(working_dir.path(), &authority_path, None, &[]);
+    let mut cmd = inputs.command(working_dir.path(), "run", &package_path);
+    cmd.arg("--kernel").arg(fixture("tests/integration/cli/data/kernel_main.masm"));
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--kernel applies to source assembly; a .masp carries its embedded kernel code",
+    ));
 }
 
 #[test]
 fn prove_rejects_kernel_for_masp_package() {
     let working_dir = TempDir::new().unwrap();
     let package_path = bundle_kernel_package(working_dir.path(), "prog.masp");
-    // `prove` reads the inferred inputs file before it looks at the program kind.
+    // Keep valid private inputs available while exercising the incompatible kernel option.
     fs::write(working_dir.path().join("prog.inputs"), r#"{"operand_stack":[]}"#).unwrap();
 
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("prove")
-        .arg(&package_path)
-        .arg("--kernel")
-        .arg(fixture("tests/integration/cli/data/kernel_main.masm"));
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("does not apply to a `.masp` package"));
+    let authority_path = working_dir.path().join("authority.masm");
+    fs::write(&authority_path, "begin nop end").unwrap();
+    let inputs = ProgramFixture::new(working_dir.path(), &authority_path, None, &[]);
+    let mut cmd = inputs.command(working_dir.path(), "prove", &package_path);
+    cmd.arg("--kernel").arg(fixture("tests/integration/cli/data/kernel_main.masm"));
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "--kernel applies to source assembly; a .masp carries its embedded kernel code",
+    ));
 }
 
 /// A `.masp` kernel is registered with the host, so its procedures are reachable from a `syscall`.
@@ -599,13 +730,11 @@ fn run_masm_program_honors_a_masp_kernel() {
     .unwrap();
     fs::write(working_dir.path().join("program.inputs"), r#"{"operand_stack":[]}"#).unwrap();
 
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("run")
-        .arg(&program_path)
-        .arg("--kernel")
-        .arg(&kernel_path)
-        .arg("-n")
-        .arg("1");
+    let kernel =
+        LibraryFixture::new(&fixture("tests/integration/cli/data/kernel_main.masm"), true, None);
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, Some(&kernel), &[]);
+    let mut cmd = inputs.command(working_dir.path(), "run", &program_path);
+    cmd.arg("--kernel").arg(&kernel_path).arg("-n").arg("1");
     cmd.assert().success();
 }
 
@@ -631,55 +760,22 @@ fn run_loads_a_masp_whose_kernel_shares_the_handler_section() {
 
     // The kernel carries the section before it is embedded, so the executable's kernel dependency
     // commits to the kernel package the CLI later reads back.
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let kernel_root = Module::parser(Some(ModuleKind::Kernel))
-        .parse_file(
-            Some(SourcePath::KERNEL),
-            fixture("tests/integration/cli/data/kernel_main.masm"),
-            source_manager.clone(),
-        )
-        .expect("kernel source parses");
-    let kernel_lib = Module::parser(Some(ModuleKind::Library))
-        .parse_file(
-            Some(SourcePath::new("::$kernel::lib")),
-            fixture("tests/integration/cli/data/lib/mod.masm"),
-            source_manager.clone(),
-        )
-        .expect("kernel support source parses");
-    let assembler = Assembler::new(source_manager.clone());
-    let mut names = FixtureNamespace::assembly_tests();
-    names.add_kernel_modules(&assembler, &[&kernel_root, &kernel_lib]).unwrap();
-    let product = names
-        .configure(assembler, [&*kernel_root, &*kernel_lib])
-        .unwrap()
-        .assemble_library_modules(
-            "kernel".into(),
-            kernel_root,
-            [kernel_lib],
-            miden_mast_package::TargetType::Kernel,
-        )
-        .expect("the kernel assembles with explicit naming");
-    let kernel_naming = Arc::new(product.naming().clone());
-    let kernel = product.into_artifact(true).unwrap();
-    let kernel = Arc::new(
-        kernel
-            .with_event_handlers(&section)
-            .expect("the kernel package takes the section"),
-    );
-
-    // Assembling against the kernel package embeds it and records the matching kernel dependency,
-    // the way a project build does.
-    let assembler = Assembler::with_kernel(source_manager, kernel, kernel_naming.clone())
-        .expect("the assembler takes the kernel package");
-    let named =
-        assemble_fixture_program(assembler, "program", "begin push.1 drop end", &[&kernel_naming]);
-    let mut package = named.package.as_ref().clone();
+    let kernel =
+        LibraryFixture::new(&fixture("tests/integration/cli/data/kernel_main.masm"), true, None);
+    let kernel_package =
+        Arc::new(kernel.package.as_ref().clone().with_event_handlers(&section).unwrap());
+    let kernel = kernel.with_package(kernel_package);
+    let program_path = working_dir.path().join("prog.masm");
+    fs::write(&program_path, "begin push.1 drop end").unwrap();
+    let mut inputs = ProgramFixture::new(working_dir.path(), &program_path, Some(&kernel), &[]);
+    let mut package = inputs.named.package.as_ref().clone();
     package
         .attach_event_handlers(&section)
         .expect("the executable package takes the section");
 
     let package_path = working_dir.path().join("prog.masp");
-    package.write_to_file(&package_path).unwrap();
+    inputs.named.package = Arc::new(package);
+    inputs.write_package(&package_path);
     fs::write(working_dir.path().join("prog.inputs"), r#"{"operand_stack":[]}"#).unwrap();
 
     // The run below exercises the handler deduplication only if the round-tripped package
@@ -697,15 +793,16 @@ fn run_loads_a_masp_whose_kernel_shares_the_handler_section() {
         "the embedded kernel must carry the same handler section as the outer package",
     );
 
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("run").arg(&package_path).arg("-n").arg("1");
+    let mut cmd = inputs.command(working_dir.path(), "run", &package_path);
+    cmd.arg("-n").arg("1");
     cmd.assert().success();
 }
 
 #[test]
 fn test_advmap_cli() {
     let working_dir = TempDir::new().unwrap();
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("run").arg(fixture("tests/integration/cli/data/adv_map.masm"));
+    let program = fixture("tests/integration/cli/data/adv_map.masm");
+    let inputs = ProgramFixture::new(working_dir.path(), &program, None, &[]);
+    let mut cmd = inputs.command(working_dir.path(), "run", &program);
     cmd.assert().success();
 }

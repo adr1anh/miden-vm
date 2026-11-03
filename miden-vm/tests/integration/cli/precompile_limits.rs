@@ -7,14 +7,14 @@ use miden_core::{
 };
 use miden_precompiles::{UintDomain, UintPrecompile};
 use miden_vm::{
-    Assembler, DefaultHost, ExecutionProof, FastProcessor, PrecompileProof, PrecompileStatus,
-    PrecompileWitness, Program, StackInputs, StarkProof, VmProof,
-    default_verification_precompile_limits, serde::Serializable,
+    DefaultHost, ExecutionOptions, ExecutionProof, FastProcessor, PrecompileProof,
+    PrecompileStatus, PrecompileWitness, StackInputs, StarkProof, VmProof,
+    default_verification_precompile_limits,
 };
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-use super::cli_test::bin_under_test;
+use super::cli_test::{bin_under_test, fixture_inputs::ProgramFixture};
 
 fn word_literal(word: Word) -> String {
     format!("[{}, {}, {}, {}]", word[0], word[1], word[2], word[3])
@@ -41,17 +41,20 @@ fn precompile_source(requests: usize, rhs: u32) -> String {
     format!("begin {} end", request.repeat(requests))
 }
 
-fn write_program(dir: &Path, source: &str) -> Program {
-    let package = Assembler::default().assemble_program("program", source).unwrap();
-    fs::write(dir.join("program.masm"), source).unwrap();
-    fs::write(dir.join("program.masp"), package.to_bytes()).unwrap();
+fn write_program(dir: &Path, source: &str) -> ProgramFixture {
+    let source_path = dir.join("program.masm");
+    fs::write(&source_path, source).unwrap();
+    let fixture = ProgramFixture::new(dir, &source_path, None, &[]);
+    fixture.write_package(&dir.join("program.masp"));
     fs::write(dir.join("program.inputs"), r#"{"operand_stack":[]}"#).unwrap();
-    package.unwrap_program()
+    fixture
 }
 
-fn verify_command(dir: &Path, program: &Program) -> Command {
+// PR12 debt: the verifier still accepts the legacy program-hash statement. Keep these complete,
+// deferred and security assertions until its caller-expected K_entry/R_E contract is migrated.
+fn verify_command(dir: &Path, program: &ProgramFixture) -> Command {
     let mut command = bin_under_test(dir);
-    let hash: [u8; 32] = program.hash().into();
+    let hash: [u8; 32] = program.named.program.hash().into();
     command.args(["verify", "--proof", "program.proof", "--program-hash", &hex::encode(hash)]);
     command
 }
@@ -67,6 +70,7 @@ fn read_proof(dir: &Path) -> ExecutionProof {
 #[test]
 fn cli_precompile_policy_errors_precede_input_loading() {
     let dir = TempDir::new().unwrap();
+    let program = write_program(dir.path(), "begin push.1 drop end");
     bin_under_test(dir.path())
         .args(["prove", "--help"])
         .assert()
@@ -75,8 +79,9 @@ fn cli_precompile_policy_errors_precede_input_loading() {
         .stdout(predicate::str::contains("--deferred"))
         .stdout(predicate::str::contains("private advice"))
         .stdout(predicate::str::contains("when that disclosure is intended"));
-    bin_under_test(dir.path())
-        .args(["prove", "missing.masm", "--complete", "--deferred"])
+    program
+        .command(dir.path(), "prove", "missing.masm")
+        .args(["--complete", "--deferred"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("cannot be used with"))
@@ -101,13 +106,14 @@ fn cli_precompile_policy_errors_precede_input_loading() {
             "--max-precompile-elements",
             "1",
         ]]) {
-            let mut command = bin_under_test(dir.path());
-            command.arg(action);
-            if action == "verify" {
+            let mut command = if action == "verify" {
+                let mut command = bin_under_test(dir.path());
+                command.arg(action);
                 command.args(["--proof", "missing.proof", "--program-hash", "00"]);
+                command
             } else {
-                command.arg("missing.masm");
-            }
+                program.command(dir.path(), action, "missing.masm")
+            };
             command
                 .args(&args)
                 .assert()
@@ -131,15 +137,15 @@ fn cli_private_precompile_witness_export_requires_opt_in() {
         word_literal(value),
         word_literal(eq),
     );
-    write_program(dir.path(), &source);
+    let program = write_program(dir.path(), &source);
     fs::write(
         dir.path().join("program.inputs"),
         r#"{"operand_stack":[],"advice_stack":["42","42","42","42","42","42","42","42"]}"#,
     )
     .unwrap();
 
-    bin_under_test(dir.path())
-        .args(["prove", "program.masm"])
+    program
+        .command(dir.path(), "prove", "program.masm")
         .assert()
         .success()
         .stdout(predicate::str::contains("Proof status: complete"))
@@ -147,8 +153,9 @@ fn cli_private_precompile_witness_export_requires_opt_in() {
     // The default artifact carries a precompile STARK, with no portable witness to disclose.
     assert!(matches!(read_proof(dir.path()).precompile(), PrecompileStatus::Proven(_)));
 
-    bin_under_test(dir.path())
-        .args(["prove", "program.masm", "--deferred"])
+    program
+        .command(dir.path(), "prove", "program.masm")
+        .arg("--deferred")
         .assert()
         .success()
         .stdout(predicate::str::contains("Proof status: deferred"))
@@ -179,10 +186,23 @@ fn cli_precompile_execution_and_export_limits_cover_masm_and_masp() {
     // while the library continues to account for both scopes independently.
     for requests in [1, 3] {
         let program = write_program(dir.path(), &precompile_source(requests, 1));
-        let (_, portable) = FastProcessor::new(StackInputs::default())
-            .execute_for_proving_sync(&program, &mut DefaultHost::default())
-            .unwrap()
-            .into_parts();
+        let mut host =
+            DefaultHost::default().with_environment_source(program.named.environment.source());
+        let (_, portable) =
+            FastProcessor::new(StackInputs::default())
+                .with_options(
+                    ExecutionOptions::default().with_environment_trace_limits(
+                        miden_utils_testing::librarytree::trace_limits(),
+                    ),
+                )
+                .unwrap()
+                .execute_for_proving_sync(
+                    &program.named.program,
+                    program.named.environment.execution(),
+                    &mut host,
+                )
+                .unwrap()
+                .into_parts();
         let prepared = portable
             .unwrap()
             .prepare(
@@ -194,22 +214,16 @@ fn cli_precompile_execution_and_export_limits_cover_masm_and_masp() {
             u64::try_from(requests * per_request).unwrap().max(prepared.work().elements());
         for extension in ["masm", "masp"] {
             for action in ["run", "prove"] {
-                let mut command = bin_under_test(dir.path());
-                command
-                    .arg(action)
-                    .arg(format!("program.{extension}"))
-                    .arg("--max-precompile-elements")
-                    .arg(boundary.to_string());
+                let mut command =
+                    program.command(dir.path(), action, format!("program.{extension}"));
+                command.arg("--max-precompile-elements").arg(boundary.to_string());
                 if action == "prove" {
                     command.arg("--deferred");
                 }
                 command.assert().success();
-                let mut command = bin_under_test(dir.path());
-                command
-                    .arg(action)
-                    .arg(format!("program.{extension}"))
-                    .arg("--max-precompile-elements")
-                    .arg((boundary - 1).to_string());
+                let mut command =
+                    program.command(dir.path(), action, format!("program.{extension}"));
+                command.arg("--max-precompile-elements").arg((boundary - 1).to_string());
                 if action == "prove" {
                     command.arg("--deferred");
                 }
@@ -226,8 +240,9 @@ fn cli_precompile_execution_and_export_limits_cover_masm_and_masp() {
 fn cli_precompile_verification_status_limits_and_failures() {
     let dir = TempDir::new().unwrap();
     let program = write_program(dir.path(), &precompile_source(1, 1));
-    bin_under_test(dir.path())
-        .args(["prove", "program.masm", "--deferred"])
+    program
+        .command(dir.path(), "prove", "program.masm")
+        .arg("--deferred")
         .assert()
         .success()
         .stdout(predicate::str::contains("Proof status: deferred"));
@@ -275,8 +290,8 @@ fn cli_precompile_verification_status_limits_and_failures() {
         .failure()
         .stdout(predicate::str::contains("Proof status:").not());
 
-    bin_under_test(dir.path())
-        .args(["prove", "program.masm"])
+    program
+        .command(dir.path(), "prove", "program.masm")
         .assert()
         .success()
         .stdout(predicate::str::contains("Proof status: complete"));
@@ -360,8 +375,8 @@ fn cli_precompile_verification_status_limits_and_failures() {
     // Deferring the precompile STARK must not bypass native execution checks in either mode.
     let program = write_program(dir.path(), &precompile_source(1, 2));
     for args in [vec![], vec!["--complete"], vec!["--deferred"]] {
-        bin_under_test(dir.path())
-            .args(["prove", "program.masm"])
+        program
+            .command(dir.path(), "prove", "program.masm")
             .args(args)
             .assert()
             .failure()
@@ -382,8 +397,8 @@ fn cli_precompile_empty_proof_is_complete() {
     let dir = TempDir::new().unwrap();
     let program = write_program(dir.path(), "begin push.1 drop end");
     for prove_args in [vec![], vec!["--complete"], vec!["--deferred"]] {
-        bin_under_test(dir.path())
-            .args(["prove", "program.masm"])
+        program
+            .command(dir.path(), "prove", "program.masm")
             .args(prove_args)
             .assert()
             .success()
