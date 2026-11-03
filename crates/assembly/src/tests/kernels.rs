@@ -117,19 +117,37 @@ fn regression_empty_kernel_is_rejected() {
 }
 
 #[test]
-fn regression_empty_kernel_with_submodule_is_rejected() {
+fn kernel_candidate_with_private_submodule_code_cannot_become_a_runnable_kernel() {
     let context = TestContext::default();
-    let source_manager = context.source_manager();
 
-    // A kernel module with no exported procedures should be rejected.
+    // Generic code candidates may retain real private code without inventing public exports.
+    // Conversion to a runnable kernel still requires a nonempty root kernel surface.
     let kernel_masm = "mod sub\n\npub const FOO = 1\n";
     let submodule_masm = "namespace $kernel::sub\n\npub proc foo push.1 end\n";
     let kernel_module = context.parse_kernel(source_file!(&context, kernel_masm)).unwrap();
     let submodule = context.parse_module(source_file!(&context, submodule_masm)).unwrap();
-    let err = Assembler::new(source_manager)
-        .assemble_kernel("kernel", kernel_module, [submodule])
-        .expect_err("expected empty kernel to be rejected");
-    assert_diagnostic_lines!(err, "package must contain at least one exported procedure");
+    let (candidate, ..) = assemble_kernel_fixture(&context, kernel_module, vec![submodule])
+        .expect("real submodule code is a valid code candidate");
+    let forest = candidate.mast_forest();
+    assert_eq!(forest.procedure_roots().len(), 1);
+    let root = forest.procedure_roots()[0];
+    let MastNode::Block(block) = &forest[root] else {
+        panic!("the retained private procedure must contain its actual local body");
+    };
+    // The unchanged push.1 source lowers to PAD INCR, followed only by block padding.
+    let operations = block.operations().copied().collect::<Vec<_>>();
+    assert!(operations.starts_with(&[Operation::Pad, Operation::Incr]));
+    assert!(operations.iter().skip(2).all(|op| *op == Operation::Noop));
+    assert!(candidate.manifest.exports().all(|export| export.as_procedure().is_none()));
+
+    let error = candidate
+        .to_kernel_descriptor()
+        .expect_err("private code cannot manufacture a runnable root kernel surface");
+    assert_diagnostic!(error, "invalid kernel package: does not export any kernel procedures");
+    let error = Assembler::with_kernel(context.source_manager(), candidate)
+        .err()
+        .expect("a code candidate with no root kernel exports cannot be attached as a kernel");
+    assert_diagnostic!(error, "invalid kernel package: does not export any kernel procedures");
 }
 
 #[test]
