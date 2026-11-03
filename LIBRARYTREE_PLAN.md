@@ -169,7 +169,7 @@ Extend the existing versioned execution witness with immutable descriptor, entry
 
 Split identity resolution from body supply, runtime reachability/SCCs from acyclic inline dependencies, and retain all public/helper/address-taken roots. Emit K for every retained invocation/procref; explicit inline alone composes a body. Activate validated namespaced package9 metadata and MAST0.0.6 together across trusted/safe readers, commitments and strip-debug. Replace root-centric Program/kernel reconstruction, root-call lowering and hardcoded `$kernel` authority rather than wrap them.
 
-Generic package metadata covers the opaque typed library ID and naming/callable/code information needed by VM/toolchain consumers, independently of Protocol artifacts. This separation grants no Protocol admission: its profile must derive/verify D3's I and validate publisher/home, immutable interface association, release and closure inputs before acceptance. Missing required naming/code metadata still rejects. Preserve independent callable-root retention and the in-flight builder/frontend/graph work.
+Generic package metadata covers the opaque typed library ID and naming/callable/code information needed by VM/toolchain consumers, independently of Protocol artifacts. This separation grants no Protocol admission: its profile must derive/verify D3's I and validate publisher/home, immutable interface association, release and closure inputs before acceptance. Missing required naming/code metadata still rejects. Preserve independent callable-root retention and the in-flight builder/frontend/graph work. Exact required naming must affect artifact commitments and deduplication/cache matching: equal D or source provenance with changed home/canonical binding cannot reuse old symbols or artifacts.
 
 **Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old serialized callable formats reject and required metadata survives debug stripping. Existing MASM invocation/procref source rebuilds under D2, using K and real EXEC without digest fallback. **Checks:** `make test-assembly test=namespaced_execution`; `cargo test -p miden-mast-package --lib package::serialization`; then `make test-assembly` and package lib tests after focused failures resolve.
 
@@ -380,7 +380,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Earlier normal private attempt stopped at three assembly errors, now resolved by PR09; fresh normal private/relocation/sidecar checks remain unrun, as do complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates |
-| 09 Assembly/packages | in-progress | Inline syntax `ff5784032`; implementation `72218ae6e`; tests `319d291ae`; earlier refs below; base `82935d673` | Independent reviews; inline13/identity12/builder63/linker35/cycles7/nested1 pass within configured-stack full run; syntax319 and strict syntax/assembly library/test Clippy pass; assembly no_std pass; prior package223/one ignored and package Clippy/no_std pass | Full assembly252 pass/230 fail/6 ignored:228 missing explicit namespace metadata, one obsolete diagnostic, one masked panic fixture. Package9/admission, project inputs, fresh normal processor and all inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Fixture helper `e4cb2fbaa`; tests `9fd347f4f`; inline and earlier refs below; base `82935d673` | Independent reviews; seven fixture tests, strict assembly library/test Clippy with testing and no_std/testing pass; configured-stack full assembly332 pass/157 fail/6 ignored. Earlier keyed/syntax/package passes below | Full run still149 missing-home failures plus invocation snapshots/diagnostics and masked assertions. Raw fixture and pure CallableBinding ownership edits are in flight; package9/admission, project inputs/cache matching, fresh normal processor and all inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -1784,3 +1784,34 @@ Next work supplies explicit test-fixture naming independently from production in
 per-target project metadata. Do not add production default homes, infer authority from source aliases,
 replace runtime exec with inline, or suppress failed gates. Package9, D3 production fixtures and all
 inherited processor/proof/recursive/security/qualification gates remain; PR09 stays in progress.
+
+
+### PR 09 Explicit fixture namespaces and package naming prerequisites
+
+`e4cb2fbaa` adds test-only FixtureNamespace with an explicitly selected typed home and bindings for
+concrete declarations, including private helpers and entrypoints. TestContext source helpers use
+it; foreign fixture packages require explicit binding sidecars. Configuration rejects conflicting
+preconfigured homes through a read-only Assembler namespace_plan accessor. No production default
+home/LibraryId algorithm, reverse-D dispatch, alias-derived authority or Protocol acceptance is added.
+Independent review is clean after removing a silent home overwrite. Tests `9fd347f4f` all7 pass,
+including raw missing-plan and missing-sidecar rejection; strict assembly library/test Clippy with
+feature testing and no-default-features/testing check pass. Error conversion uses existing
+IntoDiagnostic rather than requiring core errors to implement Diagnostic.
+
+Configured16MiB full assembly now332 pass/157 fail/6 ignored, versus252/230/6 before these seven new
+regressions. It clears73 existing setup failures. Remaining failures include149 missing explicit
+caller homes and reviewed invocation snapshots/diagnostics; later assertions remain masked. Logs:
+`pr09-fixture-helper-tests-second`, `pr09-fixture-helper-clippy-testing-first`,
+`pr09-fixture-helper-no-std-testing`, `pr09-full-assembly-lib-fixture-helper`. Results precede current
+raw-fixture and pure type-ownership edits; their checks remain pending. Generated .snap.new files
+are review artifacts, never blanket-accepted or staged as source.
+
+Bounded research identifies package9 prerequisites: format8 currently loses K/home/helper metadata
+when reconstructing imported symbols; move existing CallableBinding to mast-package rather than
+creating another model or a syntax dependency cycle. Keep source providers separate from explicit
+per-target naming. Both exported-D library deduplication and source/profile project cache reuse
+must compare requested naming before reuse; no new identity hash is selected. HomeV1's explicit
+profile/context/budget boundary and D3 external inputs remain required. Short source indices are
+`findings-pr09-project.md` and `findings-pr09-package.md` in uncommitted scratch. No target-input API,
+wire9/commitment/admission activation, final Program/kernel conversion or production cache fix is
+claimed. PR09 and all inherited/external acceptance gates remain open.
