@@ -376,11 +376,11 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Environment-aware executable generator restored at 05 (`4bfa6fc94`, `15a9a07c0`). D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | D3 Page-derived identity/interface/registration/closure production fixtures remain required, unresolved and unclaimed. Audit generic declaration/home consumer coupling while preserving profile validation. Executable lowering at09; fuzz at16. |
-| 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
+| 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. The earlier three assembly errors are resolved by PR09; normal processor checks still require a fresh run. Proof/AIR/statement activation is later. |
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
-| 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Fresh normal private attempt stops at exactly3 assembly migration errors; relocation/sidecar unit tests unrun, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Callable paths `b3440301e`; sema `450ff638f`; base `82935d673` | Independent path/builder/sema reviews; package215/one manual seed ignored, strict package Clippy/no_std; syntax317/strict Clippy, first assembly lib check pass | Builder/frontend tests and legacy inline cleanup pending; runtime graph, explicit-inline decision, generic package9/admission, Protocol-coupling audit and VM/inherited gates remain |
+| 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Earlier normal private attempt stopped at three assembly errors, now resolved by PR09; fresh normal private/relocation/sidecar checks remain unrun, as do complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates |
+| 09 Assembly/packages | in-progress | Builder `235287733`; frontend `95761edcd`; graph `f36982d5a`; fixture `ee32f0956`; private package `80a1933d8`; earlier refs below; base `82935d673` | Independent reviews; builder63/frontend12/linker35/nested1/runtime-cycle7 pass; package223/one manual seed ignored, strict package Clippy/no_std; syntax317/strict Clippy; assembly library/no_std pass | D4 inline expansion and whole-assembly lint/tests pending; package9/admission, generic consumer-coupling audit, fresh normal processor checks and all inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -1719,3 +1719,35 @@ This checkpoint changes only the plan/current brief. Four private-code package f
 uncommitted and untouched. Existing PR05–08 implementation and committed PR09 builder/frontend/
 graph/fixture work are preserved. All11 cached source hashes match provenance; shared /tmp copies
 remain retained. No Protocol production acceptance, code/format change, push or GitHub PR is claimed.
+
+
+### PR 09 Keyed compilation and private-code validation evidence
+
+Builder `235287733` with regressions `332e826dd` retains independent helper/callback roots across
+static inventories and finalizes source occurrences child-first without using code supply as
+binding authority. Callable declarations `0410592b0`, frontend `95761edcd`, runtime graph
+`f36982d5a` and tests `6ce937f6e`/`8ac8c7e9b` separate K resolution, optional body supply,
+recursive runtime reachability and actual source-alias cycles. Fixture `ee32f0956` preserves the
+original nested MASM source with explicit complete program/kernel homes. Independent reviews
+passed after retention, source-ordering and kernel-alias precedence findings were corrected.
+
+Focused checks pass: builder63, callable frontend12, linker35 and nested fixture1. Syntax317 and
+strict syntax Clippy passed earlier. The actual assembly library and no-default-features check
+pass; strict assembly lint still stops on unused former implicit-inline helpers. It is not a pass.
+
+`80a1933d8` separates an empty public API from actual callable code inventory. Constructors and
+both readers require procedure roots independently of public exports; private bodies and explicit
+External(D) references do not manufacture exports, entrypoints, code availability or authority.
+Complete-forest commitments retain private-body identity. Independent four-file review is clean;
+package223 pass/one manual seed ignored, strict package library/test Clippy and no_std pass.
+All7 runtime-cycle tests now pass, including the previously failing private-only package fixture.
+AC/heavy guards passed before each Rust command. Logs are `pr09-keyed-builder-tests-final-shared-policy`,
+`pr09-frontend-identity-tests-final`, `pr09-linker-tests-final`, `pr09-nested-blocks-test-final`,
+`pr09-private-code-package-*`, `pr09-runtime-cycles-tests-private-code` and
+`pr09-assembly-no-std-private-code` under `.scratch/librarytree/logs/`.
+
+PR09 remains in progress. D4 expansion is next; package9 activation, complete assembly and fresh
+normal processor/relocation/sidecar checks, Protocol production inputs and all inherited acceptance
+remain. The original three assembly compiler errors are resolved, not a current blocker. No
+whole-stack/proof acceptance or GitHub publication is claimed. Documentation correction `2cb3757fc`
+retains D3 and was committed separately from implementation.
