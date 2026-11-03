@@ -1840,6 +1840,7 @@ mod tests {
 
     use super::*;
 
+    mod keyed_invocations;
 
     #[test]
     fn inline_range_remapping_batches_all_endpoints() {
