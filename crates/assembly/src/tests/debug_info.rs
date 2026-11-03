@@ -304,7 +304,7 @@ fn inline_call_chains_are_recorded_on_call_and_structured_control_occurrences() 
 }
 
 #[test]
-fn inline_call_chains_cover_exec_source_occurrences() -> TestResult {
+fn explicit_inline_call_chains_cover_expanded_source_occurrences() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(
         &context,
@@ -317,10 +317,10 @@ fn inline_call_chains_cover_exec_source_occurrences() -> TestResult {
         begin
             nop
             nop
-            exec.callee
+            inline.callee
             nop
             nop
-            exec.callee
+            inline.callee
         end
         "
     );
@@ -335,7 +335,13 @@ fn inline_call_chains_cover_exec_source_occurrences() -> TestResult {
         &[None, Some("source::inlined"), None, Some("source::inlined")],
     )?;
 
-    let package = Assembler::new(context.source_manager()).assemble_program("test", module)?;
+    let mut bindings = FixtureNamespace::assembly_tests();
+    let package = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut bindings,
+        &[&module],
+    )?
+    .assemble_program("test", module)?;
     let debug_info = package
         .debug_info()
         .into_diagnostic()?
@@ -351,7 +357,7 @@ fn inline_call_chains_cover_exec_source_occurrences() -> TestResult {
                 .any(|asm_op| debug_info[asm_op.context_name_idx].contains("callee"))
                 && !source_node.inline_calls.is_empty()
         })
-        .expect("exec target should have a decorated source occurrence");
+        .expect("explicit inline target should have a decorated source occurrence");
     for asm_op in callee_source
         .asm_ops
         .iter()
@@ -364,7 +370,7 @@ fn inline_call_chains_cover_exec_source_occurrences() -> TestResult {
                 .filter(|inline_call| inline_call.contains_operation(asm_op.op_idx))
                 .count(),
             2,
-            "every operation in the exec target should retain the active inline chain",
+            "every operation in the explicit inline target should retain the active inline chain",
         );
     }
 
@@ -372,7 +378,7 @@ fn inline_call_chains_cover_exec_source_occurrences() -> TestResult {
 }
 
 #[test]
-fn exec_occurrences_do_not_reuse_stale_inline_chains() -> TestResult {
+fn explicit_inline_occurrences_do_not_reuse_stale_chains() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(
         &context,
@@ -385,9 +391,9 @@ fn exec_occurrences_do_not_reuse_stale_inline_chains() -> TestResult {
         begin
             nop
             nop
-            exec.callee
+            inline.callee
             nop
-            exec.callee
+            inline.callee
         end
         "
     );
@@ -402,7 +408,13 @@ fn exec_occurrences_do_not_reuse_stale_inline_chains() -> TestResult {
         &[None, Some("source::decorated"), None],
     )?;
 
-    let package = Assembler::new(context.source_manager()).assemble_program("test", module)?;
+    let mut bindings = FixtureNamespace::assembly_tests();
+    let package = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut bindings,
+        &[&module],
+    )?
+    .assemble_program("test", module)?;
     let debug_info = package
         .debug_info()
         .into_diagnostic()?
@@ -424,14 +436,14 @@ fn exec_occurrences_do_not_reuse_stale_inline_chains() -> TestResult {
     assert_eq!(
         inline_counts,
         [2, 2, 1, 1],
-        "the plain exec must not inherit the earlier inline chain",
+        "the plain inline expansion must not inherit the earlier inline chain",
     );
 
     Ok(())
 }
 
 #[test]
-fn nested_exec_inline_chains_are_innermost_first() -> TestResult {
+fn nested_explicit_inline_chains_are_innermost_first() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(
         &context,
@@ -443,13 +455,13 @@ fn nested_exec_inline_chains_are_innermost_first() -> TestResult {
         proc outer_target
             nop
             nop
-            exec.inner
+            inline.inner
         end
 
         begin
             nop
             nop
-            exec.outer_target
+            inline.outer_target
         end
         "
     );
@@ -470,7 +482,13 @@ fn nested_exec_inline_chains_are_innermost_first() -> TestResult {
         }
     }
 
-    let package = Assembler::new(context.source_manager()).assemble_program("test", module)?;
+    let mut bindings = FixtureNamespace::assembly_tests();
+    let package = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut bindings,
+        &[&module],
+    )?
+    .assemble_program("test", module)?;
     let debug_info = package
         .debug_info()
         .into_diagnostic()?
@@ -487,7 +505,7 @@ fn nested_exec_inline_chains_are_innermost_first() -> TestResult {
                     && debug_info[asm_op.op_name_idx].as_ref() == "add"
             })
         })
-        .expect("nested exec target should be reachable from the entrypoint");
+        .expect("nested explicit inline target should be reachable from the entrypoint");
     let inner_op = debug_info[inner_source]
         .asm_ops
         .iter()
@@ -559,7 +577,7 @@ fn external_exec_records_inline_context_at_the_boundary() -> TestResult {
 }
 
 #[test]
-fn compact_inline_ranges_survive_padding_and_static_linking() -> TestResult {
+fn compact_explicit_inline_ranges_survive_padding_and_pinned_static_linking() -> TestResult {
     let context = TestContext::default();
     let body = "push.1 drop\n".repeat(200);
     let mut library_module = context.parse_module(source_file!(
@@ -568,27 +586,38 @@ fn compact_inline_ranges_survive_padding_and_static_linking() -> TestResult {
     ))?;
     let callee = library_module.procedures_mut().next().unwrap();
     replace_nops_with_named_inline_call_markers(&context, callee, &[Some("source::inner"), None])?;
-    let library = Assembler::new(context.source_manager()).assemble_library(
-        "dep",
-        library_module,
-        None::<Box<Module>>,
-    )?;
+    let mut foreign = dependency_fixture_namespace();
+    let library = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&library_module],
+    )?
+    .assemble_library("dep", library_module, None::<Box<Module>>)?;
+    let expected_implementation = miden_core::program::ImplementationRoot::new(
+        library.mast_forest()[library.get_export_node_id("dep::math::callee")].digest(),
+    );
     let info = library.debug_info().into_diagnostic()?.unwrap();
     assert_eq!(info.nodes().iter().map(|node| node.inline_calls.len()).sum::<usize>(), 1);
 
     let mut module = context
-        .parse_module(source_file!(&context, "use dep::math begin nop exec.math::callee end"))?;
+        .parse_module(source_file!(&context, "use dep::math begin nop inline.math::callee end"))?;
     let entrypoint = module.procedures_mut().find(|procedure| procedure.is_entrypoint()).unwrap();
     replace_nops_with_named_inline_call_markers(&context, entrypoint, &[Some("source::outer")])?;
-    let package = Assembler::new(context.source_manager())
+    let mut bindings = FixtureNamespace::assembly_tests();
+    add_debug_package_bindings(&mut bindings, &library, &foreign)?;
+    let assembler = Assembler::new(context.source_manager())
         .with_package(Arc::from(library), Linkage::Static)?
+        .with_pinned_callable(
+            Arc::from(Path::new("::dep::math::callee")),
+            expected_implementation,
+        )?;
+    let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
         .assemble_program("test", module)?;
     let info = package.debug_info().into_diagnostic()?.unwrap();
     let mut checked = BTreeSet::new();
-    for (source_index, node) in info.nodes().iter().enumerate() {
-        let source_id = miden_mast_package::debug_info::DebugSourceNodeId::from(
-            u32::try_from(source_index).unwrap(),
-        );
+    let entrypoint = package.entrypoint_source_node().unwrap();
+    for source_id in reachable_source_nodes(&info, entrypoint) {
+        let node = &info[source_id];
         for operation in &node.asm_ops {
             let name = info[operation.op_name_idx].as_ref();
             if !matches!(name, "push.1" | "push.2") {
@@ -608,11 +637,20 @@ fn compact_inline_ranges_survive_padding_and_static_linking() -> TestResult {
         }
     }
     assert_eq!(checked.len(), 201);
+    let callee = debug_function(&info, "::dep::math::callee");
+    assert_eq!(&callee.mast_root, expected_implementation.as_word());
+    let definition = assert_debug_definition(&package, &info, callee);
+    let canonical_frames = reachable_source_nodes(&info, definition)
+        .into_iter()
+        .flat_map(|source| info[source].inline_calls.iter())
+        .map(|row| info[info.get_function(row.callee_idx).unwrap().name_idx].as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(canonical_frames, ["source::inner"]);
     Ok(())
 }
 
 #[test]
-fn many_inline_ranges_survive_padding_and_static_linking() -> TestResult {
+fn many_explicit_inline_ranges_survive_padding_and_pinned_static_linking() -> TestResult {
     let context = TestContext::default();
     let body = "nop nop push.1 drop nop nop push.2 drop\n".repeat(128);
     let mut library_module = context.parse_module(source_file!(
@@ -622,27 +660,38 @@ fn many_inline_ranges_survive_padding_and_static_linking() -> TestResult {
     let markers = [None, Some("source::first"), None, Some("source::second")].repeat(128);
     let callee = library_module.procedures_mut().next().unwrap();
     replace_nops_with_named_inline_call_markers(&context, callee, &markers)?;
-    let library = Assembler::new(context.source_manager()).assemble_library(
-        "dep",
-        library_module,
-        None::<Box<Module>>,
-    )?;
+    let mut foreign = dependency_fixture_namespace();
+    let library = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&library_module],
+    )?
+    .assemble_library("dep", library_module, None::<Box<Module>>)?;
+    let expected_implementation = miden_core::program::ImplementationRoot::new(
+        library.mast_forest()[library.get_export_node_id("dep::math::callee")].digest(),
+    );
     let info = library.debug_info().into_diagnostic()?.unwrap();
     assert_eq!(info.nodes().iter().map(|node| node.inline_calls.len()).sum::<usize>(), 256);
 
     let mut module = context
-        .parse_module(source_file!(&context, "use dep::math begin nop exec.math::callee end"))?;
+        .parse_module(source_file!(&context, "use dep::math begin nop inline.math::callee end"))?;
     let entrypoint = module.procedures_mut().find(|procedure| procedure.is_entrypoint()).unwrap();
     replace_nops_with_named_inline_call_markers(&context, entrypoint, &[Some("source::outer")])?;
-    let package = Assembler::new(context.source_manager())
+    let mut bindings = FixtureNamespace::assembly_tests();
+    add_debug_package_bindings(&mut bindings, &library, &foreign)?;
+    let assembler = Assembler::new(context.source_manager())
         .with_package(Arc::from(library), Linkage::Static)?
+        .with_pinned_callable(
+            Arc::from(Path::new("::dep::math::callee")),
+            expected_implementation,
+        )?;
+    let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
         .assemble_program("test", module)?;
     let info = package.debug_info().into_diagnostic()?.unwrap();
     let mut checked = BTreeSet::new();
-    for (source_index, node) in info.nodes().iter().enumerate() {
-        let source_id = miden_mast_package::debug_info::DebugSourceNodeId::from(
-            u32::try_from(source_index).unwrap(),
-        );
+    let entrypoint = package.entrypoint_source_node().unwrap();
+    for source_id in reachable_source_nodes(&info, entrypoint) {
+        let node = &info[source_id];
         for operation in &node.asm_ops {
             let name = info[operation.op_name_idx].as_ref();
             let inner = match name {
@@ -659,6 +708,17 @@ fn many_inline_ranges_survive_padding_and_static_linking() -> TestResult {
         }
     }
     assert_eq!(checked.len(), 256);
+    let callee = debug_function(&info, "::dep::math::callee");
+    assert_eq!(&callee.mast_root, expected_implementation.as_word());
+    let definition = assert_debug_definition(&package, &info, callee);
+    let canonical_frames = reachable_source_nodes(&info, definition)
+        .into_iter()
+        .flat_map(|source| info[source].inline_calls.iter())
+        .map(|row| info[info.get_function(row.callee_idx).unwrap().name_idx].as_ref())
+        .collect::<Vec<_>>();
+    assert_eq!(canonical_frames.len(), 256);
+    assert_eq!(canonical_frames.iter().filter(|name| **name == "source::first").count(), 128);
+    assert_eq!(canonical_frames.iter().filter(|name| **name == "source::second").count(), 128);
     Ok(())
 }
 
@@ -892,12 +952,18 @@ fn plain_exec_preserves_invocation_identity_through_merging() -> TestResult {
 }
 
 #[test]
-fn plain_exec_inline_ranges_cover_only_inlined_operations() -> TestResult {
+fn explicit_inline_ranges_cover_only_expanded_operations() -> TestResult {
     let context = TestContext::default();
-    let package = Assembler::new(context.source_manager()).assemble_program(
-        "test",
-        "proc leaf push.42 neg end\nproc wrapper exec.leaf end\nbegin push.7 exec.wrapper drop drop end",
+    let module = context.parse_module(
+        "proc leaf push.42 neg end\nproc wrapper inline.leaf end\nbegin push.7 inline.wrapper drop drop end",
     )?;
+    let mut bindings = FixtureNamespace::assembly_tests();
+    let package = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut bindings,
+        &[&module],
+    )?
+    .assemble_program("test", module)?;
     let debug = package.debug_info().into_diagnostic()?.unwrap();
     let root = package.entrypoint_source_node().unwrap();
     let inlined_start = debug[root]
@@ -929,7 +995,7 @@ fn plain_exec_inline_ranges_cover_only_inlined_operations() -> TestResult {
             assert!(names[0].ends_with("::leaf"));
             assert!(names[1].ends_with("::wrapper"));
         } else {
-            assert!(names.is_empty(), "caller operation {op_idx} must not inherit exec frames");
+            assert!(names.is_empty(), "caller operation {op_idx} must not inherit inline frames");
         }
     }
     Ok(())
