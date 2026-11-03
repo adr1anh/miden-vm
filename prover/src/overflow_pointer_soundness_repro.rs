@@ -146,6 +146,7 @@ fn verifier_rejects_forged_overflow_pop_order() {
 
     let forged_trace = VmTrace::new_from_parts(
         trace.program_info().clone(),
+        trace.execution_descriptor(),
         trace.init_stack_state(),
         forged_outputs,
         trace.precompile_root(),
@@ -161,11 +162,8 @@ fn verifier_rejects_forged_overflow_pop_order() {
     let proof = prove(forged_trace, HashFunction::Eidos, false)
         .expect("the prover should encode the forged trace for the verifier regression");
     let proof = ExecutionProof::new(proof, miden_core::proof::PrecompileStatus::Empty);
-    let claim = ExecutionClaim::from_program_info(
-        trace.program_info().clone(),
-        trace.init_stack_state(),
-        forged_outputs,
-    );
+    let claim =
+        ExecutionClaim::new(trace.execution_descriptor(), trace.init_stack_state(), forged_outputs);
 
     let verification_result = Verifier::new().verify(&claim, &proof);
     assert!(

@@ -136,8 +136,8 @@ fn prove_recursive_once(prover: &Prover, case: &RecursionCase) -> (f64, usize) {
     )
     .expect("prove recursive verifier");
     let elapsed_ms = start.elapsed().as_secs_f64() * 1_000.0;
-    let claim = ExecutionClaim::from_program_info(
-        case.program.program.to_info(),
+    let claim = ExecutionClaim::new(
+        case.program.environment.execution().descriptor(),
         StackInputs::default(),
         stack_outputs,
     );

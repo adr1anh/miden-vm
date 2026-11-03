@@ -7,7 +7,7 @@ use miden_air_definitions::vm::{
 };
 use miden_core::{
     Felt,
-    program::{ExecutionClaim, StackOutputs},
+    program::{ExecutionClaim, ExecutionDescriptor, StackOutputs},
     proof::{ExecutionProof, HashFunction, PrecompileStatus, VmProof},
     utils::{Matrix, RowMajorMatrix},
 };
@@ -31,6 +31,7 @@ pub struct ReproTrace {
     eidos_compression: RowMajorMatrix<Felt>,
     and8: RowMajorMatrix<Felt>,
     program_info: miden_processor::ProgramInfo,
+    execution_descriptor: ExecutionDescriptor,
     init_stack: miden_processor::StackInputs,
     precompile_root: miden_core::deferred::DeferredRoot,
     outputs: StackOutputs,
@@ -49,6 +50,7 @@ impl ReproTrace {
             eidos_compression,
             and8,
             program_info: trace.program_info().clone(),
+            execution_descriptor: trace.execution_descriptor(),
             init_stack: trace.init_stack_state(),
             precompile_root: trace.precompile_root(),
             outputs: *trace.stack_outputs(),
@@ -165,6 +167,7 @@ impl ReproTrace {
         );
         let trace = VmTrace::new_from_parts(
             self.program_info.clone(),
+            self.execution_descriptor,
             self.init_stack,
             outputs,
             self.precompile_root,
@@ -180,8 +183,7 @@ impl ReproTrace {
         outputs: StackOutputs,
     ) -> Result<VerificationOutcome, VerificationError> {
         let proof = ExecutionProof::new(proof, PrecompileStatus::Empty);
-        let claim =
-            ExecutionClaim::from_program_info(self.program_info.clone(), self.init_stack, outputs);
+        let claim = ExecutionClaim::new(self.execution_descriptor, self.init_stack, outputs);
         Verifier::new().verify(&claim, &proof)
     }
 }

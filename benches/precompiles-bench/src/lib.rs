@@ -182,9 +182,8 @@ pub fn verify_once(
     stack_outputs: StackOutputs,
     proof: &ExecutionProof,
 ) {
-    // PR12 must migrate this legacy ProgramInfo claim adapter to the caller's expected statement.
-    let claim = ExecutionClaim::from_program_info(
-        fixture.program.to_info(),
+    let claim = ExecutionClaim::new(
+        fixture.environment.execution().descriptor(),
         fixture.stack_inputs,
         stack_outputs,
     );

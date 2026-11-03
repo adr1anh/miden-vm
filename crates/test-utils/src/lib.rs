@@ -662,7 +662,7 @@ impl Test {
         }
         assembler = fixture.configure(
             assembler,
-            core::iter::once(program.as_ref()).chain(modules.iter().map(|module| module.as_ref())),
+            core::iter::once(program.as_ref()).chain(modules.iter().map(AsRef::as_ref)),
         )?;
         for module in modules {
             assembler.compile_and_statically_link(module)?;
@@ -828,21 +828,17 @@ impl Test {
             processor.execute_for_proving_sync(&program, environment, &mut host)
         }
         .unwrap();
-        let stack_outputs = *witness.claim().stack_outputs();
+        let claim = witness.claim();
+        let stack_outputs = *claim.stack_outputs();
         let proof = Prover::new().prove_full(witness).unwrap();
-        let claim =
-            ExecutionClaim::from_program_info(program.to_info(), stack_inputs, stack_outputs);
         if test_fail {
             let mut elements = [ZERO; MIN_STACK_DEPTH];
             elements.copy_from_slice(&*stack_outputs);
             elements[0] += ONE;
             let stack_outputs =
                 StackOutputs::new(&elements).expect("stack outputs should fit the VM stack");
-            let invalid_claim = ExecutionClaim::from_program_info(
-                claim.to_program_info(),
-                stack_inputs,
-                stack_outputs,
-            );
+            let invalid_claim =
+                ExecutionClaim::new(claim.execution_descriptor(), stack_inputs, stack_outputs);
             assert!(Verifier::new().verify(&invalid_claim, &proof).is_err());
         } else {
             let outcome =
