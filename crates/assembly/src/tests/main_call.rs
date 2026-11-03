@@ -2,6 +2,7 @@
 // ================================================================================================
 
 use super::*;
+use crate::testing::FixtureNamespace;
 
 #[test]
 fn simple_main_call() -> TestResult {
@@ -81,33 +82,70 @@ end
 "
     );
 
-    // compile program in which functions from different modules but with equal names are called
-    let main_src = source_file!(
-        &context,
-        "
-        begin
-            # call the account_method_1 from the first module (account_code1)
-            call.0x81e0b1afdbd431e4c9d4b86599b82c3852ecf507ae318b71c099cdeba0169068
-
-            # call the account_method_2 from the first module (account_code1)
-            call.0x1bc375fc794af6637af3f428286bf6ac1a24617640ed29f8bc533f48316c6d75
-
-            # call the account_method_1 from the second module (account_code2)
-            call.0xcfadd74886ea075d15826a4f59fb4db3a10cde6e6e953603cba96b4dcbb94321
-
-            # call the account_method_2 from the second module (account_code2)
-            call.0x1976bf72d457bd567036d3648b7e3f3c22eca4096936931e59796ec05c0ecb10
-        end
-        "
-    );
-
     let account_code1 = context.parse_module(account_code1_src)?;
     let account_code2 = context.parse_module(account_code2_src)?;
-    let main = context.parse_program(main_src)?;
+    let mut fixture = FixtureNamespace::assembly_tests();
+    fixture.add_module(&account_code1)?;
+    fixture.add_module(&account_code2)?;
+    let keys = [
+        fixture.binding(&account_code1.path().join("account_method_1")).unwrap().key(),
+        fixture.binding(&account_code1.path().join("account_method_2")).unwrap().key(),
+        fixture.binding(&account_code2.path().join("account_method_1")).unwrap().key(),
+        fixture.binding(&account_code2.path().join("account_method_2")).unwrap().key(),
+    ];
 
-    let mut assembler = Assembler::new(context.source_manager());
+    // Compile the existing word-target syntax with keys from the explicit fixture declarations.
+    let main_src = source_file!(
+        &context,
+        format!(
+            "
+        begin
+            # call the account_method_1 from the first module (account_code1)
+            call.{}
+
+            # call the account_method_2 from the first module (account_code1)
+            call.{}
+
+            # call the account_method_1 from the second module (account_code2)
+            call.{}
+
+            # call the account_method_2 from the second module (account_code2)
+            call.{}
+        end
+        ",
+            keys[0].as_word(),
+            keys[1].as_word(),
+            keys[2].as_word(),
+            keys[3].as_word(),
+        )
+    );
+
+    let main = context.parse_program(main_src)?;
+    fixture.add_module(&main)?;
+
+    let mut assembler = fixture.configure(
+        Assembler::new(context.source_manager()),
+        [&*account_code1, &*account_code2, &*main],
+    )?;
     assembler.compile_and_statically_link_all([account_code1, account_code2])?;
-    assembler.assemble_program("main", main)?;
+    let program = assembler.assemble_program("main", main)?.unwrap_program();
+    let targets = program
+        .mast_forest()
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            MastNode::Call(call) => {
+                assert!(!call.is_syscall());
+                Some(call.target())
+            },
+            MastNode::Exec(_) => panic!("call source must retain CALL mode"),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(targets.len(), 4);
+    assert_eq!(targets, keys.into_iter().collect());
+    assert_eq!(program.num_procedures(), 5);
+    assert_all_nodes_reachable_from_roots(program.mast_forest());
 
     Ok(())
 }
