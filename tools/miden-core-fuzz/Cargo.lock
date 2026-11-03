@@ -1722,6 +1722,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "miden-assembly-syntax",
  "miden-core",
+ "miden-crypto",
  "miden-debug-types",
  "miden-utils-indexing",
  "rustc-hash",
