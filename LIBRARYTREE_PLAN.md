@@ -382,7 +382,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 fresh normal attempt passes assembly compilation, then stops at two prover calls missing ExecutionEnvironment; no processor tests ran. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Namespace inputs `a16c005aa`/`2a9b8db73`; callable codec `73d0d32a4`/`38dbfa982`; earlier refs below; base `82935d673` | Independent reviews; namespace11/full assembly465 pass/43 project failures/6 ignored; fresh strict assembly library/test Clippy with testing and no_std/testing pass. Prior codec11/full package251 pass/one manual seed ignored, unchanged HomeV1/interface tests and combined Clippy/no_std evidence remain applicable | Required live package9 admission/commitments/readers, pending kernel-input and own-interface applicability decisions, per-target project/cache matching, final Program/kernel conversion, prover consumer migration and all inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Fuzz `108dc3607`, lock `54f7db5af`; namespace inputs `a16c005aa`/`2a9b8db73`; earlier refs below; base `82935d673` | Independent reviews; namespace11/full assembly465 pass/43 project failures/6 ignored; strict assembly Clippy/no_std/testing pass. Codec fuzz locked check/strict Clippy and ASan smoke5916 runs/31s pass with LSan disabled for host ptrace. Prior codec11/package251 pass/one manual seed ignored and shared-codec evidence remain applicable | Required live package9 admission/commitments/readers, pending kernel-input and own-interface applicability decisions, per-target project/cache matching, final Program/kernel conversion, prover consumer migration, full fuzz qualification and all inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -2007,3 +2007,26 @@ interface/release roles, while TargetType describes usage. Neither maps an own L
 obligation onto every code-only candidate. The user question is recorded above; do not silently
 require a Protocol interface everywhere or make identity optional for selected release profiles.
 Live package9, project/cache, standard test-dev/nextest and all inherited/external gates remain open.
+
+### PR 09 Callable codec fuzz integration
+
+`108dc3607` adds the bounded callable_inventory_codec target to the existing fuzz workspace,
+CI matrix and fuzz-all runner. Strict synthetic home/TypedId allowlists confer no Protocol
+admission. Every input also generates1–4 valid declarations, optional repeated aliases and shared
+D selections; raw/mutated bytes exercise canonical round trips, revoked-context rejection, trailing
+bytes and the4096-byte limit. Generation stays within20 records/24 components/192 blob bytes/913
+wire bytes. Independent source/runner review is clean.
+
+`54f7db5af` corrects exactly one stale nested-lock dependency edge for existing mast-package
+miden-crypto; no package/version/checksum changes. Locked target check and strict target Clippy
+pass. Scratch-local cargo-fuzz0.13.2 and nightly2026-10-09 build the AddressSanitizer dev binary.
+The first run executes6045 cases then fails its LeakSanitizer exit check under host ptrace. A
+rerun with only `ASAN_OPTIONS=detect_leaks=0` passes5916 executions/31s, with AddressSanitizer
+still enabled and seeds covering all homes/repeated aliases/shared D, canonical empty inventory
+and4097-byte rejection. This is bounded smoke evidence, not leak or full fuzz qualification.
+
+Logs: `pr09-cargo-fuzz-install`, `pr09-callables-fuzz-check-{first,refresh-lock,locked}`,
+`pr09-callables-fuzz-clippy`, `pr09-callables-fuzz-asan-{build,smoke,smoke-no-lsan}`. Build, check,
+install and fuzz commands passed AC/heavy guards; no concurrent heavy suites ran. Corpus, build,
+tool and host-failure artifacts remain uncommitted scratch outside routine agent input. Live
+package9 and both required container decisions remain unresolved; no inherited gate is waived.
