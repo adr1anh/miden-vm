@@ -34,7 +34,6 @@ use miden_core::{
     advice::AdviceMap,
     chiplets::hasher,
     mast::{MastForest, MastNode, MastNodeExt, MastNodeId},
-    program::KernelDescriptor,
     serde::{ByteWriter, Deserializable, Serializable},
 };
 
@@ -1302,75 +1301,64 @@ where
 
 /// Conversions
 impl Package {
-    /// Get a [KernelDescriptor] from this package, if this package contains one.
-    pub fn to_kernel_descriptor(&self) -> Result<KernelDescriptor, Report> {
-        let exports = self
-            .manifest
-            .exports()
-            .filter_map(|export| {
-                if export.namespace().is_kernel_path()
-                    && let PackageExport::Procedure(p) = export
-                {
-                    Some(p.digest)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
-        if exports.is_empty() {
-            return Err(Report::msg(
-                "invalid kernel package: does not export any kernel procedures",
-            ));
+    /// Checks that this package supplies a nonempty public kernel code surface.
+    ///
+    /// `naming` must be retained from compilation or admitted with explicit current policy.
+    /// Canonical bindings, rather than source namespaces or body digests, identify exports.
+    /// This neither constructs an authorization list nor authenticates an execution environment.
+    pub fn check_kernel_code(&self, naming: &PackageNaming) -> Result<(), Report> {
+        self.check_naming(naming).map_err(Report::msg)?;
+        if !self.is_kernel() {
+            return Err(Report::msg("invalid kernel package: not a kernel"));
         }
-        KernelDescriptor::new(&exports)
-            .map_err(|err| Report::msg(format!("invalid kernel package: {err}")))
+        if !self.manifest.exports().any(|export| export.as_procedure().is_some()) {
+            return Err(Report::msg("invalid kernel package: does not export any procedures"));
+        }
+        Ok(())
     }
 
-    // TODO(pauls): This function can be removed when we remove Program
-    #[doc(hidden)]
-    pub fn try_into_program(&self) -> Result<miden_core::program::Program, Report> {
-        use miden_assembly_syntax::{Path as MasmPath, ast};
+    /// Selects the code/source hint for this package's explicitly named executable entry.
+    ///
+    /// Requires the exact canonical metadata retained by compilation or obtained through
+    /// [`Self::admit_naming`] with current caller policy. A target tag, source path, body root or
+    /// embedded kernel never supplies a missing key or execution authority. The returned legacy
+    /// `Program` carries available code; execution still requires a caller-authorized descriptor
+    /// and authenticated K-to-D opening. Kernel code can be supplied independently by a host.
+    pub fn try_into_program(
+        &self,
+        naming: &PackageNaming,
+    ) -> Result<miden_core::program::Program, Report> {
         use miden_core::program::Program;
 
+        self.check_naming(naming).map_err(Report::msg)?;
         if !self.is_program() {
             return Err(Report::msg(format!(
-                "cannot convert package of type {} to Executable",
+                "cannot convert package of type {} to executable code",
                 self.kind
             )));
         }
-        let entrypoint = self.manifest.entrypoint().unwrap_or_else(|| {
-            MasmPath::exec_path().join(ast::ProcedureName::MAIN_PROC_NAME).into()
-        });
-        if let Some(entrypoint) = self.get_procedure_node_by_path(&entrypoint) {
-            let mast_forest = self.mast.clone();
-            let kernel_dependency = self.kernel_runtime_dependency()?.cloned();
-            match (self.try_embedded_kernel_package()?, kernel_dependency) {
-                (Some(kernel_package), _) => Ok(Program::with_kernel(
-                    mast_forest,
-                    entrypoint,
-                    kernel_package.to_kernel_descriptor()?,
-                )),
-                (None, Some(kernel_dependency)) => Err(Report::msg(format!(
-                    "package '{}' declares kernel runtime dependency '{}@{}#{}', but does not embed the kernel package required to reconstruct a program",
-                    self.name,
-                    kernel_dependency.name,
-                    kernel_dependency.version,
-                    kernel_dependency.digest
-                ))),
-                (None, None) => Ok(Program::new(mast_forest, entrypoint)),
-            }
-        } else {
-            Err(Report::msg(format!(
-                "malformed executable package: no procedure root for '{entrypoint}'"
-            )))
-        }
+        let key = naming
+            .entry_key()
+            .ok_or_else(|| Report::msg("executable code candidate has no explicit entry key"))?;
+        let implementation = naming.callables().selected_implementation(key).ok_or_else(|| {
+            Report::msg("explicit executable entry has no selected implementation")
+        })?;
+        // Identity/implementation selection above is complete. A matching manifest node merely
+        // preserves the selected source occurrence when equal-D roots have distinct debug frames.
+        let entrypoint = self
+            .manifest
+            .entrypoint()
+            .and_then(|path| self.get_procedure_node_by_path(&path))
+            .or_else(|| self.mast.find_procedure_root(implementation.into_word()))
+            .ok_or_else(|| {
+                Report::msg("explicit executable entry has no retained procedure root")
+            })?;
+        Ok(Program::new(self.mast.clone(), entrypoint))
     }
 
-    // TODO(pauls): This function can be removed when we remove Program
-    #[doc(hidden)]
-    pub fn unwrap_program(&self) -> miden_core::program::Program {
-        assert_eq!(self.kind, TargetType::Executable);
-        self.try_into_program().unwrap_or_else(|err| panic!("{err}"))
+    /// Panicking convenience for [`Self::try_into_program`] with explicitly supplied metadata.
+    pub fn unwrap_program(&self, naming: &PackageNaming) -> miden_core::program::Program {
+        self.try_into_program(naming).unwrap_or_else(|err| panic!("{err}"))
     }
 
     /// Decodes the [`EventHandlerSection`] of this package, if present.
@@ -1967,8 +1955,11 @@ mod tests {
         assert_eq!(first.manifest.num_exports(), 0);
         assert_eq!(first.entrypoint(), None);
         assert!(!first.is_program());
-        assert!(first.try_into_program().is_err());
-        assert!(first.to_kernel_descriptor().is_err());
+        let naming = first
+            .admit_naming(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
+            .unwrap();
+        assert!(first.try_into_program(&naming).is_err());
+        assert!(first.check_kernel_code(&naming).is_err());
         assert_eq!(first.interface_commitment().unwrap(), second.interface_commitment().unwrap());
         assert_ne!(first.mast_forest_commitment(), second.mast_forest_commitment());
         assert_ne!(first.code_commitment(), second.code_commitment());
@@ -2674,24 +2665,24 @@ mod tests {
     }
 
     #[test]
-    fn to_kernel_descriptor_rejects_empty_kernel_exports() {
-        let mut package = build_package("kernel", TargetType::Kernel, "$kernel::boot", [], vec![]);
-        package.manifest = PackageManifest {
-            exports: Default::default(),
-            modules: Default::default(),
-            dependencies: Default::default(),
-            entrypoint: None,
-        };
-
+    fn check_kernel_code_rejects_empty_kernel_exports() {
+        let with_exports = build_package("kernel", TargetType::Kernel, "$kernel::boot", [], vec![]);
+        let package = fixture_create(
+            PackageId::from("private-kernel"),
+            Version::new(1, 0, 0),
+            TargetType::Kernel,
+            with_exports.mast_forest().clone(),
+            [],
+            [],
+        )
+        .unwrap();
+        let naming = package
+            .admit_naming(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
+            .unwrap();
         let error = package
-            .to_kernel_descriptor()
+            .check_kernel_code(&naming)
             .expect_err("kernel packages without exported procedures should be rejected");
-
-        assert!(
-            error
-                .to_string()
-                .contains("invalid kernel package: does not export any kernel procedures")
-        );
+        assert!(error.to_string().contains("does not export any procedures"));
     }
 
     fn kernel_dependency(package: &Package) -> Dependency {
@@ -3061,7 +3052,10 @@ mod tests {
         let asm_op = debug_info.first_asm_op_for_source_node(source_node).unwrap();
         assert_eq!(debug_info[asm_op.context_name_idx].as_ref(), "alias_b");
 
-        let program = executable.try_into_program().unwrap();
+        let naming = executable
+            .admit_naming(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
+            .unwrap();
+        let program = executable.try_into_program(&naming).unwrap();
         assert_eq!(program.entrypoint(), entrypoint_node);
     }
 
@@ -3425,3 +3419,6 @@ mod tests {
         assert_eq!(naming.callables().key_for_visible_path(&entry_path), Some(key));
     }
 }
+
+#[cfg(test)]
+mod entry_code_tests;

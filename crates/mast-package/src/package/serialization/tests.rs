@@ -259,8 +259,10 @@ fn private_only_code_package_roundtrips_without_public_exports() {
                 assert_eq!(decoded.mast_forest().procedure_roots().len(), 1);
                 assert_eq!(decoded.code_commitment(), package.code_commitment());
                 assert_eq!(decoded.commitment(), package.commitment());
-                assert!(decoded.try_into_program().is_err());
-                assert!(decoded.to_kernel_descriptor().is_err());
+                let naming = fixture_naming(fixture_home(), kind, decoded.mast_forest(), &[]);
+                decoded.check_naming(&naming).unwrap();
+                assert!(decoded.try_into_program(&naming).is_err());
+                assert!(decoded.check_kernel_code(&naming).is_err());
             }
         }
     }
