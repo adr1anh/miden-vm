@@ -1,11 +1,15 @@
-#[cfg(any(feature = "std", test))]
-use alloc::vec::Vec;
 use alloc::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    string::ToString,
     sync::Arc,
+    vec::Vec,
 };
 
-use miden_assembly_syntax::diagnostics::{IntoDiagnostic, Report};
+use miden_assembly_syntax::{
+    PathComponent,
+    ast::{Item, Module},
+    diagnostics::{IntoDiagnostic, Report},
+};
 #[cfg(any(feature = "std", test))]
 use miden_core::{Word, chiplets::hasher};
 use miden_mast_package::{CallableProcedurePath, NamespacePlan};
@@ -113,6 +117,69 @@ impl NamespaceInputs {
         binding: CallableBinding,
     ) -> Result<Self, Report> {
         self.with_callable_input(declaration, CallableInput::Bound(binding))
+    }
+
+    /// Names concrete source procedures by their semantic defining paths under the caller home.
+    ///
+    /// This is an explicit opt-in convention requiring an already supplied [`NamespacePlan`].
+    /// Private helpers and executable entrypoints receive names; aliases and re-exports retain
+    /// their defining procedures' bindings. Only the absolute source-root component is omitted
+    /// from canonical paths. Existing local-path overrides and complete bindings are preserved.
+    /// Source paths and the caller home make no publication or public-ownership claim.
+    ///
+    /// Duplicate modules or concrete declarations within the supplied cohort are rejected.
+    /// Kernel modules require separate explicit placement of root exports and private helpers;
+    /// this ordinary source convention cannot select their syscall-authorized bindings.
+    pub fn with_default_callable_paths<'a>(
+        mut self,
+        modules: impl IntoIterator<Item = &'a Module>,
+    ) -> Result<Self, Report> {
+        self.require_namespace_plan()?;
+        let mut seen_modules = BTreeSet::new();
+        let mut seen_declarations = BTreeSet::new();
+        for module in modules {
+            if module.is_in_kernel() {
+                return Err(Report::msg(
+                    "kernel source requires explicit root-export and private-helper placement",
+                ));
+            }
+            if !seen_modules.insert(module.path()) {
+                return Err(Report::msg(format!(
+                    "duplicate source module in callable naming cohort: '{}'",
+                    module.path()
+                )));
+            }
+            for item in module.items() {
+                if !matches!(item, Item::Procedure(_)) {
+                    continue;
+                }
+                let declaration: Arc<Path> = module.path().join(item.name()).into();
+                if !seen_declarations.insert(declaration.clone()) {
+                    return Err(Report::msg(format!(
+                        "duplicate source callable declaration: '{declaration}'"
+                    )));
+                }
+                if let Entry::Vacant(entry) = self.declarations.entry(declaration) {
+                    let canonical = Self::default_callable_path(entry.key())?;
+                    entry.insert(CallableInput::LocalPath(canonical));
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    /// Shared defining-path lowering for production opt-in and explicit source fixtures.
+    pub(crate) fn default_callable_path(
+        declaration: &Path,
+    ) -> Result<CallableProcedurePath, Report> {
+        let mut components = Vec::new();
+        for component in declaration.components() {
+            let component = component.into_diagnostic()?;
+            if !matches!(component, PathComponent::Root) {
+                components.push(component.as_str().to_string());
+            }
+        }
+        CallableProcedurePath::from_semantic_components(components).into_diagnostic()
     }
 
     fn with_callable_input(

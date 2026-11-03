@@ -180,15 +180,7 @@ impl FixtureNamespace {
                 continue;
             }
             let declaration = module.path().join(item.name());
-            let mut components = Vec::new();
-            for component in declaration.components() {
-                let component = component.into_diagnostic()?;
-                if !matches!(component, PathComponent::Root) {
-                    components.push(component.as_str().to_string());
-                }
-            }
-            let canonical =
-                CallableProcedurePath::from_semantic_components(components).into_diagnostic()?;
+            let canonical = crate::NamespaceInputs::default_callable_path(&declaration)?;
             let binding =
                 CallableBinding::new(self.namespace_plan.clone(), canonical).into_diagnostic()?;
             self.add_binding(declaration.into(), binding)?;

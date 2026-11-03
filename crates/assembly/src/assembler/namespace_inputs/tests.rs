@@ -8,7 +8,7 @@ use crate::{
     Assembler, AssemblyProduct, CallableBinding, CallableDeclaration, NamespaceInputs, Path,
     Report,
     ast::{self, Ident, ItemIndex},
-    testing::TestContext,
+    testing::{FixtureNamespace, TestContext},
 };
 
 fn home(name: &str) -> NamespacePlan {
@@ -25,6 +25,14 @@ fn declaration(path: &str) -> Arc<Path> {
 
 fn binding(home_name: &str, name: &str) -> CallableBinding {
     CallableBinding::new(home(home_name), canonical(name)).unwrap()
+}
+
+fn source_binding(home_name: &str, components: &[&str]) -> CallableBinding {
+    let path = CallableProcedurePath::from_semantic_components(
+        components.iter().map(|component| (*component).to_string()).collect(),
+    )
+    .unwrap();
+    CallableBinding::new(home(home_name), path).unwrap()
 }
 
 fn inputs(home_name: &str) -> NamespaceInputs {
@@ -301,6 +309,190 @@ fn executable_product_retains_the_explicit_home_and_entry_key() {
     assert_eq!(product.namespace_plan(), &home("entry-caller"));
     assert_eq!(product.entry_key(), Some(binding("entry-caller", "entry").key()));
     assert_eq!(product.callable_key_for_definition(&entry), product.entry_key());
+}
+
+#[test]
+fn default_source_paths_require_an_explicit_home_even_with_complete_bindings() {
+    let context = TestContext::default();
+    let module = context.parse_module("namespace client\npub proc run push.1 end").unwrap();
+    let missing = NamespaceInputs::new();
+    let bound = missing
+        .clone()
+        .with_callable_binding(declaration("::client::run"), binding("foreign", "entry"))
+        .unwrap();
+    for inputs in [missing, bound] {
+        let error = inputs.with_default_callable_paths([&*module]).unwrap_err();
+        assert!(error.to_string().contains("explicit caller NamespacePlan"));
+    }
+    let explicit_root = NamespaceInputs::new()
+        .with_namespace_plan(NamespacePlan::new(vec![]))
+        .with_default_callable_paths([&*module])
+        .unwrap();
+    assert_eq!(explicit_root.namespace_plan(), Some(&NamespacePlan::new(vec![])));
+}
+
+#[test]
+fn default_source_paths_retain_private_callbacks_unused_helpers_and_entrypoints() {
+    let context = TestContext::default();
+    let program = context
+        .parse_module(
+            "proc unused push.9 end\nproc callback push.7 end\nbegin procref.callback dropw end",
+        )
+        .unwrap();
+    let inputs = NamespaceInputs::new()
+        .with_namespace_plan(home("application"))
+        .with_default_callable_paths([&*program])
+        .unwrap();
+    let product = Assembler::new(context.source_manager())
+        .with_namespace_inputs(inputs)
+        .assemble_executable_modules("application".into(), program, [])
+        .unwrap();
+    let entry = source_binding("application", &["$exec", "$main"]);
+    assert_eq!(product.entry_key(), Some(entry.key()));
+    assert_eq!(product.callables().bindings().len(), 3);
+    for name in ["unused", "callback", "$main"] {
+        let expected = source_binding("application", &["$exec", name]);
+        assert_eq!(
+            product.callable_key_for_definition(&Path::EXEC.join(name)),
+            Some(expected.key())
+        );
+    }
+}
+
+#[test]
+fn default_source_paths_preserve_local_overrides_and_foreign_complete_bindings() {
+    let context = TestContext::default();
+    let module = context
+        .parse_module(
+            "namespace client\npub proc run exec.foreign exec.helper end\nproc foreign push.7 end\nproc helper push.1 end",
+        )
+        .unwrap();
+    let foreign = binding("foreign-publisher", "foreign-export");
+    let inputs = NamespaceInputs::new()
+        .with_namespace_plan(home("previous"))
+        .with_callable_path(declaration("::client::run"), canonical("custom-entry"))
+        .unwrap()
+        .with_callable_binding(declaration("::client::foreign"), foreign.clone())
+        .unwrap()
+        .with_default_callable_paths([&*module])
+        .unwrap()
+        .with_namespace_plan(home("current"));
+    let product = Assembler::new(context.source_manager())
+        .with_namespace_inputs(inputs)
+        .assemble_library_modules("overrides".into(), module, [], TargetType::Library)
+        .unwrap();
+    for (path, expected) in [
+        ("::client::run", binding("current", "custom-entry")),
+        ("::client::foreign", foreign),
+        ("::client::helper", source_binding("current", &["client", "helper"])),
+    ] {
+        assert_eq!(product.callable_key_for_definition(Path::new(path)), Some(expected.key()));
+    }
+}
+
+#[test]
+fn default_source_paths_preserve_quoted_components_and_defining_keys_through_aliases() {
+    let context = TestContext::default();
+    let client = context
+        .parse_module("namespace client\nuse bridge\npub proc caller exec.bridge::alias end")
+        .unwrap();
+    let dependency = context
+        .parse_module("namespace dep::\"math::wide\"\npub proc run push.7 end")
+        .unwrap();
+    let bridge = context
+        .parse_module("namespace bridge\npub use {run as alias} from dep::\"math::wide\"")
+        .unwrap();
+    let inputs = NamespaceInputs::new()
+        .with_namespace_plan(home("caller"))
+        .with_default_callable_paths([&*client, &*dependency, &*bridge])
+        .unwrap();
+    let product = Assembler::new(context.source_manager())
+        .with_namespace_inputs(inputs)
+        .assemble_library_modules(
+            "aliases".into(),
+            client,
+            [dependency, bridge],
+            TargetType::Library,
+        )
+        .unwrap();
+    let defining = source_binding("caller", &["dep", "math::wide", "run"]);
+    assert_eq!(
+        product.callable_key_for_definition(Path::new("::dep::\"math::wide\"::run")),
+        Some(defining.key())
+    );
+    assert_eq!(product.callable_key_for_definition(Path::new("::bridge::alias")), None);
+    assert_eq!(product.callables().bindings().len(), 2);
+    let artifact = product.into_artifact(false).unwrap();
+    assert!(artifact.mast_forest().nodes().iter().any(|node| {
+        matches!(node, miden_core::mast::MastNode::Exec(exec) if exec.target() == defining.key())
+    }));
+}
+
+#[test]
+fn default_source_paths_reject_duplicate_cohort_modules_even_without_procedures() {
+    let first = ast::Module::new(ast::ModuleKind::Library, Path::new("::duplicate"));
+    let second = first.clone();
+    for modules in [[&first, &first], [&first, &second]] {
+        let error = NamespaceInputs::new()
+            .with_namespace_plan(home("caller"))
+            .with_default_callable_paths(modules)
+            .unwrap_err();
+        assert!(error.to_string().contains("duplicate source module"));
+    }
+}
+
+#[test]
+fn default_source_paths_reject_duplicate_declarations_even_when_an_override_exists() {
+    let context = TestContext::default();
+    let mut module = context
+        .parse_module("namespace client\npub proc run push.1 end\nproc helper push.2 end")
+        .unwrap();
+    let duplicate = module.items()[0].clone();
+    *module.items_mut().nth(1).unwrap() = duplicate;
+    let error = NamespaceInputs::new()
+        .with_namespace_plan(home("caller"))
+        .with_callable_binding(declaration("::client::run"), binding("foreign", "run"))
+        .unwrap()
+        .with_default_callable_paths([&*module])
+        .unwrap_err();
+    assert!(error.to_string().contains("duplicate source callable declaration"));
+}
+
+#[test]
+fn default_source_paths_require_separate_kernel_placement_at_any_source_path() {
+    for path in [Path::KERNEL, Path::new("::ordinary_name")] {
+        let kernel = ast::Module::new(ast::ModuleKind::Kernel, path);
+        let error = NamespaceInputs::new()
+            .with_namespace_plan(home("private-helpers"))
+            .with_default_callable_paths([&kernel])
+            .unwrap_err();
+        assert!(error.to_string().contains("explicit root-export and private-helper placement"));
+    }
+}
+
+#[test]
+fn source_fixture_lowering_preserves_identical_repeats_and_rejects_conflicts() {
+    let context = TestContext::default();
+    let module = context
+        .parse_module("namespace fixtures::\"math::wide\"\npub proc run push.1 end")
+        .unwrap();
+    let path = declaration("::fixtures::\"math::wide\"::run");
+    let mut fixture = FixtureNamespace::new(home("fixtures"));
+    fixture.add_module(&module).unwrap();
+    fixture.add_module(&module).unwrap();
+    assert_eq!(
+        fixture.binding(&path),
+        Some(&source_binding("fixtures", &["fixtures", "math::wide", "run"]))
+    );
+    let mut conflicting = FixtureNamespace::new(home("fixtures"));
+    conflicting.add_binding(path, binding("fixtures", "override")).unwrap();
+    assert!(
+        conflicting
+            .add_module(&module)
+            .unwrap_err()
+            .to_string()
+            .contains("conflicting fixture callable metadata")
+    );
 }
 
 #[test]
