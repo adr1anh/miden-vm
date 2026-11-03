@@ -130,11 +130,7 @@ fn run_every_binding(fixture: ExecutableForestFixture, stack: &[Felt]) -> Result
     for procedure in fixture.procedures() {
         let program = Program::new(fixture.forest().clone(), procedure.root);
         let environment = ExecutionEnvironment::new(
-            ExecutionDescriptor::new(
-                procedure.key,
-                fixture.environment().root(),
-                fixture.kernel_namespace(),
-            ),
+            ExecutionDescriptor::new(procedure.key, fixture.environment().root()),
             opening_limits(),
             ledger_limits(),
             session_limits(),

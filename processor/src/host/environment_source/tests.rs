@@ -25,11 +25,8 @@ use crate::{
 
 #[test]
 fn configuration_preserves_explicit_authority_and_limits() {
-    let descriptor = ExecutionDescriptor::new(
-        ProcedureKey::new(word(10)),
-        EnvironmentRoot::new(word(20)),
-        Namespace::new(word(30)),
-    );
+    let descriptor =
+        ExecutionDescriptor::new(ProcedureKey::new(word(10)), EnvironmentRoot::new(word(20)));
     let opening = OpeningLimits { max_depth: 0, ..opening_limits() };
     let ledger = LedgerLimits {
         max_occurrences: 0,

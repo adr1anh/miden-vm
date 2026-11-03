@@ -22,7 +22,7 @@ macro_rules! rejected {
 #[test]
 fn unentered_session_exposes_its_descriptor_but_cannot_issue_or_finalize_requests() {
     let fixture = direct("entry", 40);
-    let descriptor = fixture.descriptor(Namespace::initial());
+    let descriptor = fixture.descriptor();
     let limits = session_limits();
     let mut session = ResolutionSession::new(descriptor, ledger_limits(), limits);
     assert_eq!(session.descriptor(), descriptor);
@@ -60,7 +60,7 @@ fn unentered_session_exposes_its_descriptor_but_cannot_issue_or_finalize_request
 #[test]
 fn entry_requires_the_exact_descriptor_root_and_key_and_drop_publishes_nothing() {
     let tree = tree();
-    let mut session = new_session(&tree.entry, tree.kernel.namespace);
+    let mut session = new_session(&tree.entry);
     let other_root = direct("entry", 40);
     rejected!(
         session,
@@ -113,7 +113,7 @@ fn entry_requires_the_exact_descriptor_root_and_key_and_drop_publishes_nothing()
 #[test]
 fn each_ordinary_and_cached_invocation_records_its_key_opening_and_row_including_recursion() {
     let tree = tree();
-    let mut session = entered(&tree.entry, tree.kernel.namespace);
+    let mut session = entered(&tree.entry);
     let before = snapshot(&session);
     let prepared = session
         .prepare(tree.normal.key, tree.normal.binding(), InvocationTag::Normal, row(17))
@@ -167,7 +167,7 @@ fn same_implementation_under_distinct_keys_keeps_distinct_bindings_and_requests(
     let tree = tree();
     assert_eq!(tree.normal.implementation, tree.alias.implementation);
     assert_ne!(tree.normal.key, tree.alias.key);
-    let mut session = entered(&tree.entry, tree.kernel.namespace);
+    let mut session = entered(&tree.entry);
     let first = session
         .prepare(tree.normal.key, tree.normal.binding(), InvocationTag::Normal, row(2))
         .unwrap()
@@ -205,9 +205,11 @@ fn same_implementation_under_distinct_keys_keeps_distinct_bindings_and_requests(
 #[test]
 fn syscall_authorization_checks_the_full_immediate_namespace_on_misses_and_hits() {
     let tree = tree();
-    let mut session = entered(&tree.entry, tree.kernel.namespace);
+    let mut session = entered(&tree.entry);
     assert_eq!(InvocationTag::Normal as u8, 0);
     assert_eq!(InvocationTag::Syscall as u8, 1);
+    assert_eq!(tree.kernel.namespace, Namespace::initial());
+    assert_ne!(tree.kernel.namespace.into_word(), Word::default());
     assert_ne!(tree.decoy.namespace, tree.kernel.namespace);
     assert_ne!(tree.descendant.namespace, tree.kernel.namespace);
     for fixture in [&tree.normal, &tree.descendant, &tree.decoy] {
@@ -260,7 +262,7 @@ fn syscall_authorization_checks_the_full_immediate_namespace_on_misses_and_hits(
 #[test]
 fn entry_may_be_a_kernel_export_and_root_end_is_still_one_normal_use() {
     let tree = tree();
-    let mut session = entered(&tree.kernel, tree.kernel.namespace);
+    let mut session = entered(&tree.kernel);
     assert_eq!(session.bindings()[0].counts(), OpeningUseCounts { normal: 0, syscall: 0 });
     session
         .prepare_cached(tree.kernel.key, InvocationTag::Syscall, row(3))
@@ -276,7 +278,7 @@ fn bindings_and_cache_are_scoped_to_the_immutable_environment_root() {
     let (first, second) = same_key_different_roots();
     assert_eq!(first.key, second.key);
     assert_ne!(first.root, second.root);
-    let mut session = entered(&first, Namespace::initial());
+    let mut session = entered(&first);
     let descriptor = session.descriptor();
     rejected!(
         session,
@@ -287,7 +289,7 @@ fn bindings_and_cache_are_scoped_to_the_immutable_environment_root() {
         }
     );
     assert_eq!(session.descriptor(), descriptor);
-    let mut other = new_session(&second, Namespace::initial());
+    let mut other = new_session(&second);
     rejected!(
         other,
         other.prepare_cached(first.key, InvocationTag::Normal, row(6)),
@@ -312,7 +314,7 @@ fn observed_conflicting_metadata_or_structural_opening_provenance_is_rejected_at
         assert_eq!(first.key, second.key);
         // Both paths prove membership. This deliberately duplicated-key root is not an admission
         // fixture and selective verification makes no global uniqueness claim.
-        let mut session = entered(&first, Namespace::initial());
+        let mut session = entered(&first);
         rejected!(
             session,
             session.prepare(second.key, second.binding(), InvocationTag::Normal, row(4)),
@@ -331,7 +333,7 @@ fn observed_conflicting_metadata_or_structural_opening_provenance_is_rejected_at
 #[test]
 fn root_end_keeps_its_reservation_on_error_or_drop_and_completes_exactly_once() {
     let tree = tree();
-    let mut session = entered(&tree.entry, tree.kernel.namespace);
+    let mut session = entered(&tree.entry);
     let wrong = implementation(900);
     rejected!(
         session,
@@ -396,11 +398,7 @@ fn ordinary_requests_cannot_consume_the_root_demand_or_its_dedicated_record_buff
     for request_limit in [1, 2] {
         let mut limits = session_limits();
         limits.max_requests = request_limit;
-        let mut session = ResolutionSession::new(
-            tree.entry.descriptor(tree.kernel.namespace),
-            ledger_limits(),
-            limits,
-        );
+        let mut session = ResolutionSession::new(tree.entry.descriptor(), ledger_limits(), limits);
         session.prepare_entry(tree.entry.binding()).unwrap().commit();
         let root_allocation = allocation(&session.state.root_use);
         assert!(root_allocation.1 >= 1);
@@ -432,29 +430,23 @@ fn ordinary_requests_cannot_consume_the_root_demand_or_its_dedicated_record_buff
 #[test]
 fn every_session_limit_accepts_exact_and_rejects_one_below_on_an_empty_session() {
     let tree = tree();
-    let mut calibration = new_session(&tree.entry, tree.kernel.namespace);
+    let mut calibration = new_session(&tree.entry);
     let requirements = measure_entry(&mut calibration, &tree.entry);
     for resource in resources() {
         let requested = requirements.value(resource);
         assert!(requested > 0);
         let mut exact_limits = session_limits();
         set_limit(&mut exact_limits, resource, requested);
-        let mut exact = ResolutionSession::new(
-            tree.entry.descriptor(tree.kernel.namespace),
-            ledger_limits(),
-            exact_limits,
-        );
+        let mut exact =
+            ResolutionSession::new(tree.entry.descriptor(), ledger_limits(), exact_limits);
         let prepared = exact.prepare_entry(tree.entry.binding()).unwrap();
         assert_eq!(prepared.counters(), requirements.counters);
         assert_eq!(prepared.requested_peak_bytes(), requirements.peak);
         prepared.commit();
         let mut below_limits = session_limits();
         set_limit(&mut below_limits, resource, requested - 1);
-        let mut below = ResolutionSession::new(
-            tree.entry.descriptor(tree.kernel.namespace),
-            ledger_limits(),
-            below_limits,
-        );
+        let mut below =
+            ResolutionSession::new(tree.entry.descriptor(), ledger_limits(), below_limits);
         rejected!(
             below,
             below.prepare_entry(tree.entry.binding()),
@@ -470,17 +462,14 @@ fn every_session_limit_accepts_exact_and_rejects_one_below_on_an_empty_session()
 #[test]
 fn every_session_limit_accepts_exact_and_rejects_one_below_on_a_populated_session() {
     let tree = tree();
-    let mut calibration = entered(&tree.entry, tree.kernel.namespace);
+    let mut calibration = entered(&tree.entry);
     let requirements = measure_invocation(&mut calibration, &tree.normal);
     for resource in resources() {
         let requested = requirements.value(resource);
         let mut exact_limits = session_limits();
         set_limit(&mut exact_limits, resource, requested);
-        let mut exact = ResolutionSession::new(
-            tree.entry.descriptor(tree.kernel.namespace),
-            ledger_limits(),
-            exact_limits,
-        );
+        let mut exact =
+            ResolutionSession::new(tree.entry.descriptor(), ledger_limits(), exact_limits);
         exact.prepare_entry(tree.entry.binding()).unwrap().commit();
         let prepared = exact
             .prepare(tree.normal.key, tree.normal.binding(), InvocationTag::Normal, row(9))
@@ -490,11 +479,8 @@ fn every_session_limit_accepts_exact_and_rejects_one_below_on_a_populated_sessio
         prepared.commit();
         let mut below_limits = session_limits();
         set_limit(&mut below_limits, resource, requested - 1);
-        let mut below = ResolutionSession::new(
-            tree.entry.descriptor(tree.kernel.namespace),
-            ledger_limits(),
-            below_limits,
-        );
+        let mut below =
+            ResolutionSession::new(tree.entry.descriptor(), ledger_limits(), below_limits);
         below.prepare_entry(tree.entry.binding()).unwrap().commit();
         rejected!(
             below,
@@ -511,7 +497,7 @@ fn every_session_limit_accepts_exact_and_rejects_one_below_on_a_populated_sessio
 #[test]
 fn native_peak_composes_actual_ledger_peak_old_buffers_and_all_replacement_capacities() {
     let tree = tree();
-    let mut session = new_session(&tree.entry, tree.kernel.namespace);
+    let mut session = new_session(&tree.entry);
     let before = snapshot(&session);
     let prepared = session.prepare_entry(tree.entry.binding()).unwrap();
     assert_eq!(
@@ -571,14 +557,13 @@ fn native_peak_composes_actual_ledger_peak_old_buffers_and_all_replacement_capac
 #[test]
 fn a_large_declared_ledger_peak_does_not_preclude_modest_actual_work_under_the_outer_limit() {
     let tree = tree();
-    let mut calibration = entered(&tree.entry, tree.kernel.namespace);
+    let mut calibration = entered(&tree.entry);
     let requirements = measure_invocation(&mut calibration, &tree.normal);
     let mut limits = session_limits();
     limits.max_prepare_peak_bytes = requirements.peak;
     let declared = ledger_limits();
     assert_eq!(declared.max_peak_bytes, usize::MAX);
-    let mut session =
-        ResolutionSession::new(tree.entry.descriptor(tree.kernel.namespace), declared, limits);
+    let mut session = ResolutionSession::new(tree.entry.descriptor(), declared, limits);
     session.prepare_entry(tree.entry.binding()).unwrap().commit();
     let prepared = session
         .prepare(tree.normal.key, tree.normal.binding(), InvocationTag::Normal, row(9))
@@ -591,7 +576,7 @@ fn a_large_declared_ledger_peak_does_not_preclude_modest_actual_work_under_the_o
 #[test]
 fn the_outer_peak_can_tighten_ledger_preparation_without_mutating_the_stored_policy_or_ledger() {
     let tree = tree();
-    let mut calibration = new_session(&tree.entry, tree.kernel.namespace);
+    let mut calibration = new_session(&tree.entry);
     let entry_peak = measure_entry(&mut calibration, &tree.entry).peak;
     calibration.prepare_entry(tree.entry.binding()).unwrap().commit();
     let before = snapshot(&calibration);
@@ -607,8 +592,7 @@ fn the_outer_peak_can_tighten_ledger_preparation_without_mutating_the_stored_pol
     let mut limits = session_limits();
     limits.max_prepare_peak_bytes = outer_limit;
     let declared = ledger_limits();
-    let mut session =
-        ResolutionSession::new(tree.entry.descriptor(tree.kernel.namespace), declared, limits);
+    let mut session = ResolutionSession::new(tree.entry.descriptor(), declared, limits);
     session.prepare_entry(tree.entry.binding()).unwrap().commit();
     rejected!(
         session,
@@ -625,7 +609,7 @@ fn the_outer_peak_can_tighten_ledger_preparation_without_mutating_the_stored_pol
 #[test]
 fn capacity_rechecks_reject_allocator_excess_before_publication() {
     let tree = tree();
-    let session = entered(&tree.entry, tree.kernel.namespace);
+    let session = entered(&tree.entry);
     let before = snapshot(&session);
     let plan = BufferPlan {
         bindings: Some(session.state.bindings.capacity() + 1),
@@ -740,8 +724,8 @@ impl Fixture {
             .unwrap()
     }
 
-    fn descriptor(&self, kernel: Namespace) -> ExecutionDescriptor {
-        ExecutionDescriptor::new(self.key, self.root, kernel)
+    fn descriptor(&self) -> ExecutionDescriptor {
+        ExecutionDescriptor::new(self.key, self.root)
     }
 }
 
@@ -762,21 +746,24 @@ fn tree() -> Tree {
     let descendant = mast("descendant", 160);
     let child = env("child", &descendant);
     let exports = EnvNode::List(vec![service.commitment().unwrap(), child.commitment().unwrap()]);
-    let kernel = env("kernel", &exports);
+    let kernel = EnvNode::Merkle {
+        left: exports.commitment().unwrap(),
+        right: EnvironmentRoot::new(Word::default()),
+    };
     let decoy = mast("decoy", 200);
     let other_kernel = env("kernel", &decoy);
     let other = env("other", &other_kernel);
     let list = EnvNode::List(vec![
-        entry.commitment().unwrap(),
-        normal.commitment().unwrap(),
-        alias.commitment().unwrap(),
+        env("app", &entry).commitment().unwrap(),
+        env("app", &normal).commitment().unwrap(),
+        env("app", &alias).commitment().unwrap(),
         kernel.commitment().unwrap(),
         other.commitment().unwrap(),
     ]);
-    let runtime = env("runtime", &list);
-    let prefix = |slot| vec![step(runtime.clone(), Some(0)), step(list.clone(), Some(slot))];
+    let prefix = |slot| vec![step(list.clone(), Some(slot))];
     let leaf_fixture = |slot, leaf| {
         let mut path = prefix(slot);
+        path.push(step(env("app", &leaf), Some(0)));
         path.push(step(leaf, None));
         Fixture::new(path)
     };
@@ -821,12 +808,12 @@ fn duplicate_key_slots(same_implementation: bool) -> (Fixture, Fixture) {
     )
 }
 
-fn new_session(fixture: &Fixture, kernel: Namespace) -> ResolutionSession {
-    ResolutionSession::new(fixture.descriptor(kernel), ledger_limits(), session_limits())
+fn new_session(fixture: &Fixture) -> ResolutionSession {
+    ResolutionSession::new(fixture.descriptor(), ledger_limits(), session_limits())
 }
 
-fn entered(fixture: &Fixture, kernel: Namespace) -> ResolutionSession {
-    let mut session = new_session(fixture, kernel);
+fn entered(fixture: &Fixture) -> ResolutionSession {
+    let mut session = new_session(fixture);
     session.prepare_entry(fixture.binding()).unwrap().commit();
     session
 }

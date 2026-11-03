@@ -28,7 +28,7 @@ use crate::{
 };
 
 const RECORD_WIRE_BYTES: usize = 150;
-const ENVIRONMENT_HEADER_BYTES: usize = 176;
+const ENVIRONMENT_HEADER_BYTES: usize = 144;
 const OCCURRENCE_HEADER_BYTES: usize = 24;
 const NO_PARENT: u64 = u64::MAX;
 // A native reservation identity, unrelated to the wire, opening identity or authority. Allocation
@@ -337,7 +337,6 @@ impl EnvironmentReplay {
         let descriptor = ExecutionDescriptor::new(
             ProcedureKey::read_from(source)?,
             miden_core::program::EnvironmentRoot::read_from(source)?,
-            Namespace::read_from(source)?,
         );
         let entry = ReplayEntry {
             namespace: Namespace::read_from(source)?,
@@ -717,7 +716,6 @@ impl Serializable for EnvironmentReplay {
     fn write_into<W: ByteWriter>(&self, target: &mut W) {
         self.descriptor.entry_key().write_into(target);
         self.descriptor.environment_root().write_into(target);
-        self.descriptor.kernel_namespace().write_into(target);
         self.entry.namespace.write_into(target);
         self.entry.implementation.write_into(target);
         target.write_u64(self.entry.opening as u64);

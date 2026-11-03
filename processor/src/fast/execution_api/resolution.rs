@@ -2,7 +2,7 @@
 
 use core::ops::ControlFlow;
 
-use miden_core::program::{ImplementationRoot, ProcedureKey};
+use miden_core::program::{ImplementationRoot, Namespace, ProcedureKey};
 
 use super::*;
 use crate::{
@@ -110,7 +110,7 @@ impl FastProcessor {
             PendingBinding::Verified(binding) => binding.namespace(),
             PendingBinding::Cached(binding) => binding.namespace(),
         };
-        let expected = resume.environment.descriptor().kernel_namespace();
+        let expected = Namespace::initial();
         if actual != expected {
             return Err(ExecutionError::EnvironmentSession(SessionError::UnauthorizedSyscall {
                 expected,

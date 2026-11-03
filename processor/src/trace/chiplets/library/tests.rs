@@ -16,6 +16,30 @@ use crate::{
 };
 
 #[test]
+fn root_export_remains_syscall_eligible_beneath_list_and_merkle_grouping() {
+    let leaf = mast("kernel_service", 40);
+    let merkle = EnvNode::Merkle {
+        left: commitment(&leaf),
+        right: EnvironmentRoot::new(Word::default()),
+    };
+    let list = EnvNode::List(vec![commitment(&merkle)]);
+    let resolved = binding(vec![step(&list, Some(0)), step(&merkle, Some(0)), step(&leaf, None)]);
+    assert_eq!(resolved.namespace(), Namespace::initial());
+    assert_ne!(resolved.namespace().into_word(), Word::default());
+    let key = resolved.procedure_key();
+    let implementation = resolved.implementation_root();
+    let mut session = new_session(&resolved);
+    session.prepare_entry(resolved).unwrap().commit();
+    session.prepare_cached(key, InvocationTag::Syscall, row(1)).unwrap().commit();
+    session.prepare_root_end(implementation, row(2)).unwrap().commit();
+    let trace = LibraryTrace::new(&session).unwrap();
+    let (cells, _) = materialize(&trace);
+    assert_eq!(cols(&cells, 4).k, MAST);
+    assert_eq!(cols(&cells, 4).w, Namespace::initial().into_word().into_elements());
+    assert_eq!((cols(&cells, 5).a, cols(&cells, 5).b), (ONE, ONE));
+}
+
+#[test]
 fn completed_nested_session_maps_occurrences_and_frequencies_to_exact_packed_rows() {
     let entry = mast("entry", 40);
     let alias = mast("alias", 40);
@@ -56,14 +80,14 @@ fn completed_nested_session_maps_occurrences_and_frequencies_to_exact_packed_row
     let entry_binding = binding(entry_path);
     let entry_key = entry_binding.procedure_key();
     let implementation = entry_binding.implementation_root();
-    let mut session = new_session(&entry_binding, namespace);
+    let mut session = new_session(&entry_binding);
     session.prepare_entry(entry_binding).unwrap().commit();
     session
         .prepare_cached(entry_key, InvocationTag::Normal, row(2))
         .unwrap()
         .commit();
     session
-        .prepare_cached(entry_key, InvocationTag::Syscall, row(3))
+        .prepare_cached(entry_key, InvocationTag::Normal, row(3))
         .unwrap()
         .commit();
     session
@@ -127,7 +151,7 @@ fn completed_nested_session_maps_occurrences_and_frequencies_to_exact_packed_row
     assert_eq!(cols(&cells, 7).z, [ZERO; 4]);
     assert_eq!(cols(&cells, 9).z, entry_key.into_word().into_elements());
     assert_eq!(cols(&cells, 9).w, implementation.into_word().into_elements());
-    assert_eq!((cols(&cells, 9).a, cols(&cells, 9).b), (Felt::from_u8(3), ONE));
+    assert_eq!((cols(&cells, 9).a, cols(&cells, 9).b), (Felt::from_u8(4), ZERO));
     assert_eq!(cols(&cells, 11).z, alias_key.into_word().into_elements());
     assert_eq!((cols(&cells, 11).a, cols(&cells, 11).b), (Felt::from_u8(2), ZERO));
     assert_eq!(cols(&cells, 15).y, [ZERO; 4]); // A real, unselected high child.
@@ -167,7 +191,7 @@ fn odd_even_and_multiblock_lists_include_every_child_and_reverse_complete_cvs() 
         let list = EnvNode::List(children.clone());
         let resolved = binding(vec![step(&list, Some(selected)), step(&leaf, None)]);
         let implementation = resolved.implementation_root();
-        let mut session = new_session(&resolved, Namespace::initial());
+        let mut session = new_session(&resolved);
         session.prepare_entry(resolved).unwrap().commit();
         session.prepare_root_end(implementation, row(1)).unwrap().commit();
         let trace = LibraryTrace::new(&session).unwrap();
@@ -286,7 +310,7 @@ fn phase_size_and_callback_failures_do_not_mutate_the_native_authority() {
     let leaf = mast("entry", 40);
     let resolved = binding(vec![step(&leaf, None)]);
     let implementation = resolved.implementation_root();
-    let mut session = new_session(&resolved, Namespace::initial());
+    let mut session = new_session(&resolved);
     assert!(matches!(
         LibraryTrace::new(&session),
         Err(ExecutionError::EnvironmentSession(SessionError::InvalidPhase {
@@ -352,7 +376,7 @@ fn pre_admission_needs_only_a_fixed_request_sink_and_write_does_not_register_aga
     let resolved = binding(vec![step(&leaf, None)]);
     let implementation = resolved.implementation_root();
     let key = resolved.procedure_key();
-    let mut session = new_session(&resolved, Namespace::initial());
+    let mut session = new_session(&resolved);
     session.prepare_entry(resolved).unwrap().commit();
     session.prepare_root_end(implementation, row(1)).unwrap().commit();
     let counters = session.counters();
@@ -587,9 +611,9 @@ fn binding(path: Vec<OpeningStep>) -> ResolvedBinding {
         .unwrap()
 }
 
-fn new_session(binding: &ResolvedBinding, kernel: Namespace) -> ResolutionSession {
+fn new_session(binding: &ResolvedBinding) -> ResolutionSession {
     ResolutionSession::new(
-        ExecutionDescriptor::new(binding.procedure_key(), binding.environment_root(), kernel),
+        ExecutionDescriptor::new(binding.procedure_key(), binding.environment_root()),
         LedgerLimits {
             max_occurrences: 128,
             max_total_list_children: 256,

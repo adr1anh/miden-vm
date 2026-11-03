@@ -332,7 +332,7 @@ impl ResolutionSession {
     ) -> Result<PreparedInvocation<'_>, SessionError> {
         require_phase(self.state.phase, SessionPhase::PendingEntry)?;
         check_binding(self.descriptor, key, &binding)?;
-        check_tag(self.descriptor, binding.namespace(), tag)?;
+        check_tag(binding.namespace(), tag)?;
         let metadata = BindingMetadata::from_binding(&binding);
         let existing = self.state.bindings.iter().position(|binding| binding.key == key);
         if let Some(index) = existing
@@ -402,7 +402,7 @@ impl ResolutionSession {
             .position(|binding| binding.key == key)
             .ok_or(SessionError::MissingCachedBinding { key })?;
         let mut binding = self.state.bindings[index];
-        check_tag(self.descriptor, binding.namespace, tag)?;
+        check_tag(binding.namespace, tag)?;
         binding.counts = binding.counts.increment(tag)?;
         let mut counters = self.state.counters;
         counters.committed_requests = checked_add(counters.committed_requests, 1)?;
@@ -824,14 +824,10 @@ fn require_phase(actual: SessionPhase, expected: SessionPhase) -> Result<(), Ses
     }
 }
 
-fn check_tag(
-    descriptor: ExecutionDescriptor,
-    namespace: Namespace,
-    tag: InvocationTag,
-) -> Result<(), SessionError> {
-    if tag == InvocationTag::Syscall && namespace != descriptor.kernel_namespace() {
+fn check_tag(namespace: Namespace, tag: InvocationTag) -> Result<(), SessionError> {
+    if tag == InvocationTag::Syscall && namespace != Namespace::initial() {
         return Err(SessionError::UnauthorizedSyscall {
-            expected: descriptor.kernel_namespace(),
+            expected: Namespace::initial(),
             actual: namespace,
         });
     }
