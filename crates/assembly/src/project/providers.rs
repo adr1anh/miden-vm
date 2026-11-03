@@ -39,6 +39,56 @@ pub struct TargetAssemblyContext<'a> {
 }
 
 impl<'a> TargetAssemblyContext<'a> {
+    /// Context for caller-supplied ASTs, whose declared source path need not exist on disk.
+    pub(super) fn for_provided_sources(
+        package: &'a Arc<ProjectPackage>,
+        target: &'a Target,
+        profile: &'a Profile,
+        dependency_graph: &'a ProjectDependencyGraph,
+        package_registry: &'a dyn PackageRegistryAndProvider,
+        source_manager: Arc<dyn SourceManager>,
+    ) -> Result<Self, Report> {
+        let Some(manifest_path) = package.manifest_path() else {
+            return Self::new_virtual(
+                package.clone(),
+                target,
+                profile,
+                dependency_graph,
+                package_registry,
+                source_manager,
+            );
+        };
+        let project_root = manifest_path
+            .parent()
+            .ok_or_else(|| {
+                Report::msg(format!(
+                    "manifest '{}' has no parent directory",
+                    manifest_path.display()
+                ))
+            })?
+            .to_path_buf();
+        let target_path = target.path.to_path().ok_or_else(|| {
+            Report::msg(format!(
+                "invalid target '{}': '{}' is not a valid file path",
+                target.name.inner(),
+                target.path
+            ))
+        })?;
+        let root_path = project_root.join(target_path);
+        Ok(Self {
+            package: package.clone(),
+            manifest_path,
+            project_root: project_root.into(),
+            resolved_target_root: root_path.into_boxed_path(),
+            target,
+            profile,
+            dependency_graph,
+            source_manager,
+            package_registry,
+            warnings_as_errors: false,
+        })
+    }
+
     pub fn new(
         package: Arc<ProjectPackage>,
         manifest_path: &'a std::path::Path,

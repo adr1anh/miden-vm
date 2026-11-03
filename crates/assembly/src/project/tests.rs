@@ -19,7 +19,7 @@ use miden_package_registry::PackageRegistry;
 use tempfile::TempDir;
 
 use super::*;
-use crate::testing::{FixtureNamespace, TestContext, TestRegistry};
+use crate::testing::{FixtureNamespace, TestContext, TestRegistry, configure_project_fixture};
 
 #[test]
 fn builds_library_package_from_project_profiles() {
@@ -166,7 +166,7 @@ path = "kernel.masm"
     );
     write_file(
         &tempdir.path().join("support.masm"),
-        r#"pub proc foo
+        r#"pub proc supporting_foo
     caller
 end
 "#,
@@ -175,15 +175,16 @@ end
         &tempdir.path().join("kernel.masm"),
         r#"pub mod support
 pub proc foo
-    exec.support::foo
+    exec.support::supporting_foo
 end
 "#,
     );
 
     let mut registry = TestRegistry::default();
-    let package = Assembler::default()
-        .for_project_at_path(&manifest_path, &mut registry)
-        .unwrap()
+    let mut assembler =
+        Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
+    configure_project_fixture(&mut assembler);
+    let package = assembler
         .assemble(ProjectTargetSelector::Library, "dev")
         .expect("kernel build should succeed");
 
@@ -533,14 +534,22 @@ end
         depa_exec, depb_exec,
         "identical static dependency bodies should dedup to one execution node",
     );
-    assert!(debug_info.nodes().iter().any(|node| {
-        node.exec_node == depa_exec
-            && node
-                .asm_ops
-                .iter()
-                .map(|row| debug_info.get_string(row.context_name_idx).unwrap())
-                .eq([Arc::from("depa_ctx"), Arc::from("depb_ctx")])
-    }));
+    // Runtime exec keeps each caller edge and each callee's distinct source provenance. It no
+    // longer concatenates both imported bodies into a caller block as implicit inline did.
+    let runtime_calls = debug_info
+        .nodes()
+        .iter()
+        .filter(|node| {
+            matches!(package.mast_forest()[node.exec_node], miden_core::mast::MastNode::Exec(_))
+                && node.asm_ops.iter().any(|row| {
+                    debug_info.get_string(row.op_name_idx).is_some_and(|op| op.starts_with("exec."))
+                })
+        })
+        .count();
+    assert_eq!(runtime_calls, 2, "both static calls must remain real runtime invocation nodes");
+    for source in [depa_source, depb_source] {
+        assert_eq!(debug_info.source_node(source).unwrap().asm_ops.len(), 1);
+    }
 
     let contexts_for_deduped_exec = [depa_source, depb_source]
         .into_iter()
@@ -1974,7 +1983,7 @@ end
     let error = context
         .assemble_library_package(&root_manifest, None)
         .expect_err("changed transitive dependency sources should require a semver bump");
-    assert!(error.to_string().contains("package 'dep' version '1.0.0'"));
+    assert!(error.to_string().contains("package 'leaf' version '1.0.0'"));
     assert!(error.to_string().contains("different source provenance"));
 }
 
@@ -2478,9 +2487,26 @@ fn executable_packages_preserve_kernel_when_converted_back_to_program() {
     let expected_kernel = kernel_package
         .to_kernel_descriptor()
         .expect("kernel package should round-trip as a kernel library");
-    let package = context
-        .assemble_executable_package(&manifest_path, Some("main"), None)
+    let saw_kernel = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut assembler = context.project_assembler_for_path(&manifest_path).unwrap();
+    assembler.with_namespace_inputs_provider({
+        let saw_kernel = saw_kernel.clone();
+        move |context, sources, base| {
+            if context.target.is_executable() {
+                assert!(
+                    !base.kernel().is_empty(),
+                    "required kernel must be linked before target naming selection"
+                );
+                assert!(base.linker().kernel_naming().is_some());
+                saw_kernel.set(true);
+            }
+            crate::testing::project_fixture_namespace_inputs(context, sources, base)
+        }
+    });
+    let package = assembler
+        .assemble(ProjectTargetSelector::Executable("main"), "dev")
         .expect("executable package build should succeed");
+    assert!(saw_kernel.get());
     let kernel_dependency = package
         .manifest
         .dependencies()
@@ -2603,9 +2629,15 @@ fn preassembled_libraries_prefer_store_kernel_over_embedded_copy() {
     let mut context = TestContext::new();
     context.registry_mut().add_package(kernel_package.clone());
 
-    let package = context
-        .assemble_executable_package(&root_manifest, Some("main"), None)
+    let mut project_assembler = context.project_assembler_for_path(&root_manifest).unwrap();
+    allow_root_fixture_bindings(
+        &mut project_assembler,
+        vec![mid_package.commitment(), kernel_package.commitment()],
+    );
+    let package = project_assembler
+        .assemble(ProjectTargetSelector::Executable("main"), "dev")
         .expect("executable package build should prefer the store kernel");
+    drop(project_assembler);
     let embedded_kernel_package = package
         .sections
         .iter()
@@ -2695,9 +2727,15 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
     assert!(removed.is_some(), "expected indexed kernel artifact to exist");
     context.registry().clear_loaded_packages();
 
-    let package = context
-        .assemble_executable_package(&root_manifest, Some("main"), None)
+    let mut project_assembler = context.project_assembler_for_path(&root_manifest).unwrap();
+    allow_root_fixture_bindings(
+        &mut project_assembler,
+        vec![mid_package.commitment(), kernel_package.commitment()],
+    );
+    let package = project_assembler
+        .assemble(ProjectTargetSelector::Executable("main"), "dev")
         .expect("embedded kernel should be used when the indexed artifact is unreadable");
+    drop(project_assembler);
     let embedded_kernel_package = package
         .sections
         .iter()
@@ -2779,10 +2817,14 @@ end
     let root_manifest =
         write_preassembled_kernel_executable_project(tempdir.path(), &mid_package_path);
     let mut context = TestContext::new();
-    context.registry_mut().add_package(kernel_package);
+    context.registry_mut().add_package(kernel_package.clone());
     let mut project_assembler = context
         .project_assembler_for_path(&root_manifest)
         .expect("dependency graph should build");
+    allow_root_fixture_bindings(
+        &mut project_assembler,
+        vec![mid_package.commitment(), kernel_package.commitment()],
+    );
     project_assembler.store.replace_semver_package(conflicting_kernel);
 
     project_assembler
@@ -3434,6 +3476,9 @@ fn locate_first_node_hash(bytes: &[u8]) -> (usize, usize) {
 
     let internal_node_count = read_usize_vint64(bytes, &mut offset);
     let external_node_count = read_usize_vint64(bytes, &mut offset);
+    // MAST0.0.6 stores the keyed invocation target table separately from node entries.
+    let target_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+    offset += 4;
     let node_count = internal_node_count
         .checked_add(external_node_count)
         .expect("node count overflow");
@@ -3448,6 +3493,7 @@ fn locate_first_node_hash(bytes: &[u8]) -> (usize, usize) {
 
     offset += node_count * 8;
     offset += external_node_count * 32;
+    offset += target_count * 32;
 
     (offset, internal_node_count)
 }
@@ -3534,6 +3580,7 @@ fn package_post_processors_default_to_empty() {
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
+    configure_project_fixture(&mut project_assembler);
     assert!(project_assembler.post_processors.is_empty());
 
     let package = project_assembler
@@ -3556,6 +3603,7 @@ fn package_post_processors_run_in_registration_order() {
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
+    configure_project_fixture(&mut project_assembler);
     project_assembler
         .with_package_post_processor(MarkerPostProcessor {
             tag: "pp-a",
@@ -3596,6 +3644,7 @@ fn manually_provided_sources_skip_package_post_processors() {
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
+    configure_project_fixture(&mut project_assembler);
     project_assembler.with_package_post_processor(MarkerPostProcessor {
         tag: "pp-manual",
         invocations: invocations.clone(),
@@ -3698,6 +3747,7 @@ end
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(&root_manifest, &mut registry).unwrap();
+    configure_project_fixture(&mut project_assembler);
     project_assembler.with_package_post_processor(MarkerPostProcessor {
         tag: "pp-root-only",
         invocations: invocations.clone(),
@@ -3716,4 +3766,247 @@ end
             .iter()
             .any(|section| section.id == SectionId::custom("pp-root-only").unwrap())
     );
+}
+
+// These composition fixtures explicitly authorize N0 naming on the selected mid/kernel artifacts.
+// An unlisted artifact still receives only the ordinary test home; raw names never select policy.
+fn allow_root_fixture_bindings(
+    assembler: &mut ProjectAssembler<'_, TestRegistry>,
+    artifacts: Vec<miden_core::Word>,
+) {
+    assembler.with_package_naming_provider(move |package| {
+        let mut homes = vec![FixtureNamespace::assembly_tests().namespace_plan().clone()];
+        if artifacts.contains(&package.commitment()) {
+            homes.push(miden_mast_package::NamespacePlan::new(vec![]));
+        }
+        crate::testing::admit_fixture_package(package, &homes)
+    });
+}
+
+fn cache_test_project(directory: &FsPath, source_path: &str) -> PathBuf {
+    let manifest = directory.join("miden-project.toml");
+    write_file(
+        &manifest,
+        &format!(
+            "[package]\nname = \"cachetest\"\nversion = \"1.0.0\"\n\n[lib]\npath = \"{source_path}\"\n"
+        ),
+    );
+    manifest
+}
+
+fn cache_test_inputs(
+    context: &TargetAssemblyContext<'_>,
+    sources: &ProjectSourceInputs,
+    home: miden_mast_package::NamespacePlan,
+) -> Result<NamespaceInputs, Report> {
+    let mut fixture = FixtureNamespace::new(home);
+    let modules = core::iter::once(sources.root.as_ref())
+        .chain(sources.support.iter().map(Box::as_ref))
+        .collect::<Vec<_>>();
+    for module in &modules {
+        fixture.add_module(module)?;
+    }
+    let assembler = fixture.configure(Assembler::new(context.source_manager.clone()), modules)?;
+    Ok(assembler.namespace_inputs().clone())
+}
+
+#[test]
+fn source_cache_selects_current_naming_before_reuse_and_rejects_changed_home() {
+    use std::{cell::Cell, rc::Rc};
+
+    let temp = TempDir::new().unwrap();
+    let manifest = cache_test_project(temp.path(), "lib.masm");
+    write_file(&temp.path().join("lib.masm"), "pub proc run push.1 end");
+    let calls = Rc::new(Cell::new(0));
+    let changed_home = Rc::new(Cell::new(false));
+    let mut context = TestContext::new();
+    let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+    assembler.with_namespace_inputs_provider({
+        let calls = calls.clone();
+        let changed_home = changed_home.clone();
+        move |context, sources, _base| {
+            calls.set(calls.get() + 1);
+            let home = if changed_home.get() {
+                miden_mast_package::NamespacePlan::new(vec![
+                    miden_core::program::CanonicalLabel::text("changed-caller").unwrap(),
+                ])
+            } else {
+                FixtureNamespace::assembly_tests().namespace_plan().clone()
+            };
+            cache_test_inputs(context, sources, home)
+        }
+    });
+    let project = assembler.project.clone();
+    let target = project.library_target().unwrap().inner().clone();
+    let id = assembler.dependency_graph.root().clone();
+    let mut cache = BTreeMap::new();
+    let mut assemble = |assembler: &mut ProjectAssembler<'_, TestRegistry>| {
+        assembler.assemble_source_package(
+            id.clone(),
+            project.clone(),
+            &target,
+            "dev",
+            InterruptedTargetRole::Dependency,
+            None,
+            None,
+            None,
+            &mut cache,
+        )
+    };
+    let first = match assemble(&mut assembler).unwrap() {
+        ControlFlow::Continue(package) => package,
+        _ => panic!("source build unexpectedly interrupted"),
+    };
+    let second = match assemble(&mut assembler).unwrap() {
+        ControlFlow::Continue(package) => package,
+        _ => panic!("source build unexpectedly interrupted"),
+    };
+    assert!(
+        Arc::ptr_eq(&first.package, &second.package),
+        "exact matching source inputs should reuse the memory artifact"
+    );
+    assert_eq!(calls.get(), 2, "naming selection must run even on a memory hit");
+    changed_home.set(true);
+    let error = assemble(&mut assembler)
+        .err()
+        .expect("a different home must not reuse the previous artifact");
+    assert!(error.to_string().contains("different source provenance"));
+    assert!(error.to_string().contains("bump the semantic version"));
+    assert_eq!(calls.get(), 3);
+    assembler.namespace_inputs_provider = None;
+    let error = assemble(&mut assembler)
+        .err()
+        .expect("cached code cannot supply a missing naming policy");
+    assert!(error.to_string().contains("explicit namespace inputs provider"));
+}
+
+#[test]
+fn memory_cache_rejects_root_post_processing_when_used_as_dependency() {
+    let temp = TempDir::new().unwrap();
+    let manifest = cache_test_project(temp.path(), "lib.masm");
+    write_file(&temp.path().join("lib.masm"), "pub proc run push.1 end");
+    let mut context = TestContext::new();
+    let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+    let invocations = Arc::new(std::sync::Mutex::new(Vec::new()));
+    assembler.with_package_post_processor(MarkerPostProcessor {
+        tag: "memory-root-only",
+        invocations: invocations.clone(),
+    });
+    let project = assembler.project.clone();
+    let target = project.library_target().unwrap().inner().clone();
+    let id = assembler.dependency_graph.root().clone();
+    let mut cache = BTreeMap::new();
+    let outcome = assembler
+        .assemble_source_package(
+            id.clone(),
+            project.clone(),
+            &target,
+            "dev",
+            InterruptedTargetRole::Root,
+            None,
+            None,
+            None,
+            &mut cache,
+        )
+        .unwrap();
+    assert!(matches!(outcome, ControlFlow::Continue(_)));
+    assert_eq!(invocations.lock().unwrap().len(), 1);
+    let error = assembler
+        .assemble_source_package(
+            id,
+            project,
+            &target,
+            "dev",
+            InterruptedTargetRole::Dependency,
+            None,
+            None,
+            None,
+            &mut cache,
+        )
+        .err()
+        .expect(
+            "memory artifacts must meet the same dependency-section gate as registered artifacts",
+        );
+    assert!(error.to_string().contains("memory-root-only"));
+    assert!(error.to_string().contains("a dependency build does not produce"));
+    assert_eq!(invocations.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn manual_ast_without_source_file_or_provider_never_reuses_another_body() {
+    let temp = TempDir::new().unwrap();
+    let manifest = cache_test_project(temp.path(), "nonexistent.custom");
+    let mut context = TestContext::new();
+    let first_root = context.parse_module("namespace cachetest\npub proc run push.1 end").unwrap();
+    let second_root = context.parse_module("namespace cachetest\npub proc run push.2 end").unwrap();
+    let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+    let project = assembler.project.clone();
+    let target = project.library_target().unwrap().inner().clone();
+    let id = assembler.dependency_graph.root().clone();
+    let mut cache = BTreeMap::new();
+    let mut assemble = |root| match assembler
+        .assemble_source_package(
+            id.clone(),
+            project.clone(),
+            &target,
+            "dev",
+            InterruptedTargetRole::Root,
+            None,
+            Some(ProjectSourceInputs { root, support: vec![] }),
+            None,
+            &mut cache,
+        )
+        .unwrap()
+    {
+        ControlFlow::Continue(package) => package,
+        _ => panic!("manual AST unexpectedly interrupted"),
+    };
+    let first = assemble(first_root);
+    let second = assemble(second_root);
+    assert_ne!(first.package.code_commitment(), second.package.code_commitment());
+    assert_eq!(
+        first.naming.callables().bindings().collect::<Vec<_>>(),
+        second.naming.callables().bindings().collect::<Vec<_>>(),
+        "body changes retain the caller's canonical names"
+    );
+    assert!(PackageBuildProvenance::from_package(&first.package).unwrap().is_none());
+    assert!(PackageBuildProvenance::from_package(&second.package).unwrap().is_none());
+}
+
+#[test]
+fn manual_dependency_ast_cannot_reuse_matching_file_provenance_for_another_body() {
+    let temp = TempDir::new().unwrap();
+    let manifest = cache_test_project(temp.path(), "nonexistent.custom");
+    let mut context = TestContext::new();
+    let first_root = context.parse_module("namespace cachetest\npub proc run push.1 end").unwrap();
+    let second_root = context.parse_module("namespace cachetest\npub proc run push.2 end").unwrap();
+    let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+    let project = assembler.project.clone();
+    let target = project.library_target().unwrap().inner().clone();
+    let id = assembler.dependency_graph.root().clone();
+    let mut cache = BTreeMap::new();
+    let mut assemble = |root| {
+        assembler.assemble_source_package(
+            id.clone(),
+            project.clone(),
+            &target,
+            "dev",
+            InterruptedTargetRole::Dependency,
+            None,
+            Some(ProjectSourceInputs { root, support: vec![] }),
+            Some(ProjectSourceProvenanceInputs {
+                root: SourceFileProvenance {
+                    path: temp.path().join("nonexistent.custom").into_boxed_path(),
+                    content: "pub proc run push.1 end".into(),
+                },
+                support: vec![],
+            }),
+            &mut cache,
+        )
+    };
+    let first = assemble(first_root).unwrap();
+    assert!(matches!(first, ControlFlow::Continue(_)));
+    // Identical supplied source provenance cannot identify an AST mutated after parsing.
+    let error = assemble(second_root).err().expect("a changed manual body must compile and encounter the immutable semantic-version collision, never return the memoized first body");
+    assert!(error.to_string().contains("already registered"));
 }
