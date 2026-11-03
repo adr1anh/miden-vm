@@ -490,11 +490,11 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Environment-aware executable generator restored at 05 (`4bfa6fc94`, `15a9a07c0`). D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | D3 now leaves identity derivation/interface policy external/open; selected-profile production fixtures remain unresolved and unclaimed. Audit generic declaration/home consumer coupling while preserving profile validation. Executable lowering at09; fuzz at16. |
-| 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Fresh normal attempt gets past assembly, then stops at two prover calls missing ExecutionEnvironment; no tests ran. Proof/AIR/statement activation is later. |
+| 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal package-entry API4 now passes after prover environment plumbing; full processor unit build still reaches226 older API/fixture errors, so no unit tests ran. Proof/AIR/statement activation is later. |
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
-| 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 fresh normal attempt passes assembly compilation, then stops at two prover calls missing ExecutionEnvironment; no processor tests ran. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Entry code `282445d4c`, kernel state `0a1b5d888`, processor entry `bee88c1af`; prior routing/Package9 refs below; base `82935d673` | Independent reviews; package289 pass/one ignored; standard assembly Nextest540 pass/6 existing skips; strict package/assembly test/bench and processor-lib Clippy; all three no_std libraries and formatting pass. Public API4 supplemental tests pass; normal processor test target still stops at prover ExecutionEnvironment calls | Remaining processor/CLI/test/fuzz caller migration and legacy Program/ProgramInfo claim cutover; D5 selectors/file config, PR10 distinct instances and complete inherited AST reuse snapshots. Native/generated/recursive D6 cutover, full fuzz qualification and inherited/external gates remain |
+| 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate still has226 older API/fixture errors and no unit tests ran. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
+| 09 Assembly/packages | in-progress | Prover env `97013a482`, shared fixtures `132f27548`/`a2dea935c`, host adapters `8a2fb1cc3`; D5 decision `5010a7b72`; earlier refs below; base `82935d673` | Independent reviews; normal processor package-entry4 pass, shared test-utils12, prover regression1/both modes, assembly Nextest540/6 skips; strict scoped Clippy/no_std/formatting pass. Prior package289/one ignored evidence below | Full processor unit compile has226 older fixture/API errors; migrate fast/trace/execution/parallel, CLI/test/fuzz callers. D5 explicit-selection configuration, PR10 distinct instances, legacy claim cutover and complete inherited AST snapshots remain; inherited native/generated/MASM/recursive/security/fuzz gates stay open |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -2432,3 +2432,49 @@ PR09/M1 remain open. Remaining processor/CLI/test/fuzz callers must migrate thes
 prover environment plumbing and legacy Program/ProgramInfo claim transport remain incomplete.
 D5 selector/file configuration, PR10 distinct instances, complete inherited AST reuse snapshots
 and inherited native/MASM/recursive/generated/security/fuzz qualification remain required.
+
+### PR09 prover environment and shared execution fixtures (3 November 2026)
+
+Documentation `5010a7b72` separately records the user's D5 clarification: standard project
+Latest/Pinned selection must be explicit; omission rejects. Custom bindings remain supported,
+configuration fields remain implementation design, and no selector implementation is claimed.
+
+Source `97013a482` adds caller ExecutionEnvironment to synchronous proving and passes it unchanged
+through buffered and overlapped execution. Its regression exercises both scheduling choices and
+requires the exact caller root/key when evidence is unavailable. No root, key, native policy or
+opening authority is inferred from code or proving settings.
+
+Source `132f27548` shares the existing kernel source-fixture placement algorithm as
+FixtureNamespace::add_kernel_modules, including visibility, imported canonical aliases and global
+root-label conflict checks. It also rejects an empty cohort without panicking. Source `a2dea935c`
+retains exact compiler/admitted names and selected code in shared test preparation while keeping
+the public compile tuple. Cache identity includes complete library artifacts; the cache retains
+its source-manager owner so an allocator cannot recycle the address used as source identity.
+Fixed finite fixture admission still refuses unknown homes/TypedIds. The locally selected test
+root contains typed home Env paths and semantic Text procedure paths, with unique K bindings;
+equal D under distinct K remains valid, while conflicting selections reject. Sources enforce
+requested root/key and construction limits, verify candidates and retain finite request budgets.
+Full/debug/step/proving helpers pass explicit environments and finite trace policies; existing
+memory, full-versus-step, proof and constraint assertions remain intact. Nested helper/procref and
+root-SYS/private-helper tests execute through actual authenticated openings and preserve stack rules.
+
+Source `8a2fb1cc3` gives processor test hosts optional native environment sources and adapts executor
+and host fixtures without changing event/trace/snapshot/source-manager behavior. A cfg(test)-only
+bridge copies every native policy field and witness node/slot between the dependency processor
+and its separately compiled unit-test crate; it creates no names, tree or authority. These unit
+cases remain unexecuted until the rest of the unit test crate compiles.
+
+Fresh AC/heavy-guarded checks: prover environment regression1 pass (both scheduling modes), all
+shared test-utils12 pass, standard assembly Nextest540 pass/6 existing skips. Crucially, normal
+`cargo test --locked -p miden-processor --test package_entry_metadata` now runs4 passing tests;
+the former prover compile stop is resolved. Strict scoped prover integration/library, test-utils
+library/tests and processor testing-library Clippy pass, as do no_std and scoped formatting checks.
+A full normal processor unit compile now reaches226 remaining older API/fixture errors, with the
+largest groups in fast/tests/mod.rs, tests/mod.rs, masm_consistency and parallel trace fixtures;
+no unit tests ran. New executor/host type-identity errors were fixed, not waived. Logs/source index
+stay local scratch. Independent source reviews report no remaining findings in this slice.
+All five decision/source commits have verified SSH signatures; no pushes, PRs or Git settings changed.
+
+PR09/M1 remain in progress. Complete normal processor/parallel/debug/trace fixture migration,
+remaining CLI/fuzz/tooling consumers, D5 file/API configuration, PR10 distinct instances, PR12 claim
+transport and all inherited adversarial/native/generated/MASM/recursive/security gates remain.
