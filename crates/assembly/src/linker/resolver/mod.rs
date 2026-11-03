@@ -118,7 +118,10 @@ impl<'a, 'b: 'a> Resolver<'a, 'b> {
                 self.cache.constants.insert(gid, value);
                 return Ok(());
             },
-            SymbolItem::Compiled(_) | SymbolItem::Procedure(_) | SymbolItem::Type(_) => (),
+            SymbolItem::CallableDeclaration(_)
+            | SymbolItem::Compiled(_)
+            | SymbolItem::Procedure(_)
+            | SymbolItem::Type(_) => (),
         }
 
         Err(self.invalid_constant_ref(span))
@@ -142,6 +145,7 @@ impl<'a, 'b: 'a> Resolver<'a, 'b> {
             SymbolItem::Compiled(_)
             | SymbolItem::Constant(_)
             | SymbolItem::Procedure(_)
+            | SymbolItem::CallableDeclaration(_)
             | SymbolItem::Type(_) => Err(self.invalid_constant_ref(span)),
         }
     }
@@ -431,7 +435,8 @@ impl<'a, 'b: 'a> Resolver<'a, 'b> {
             SymbolItem::Type(ast::TypeDecl::Enum(_))
             | SymbolItem::Compiled(_)
             | SymbolItem::Constant(_)
-            | SymbolItem::Procedure(_) => Err(LinkerError::InvalidTypeRef {
+            | SymbolItem::Procedure(_)
+            | SymbolItem::CallableDeclaration(_) => Err(LinkerError::InvalidTypeRef {
                 span: context,
                 source_file: self.get_source_file_for(context),
             }),

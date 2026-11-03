@@ -54,7 +54,7 @@ pub use self::project::{
 pub use self::{
     assembler::Assembler,
     linker::Linkage,
-    procedure::{Procedure, ProcedureContext},
+    procedure::{CallableBinding, CallableDeclaration, Procedure, ProcedureContext},
 };
 
 // CONSTANTS
