@@ -2,6 +2,7 @@
 pub(super) mod debuginfo;
 pub(crate) mod error;
 mod inline;
+mod namespace_inputs;
 mod product;
 
 use alloc::{
@@ -38,7 +39,7 @@ use miden_mast_package::{
 use miden_project::{Linkage, TargetType};
 
 use self::error::AssemblerError;
-pub use self::product::AssemblyProduct;
+pub use self::{namespace_inputs::NamespaceInputs, product::AssemblyProduct};
 use crate::{
     CallableBinding, CallableDeclaration, GlobalItemIndex, ModuleIndex, Procedure,
     ProcedureContext,
@@ -177,14 +178,8 @@ pub struct Assembler {
     pub(super) emit_debug_info: bool,
     /// Whether to trim source file paths in debug information.
     pub(super) trim_paths: bool,
-    /// Caller-supplied home used only with explicitly supplied canonical declaration paths.
-    namespace_plan: Option<NamespacePlan>,
-    /// The complete typed kernel home; neither a source module name nor code supplies authority.
-    kernel_namespace_plan: Option<NamespacePlan>,
-    /// Canonical metadata indexed by defining source declaration path, never by an access alias.
-    callable_paths: BTreeMap<Arc<Path>, CallableProcedurePath>,
-    /// Explicit foreign-home metadata awaiting attachment to the corresponding linker symbol.
-    callable_bindings: BTreeMap<Arc<Path>, CallableBinding>,
+    /// Complete raw namespace configuration, replaceable independently of code supply.
+    namespace_inputs: NamespaceInputs,
     /// Source modules supplied as the root and support of the current assembly artifact.
     assembly_modules: BTreeSet<ModuleIndex>,
     /// Explicit implementation selections for structural inline expansion, by defining path.
@@ -201,10 +196,7 @@ impl Default for Assembler {
             warnings_as_errors: false,
             emit_debug_info: true,
             trim_paths: false,
-            namespace_plan: None,
-            kernel_namespace_plan: None,
-            callable_paths: BTreeMap::new(),
-            callable_bindings: BTreeMap::new(),
+            namespace_inputs: NamespaceInputs::default(),
             assembly_modules: BTreeSet::new(),
             inline_pins: BTreeMap::new(),
         }
@@ -256,23 +248,42 @@ impl Assembler {
 // ------------------------------------------------------------------------------------------------
 /// Dependency Management
 impl Assembler {
+    /// Returns the complete raw namespace configuration for this assembler.
+    pub fn namespace_inputs(&self) -> &NamespaceInputs {
+        &self.namespace_inputs
+    }
+
+    /// Replaces all pending caller, kernel and canonical declaration metadata together.
+    ///
+    /// This also clears inputs omitted by the replacement. Already-bound linker symbols keep their
+    /// identities; conflicting replacement metadata is rejected during compilation prebinding.
+    /// Code supply and structural inline implementation pins are configured separately.
+    pub fn with_namespace_inputs(mut self, inputs: NamespaceInputs) -> Self {
+        self.namespace_inputs = inputs;
+        self
+    }
+
     /// Supplies the explicit home for locally defined callables.
     ///
     /// Every callable still needs a canonical path through [`Self::with_callable_path`]. Source
     /// namespaces, aliases and package code never fill in either part of this metadata.
+    /// This configures naming only, without home/profile or execution-environment admission.
     pub fn with_namespace_plan(mut self, plan: NamespacePlan) -> Self {
-        self.namespace_plan = Some(plan);
+        self.namespace_inputs = self.namespace_inputs.with_namespace_plan(plan);
         self
     }
 
     /// Returns the explicitly configured home for locally defined callables, if supplied.
     pub fn namespace_plan(&self) -> Option<&NamespacePlan> {
-        self.namespace_plan.as_ref()
+        self.namespace_inputs.namespace_plan()
     }
 
-    /// Supplies the complete typed namespace authorized for actual syscalls.
+    /// Supplies the complete kernel home expected when lowering syscall targets.
+    ///
+    /// This raw input does not admit the home or authorize execution. The execution environment's
+    /// authenticated bindings and complete kernel namespace determine actual syscall authority.
     pub fn with_kernel_namespace_plan(mut self, plan: NamespacePlan) -> Self {
-        self.kernel_namespace_plan = Some(plan);
+        self.namespace_inputs = self.namespace_inputs.with_kernel_namespace_plan(Some(plan));
         self
     }
 
@@ -285,12 +296,7 @@ impl Assembler {
         declaration: Arc<Path>,
         canonical: CallableProcedurePath,
     ) -> Result<Self, Report> {
-        if self.callable_paths.contains_key(&declaration)
-            || self.callable_bindings.contains_key(&declaration)
-        {
-            return Err(Report::msg(format!("duplicate callable metadata for '{declaration}'")));
-        }
-        self.callable_paths.insert(declaration, canonical);
+        self.namespace_inputs = self.namespace_inputs.with_callable_path(declaration, canonical)?;
         Ok(self)
     }
 
@@ -300,12 +306,8 @@ impl Assembler {
         declaration: Arc<Path>,
         binding: CallableBinding,
     ) -> Result<Self, Report> {
-        if self.callable_paths.contains_key(&declaration)
-            || self.callable_bindings.contains_key(&declaration)
-        {
-            return Err(Report::msg(format!("duplicate callable metadata for '{declaration}'")));
-        }
-        self.callable_bindings.insert(declaration, binding);
+        self.namespace_inputs =
+            self.namespace_inputs.with_callable_binding(declaration, binding)?;
         Ok(self)
     }
 
@@ -317,51 +319,6 @@ impl Assembler {
     ) -> Result<&mut Self, Report> {
         self.linker.link_callable_declarations(module, declarations)?;
         Ok(self)
-    }
-
-    /// Attaches explicit canonical metadata to existing concrete declarations before codegen.
-    fn prebind_callables(&self) -> Result<(), Report> {
-        if self.namespace_plan.is_none() {
-            return Err(Report::msg("assembly requires an explicit caller NamespacePlan"));
-        }
-        let mut seen = BTreeSet::new();
-        for module in self.linker.modules() {
-            for symbol in module.symbols() {
-                if !symbol.is_procedure() {
-                    continue;
-                }
-                let declaration: Arc<Path> = module.path().join(symbol.name()).into();
-                let binding = match (
-                    self.callable_paths.get(&declaration),
-                    self.callable_bindings.get(&declaration),
-                ) {
-                    (Some(path), None) => Some(
-                        CallableBinding::new(
-                            self.namespace_plan.as_ref().expect("explicit home checked").clone(),
-                            path.clone(),
-                        )
-                        .into_diagnostic()?,
-                    ),
-                    (None, Some(binding)) => Some(binding.clone()),
-                    (None, None) => None,
-                    (Some(_), Some(_)) => unreachable!("duplicate metadata rejected at insertion"),
-                };
-                if let Some(binding) = binding {
-                    symbol.bind_callable(binding).map_err(|_| {
-                        Report::msg(format!("conflicting callable metadata for '{declaration}'"))
-                    })?;
-                    seen.insert(declaration);
-                }
-            }
-        }
-        for declaration in self.callable_paths.keys().chain(self.callable_bindings.keys()) {
-            if !seen.contains(declaration) {
-                return Err(Report::msg(format!(
-                    "callable metadata does not name a concrete declaration: '{declaration}'"
-                )));
-            }
-        }
-        self.validate_inline_pins()
     }
 
     fn callable_binding(&self, gid: GlobalItemIndex) -> Result<&CallableBinding, Report> {
@@ -1307,14 +1264,15 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
+        let (namespace_plan, kernel_namespace_plan) = self.namespace_inputs.into_plans();
         Ok(AssemblyProduct::new(
             package,
             None,
             debug_info,
             callables,
             callable_sources,
-            self.namespace_plan.expect("prebinding requires an explicit caller home"),
-            self.kernel_namespace_plan,
+            namespace_plan.expect("prebinding requires an explicit caller home"),
+            kernel_namespace_plan,
             None,
         ))
     }
@@ -1374,14 +1332,15 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
+        let (namespace_plan, kernel_namespace_plan) = self.namespace_inputs.into_plans();
         Ok(AssemblyProduct::new(
             package,
             kernel,
             debug_info,
             callables,
             callable_sources,
-            self.namespace_plan.expect("prebinding requires an explicit caller home"),
-            self.kernel_namespace_plan,
+            namespace_plan.expect("prebinding requires an explicit caller home"),
+            kernel_namespace_plan,
             Some(entry_key),
         ))
     }
@@ -1920,7 +1879,7 @@ impl Assembler {
             },
         };
         if kind == InvokeKind::SysCall {
-            let kernel = self.kernel_namespace_plan.as_ref().ok_or_else(|| {
+            let kernel = self.namespace_inputs.kernel_namespace_plan().ok_or_else(|| {
                 Report::msg("syscall requires an explicit complete kernel NamespacePlan")
             })?;
             if parent_namespace.is_some_and(|parent| parent != kernel.namespace()) {

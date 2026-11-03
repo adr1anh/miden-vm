@@ -171,7 +171,8 @@ fn syscall_requires_the_explicit_complete_kernel_home() {
         target_binding().key().into_word(),
     ));
     assert!(assembler.resolve_target(InvokeKind::SysCall, &literal, caller.module).is_ok());
-    assembler.kernel_namespace_plan = None;
+    let inputs = assembler.namespace_inputs().clone().with_kernel_namespace_plan(None);
+    assembler = assembler.with_namespace_inputs(inputs);
     assert!(assembler.resolve_target(InvokeKind::SysCall, &literal, caller.module).is_err());
 }
 

@@ -53,7 +53,7 @@ pub use self::project::{
     SourceProviderRegistry, TargetAssemblyContext,
 };
 pub use self::{
-    assembler::{Assembler, AssemblyProduct},
+    assembler::{Assembler, AssemblyProduct, NamespaceInputs},
     linker::Linkage,
     procedure::{CallableDeclaration, Procedure, ProcedureContext},
 };
