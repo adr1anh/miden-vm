@@ -38,7 +38,7 @@ use miden_core::{
 };
 
 pub use self::{
-    callables::{PackageCallables, PackageCallablesError},
+    callables::{CallablesCodecError, PackageCallables, PackageCallablesError},
     error::{PackageDebugInfoError, PackageStripError},
     event_handlers::{
         EventHandlerManifestEntry, EventHandlerSection, EventHandlerSectionError, MAX_HANDLERS,

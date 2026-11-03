@@ -9,6 +9,9 @@ use crate::{
     interface::serialization::{Budget, CodecError, CodecLimits, HomeProfile, checked_add},
 };
 
+pub(crate) mod serialization;
+pub use serialization::CallablesCodecError;
+
 /// An in-memory inventory of named callables, independently of selected code and source aliases.
 ///
 /// Every supplied binding is retained, including implementation-private helpers, entrypoints and
@@ -21,11 +24,12 @@ use crate::{
 /// relations between already-owned values; it does not admit a home, authorize a publisher or
 /// kernel namespace, or establish executable-path uniqueness across composed environments.
 ///
-/// This detached inventory is not a serialized package, interface or release artifact. Library
+/// This detached inventory is not a package, interface or release artifact. Its canonical v1
+/// payload codec revalidates explicit home policy; it does not add container admission. Library
 /// identity, executable entry selection and authorized full kernel paths remain requirements of
 /// their respective artifact/configuration containers. [`Self::validate_homes`] checks explicit
 /// caller-supplied home policy and aggregate owned-data bounds. Full artifact admission, including
-/// future wire-format validation, remains a separate container operation.
+/// required container metadata, remains a separate container operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageCallables {
     bindings: BTreeMap<ProcedureKey, CallableBinding>,

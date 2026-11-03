@@ -9,7 +9,8 @@ use super::{ArtifactError, EncodingPlan, LibraryId, borrow_blob, decode_word};
 use crate::interface::{
     DeclarationSet, ProcedureDeclaration, PublicProcedurePath,
     serialization::{
-        Budget, CodecError, Reader, Writer, check_label_layout, checked_add, reserve, wire_len,
+        Budget, CodecError, Reader, Writer, check_label_layout, checked_add, compare_text_paths,
+        count_with_tail, reserve, wire_len,
     },
 };
 
@@ -210,35 +211,6 @@ fn decode_ids<E>(
     Ok(ids)
 }
 
-/// Retain mandatory later framing in addition to the shared count/layout lower-bound check.
-fn count_with_tail<T, E>(
-    reader: &Reader<'_>,
-    count: u32,
-    minimum_bytes: usize,
-    tail: usize,
-    kind: &'static str,
-) -> Result<usize, CodecError<E>> {
-    let count = reader.count::<T, E>(count, minimum_bytes, kind)?;
-    let minimum = count.checked_mul(minimum_bytes).ok_or(CodecError::LengthOverflow(kind))?;
-    if checked_add(minimum, tail, kind)? > reader.remaining() {
-        return Err(CodecError::Truncated(kind));
-    }
-    Ok(count)
-}
-
 fn compare_paths(left: &ProcedureDeclaration, right: &ProcedureDeclaration) -> Ordering {
-    let left = left.path().components();
-    let right = right.path().components();
-    for (left, right) in left.iter().zip(right) {
-        // All envelopes start [1, Text=0]. Compare their little-endian payload lengths, then
-        // exact payload bytes. This is full-envelope order, not String or numeric-length order.
-        let ordering = (left.len() as u32)
-            .to_le_bytes()
-            .cmp(&(right.len() as u32).to_le_bytes())
-            .then_with(|| left.as_bytes().cmp(right.as_bytes()));
-        if ordering != Ordering::Equal {
-            return ordering;
-        }
-    }
-    left.len().cmp(&right.len())
+    compare_text_paths(left.path().components(), right.path().components())
 }
