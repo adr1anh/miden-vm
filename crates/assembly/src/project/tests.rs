@@ -9,6 +9,7 @@ use miden_core::{
 };
 use miden_mast_package::{
     PackageExport, PackageModule, ProcedureExport, Section, SectionId,
+    arbitrary::fixture_naming,
     debug_info::{
         DEBUG_INFO_VERSION, DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, DebugSourceVar,
         PackageDebugInfo, PackageDebugInfoBuilder,
@@ -18,7 +19,7 @@ use miden_package_registry::PackageRegistry;
 use tempfile::TempDir;
 
 use super::*;
-use crate::testing::{TestContext, TestRegistry};
+use crate::testing::{FixtureNamespace, TestContext, TestRegistry};
 
 #[test]
 fn builds_library_package_from_project_profiles() {
@@ -418,6 +419,12 @@ fn debug_bearing_static_package(
     exports.insert(0, PackageExport::Procedure(export));
 
     let modules = module_paths.into_iter().map(|path| PackageModule::new(path, []));
+    let naming = fixture_naming(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        TargetType::Library,
+        &forest,
+        &exports,
+    );
     let mut package = MastPackage::create_with_modules(
         PackageId::from(name),
         "1.0.0".parse().unwrap(),
@@ -426,6 +433,7 @@ fn debug_bearing_static_package(
         exports,
         modules,
         [],
+        &naming,
     )
     .expect("test package should be valid");
     package.sections = vec![Section::new(SectionId::DEBUG_INFO, debug_info.to_bytes())];
@@ -1730,6 +1738,7 @@ end
     let post_processed = dep_assembler
         .assemble(ProjectTargetSelector::Library, "dev")
         .expect("root build of dep should succeed");
+    drop(dep_assembler);
     assert!(
         post_processed
             .sections
@@ -3000,18 +3009,26 @@ fn preassembled_dependency_must_match_graph_selected_runtime_dependencies() {
         [],
     ));
     let dep_package_path = tempdir.path().join("dep.masp");
+    let exports = runtime_v1.manifest.exports().cloned().collect::<Vec<_>>();
+    let naming = fixture_naming(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        TargetType::Library,
+        runtime_v1.mast_forest(),
+        &exports,
+    );
     let dep_v1 = MastPackage::create(
         "dep".into(),
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime_v1.mast_forest().clone(),
-        runtime_v1.manifest.exports().cloned(),
+        exports.clone(),
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime_v1.version.clone(),
             kind: TargetType::Library,
             digest: runtime_v1.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v1.write_to_file(&dep_package_path).unwrap();
@@ -3047,13 +3064,14 @@ end
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime_v1.mast_forest().clone(),
-        runtime_v1.manifest.exports().cloned(),
+        exports,
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime_v2.version.clone(),
             kind: TargetType::Library,
             digest: runtime_v2.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v2.write_to_file(&dep_package_path).unwrap();
@@ -3074,18 +3092,26 @@ fn preassembled_dependency_must_match_graph_selected_dependency_kinds() {
         [],
     ));
     let dep_package_path = tempdir.path().join("dep.masp");
+    let exports = runtime.manifest.exports().cloned().collect::<Vec<_>>();
+    let naming = fixture_naming(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        TargetType::Library,
+        runtime.mast_forest(),
+        &exports,
+    );
     let dep_v1 = MastPackage::create(
         "dep".into(),
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime.mast_forest().clone(),
-        runtime.manifest.exports().cloned(),
+        exports.clone(),
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime.version.clone(),
             kind: TargetType::Library,
             digest: runtime.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v1.write_to_file(&dep_package_path).unwrap();
@@ -3121,13 +3147,14 @@ end
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime.mast_forest().clone(),
-        runtime.manifest.exports().cloned(),
+        exports,
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime.version.clone(),
             kind: TargetType::Kernel,
             digest: runtime.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v2.write_to_file(&dep_package_path).unwrap();
@@ -3148,18 +3175,22 @@ fn preassembled_package_must_match_graph_selected_target_kind() {
         [],
     ));
     let dep_package_path = tempdir.path().join("dep.masp");
+    let exports = runtime.manifest.exports().cloned().collect::<Vec<_>>();
+    let home = FixtureNamespace::assembly_tests().namespace_plan().clone();
+    let naming = fixture_naming(home.clone(), TargetType::Library, runtime.mast_forest(), &exports);
     let dep_v1 = MastPackage::create(
         "dep".into(),
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime.mast_forest().clone(),
-        runtime.manifest.exports().cloned(),
+        exports.clone(),
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime.version.clone(),
             kind: TargetType::Library,
             digest: runtime.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v1.write_to_file(&dep_package_path).unwrap();
@@ -3190,18 +3221,20 @@ end
     let mut context = TestContext::new();
     context.registry_mut().add_package(runtime.clone());
     let mut project_assembler = context.project_assembler_for_path(&root_manifest).unwrap();
+    let naming = fixture_naming(home, TargetType::Kernel, runtime.mast_forest(), &exports);
     let dep_v2 = MastPackage::create(
         "dep".into(),
         "1.0.0".parse().unwrap(),
         TargetType::Kernel,
         runtime.mast_forest().clone(),
-        runtime.manifest.exports().cloned(),
+        exports,
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime.version.clone(),
             kind: TargetType::Library,
             digest: runtime.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v2.write_to_file(&dep_package_path).unwrap();

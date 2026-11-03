@@ -7,7 +7,7 @@ use std::{
 
 use miden_assembly_syntax::{ast::ModuleKind, diagnostics::Report};
 use miden_core::serde::Deserializable;
-use miden_mast_package::{Package as MastPackage, SectionId, TargetType};
+use miden_mast_package::{Package as MastPackage, PackageNaming, SectionId, TargetType};
 use miden_package_registry::{PackageCache, PackageId, Version as PackageVersion};
 use miden_project::{
     Linkage, Package as ProjectPackage, PreassembledDependencyMetadata, Profile,
@@ -76,6 +76,7 @@ impl Assembler {
             source_provider: SourceProviderRegistry::new(providers),
             dependency_graph,
             post_processors: Vec::new(),
+            package_naming_provider: None,
             store,
         })
     }
@@ -112,6 +113,7 @@ impl Assembler {
             source_provider: SourceProviderRegistry::new(providers),
             dependency_graph,
             post_processors: Vec::new(),
+            package_naming_provider: None,
             store,
         })
     }
@@ -228,6 +230,8 @@ impl core::fmt::Display for InterruptedTargetRole {
     }
 }
 
+type PackageNamingProvider<'a> = dyn Fn(&MastPackage) -> Result<PackageNaming, Report> + 'a;
+
 pub struct ProjectAssembler<'a, S: PackageCache> {
     assembler: Assembler,
     project: Arc<ProjectPackage>,
@@ -235,6 +239,7 @@ pub struct ProjectAssembler<'a, S: PackageCache> {
     source_provider: SourceProviderRegistry,
     /// Package post-processors, run in registration order. Empty by default.
     post_processors: Vec<Box<dyn PackagePostProcessor>>,
+    package_naming_provider: Option<Box<PackageNamingProvider<'a>>>,
     store: &'a mut S,
 }
 
@@ -242,6 +247,19 @@ impl<'a, S> ProjectAssembler<'a, S>
 where
     S: PackageCache,
 {
+    /// Provides canonical naming for packages read from storage or preassembled artifacts.
+    ///
+    /// The provider must admit raw naming using the caller's explicit current home profile,
+    /// context and codec limits. Its result is checked against the exact package before use.
+    /// Source compilation retains its own canonical naming and does not use this provider.
+    pub fn with_package_naming_provider(
+        &mut self,
+        provider: impl Fn(&MastPackage) -> Result<PackageNaming, Report> + 'a,
+    ) -> &mut Self {
+        self.package_naming_provider = Some(Box::new(provider));
+        self
+    }
+
     pub fn with_source_provider(
         &mut self,
         provider: impl ProjectSourceProvider + 'static,
@@ -416,12 +434,18 @@ where
                 // We do not link the package here, as by definition a required library is only
                 // present for executable targets, and we always unconditionally link kernel
                 // dependencies just prior to assembling the package
-                runtime_dependencies.record_linked_kernel_dependency(required_lib.package)?;
+                runtime_dependencies
+                    .record_linked_kernel_dependency(required_lib.package, required_lib.naming)?;
             },
             Some(required_lib) => {
-                assembler.link_package(required_lib.package.clone(), Linkage::Static)?;
-                if let Some(kernel_package) = required_lib.linked_kernel_package {
-                    runtime_dependencies.record_linked_kernel_dependency(kernel_package)?;
+                assembler.link_package(
+                    required_lib.package.clone(),
+                    Linkage::Static,
+                    required_lib.naming.clone(),
+                )?;
+                if let Some((kernel_package, kernel_naming)) = required_lib.linked_kernel_package {
+                    runtime_dependencies
+                        .record_linked_kernel_dependency(kernel_package, kernel_naming)?;
                 }
             },
             None => (),
@@ -443,7 +467,11 @@ where
             }
 
             if !dependency_package.package.is_kernel() {
-                assembler.link_package(dependency_package.package.clone(), edge.linkage)?;
+                assembler.link_package(
+                    dependency_package.package.clone(),
+                    edge.linkage,
+                    dependency_package.naming.clone(),
+                )?;
             }
             runtime_dependencies.merge_package(dependency_package, edge.linkage)?;
         }
@@ -482,14 +510,14 @@ where
             sections.push(build_provenance.to_section());
         }
 
-        if let Some(kernel_package) = runtime_dependencies.kernel.clone() {
+        if let Some((kernel_package, kernel_naming)) = runtime_dependencies.kernel.clone() {
             if matches!(target.ty, TargetType::Kernel) {
                 return Err(Report::msg(format!(
                     "kernel targets cannot depend on a kernel, dependency '{}' is a kernel",
                     kernel_package.name
                 )));
             }
-            assembler.link_package(kernel_package, Linkage::Dynamic)?;
+            assembler.link_package(kernel_package, Linkage::Dynamic, kernel_naming)?;
         }
 
         let mut product = match target.ty {
@@ -506,6 +534,7 @@ where
             .extend_dependencies(runtime_dependencies.deps.into_values())
             .expect("assembled package manifest should have unique runtime dependencies");
 
+        let naming = Arc::new(product.naming().clone());
         let mut package = product.into_artifact(profile.should_emit_debug_info())?;
         package.name = project.target_package_name(target);
         package.version = project.version().into_inner().clone();
@@ -523,10 +552,12 @@ where
             )?;
         }
 
+        package.check_naming(&naming).map_err(|error| Report::msg(error.to_string()))?;
         let package = Arc::from(package);
 
         let resolved = ResolvedPackage {
             package,
+            naming,
             linked_kernel_package: runtime_dependencies.kernel,
         };
         cache.insert(package_id, resolved.clone());
@@ -582,14 +613,9 @@ where
                     origin,
                     manifest_path,
                 )? {
-                    RegisteredSourcePackage::Loaded(package) => (
-                        ResolvedPackage {
-                            linked_kernel_package: self
-                                .resolve_linked_kernel_package(package.clone())?,
-                            package,
-                        },
-                        false,
-                    ),
+                    RegisteredSourcePackage::Loaded(package) => {
+                        (self.resolve_loaded_package(package)?, false)
+                    },
                     reuse => {
                         let package = match self.assemble_source_package(
                             package_id.clone(),
@@ -631,25 +657,11 @@ where
                             "dependency '{package_id}' version '{node_version}' was not found in the package registry"
                         ))
                     })?;
-                (
-                    ResolvedPackage {
-                        linked_kernel_package: self
-                            .resolve_linked_kernel_package(package.clone())?,
-                        package,
-                    },
-                    false,
-                )
+                (self.resolve_loaded_package(package)?, false)
             },
             ProjectDependencyNodeProvenance::Registry { selected, .. } => {
                 let package = self.store.load_package(package_id, selected)?;
-                (
-                    ResolvedPackage {
-                        linked_kernel_package: self
-                            .resolve_linked_kernel_package(package.clone())?,
-                        package,
-                    },
-                    false,
-                )
+                (self.resolve_loaded_package(package)?, false)
             },
             ProjectDependencyNodeProvenance::Preassembled {
                 path,
@@ -665,14 +677,7 @@ where
                     requirements,
                 )?;
                 let should_cache = self.should_cache_preassembled_package(package_id, selected);
-                (
-                    ResolvedPackage {
-                        linked_kernel_package: self
-                            .resolve_linked_kernel_package(package.clone())?,
-                        package,
-                    },
-                    should_cache,
-                )
+                (self.resolve_loaded_package(package)?, should_cache)
             },
         };
 
@@ -683,12 +688,35 @@ where
         Ok(ControlFlow::Continue(package))
     }
 
+    fn naming_for_loaded_package(
+        &self,
+        package: &MastPackage,
+    ) -> Result<Arc<PackageNaming>, Report> {
+        let provider = self.package_naming_provider.as_ref().ok_or_else(|| {
+            Report::msg(format!(
+                "package '{}@{}' requires an explicit package naming provider; configure with_package_naming_provider with the current home profile, context and codec limits",
+                package.name, package.version
+            ))
+        })?;
+        let naming = provider(package)?;
+        package.check_naming(&naming).map_err(|error| Report::msg(error.to_string()))?;
+        Ok(Arc::new(naming))
+    }
+
+    fn resolve_loaded_package(&self, package: Arc<MastPackage>) -> Result<ResolvedPackage, Report> {
+        let naming = self.naming_for_loaded_package(&package)?;
+        let linked_kernel_package =
+            self.resolve_linked_kernel_package(package.clone(), naming.clone())?;
+        Ok(ResolvedPackage { package, naming, linked_kernel_package })
+    }
+
     fn resolve_linked_kernel_package(
         &self,
         package: Arc<MastPackage>,
-    ) -> Result<Option<Arc<MastPackage>>, Report> {
+        naming: Arc<PackageNaming>,
+    ) -> Result<Option<(Arc<MastPackage>, Arc<PackageNaming>)>, Report> {
         if package.is_kernel() {
-            return Ok(Some(package));
+            return Ok(Some((package, naming)));
         }
 
         let Some(kernel_dependency) = package.kernel_runtime_dependency()? else {
@@ -709,14 +737,16 @@ where
                             kernel_package.name
                         )));
                     }
-                    return Ok(Some(kernel_package));
+                    let kernel_naming = self.naming_for_loaded_package(&kernel_package)?;
+                    return Ok(Some((kernel_package, kernel_naming)));
                 },
                 Err(load_error) => {
                     if let Some(kernel_package) = package
                         .try_embedded_kernel_package()
                         .map(|kernel_package| kernel_package.map(Arc::from))?
                     {
-                        return Ok(Some(kernel_package));
+                        let kernel_naming = self.naming_for_loaded_package(&kernel_package)?;
+                        return Ok(Some((kernel_package, kernel_naming)));
                     }
                     return Err(load_error);
                 },
@@ -724,8 +754,13 @@ where
         }
 
         package
-            .try_embedded_kernel_package()
-            .map(|kernel_package| kernel_package.map(Arc::from))
+            .try_embedded_kernel_package()?
+            .map(|kernel_package| {
+                let kernel_package: Arc<MastPackage> = Arc::from(kernel_package);
+                let kernel_naming = self.naming_for_loaded_package(&kernel_package)?;
+                Ok((kernel_package, kernel_naming))
+            })
+            .transpose()
     }
 
     fn load_canonical_package(
@@ -829,7 +864,7 @@ where
 
     fn cache_resolved_package(&mut self, package: &ResolvedPackage) -> Result<(), Report> {
         self.cache_package(package.package.clone())?;
-        if let Some(kernel_package) = package.linked_kernel_package.clone()
+        if let Some((kernel_package, _)) = package.linked_kernel_package.clone()
             && self.should_cache_linked_kernel_package(kernel_package.as_ref())
         {
             self.cache_package(kernel_package)?;
@@ -978,7 +1013,8 @@ where
 #[derive(Clone)]
 pub struct ResolvedPackage {
     pub package: Arc<MastPackage>,
-    pub linked_kernel_package: Option<Arc<MastPackage>>,
+    pub naming: Arc<PackageNaming>,
+    pub linked_kernel_package: Option<(Arc<MastPackage>, Arc<PackageNaming>)>,
 }
 
 enum RegisteredSourcePackage {
