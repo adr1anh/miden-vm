@@ -176,6 +176,9 @@ fn absolute_fixture_path(path: &Path) -> Result<Arc<Path>, Report> {
     Ok(Arc::from(path.as_ref()))
 }
 
+#[cfg(all(test, feature = "std"))]
+mod fixture_namespace_tests;
+
 /// A [TestContext] provides common functionality for all tests which interact with an [Assembler].
 ///
 /// It is used by constructing it with `TestContext::default()`, which will initialize the
