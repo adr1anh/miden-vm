@@ -171,7 +171,7 @@ expression: fast_host.snapshots()
             ],
         },
         ProcessorStateSnapshot {
-            clk: 33,
+            clk: 34,
             ctx: 0,
             stack_state: [
                 0,
@@ -255,7 +255,7 @@ expression: fast_host.snapshots()
     ],
     2: [
         ProcessorStateSnapshot {
-            clk: 49,
+            clk: 50,
             ctx: 0,
             stack_state: [
                 0,
@@ -339,7 +339,7 @@ expression: fast_host.snapshots()
     ],
     3: [
         ProcessorStateSnapshot {
-            clk: 69,
+            clk: 70,
             ctx: 0,
             stack_state: [
                 0,
@@ -423,7 +423,7 @@ expression: fast_host.snapshots()
     ],
     4: [
         ProcessorStateSnapshot {
-            clk: 92,
+            clk: 93,
             ctx: 0,
             stack_state: [
                 0,
@@ -507,7 +507,7 @@ expression: fast_host.snapshots()
     ],
     5: [
         ProcessorStateSnapshot {
-            clk: 122,
+            clk: 123,
             ctx: 0,
             stack_state: [
                 7,
@@ -599,7 +599,7 @@ expression: fast_host.snapshots()
     ],
     6: [
         ProcessorStateSnapshot {
-            clk: 143,
+            clk: 144,
             ctx: 0,
             stack_state: [
                 6,
@@ -698,7 +698,7 @@ expression: fast_host.snapshots()
     ],
     7: [
         ProcessorStateSnapshot {
-            clk: 156,
+            clk: 157,
             ctx: 0,
             stack_state: [
                 5,
@@ -788,7 +788,7 @@ expression: fast_host.snapshots()
     ],
     8: [
         ProcessorStateSnapshot {
-            clk: 169,
+            clk: 171,
             ctx: 0,
             stack_state: [
                 5,
@@ -902,7 +902,7 @@ expression: fast_host.snapshots()
     ],
     9: [
         ProcessorStateSnapshot {
-            clk: 176,
+            clk: 182,
             ctx: 0,
             stack_state: [
                 5,
@@ -1016,7 +1016,7 @@ expression: fast_host.snapshots()
     ],
     10: [
         ProcessorStateSnapshot {
-            clk: 179,
+            clk: 193,
             ctx: 0,
             stack_state: [
                 5,
@@ -1130,7 +1130,7 @@ expression: fast_host.snapshots()
     ],
     11: [
         ProcessorStateSnapshot {
-            clk: 191,
+            clk: 204,
             ctx: 0,
             stack_state: [
                 5,
@@ -1260,7 +1260,7 @@ expression: fast_host.snapshots()
             ],
         },
         ProcessorStateSnapshot {
-            clk: 258,
+            clk: 273,
             ctx: 0,
             stack_state: [
                 5,
@@ -1343,49 +1343,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    8858531133204746390,
+                    8479738444888982664,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    1425382315037193640,
+                    8742778138292153543,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7636218587116371429,
+                    8352435570800538838,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    3484120050856187925,
+                    2898843555514367888,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -1440,7 +1440,7 @@ expression: fast_host.snapshots()
     ],
     12: [
         ProcessorStateSnapshot {
-            clk: 202,
+            clk: 213,
             ctx: 0,
             stack_state: [
                 5,
@@ -1578,7 +1578,7 @@ expression: fast_host.snapshots()
     ],
     13: [
         ProcessorStateSnapshot {
-            clk: 234,
+            clk: 249,
             ctx: 0,
             stack_state: [
                 5,
@@ -1667,25 +1667,25 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    8858531133204746390,
+                    8479738444888982664,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    1425382315037193640,
+                    8742778138292153543,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7636218587116371429,
+                    8352435570800538838,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    3484120050856187925,
+                    2898843555514367888,
                 ),
                 (
                     MemoryAddress(
@@ -1740,7 +1740,7 @@ expression: fast_host.snapshots()
     ],
     14: [
         ProcessorStateSnapshot {
-            clk: 271,
+            clk: 282,
             ctx: 0,
             stack_state: [
                 5,
@@ -1829,49 +1829,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    8858531133204746390,
+                    8479738444888982664,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    1425382315037193640,
+                    8742778138292153543,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7636218587116371429,
+                    8352435570800538838,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    3484120050856187925,
+                    2898843555514367888,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -1926,7 +1926,7 @@ expression: fast_host.snapshots()
     ],
     15: [
         ProcessorStateSnapshot {
-            clk: 303,
+            clk: 316,
             ctx: 0,
             stack_state: [
                 5,
@@ -2015,49 +2015,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -2112,7 +2112,7 @@ expression: fast_host.snapshots()
     ],
     16: [
         ProcessorStateSnapshot {
-            clk: 313,
+            clk: 327,
             ctx: 0,
             stack_state: [
                 1,
@@ -2202,49 +2202,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -2299,7 +2299,7 @@ expression: fast_host.snapshots()
     ],
     17: [
         ProcessorStateSnapshot {
-            clk: 321,
+            clk: 335,
             ctx: 0,
             stack_state: [
                 5,
@@ -2388,49 +2388,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -2485,7 +2485,7 @@ expression: fast_host.snapshots()
     ],
     18: [
         ProcessorStateSnapshot {
-            clk: 330,
+            clk: 344,
             ctx: 0,
             stack_state: [
                 0,
@@ -2575,49 +2575,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -2672,7 +2672,7 @@ expression: fast_host.snapshots()
     ],
     19: [
         ProcessorStateSnapshot {
-            clk: 338,
+            clk: 352,
             ctx: 0,
             stack_state: [
                 5,
@@ -2761,49 +2761,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -2858,7 +2858,7 @@ expression: fast_host.snapshots()
     ],
     20: [
         ProcessorStateSnapshot {
-            clk: 355,
+            clk: 369,
             ctx: 0,
             stack_state: [
                 3,
@@ -2948,49 +2948,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -3043,7 +3043,7 @@ expression: fast_host.snapshots()
             ],
         },
         ProcessorStateSnapshot {
-            clk: 367,
+            clk: 381,
             ctx: 0,
             stack_state: [
                 2,
@@ -3133,49 +3133,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -3228,7 +3228,7 @@ expression: fast_host.snapshots()
             ],
         },
         ProcessorStateSnapshot {
-            clk: 379,
+            clk: 393,
             ctx: 0,
             stack_state: [
                 1,
@@ -3318,49 +3318,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -3415,7 +3415,7 @@ expression: fast_host.snapshots()
     ],
     21: [
         ProcessorStateSnapshot {
-            clk: 393,
+            clk: 407,
             ctx: 0,
             stack_state: [
                 0,
@@ -3505,49 +3505,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -3602,7 +3602,7 @@ expression: fast_host.snapshots()
     ],
     22: [
         ProcessorStateSnapshot {
-            clk: 475,
+            clk: 491,
             ctx: 0,
             stack_state: [
                 0,
@@ -3685,49 +3685,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
@@ -3806,8 +3806,8 @@ expression: fast_host.snapshots()
     ],
     100: [
         ProcessorStateSnapshot {
-            clk: 225,
-            ctx: 219,
+            clk: 236,
+            ctx: 230,
             stack_state: [
                 5,
                 4,
@@ -3914,7 +3914,7 @@ expression: fast_host.snapshots()
     ],
     101: [
         ProcessorStateSnapshot {
-            clk: 294,
+            clk: 305,
             ctx: 0,
             stack_state: [
                 5,
@@ -4003,49 +4003,49 @@ expression: fast_host.snapshots()
                     MemoryAddress(
                         4,
                     ),
-                    1295433558800160874,
+                    6659769839555252057,
                 ),
                 (
                     MemoryAddress(
                         5,
                     ),
-                    3961939502943717973,
+                    247814584803863449,
                 ),
                 (
                     MemoryAddress(
                         6,
                     ),
-                    7266924301523207340,
+                    2553330641417688156,
                 ),
                 (
                     MemoryAddress(
                         7,
                     ),
-                    2772742725775212465,
+                    8556612526879354560,
                 ),
                 (
                     MemoryAddress(
                         8,
                     ),
-                    6390356886990291098,
+                    4196864994247018823,
                 ),
                 (
                     MemoryAddress(
                         9,
                     ),
-                    7406600055595171934,
+                    6113174822929440316,
                 ),
                 (
                     MemoryAddress(
                         10,
                     ),
-                    5082789102930362593,
+                    5073338291098619264,
                 ),
                 (
                     MemoryAddress(
                         11,
                     ),
-                    4459758368985607123,
+                    751712324703098468,
                 ),
                 (
                     MemoryAddress(
