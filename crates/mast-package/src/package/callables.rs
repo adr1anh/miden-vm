@@ -25,9 +25,10 @@ pub use serialization::CallablesCodecError;
 /// kernel namespace, or establish executable-path uniqueness across composed environments.
 ///
 /// This detached inventory is not a package, interface or release artifact. Its canonical v1
-/// payload codec revalidates explicit home policy; it does not add container admission. Library
-/// identity, executable entry selection and authorized full kernel paths remain requirements of
-/// their respective artifact/configuration containers. [`Self::validate_homes`] checks explicit
+/// payload codec revalidates explicit home policy; it does not add container admission. Entry/code
+/// relationships belong to [`crate::PackageNaming`]; publication identity and policy stay external.
+/// Syscall authority is defined by the VM, not an inventory configuration.
+/// [`Self::validate_homes`] checks explicit
 /// caller-supplied home policy and aggregate owned-data bounds. Full artifact admission, including
 /// required container metadata, remains a separate container operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +106,7 @@ impl PackageCallables {
     /// All aggregate bounds are checked before any external profile callback.
     ///
     /// Success retains no validation state. It checks only TypedId/home policy and these resource
-    /// bounds, without admitting an artifact, establishing library/entry/kernel metadata,
+    /// bounds, without checking package entry/code relationships,
     /// authenticating a K-to-D binding, proving code availability or granting Protocol admission.
     pub fn validate_homes<P: HomeProfile + ?Sized>(
         &self,

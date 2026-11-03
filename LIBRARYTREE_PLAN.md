@@ -491,7 +491,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 fresh normal attempt passes assembly compilation, then stops at two prover calls missing ExecutionEnvironment; no processor tests ran. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Fixed-root/D8 `dfdbc42b3`, assembler `1615fc816`; fuzz `108dc3607`, lock `54f7db5af`; earlier refs below; base `82935d673` | Independent reviews; current syntax319/D8 construction5, assembly471 pass/43 project failures/6 ignored; strict syntax/assembly Clippy/no_std pass. Earlier namespace11/testing, codec11/package251 and ASan5916/31s (LSan disabled for host ptrace) evidence remains in the ledger below | Required live package9 admission/commitments/readers, per-target project/cache matching, final Program/kernel conversion, prover consumer migration, native/generated/recursive D6 statement cutover, full fuzz qualification and all inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Package9 `6233ae58c`, imports `359d5840d`, project naming bridge `9d6f8caa2`, fixtures `ea4fa6a57`; earlier refs below; base `82935d673` | Independent reviews; package280 pass/one ignored, producer54, assembly478 pass/43 project failures/6 ignored, registry25; strict package/assembly test/bench Clippy/no_std. Earlier D6/D8/codec/fuzz evidence remains below | Per-target NamespaceInputs/D5 routing, exact naming-aware project/cache matching, Program/kernel conversion and remaining consumer migration; native/generated/recursive D6 cutover, full fuzz qualification and inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -2296,3 +2296,51 @@ projection, name-aware dedup/provenance and private metadata retention without i
 Raw read/admission checks remain distinct; selected production profiles still need their external
 owner evidence. Public import APIs and remaining consumers are intentionally in flight. No completed
 Package9 cutover, Program/kernel conversion, project routing, proof closure or M1 acceptance is claimed.
+
+### Package9 persistence, named imports and canonical inventory retention
+
+Source `6233ae58c` persists required NamingV1 in Package9 (rejecting8), with explicit own home,
+callable inventory and optional entry K. Generic containers retain opaque, bounded naming bytes;
+`admit_naming` uses current explicit HomeProfile/context/CodecLimits and checks current container
+relations. No own I/interface, publication profile or TypedId fallback is introduced. Code candidates
+remain valid without entry/public exports across usage tags; explicit private entries require their
+own selected root, and manifest entries require matching explicit K. Exact naming affects v2
+dependency/artifact/full commitments while exported-code/interface meanings remain unchanged.
+Safe/trusted byte readers reject trailing input; debug stripping preserves required naming.
+
+The aggregate codec reuses one fully charged Budget. Prepared callable reference checks and entry
+declaration checks precede every profile callback, including own-home validation; no counter is
+reset/recharged. Raw transport can preserve unknown codecs or invalid references only as opaque
+unadmitted bytes. Current-context admission rejects them. Fixed fixtures195/7/6/25 and the earlier
+callable412-byte vector remain intact. These limits describe logical work, not measured RSS.
+
+Source `359d5840d` borrows one canonical inventory into producer artifacts and requires exact
+package/naming pairs at import. It projects defining bindings onto source aliases, rejects rebasing
+and conflicting module surfaces atomically, and indexes imports by naming-sensitive dependency
+identity. Full private inventories survive separately from source paths; selected D survives only
+where an actual final procedure root exists. No private defining path is invented. Independent
+review found a static debug lookup comparing a forest digest with the new package identity; the
+fix uses the stored source-ID index plus exact debug equality, with canonical frame-source reuse
+asserted. The old package-backed interface-D provenance alias is removed.
+
+Source `9d6f8caa2` retains canonical data from local project products, checks it after hooks and
+propagates package/kernel naming Arc pairs together. Raw/cached/registry/preassembled/embedded
+loads need an explicit naming-provider callback; absence rejects. This does **not** implement
+per-target namespace routing, D5 selectors/file configuration, distinct dependency instances or
+exact naming-aware project cache selection. Existing PackageId caches/base-assembler cloning and
+legacy Program/kernel reconstruction remain required follow-up. Source `ea4fa6a57` supplies explicit
+metadata to manual registry/processor fixtures; no source operations or negative coverage is removed.
+
+Fresh guarded evidence: full package280 pass/one manual seed test ignored; producer/import54 pass;
+full assembly478 pass/43 existing project-input failures/6 ignored; registry resolver25 pass. Strict
+package/assembly library/test/bench Clippy, no-default-features library checks, scoped pinned-nightly
+rustfmt and whitespace checks pass. The two temporary fixture failures were resolved by retaining
+the duplicate-module diagnostic category and rejecting an unconfigured foreign home before module
+registration; the original negative invocation remains tested. Fresh normal processor attempt
+stops at `prover.rs:261,276` missing ExecutionEnvironment; no processor tests ran. Further import
+API consumers, fuzz seeds, generated/native/MASM/recursive and inherited qualification remain.
+
+All four source commits and documentation `99c4d8967` have verified SSH signatures against the
+configured public key using the scratch allowed-signers file. No Git configuration, pushes or
+GitHub PRs changed. This is implementation progress within PR09/M1, not completed cutover or proof
+qualification. The current brief routes the next slice; this ledger owns the durable evidence.
