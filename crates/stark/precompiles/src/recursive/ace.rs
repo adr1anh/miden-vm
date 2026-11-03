@@ -358,7 +358,7 @@ mod tests {
     fn pvm_domain_is_separated_from_vm() {
         assert_ne!(
             crate::recursive::ace_constants::PVM_PROTOCOL_ID,
-            1,
+            miden_air::vm::config::PROTOCOL_ID,
             "PVM must not reuse the VM protocol id"
         );
         assert_ne!(

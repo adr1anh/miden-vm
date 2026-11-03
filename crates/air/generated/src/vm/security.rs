@@ -136,7 +136,7 @@ const fn deployed_instance(log_max_height: u32) -> InstanceShape {
 /// `log2(e)`, rounded up, in fixed point. Matches the common MASM estimator's `LOG2_E_FP`.
 pub const LOG2_E: u64 = fixed::LOG2_E;
 
-/// Number of lookup fractions `emit_core_boundary` emits unconditionally: the block-hash seed and
-/// the two log-deferred-root terminals. Matches `sys::vm::mod.masm`'s
-/// `CORE_BOUNDARY_LOOKUP_TERMS`.
+/// Fixed number of external lookup fractions: the two log-deferred-root terminals and the
+/// singleton root `Open(R_E, N_0)` term. Matches `sys::vm::mod.masm`'s
+/// `CORE_BOUNDARY_LOOKUP_TERMS`; no kernel-list count participates in this bound.
 pub const CORE_BOUNDARY_LOOKUP_TERMS: u32 = 3;

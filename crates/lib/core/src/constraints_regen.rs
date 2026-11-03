@@ -18,7 +18,7 @@ use miden_air::vm::{
     config::{self, PROTOCOL_ID},
 };
 use miden_air_definitions::vm::AIRS;
-use miden_core::{Felt, WORD_SIZE, Word, crypto::hash::Eidos, program::KernelDescriptor};
+use miden_core::{Felt, WORD_SIZE, Word, crypto::hash::Eidos, program::NUM_CLAIM_ELEMENTS};
 use miden_crypto::hash::eidos::{BLOCK_LEN as EIDOS_BLOCK_WIDTH, domains::LMCS_LEAF};
 use miden_stark::{
     QuotientRecompositionInputs, config::relation_digest, quotient_recomposition_inputs,
@@ -78,7 +78,7 @@ fn check() -> Result<(), String> {
     let artifact = compute_artifacts().map_err(|err| err.to_string())?;
     constraints_eval_masm_matches_artifact(&artifact)?;
     relation_digest_matches_artifact(&artifact)?;
-    public_inputs_masm_matches_air()?;
+    public_inputs_masm_matches_artifact(&artifact)?;
     vm_geometry_matches_artifact(&artifact)?;
     security_masm_matches_air()?;
     Ok(())
@@ -147,6 +147,8 @@ fn compute_artifacts() -> io::Result<ComputedArtifacts> {
         stream_blocks: circuit.stream_len / 8,
         circuit_digest,
         relation_digest,
+        public_widths: vm_geometry.public_widths,
+        public_width: vm_geometry.public_width,
         constraints_eval,
         vm_ood_frames,
         vm_parameters,
@@ -185,6 +187,8 @@ fn check_vm_ace_stream_capacity(
 const OOD_SCATTER_TABLE_FELTS: usize = 64;
 
 struct VmGeometry {
+    public_widths: Vec<usize>,
+    public_width: usize,
     raw_preprocessed_widths: Vec<usize>,
     preprocessed_widths: Vec<usize>,
     preprocessed_width: usize,
@@ -217,6 +221,33 @@ impl VmGeometry {
                     "the compiled VM relation has {} AIRs, expected {MIDEN_AIR_COUNT}",
                     compiled.airs.len()
                 ),
+            ));
+        }
+        let public_widths: Vec<_> = compiled.airs.iter().map(|air| air.num_public).collect();
+        let public_width = public_widths.iter().sum::<usize>();
+        if public_widths.as_slice() != [36, 4, 0, 0] {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "the VM requires Core/Chiplets/Eidos/And8 public widths [36, 4, 0, 0], got \
+                     {public_widths:?}"
+                ),
+            ));
+        }
+        if public_width != compiled.num_public || public_width != input_layout.counts.num_public {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "AIR public widths sum to {public_width}, but relation geometry records {} \
+                     and ACE input layout records {}",
+                    compiled.num_public, input_layout.counts.num_public,
+                ),
+            ));
+        }
+        if compiled.max_constraint_degree > (1 << config::pcs_params().log_blowup()) + 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the VM constraint degree exceeds its PCS policy",
             ));
         }
         let raw_preprocessed_widths: Vec<_> =
@@ -306,34 +337,46 @@ impl VmGeometry {
                 ),
             ));
         }
-        if ood_scatter_table_ptr + OOD_SCATTER_TABLE_FELTS > aux_rand_elem_ptr {
+        let public_inputs_ptr =
+            aux_rand_elem_ptr.checked_sub(public_width * EXT_DEGREE).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "the VM public-input base underflows")
+            })?;
+        let scatter_end =
+            ood_scatter_table_ptr.checked_add(OOD_SCATTER_TABLE_FELTS).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "the VM scatter reserve overflows")
+            })?;
+        if scatter_end > public_inputs_ptr {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "the {OOD_SCATTER_TABLE_FELTS}-felt out-of-domain scatter table at \
-                     {ood_scatter_table_ptr} runs into the ACE READ section at {aux_rand_elem_ptr}"
+                     {ood_scatter_table_ptr} runs into the ACE public inputs at {public_inputs_ptr}"
                 ),
             ));
         }
-        // Its lower neighbour is the kernel digest witness, one word per supported kernel
-        // procedure written by `materialize_kernel_witness`; the table must start at or after its
-        // end.
-        let kernel_witness_ptr =
-            parse_masm_const::<usize>(&layout, "KERNEL_WITNESS_PTR", VM_LAYOUT_PATH)
+        let claim_ptr = parse_masm_const::<usize>(&layout, "CLAIM_PTR", VM_LAYOUT_PATH)
+            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
+        let boundary_inputs_ptr =
+            parse_masm_const::<usize>(&layout, "BOUNDARY_INPUTS_PTR", VM_LAYOUT_PATH)
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        let kernel_witness_end = kernel_witness_ptr
-            .checked_add(WORD_SIZE * KernelDescriptor::MAX_NUM_PROCEDURES)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "the kernel witness end overflows")
+        // This internal staging block holds R_E[4] and deferred[4]. Only deferred[4] belongs to
+        // statement auxiliary inputs; the environment root is a copy of Chiplets public values.
+        for (name, start, width) in [
+            ("claim", claim_ptr, NUM_CLAIM_ELEMENTS),
+            ("boundary staging", boundary_inputs_ptr, 2 * WORD_SIZE),
+        ] {
+            let end = start.checked_add(width).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("the VM {name} end overflows"))
             })?;
-        if ood_scatter_table_ptr < kernel_witness_end {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "the out-of-domain scatter table at {ood_scatter_table_ptr} overlaps the \
-                     kernel digest witness, which ends at {kernel_witness_end}"
-                ),
-            ));
+            if ood_scatter_table_ptr < end {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "the out-of-domain scatter table at {ood_scatter_table_ptr} overlaps \
+                         {name}, which ends at {end}"
+                    ),
+                ));
+            }
         }
 
         let aux_rand_index = require_input_index(input_layout, InputKey::AuxRandBeta)?;
@@ -380,6 +423,8 @@ impl VmGeometry {
         let ace_circuit_stream_ptr = input_ptr(input_layout.total_inputs, "ACE circuit stream")?;
 
         Ok(Self {
+            public_widths,
+            public_width,
             raw_preprocessed_widths,
             preprocessed_widths,
             preprocessed_width,
@@ -510,6 +555,19 @@ fn render_vm_parameters(
     writeln!(output, "\n# Per-AIR widths in canonical order: {air_names}.").unwrap();
     writeln!(
         output,
+        "# Public values: {} = {} base felts (Core I/O + entry key, Chiplets environment root).",
+        format_sum(&geometry.public_widths),
+        geometry.public_width,
+    )
+    .unwrap();
+    writeln!(output, "pub const NUM_PUBLIC_VALUES = {}", geometry.public_width).unwrap();
+    for (name, width) in
+        ["CORE", "CHIPLETS", "EIDOS", "AND8"].into_iter().zip(&geometry.public_widths)
+    {
+        writeln!(output, "pub const {name}_NUM_PUBLIC_VALUES = {width}").unwrap();
+    }
+    writeln!(
+        output,
         "# Preprocessed: {} raw columns -> {} aligned base felts = {}.",
         format_sum(&geometry.raw_preprocessed_widths),
         format_sum(&geometry.preprocessed_widths),
@@ -569,9 +627,9 @@ fn render_vm_parameters(
     writeln!(output, "\n# VM ACE READ addresses derived from InputLayout.").unwrap();
     writeln!(
         output,
-        "# Stack I/O: {} public values in {} base-field cells immediately before AUX_RAND_ELEM_PTR.",
-        miden_air::vm::NUM_PUBLIC_VALUES,
-        miden_air::vm::NUM_PUBLIC_VALUES * EXT_DEGREE,
+        "# All AIR public values: {} in {} base-field cells immediately before AUX_RAND_ELEM_PTR.",
+        geometry.public_width,
+        geometry.public_width * EXT_DEGREE,
     )
     .unwrap();
     writeln!(
@@ -825,18 +883,13 @@ pub fn relation_digest_matches_air() -> Result<(), String> {
 fn pinned_identity_matches_artifact(artifact: &ComputedArtifacts) -> Result<(), String> {
     const UPDATE_HINT: &str = "an intentional relation change must update the pinned constants \
                                in crates/air/generated/src/vm/config.rs before regenerating";
-    if config::ACE_CIRCUIT_DIGEST != artifact.circuit_digest {
+    if config::ACE_CIRCUIT_DIGEST != artifact.circuit_digest
+        || config::RELATION_DIGEST != artifact.relation_digest
+    {
         return Err(format!(
-            "ACE_CIRCUIT_DIGEST in crates/air/generated/src/vm/config.rs is stale (it binds the \
-             transcript to the one circuit the recursive verifier evaluates): expected {:?}; \
-             {UPDATE_HINT}",
-            artifact.circuit_digest.map(|felt| felt.as_canonical_u64())
-        ));
-    }
-    if config::RELATION_DIGEST != artifact.relation_digest {
-        return Err(format!(
-            "RELATION_DIGEST in crates/air/generated/src/vm/config.rs is stale: expected {:?}; \
-             {UPDATE_HINT}",
+            "the pinned VM relation identity in crates/air/generated/src/vm/config.rs is stale: \
+             expected ACE_CIRCUIT_DIGEST {:?}; expected RELATION_DIGEST {:?}; {UPDATE_HINT}",
+            artifact.circuit_digest.map(|felt| felt.as_canonical_u64()),
             artifact.relation_digest.map(|felt| felt.as_canonical_u64())
         ));
     }
@@ -863,13 +916,65 @@ fn relation_digest_matches_artifact(artifact: &ComputedArtifacts) -> Result<(), 
 
 /// Verify that Miden VM public-input constants match the current AIR set.
 pub fn public_inputs_masm_matches_air() -> Result<(), String> {
-    let public_inputs = read_file(VM_PUBLIC_INPUTS_PATH).map_err(|e| e.to_string())?;
-    let num_miden_airs =
-        parse_masm_const::<usize>(&public_inputs, "NUM_MIDEN_AIRS", VM_PUBLIC_INPUTS_PATH)?;
-    if num_miden_airs != MIDEN_AIR_COUNT {
-        return Err("NUM_MIDEN_AIRS in sys/vm/public_inputs.masm is stale".into());
-    }
+    let artifact = compute_artifacts().map_err(|err| err.to_string())?;
+    public_inputs_masm_matches_artifact(&artifact)
+}
 
+fn public_inputs_masm_matches_artifact(artifact: &ComputedArtifacts) -> Result<(), String> {
+    let public_inputs = read_file(VM_PUBLIC_INPUTS_PATH).map_err(|e| e.to_string())?;
+    public_inputs_source_matches_geometry(
+        &public_inputs,
+        &artifact.public_widths,
+        artifact.public_width,
+    )?;
+    for path in [VM_LAYOUT_PATH, VM_WRAPPER_PATH] {
+        let source = read_file(path).map_err(|err| err.to_string())?;
+        reject_legacy_kernel_metadata(&source, path)?;
+    }
+    Ok(())
+}
+
+fn public_inputs_source_matches_geometry(
+    public_inputs: &str,
+    public_widths: &[usize],
+    public_width: usize,
+) -> Result<(), String> {
+    for (name, expected) in [
+        ("NUM_MIDEN_AIRS", public_widths.len()),
+        ("NUM_FIXED_LEN_PUBLIC_INPUTS", public_width),
+    ] {
+        let actual = parse_masm_const::<usize>(public_inputs, name, VM_PUBLIC_INPUTS_PATH)?;
+        if actual != expected {
+            return Err(format!(
+                "{name} in {VM_PUBLIC_INPUTS_PATH} is stale: expected {expected}, got {actual}"
+            ));
+        }
+    }
+    reject_legacy_kernel_metadata(public_inputs, VM_PUBLIC_INPUTS_PATH)
+}
+
+fn reject_legacy_kernel_metadata(source: &str, path: &str) -> Result<(), String> {
+    const OBSOLETE: [&str; 13] = [
+        "NUM_KERNEL_PROCEDURES_PTR",
+        "KERNEL_WITNESS_PTR",
+        "MAX_NUM_KERNEL_PROCEDURES",
+        "BUS_ID_KERNEL_ROM_INIT_PLUS_ONE",
+        "BUS_ID_BLOCK_HASH_TABLE_PLUS_ONE",
+        "BOUNDARY_INPUTS_PROGRAM_OFFSET",
+        "KERNEL_COMMITMENT_OFFSET",
+        "KERNEL_DOMAIN_TAG",
+        "FELTS_PER_KERNEL_DIGEST",
+        "materialize_kernel_witness",
+        "num_kernel_procedures_ptr",
+        "kernel_witness_ptr",
+        "BOUNDARY_INPUTS_PROGRAM_ROOT_OFFSET",
+    ];
+    for line in source.lines() {
+        let code = line.split('#').next().unwrap_or_default();
+        if let Some(name) = OBSOLETE.iter().find(|name| code.contains(**name)) {
+            return Err(format!("{path} has obsolete kernel metadata: {name}"));
+        }
+    }
     Ok(())
 }
 
@@ -937,14 +1042,17 @@ pub fn security_masm_matches_air() -> Result<(), String> {
     // checks the stored shape against the AIRs; the checks below fail if that shape leaves the
     // estimator envelope. This function also pins the generic verifier bounds directly.
     let wrapper = read_file(VM_WRAPPER_PATH).map_err(|e| e.to_string())?;
+    reject_legacy_kernel_metadata(&wrapper, VM_WRAPPER_PATH)?;
     let utils = read_file(GENERIC_UTILS_PATH).map_err(|e| e.to_string())?;
     let air_shape = miden_air::vm::security::AIR_SHAPE;
     let parsed = |name: &str| parse_masm_const::<u64>(&estimator, name, SECURITY_ESTIMATOR_PATH);
     let lookup = air_shape.lookup.expect("the MVM uses a lookup argument");
     let lookup_coefficient =
         (u64::from(lookup.max_message_width) + 2) * u64::from(lookup.fractions_per_row);
-    let max_boundary_terms = u64::from(miden_air::vm::security::CORE_BOUNDARY_LOOKUP_TERMS)
-        + KernelDescriptor::MAX_NUM_PROCEDURES as u64;
+    let max_boundary_terms = u64::from(miden_air::vm::security::CORE_BOUNDARY_LOOKUP_TERMS);
+    if max_boundary_terms != 3 {
+        return Err("the VM requires exactly three external lookup terms".into());
+    }
     if u64::from(air_shape.num_composed_constraints) > parsed("MAX_COMPOSED_CONSTRAINTS")? {
         return Err("the MVM composed-constraint count exceeds the estimator envelope".into());
     }
@@ -1023,11 +1131,6 @@ pub fn security_masm_matches_air() -> Result<(), String> {
             parameters_source,
             miden_air::vm::security::LOOKUP_SHAPE.fractions_per_row as u64,
         ),
-        (
-            "MAX_NUM_KERNEL_PROCEDURES",
-            wrapper_source,
-            KernelDescriptor::MAX_NUM_PROCEDURES as u64,
-        ),
         ("LOG_HEIGHT_MAX", wrapper_source, estimator_heights),
     ] {
         let actual = parse_masm_const::<u64>(source, name, path)?;
@@ -1081,6 +1184,8 @@ struct ComputedArtifacts {
     stream_blocks: usize,
     circuit_digest: [Felt; 4],
     relation_digest: [Felt; 4],
+    public_widths: Vec<usize>,
+    public_width: usize,
     constraints_eval: String,
     vm_ood_frames: String,
     vm_parameters: String,
@@ -1091,6 +1196,52 @@ mod tests {
     use alloc::{string::ToString, vec};
 
     use super::*;
+
+    #[test]
+    fn public_input_freshness_rejects_legacy_count_and_kernel_authority() {
+        let legacy = "const NUM_MIDEN_AIRS = 4\nconst NUM_FIXED_LEN_PUBLIC_INPUTS = 32\n";
+        let error = public_inputs_source_matches_geometry(legacy, &[36, 4, 0, 0], 40)
+            .expect_err("four AIRs alone do not make legacy public geometry current");
+        assert!(error.contains("NUM_FIXED_LEN_PUBLIC_INPUTS"));
+        assert!(error.contains("expected 40, got 32"));
+
+        let current = "const NUM_MIDEN_AIRS = 4\nconst NUM_FIXED_LEN_PUBLIC_INPUTS = 40\n";
+        public_inputs_source_matches_geometry(current, &[36, 4, 0, 0], 40).unwrap();
+        for obsolete in [
+            "const BUS_ID_KERNEL_ROM_INIT_PLUS_ONE = 1\n",
+            "const BUS_ID_BLOCK_HASH_TABLE_PLUS_ONE = 2\n",
+            "const MAX_NUM_KERNEL_PROCEDURES = 255\n",
+            "const KERNEL_WITNESS_PTR = 1000\n",
+            "const NUM_KERNEL_PROCEDURES_PTR = 1000\n",
+        ] {
+            let error = public_inputs_source_matches_geometry(
+                &format!("{current}{obsolete}"),
+                &[36, 4, 0, 0],
+                40,
+            )
+            .expect_err("obsolete kernel metadata must not pass with a current public count");
+            assert!(error.contains("obsolete kernel metadata"));
+        }
+    }
+
+    #[test]
+    fn stale_identity_reports_both_computed_pins_in_one_refusal() {
+        let artifact = ComputedArtifacts {
+            num_inputs: 0,
+            num_eval_gates: 0,
+            stream_blocks: 0,
+            circuit_digest: [Felt::ZERO; 4],
+            relation_digest: [Felt::ONE; 4],
+            public_widths: vec![36, 4, 0, 0],
+            public_width: 40,
+            constraints_eval: String::new(),
+            vm_ood_frames: String::new(),
+            vm_parameters: String::new(),
+        };
+        let error = pinned_identity_matches_artifact(&artifact).unwrap_err();
+        assert!(error.contains("expected ACE_CIRCUIT_DIGEST [0, 0, 0, 0]"));
+        assert!(error.contains("expected RELATION_DIGEST [1, 1, 1, 1]"));
+    }
 
     /// A group every AIR occupies is indexed correctly by proof-order position, and one with a
     /// single occupant needs no table at all. Anything between the two would address past the
@@ -1124,6 +1275,8 @@ mod tests {
         let quotient_width = 8;
         let row_width = preprocessed_width + main_width + aux_width + quotient_width;
         VmGeometry {
+            public_widths: vec![36, 4, 0, 0],
+            public_width: 40,
             raw_preprocessed_widths: preprocessed_widths.clone(),
             preprocessed_widths,
             preprocessed_width,
