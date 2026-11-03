@@ -11,6 +11,27 @@ pub use miden_package_registry::{SemVer, Version, VersionReq, VersionRequirement
 pub use self::graph::*;
 use crate::{Diagnostic, Linkage, SourceSpan, Span, Uri, miette};
 
+/// An explicit source-target default-home request, independent of provenance and code supply.
+///
+/// Complete callable bindings and reexports retain their separately supplied homes. A Standard
+/// request is not an artifact ownership or public-surface claim; preassembled Standard imports
+/// require consumer-supplied callable expectations. Custom artifact homes state only the requested
+/// package-default metadata, while the naming provider admits the full retained inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencyBinding {
+    Standard(crate::LibraryImport),
+    Custom(miden_mast_package::NamespacePlan),
+}
+
+impl DependencyBinding {
+    pub fn namespace_plan(&self) -> miden_mast_package::NamespacePlan {
+        match self {
+            Self::Standard(import) => import.namespace_plan(),
+            Self::Custom(home) => home.clone(),
+        }
+    }
+}
+
 /// Represents a project/package dependency declaration
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dependency {
@@ -20,6 +41,8 @@ pub struct Dependency {
     version: DependencyVersionScheme,
     /// The linkage for this dependency
     linkage: Linkage,
+    /// Missing only for incomplete low-level API inputs; manifest dependencies require a choice.
+    binding: Option<DependencyBinding>,
 }
 
 impl Dependency {
@@ -29,7 +52,17 @@ impl Dependency {
         version: DependencyVersionScheme,
         linkage: Linkage,
     ) -> Self {
-        Self { name, version, linkage }
+        Self { name, version, linkage, binding: None }
+    }
+
+    /// Sets an explicit standard or custom runtime home without changing source resolution.
+    pub fn with_binding(mut self, binding: DependencyBinding) -> Self {
+        self.binding = Some(binding);
+        self
+    }
+
+    pub fn binding(&self) -> Option<&DependencyBinding> {
+        self.binding.as_ref()
     }
 
     /// Get the name of this dependency

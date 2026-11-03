@@ -1,3 +1,4 @@
+use alloc::string::ToString;
 use core::assert_matches;
 use std::{boxed::Box, fs, path::Path, sync::Arc};
 
@@ -8,7 +9,10 @@ use miden_assembly_syntax::{
 };
 use tempfile::TempDir;
 
-use crate::{DependencyVersionScheme, Linkage, Project, TargetType, Workspace};
+use crate::{
+    DependencyBinding, DependencyVersionScheme, LibraryImport, LibrarySelection, Linkage, Project,
+    TargetType, Word, Workspace,
+};
 
 struct TestContext {
     pub source_manager: Arc<dyn SourceManager>,
@@ -473,4 +477,80 @@ path = "lib.masm"
         .expect_err("duplicate member package names should be rejected");
 
     assert!(format!("{error}").contains("duplicate"), "{error}");
+}
+
+#[test]
+fn project_dependencies_require_explicit_runtime_selection() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    for dependency in ["dep = '1.0'", "dep = { path = '../dep' }"] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\n{dependency}\n")).unwrap();
+        let context = TestContext::default();
+        let error = Project::load(&manifest, &context.source_manager).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("requires an explicit Latest/Pinned binding or custom home"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn project_selection_roundtrip_keeps_source_version_linkage_and_runtime_naming_separate() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    let id = "0x0100000000000000020000000000000003000000000000000400000000000000";
+    for (selection, revision) in [("latest", ""), ("pinned", ", revision = 4")] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\ndep = {{ version = '=2.0.0', linkage = 'static', binding = {{ selection = '{selection}', library-id = '{id}', base = [{{text = 'tenant'}}]{revision} }} }}\n")).unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        let dependency = &package.dependencies()[0];
+        assert_eq!(dependency.linkage(), Linkage::Static);
+        assert_eq!(dependency.required_version().to_string(), "=2.0.0");
+        let binding = dependency.binding().unwrap().clone();
+        let expected = LibraryImport::new(
+            miden_mast_package::NamespacePlan::new(vec![
+                miden_core::program::CanonicalLabel::text("tenant").unwrap(),
+            ]),
+            Word::try_from(id).unwrap(),
+            if selection == "latest" {
+                LibrarySelection::Latest
+            } else {
+                LibrarySelection::Pinned(core::num::NonZeroU32::new(4).unwrap())
+            },
+        );
+        assert_eq!(binding, DependencyBinding::Standard(expected));
+        fs::write(&manifest, package.to_toml().unwrap()).unwrap();
+        let restored = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert_eq!(restored.dependencies()[0].binding(), Some(&binding));
+        assert_eq!(restored.dependencies()[0].scheme(), dependency.scheme());
+        assert_eq!(restored.dependencies()[0].linkage(), dependency.linkage());
+    }
+}
+
+#[test]
+fn workspace_binding_inheritance_is_explicit_and_member_override_wins() {
+    let temp = TempDir::new().unwrap();
+    let app = temp.path().join("app");
+    fs::create_dir(&app).unwrap();
+    fs::write(temp.path().join("miden-project.toml"), "[workspace]\nmembers = ['app']\n[workspace.dependencies]\ndep = {version = '1.0', binding = { selection = 'custom', home = [{text = 'workspace-home'}] }}\n").unwrap();
+    let manifest = app.join("miden-project.toml");
+    for (extra, expected) in [
+        ("", "workspace-home"),
+        (
+            ", binding = { selection = 'custom', home = [{text = 'member-home'}] }",
+            "member-home",
+        ),
+    ] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\ndep = {{workspace = true{extra}}}\n")).unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert_eq!(
+            package.dependencies()[0].binding().unwrap().namespace_plan(),
+            miden_mast_package::NamespacePlan::new(vec![
+                miden_core::program::CanonicalLabel::text(expected).unwrap()
+            ])
+        );
+    }
 }

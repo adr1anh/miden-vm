@@ -6,8 +6,8 @@ members = [
 ]
 
 [workspace.dependencies]
-miden-utils = { path = "utils", linkage = "static" }
-miden-tx = { path = "kernel" }
+miden-utils = { path = "utils", linkage = "static", binding = { selection = "custom", home = [{text = "project-example-libraries"}] } }
+miden-tx = { path = "kernel", binding = { selection = "custom", home = [{text = "project-example-libraries"}] } }
 
 [profile.test]
 inherits = "dev"

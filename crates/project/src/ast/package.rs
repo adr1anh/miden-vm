@@ -364,7 +364,14 @@ impl ProjectFile {
                                 .copied()
                                 .or(dep.linkage.as_deref().copied())
                                 .unwrap_or_default();
-                            dependencies.push(Dependency::new(dep.name.clone(), version, linkage));
+                            let binding = dependency.binding.as_ref().or(dep.binding.as_ref())
+                                .ok_or_else(|| Report::msg(format!(
+                                    "dependency '{}' requires an explicit Latest/Pinned binding or custom home", dependency.name)))?
+                                .resolve()?;
+                            dependencies.push(
+                                Dependency::new(dep.name.clone(), version, linkage)
+                                    .with_binding(binding),
+                            );
                         },
                         None => {
                             return Err(ProjectFileError::InvalidPackageDependency {
@@ -390,7 +397,8 @@ impl ProjectFile {
                     dependency.name.clone(),
                     DependencyVersionScheme::try_from(dependency.as_ref())?,
                     linkage,
-                ));
+                ).with_binding(dependency.binding.as_ref().ok_or_else(|| Report::msg(format!(
+                    "dependency '{}' requires an explicit Latest/Pinned binding or custom home", dependency.name)))?.resolve()?));
             }
         }
 

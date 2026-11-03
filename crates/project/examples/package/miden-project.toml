@@ -6,7 +6,7 @@ version = "0.1.0"
 path = "lib/mod.masm"
 
 [dependencies]
-miden-protocol = { path = "../protocol/userspace" }
+miden-protocol = { path = "../protocol/userspace", binding = { selection = "custom", home = [{text = "project-example-libraries"}] } }
 
 [profile.test]
 inherits = "dev"
