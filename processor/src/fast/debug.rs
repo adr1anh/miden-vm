@@ -502,6 +502,21 @@ impl DebugCallFrameResolver {
         }
         let mut frames = Vec::<DebugCallFrame>::new();
         for (position, (continuation, source)) in continuations.iter().enumerate() {
+            // A keyed invocation keeps both its finish and a zero-cycle forest restoration.
+            // They describe one caller activation; retain the finish's identity and source.
+            if matches!(continuation, Continuation::EnterForest { .. })
+                && position.checked_sub(1).is_some_and(|previous| {
+                    let (finish, finish_source) = continuations[previous];
+                    matches!(
+                        finish,
+                        Continuation::FinishExec(_)
+                            | Continuation::FinishCall(_)
+                            | Continuation::FinishDyn(_)
+                    ) && finish_source == *source
+                })
+            {
+                continue;
+            }
             let ancestor = matches!(
                 continuation,
                 Continuation::FinishJoin(_)
@@ -739,7 +754,6 @@ fn frame(
 mod tests {
     use alloc::{boxed::Box, format};
 
-    use miden_assembly::{Assembler, DefaultSourceManager};
     use miden_core::serde::Serializable;
     use miden_mast_package::debug_info::PackageDebugInfoBuilder;
 
@@ -748,9 +762,8 @@ mod tests {
     #[test]
     fn inline_depth_index_respects_adjacent_nested_and_point_ranges() {
         use miden_mast_package::debug_info::{DebugLocIdx, DebugSourceInlineCall};
-        let package = Assembler::new(Arc::new(DefaultSourceManager::default()))
-            .assemble_program("program", "begin push.7 drop end")
-            .unwrap();
+        let fixture = crate::test_utils::named_source("begin push.7 drop end").unwrap();
+        let package = fixture.package;
         let info = package.debug_info().unwrap().unwrap();
         let mut node = info.nodes().iter().next().unwrap().clone();
         node.inline_calls = [(0, 10), (0, 5), (5, 10), (5, 5)]
@@ -770,9 +783,8 @@ mod tests {
 
     #[test]
     fn frame_index_handles_many_sources_and_functions_sharing_an_execution_node() {
-        let package = Assembler::new(Arc::new(DefaultSourceManager::default()))
-            .assemble_program("program", "begin push.7 drop end")
-            .unwrap();
+        let fixture = crate::test_utils::named_source("begin push.7 drop end").unwrap();
+        let package = fixture.package;
         let info = package.debug_info().unwrap().unwrap();
         let template = info.functions()[0];
         let node = info[template.source_node.into_option().unwrap()].clone();

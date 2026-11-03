@@ -1,9 +1,10 @@
 use alloc::string::String;
 
-use miden_assembly::package::Package;
+use miden_utils_testing::Test;
 use rstest::fixture;
 
 use super::*;
+use crate::test_utils::{named_source, native_fixture_environment};
 
 #[rstest]
 // ---- syscalls --------------------------------
@@ -234,47 +235,27 @@ fn test_masm_consistency(
     #[case] program_source: &'static str,
     #[case] stack_inputs: Vec<Felt>,
 ) {
-    let (program, kernel_lib) = {
-        let source_manager = Arc::new(DefaultSourceManager::default());
-
-        match kernel_source {
-            Some(kernel_source) => {
-                let kernel = parse_kernel_source(source_manager.clone(), kernel_source);
-                let kernel_lib = Assembler::new(source_manager.clone())
-                    .assemble_kernel("kernel", kernel, None)
-                    .map(Arc::<Package>::from)
-                    .unwrap();
-                let program = Assembler::with_kernel(source_manager, kernel_lib.clone())
-                    .unwrap()
-                    .assemble_program("program", program_source)
-                    .unwrap()
-                    .unwrap_program();
-
-                (program, Some(kernel_lib))
-            },
-            None => {
-                let program = Assembler::new(source_manager)
-                    .assemble_program("program", program_source)
-                    .unwrap()
-                    .unwrap_program();
-                (program, None)
-            },
-        }
+    let test = Test::new("program", program_source, false);
+    let test = match kernel_source {
+        Some(kernel_source) => test.with_kernel_source("kernel", kernel_source),
+        None => test,
     };
-
-    let mut host = DefaultHost::default();
+    let (program, kernel_lib, _) = test.compile().unwrap();
+    let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
+    let mut host = DefaultHost::default().with_environment_source(source);
     if let Some(kernel_lib) = &kernel_lib {
         host.load_library(kernel_lib.mast_forest()).unwrap();
     }
 
     // fast processor
     let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-    let fast_stack_outputs = processor.execute_sync(&program, &mut host).unwrap().stack;
+    let fast_stack_outputs =
+        processor.execute_sync(&program, environment, &mut host).unwrap().stack;
 
     // fast processor by step
     let stepped_stack_outputs = {
         let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-        processor.execute_by_step_sync(&program, &mut host).unwrap()
+        processor.execute_by_step_sync(&program, environment, &mut host).unwrap()
     };
 
     assert_eq!(fast_stack_outputs, stepped_stack_outputs);
@@ -320,47 +301,26 @@ fn test_masm_errors_consistency(
     #[case] program_source: &'static str,
     #[case] stack_inputs: Vec<Felt>,
 ) {
-    let (program, kernel_lib) = {
-        let source_manager = Arc::new(DefaultSourceManager::default());
-
-        match kernel_source {
-            Some(kernel_source) => {
-                let kernel = parse_kernel_source(source_manager.clone(), kernel_source);
-                let kernel_lib = Assembler::new(source_manager.clone())
-                    .assemble_kernel("kernel", kernel, None)
-                    .map(Arc::<Package>::from)
-                    .unwrap();
-                let program = Assembler::with_kernel(source_manager, kernel_lib.clone())
-                    .unwrap()
-                    .assemble_program("program", program_source)
-                    .unwrap()
-                    .unwrap_program();
-
-                (program, Some(kernel_lib))
-            },
-            None => {
-                let program = Assembler::new(source_manager)
-                    .assemble_program("program", program_source)
-                    .unwrap()
-                    .unwrap_program();
-                (program, None)
-            },
-        }
+    let test = Test::new("program", program_source, false);
+    let test = match kernel_source {
+        Some(kernel_source) => test.with_kernel_source("kernel", kernel_source),
+        None => test,
     };
-
-    let mut host = DefaultHost::default();
+    let (program, kernel_lib, _) = test.compile().unwrap();
+    let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
+    let mut host = DefaultHost::default().with_environment_source(source);
     if let Some(kernel_lib) = &kernel_lib {
         host.load_library(kernel_lib.mast_forest()).unwrap();
     }
 
     // fast processor
     let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-    let fast_err = processor.execute_sync(&program, &mut host).unwrap_err();
+    let fast_err = processor.execute_sync(&program, environment, &mut host).unwrap_err();
 
     // fast processor by step
     let fast_stepped_err = {
         let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-        processor.execute_by_step_sync(&program, &mut host).unwrap_err()
+        processor.execute_by_step_sync(&program, environment, &mut host).unwrap_err()
     };
 
     assert_eq!(fast_err.to_string(), fast_stepped_err.to_string());
@@ -384,17 +344,12 @@ fn test_log_deferred_correctness() {
     let expected_state_new = deferred_and_digest(state_prev, stmnt);
 
     let program_source = "begin log_deferred end";
-    let program = {
-        let source_manager = Arc::new(DefaultSourceManager::default());
-        Assembler::new(source_manager)
-            .assemble_program("program", program_source)
-            .unwrap()
-            .unwrap_program()
-    };
-
-    let mut host = DefaultHost::default();
+    let fixture = named_source(program_source).unwrap();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
     let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-    let execution_output = processor.execute_sync(&program, &mut host).unwrap();
+    let execution_output = processor
+        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .unwrap();
 
     let actual_state_new = execution_output.stack.get_word(0).unwrap();
 
@@ -441,20 +396,20 @@ fn export_deferred_witness_opens_an_unlogged_shared_graph() {
     processor = processor
         .with_advice(AdviceInputs::default().with_stack(AdviceStack::from(advice_stack.clone())))
         .unwrap();
-    let program = Assembler::new(Arc::new(DefaultSourceManager::default()))
-        .assemble_program(
-            "program",
-            r#"begin
+    let fixture = named_source(
+        r#"begin
                 # Insert one zero felt under the selected root before exporting its witness.
                 push.0.1 movdn.5 movdn.4 adv.insert_mem
                 movup.4 drop movup.4 drop
                 adv.export_deferred_witness
                 emit.event("sys::adv::export_deferred_witness")
             end"#,
-        )
-        .unwrap()
-        .unwrap_program();
-    let output = processor.execute_sync(&program, &mut DefaultHost::default()).unwrap();
+    )
+    .unwrap();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let output = processor
+        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .unwrap();
 
     assert_eq!(output.precompile_root(), logged_root);
     for (offset, expected) in stack_inputs.into_iter().enumerate() {
@@ -497,11 +452,7 @@ fn successive_log_deferred_calls_build_an_ordered_and_chain() {
         *value = Felt::new_unchecked(offset as u64 + 9);
     }
 
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let program = Assembler::new(source_manager)
-        .assemble_program("program", "begin log_deferred dropw log_deferred end")
-        .unwrap()
-        .unwrap_program();
+    let fixture = named_source("begin log_deferred dropw log_deferred end").unwrap();
 
     let mut processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
     processor.deferred_state_mut().register(first_node).unwrap();
@@ -513,7 +464,10 @@ fn successive_log_deferred_calls_build_an_ordered_and_chain() {
         deferred_and_digest(deferred_and_digest(TRUE_DIGEST, second_statement), first_statement);
     assert_ne!(expected_root, reversed_root);
 
-    let execution_output = processor.execute_sync(&program, &mut DefaultHost::default()).unwrap();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let execution_output = processor
+        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .unwrap();
 
     assert_eq!(execution_output.stack.get_word(0), Some(expected_root));
     assert_eq!(execution_output.precompile_root(), expected_root);

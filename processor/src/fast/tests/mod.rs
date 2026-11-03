@@ -19,7 +19,7 @@ use miden_core::{
         MastNodeId, SplitNodeBuilder,
     },
     operations::Operation,
-    program::StackInputs,
+    program::{ImplementationRoot, StackInputs},
     serde::{Deserializable, Serializable},
 };
 use miden_debug_types::{
@@ -44,6 +44,9 @@ use crate::{
     event::EventError,
     operation::OperationError,
     processor::{StackInterface, SystemInterface},
+    test_utils::{
+        NamedFixture, named_module, named_package, named_program, named_source, native_trace_limits,
+    },
 };
 
 mod advice_provider;
@@ -51,11 +54,6 @@ mod all_ops;
 mod arbitrary_forest;
 mod masm_consistency;
 mod memory;
-
-fn parse_kernel_source(source_manager: Arc<dyn SourceManager>, source: &str) -> Box<Module> {
-    let mut parser = Module::parser(Some(ModuleKind::Kernel));
-    parser.parse_str(Some(Path::KERNEL), source, source_manager).unwrap()
-}
 
 fn set_entrypoint_inline_context(
     source_manager: &DefaultSourceManager,
@@ -188,15 +186,17 @@ end
 }
 
 #[test]
-fn source_debug_call_frames_do_not_invent_tail_exec_wrappers() {
+fn source_debug_call_frames_preserve_real_tail_exec_callers() {
     let chains = collect_debug_call_chains(
         "proc inner push.1 drop end proc outer exec.inner end begin exec.outer end",
     );
     assert!(
-        chains.iter().any(|chain| chain.len() == 2 && chain[1].contains("inner")),
-        "{chains:?}"
+        chains.iter().any(|chain| chain.len() == 3
+            && chain[1].contains("outer")
+            && chain[2].contains("inner")),
+        "real EXEC activations retain their tail callers: {chains:?}"
     );
-    assert!(chains.iter().all(|chain| chain.iter().all(|name| !name.contains("outer"))));
+    assert_eq!(chains.last().unwrap().len(), 1, "{chains:?}");
 }
 
 #[test]
@@ -243,21 +243,19 @@ fn source_debug_call_frames_track_branch_and_loop_returns() {
 }
 
 fn collect_debug_call_chains(source: &str) -> Vec<Vec<String>> {
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let package = Arc::<Package>::from(
-        Assembler::new(source_manager).assemble_program("program", source).unwrap(),
-    );
-    collect_package_debug_call_chains(package, DefaultHost::default())
+    collect_package_debug_call_chains(named_source(source).unwrap(), DefaultHost::default())
 }
 
 fn collect_package_debug_call_chains(
-    package: Arc<Package>,
+    fixture: NamedFixture,
     mut host: DefaultHost,
 ) -> Vec<Vec<String>> {
+    let package = fixture.package.clone();
+    host = host.with_environment_source(fixture.source.clone());
     let package_debug_info = package.debug_info().unwrap().unwrap();
     let mut processor = FastProcessor::new(StackInputs::default());
     let mut resume_ctx = processor
-        .get_initial_resume_context_for_package(package)
+        .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
         .expect("package should produce an initial resume context");
     let mut chains = Vec::new();
 
@@ -295,12 +293,11 @@ fn collect_package_debug_call_chains(
             );
         }
 
-        match processor
-            .step_with_package_debug_info_sync(&mut host, resume_ctx, &package_debug_info)
+        if processor
+            .step_with_package_debug_info_sync(&mut host, &mut resume_ctx, &package_debug_info)
             .unwrap()
         {
-            Some(next) => resume_ctx = next,
-            None => break,
+            break;
         }
     }
 
@@ -309,17 +306,17 @@ fn collect_package_debug_call_chains(
 
 #[test]
 fn source_debug_call_frames_expose_inference_and_reuse_the_index() {
-    for invocation in ["exec.inner", "call.inner"] {
-        let source_manager = Arc::new(DefaultSourceManager::default());
+    for invocation in ["inline.inner", "exec.inner", "call.inner"] {
         let source =
             format!("proc inner push.7 drop end begin push.1 drop {invocation} push.2 drop end");
-        let package = Arc::<Package>::from(
-            Assembler::new(source_manager).assemble_program("program", source).unwrap(),
-        );
+        let fixture = named_source(&source).unwrap();
+        let package = fixture.package.clone();
         let debug_info = package.debug_info().unwrap().unwrap();
         let mut processor = FastProcessor::new(StackInputs::default());
-        let mut host = DefaultHost::default();
-        let mut resume = processor.get_initial_resume_context_for_package(package).unwrap();
+        let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+        let mut resume = processor
+            .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
+            .unwrap();
         let mut resolver = DebugCallFrameResolver::new();
         let mut seen = false;
         loop {
@@ -330,16 +327,15 @@ fn source_debug_call_frames_expose_inference_and_reuse_the_index() {
                 assert!(frame.is_same_frame(repeated));
                 assert_eq!(frame.origin(), repeated.origin());
                 if frame.debug_info()[frame.function().name_idx].contains("inner") {
-                    assert_eq!(frame.is_inferred(), invocation == "exec.inner");
+                    assert_eq!(frame.is_inferred(), invocation == "inline.inner");
                     seen = true;
                 }
             }
-            match processor
-                .step_with_package_debug_info_sync(&mut host, resume, &debug_info)
+            if processor
+                .step_with_package_debug_info_sync(&mut host, &mut resume, &debug_info)
                 .unwrap()
             {
-                Some(next) => resume = next,
-                None => break,
+                break;
             }
         }
         assert!(seen, "{invocation}");
@@ -348,18 +344,14 @@ fn source_debug_call_frames_expose_inference_and_reuse_the_index() {
 
 #[test]
 fn source_debug_call_frames_preserve_inherited_inline_calls_across_operations() {
-    let package = Arc::<Package>::from(
-        Assembler::new(Arc::new(DefaultSourceManager::default()))
-            .assemble_program(
-                "program",
-                "proc inner push.7 drop end proc outer exec.inner push.8 drop end begin exec.outer push.9 drop end",
-            )
-            .unwrap(),
-    );
+    let fixture = named_source("proc inner push.7 drop end proc outer inline.inner push.8 drop end begin inline.outer push.9 drop end").unwrap();
+    let package = fixture.package.clone();
     let debug_info = package.debug_info().unwrap().unwrap();
     let mut processor = FastProcessor::new(StackInputs::default());
-    let mut host = DefaultHost::default();
-    let mut resume = processor.get_initial_resume_context_for_package(package).unwrap();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let mut resume = processor
+        .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
+        .unwrap();
     let mut resolver = DebugCallFrameResolver::new();
     let mut previous = None::<DebugCallFrame>;
     let mut observations = 0;
@@ -370,7 +362,7 @@ fn source_debug_call_frames_preserve_inherited_inline_calls_across_operations() 
                 assert_eq!(
                     frame.inherited_inline_calls(),
                     2,
-                    "both enclosing exec calls remain inherited throughout inner"
+                    "both enclosing explicit inline calls remain inherited throughout inner"
                 );
                 if let Some(previous) = &previous {
                     assert!(previous.is_same_frame(&frame));
@@ -379,12 +371,11 @@ fn source_debug_call_frames_preserve_inherited_inline_calls_across_operations() 
                 observations += 1;
             }
         }
-        match processor
-            .step_with_package_debug_info_sync(&mut host, resume, &debug_info)
+        if processor
+            .step_with_package_debug_info_sync(&mut host, &mut resume, &debug_info)
             .unwrap()
         {
-            Some(next) => resume = next,
-            None => break,
+            break;
         }
     }
     assert!(observations >= 2, "inner must be observed across multiple operations");
@@ -396,7 +387,7 @@ fn source_debug_call_frames_distinguish_owned_and_inherited_inline_calls() {
     let mut module = Module::parser(Some(ModuleKind::Executable))
         .parse_str(
             None,
-            "proc inner push.7 drop nop push.6 drop nop push.5 drop end proc outer exec.inner push.8 drop end begin exec.outer push.9 drop end",
+            "proc inner push.7 drop nop push.6 drop nop push.5 drop end proc outer inline.inner push.8 drop end begin inline.outer push.9 drop end",
             source_manager.clone(),
         )
         .unwrap();
@@ -423,13 +414,14 @@ fn source_debug_call_frames_distinguish_owned_and_inherited_inline_calls() {
         }
     }
     assert!(markers.next().is_none());
-    let package = Arc::<Package>::from(
-        Assembler::new(source_manager).assemble_program("program", module).unwrap(),
-    );
+    let fixture = named_module(Assembler::new(source_manager), module, []).unwrap();
+    let package = fixture.package.clone();
     let debug_info = package.debug_info().unwrap().unwrap();
     let mut processor = FastProcessor::new(StackInputs::default());
-    let mut host = DefaultHost::default();
-    let mut resume = processor.get_initial_resume_context_for_package(package).unwrap();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let mut resume = processor
+        .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
+        .unwrap();
     let mut resolver = DebugCallFrameResolver::new();
     let mut phases = Vec::new();
     let mut previous = None::<DebugCallFrame>;
@@ -476,12 +468,11 @@ fn source_debug_call_frames_distinguish_owned_and_inherited_inline_calls() {
                 }
             }
         }
-        match processor
-            .step_with_package_debug_info_sync(&mut host, resume, &debug_info)
+        if processor
+            .step_with_package_debug_info_sync(&mut host, &mut resume, &debug_info)
             .unwrap()
         {
-            Some(next) => resume = next,
-            None => break,
+            break;
         }
     }
     assert_eq!(
@@ -493,19 +484,15 @@ fn source_debug_call_frames_distinguish_owned_and_inherited_inline_calls() {
 
 #[test]
 fn source_debug_call_frames_distinguish_adjacent_identical_invocations() {
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let package = Arc::<Package>::from(
-        Assembler::new(source_manager)
-            .assemble_program(
-                "program",
-                "proc inner push.7 drop end begin exec.inner exec.inner end",
-            )
-            .unwrap(),
-    );
+    let fixture =
+        named_source("proc inner push.7 drop end begin exec.inner exec.inner end").unwrap();
+    let package = fixture.package.clone();
     let debug_info = package.debug_info().unwrap().unwrap();
     let mut processor = FastProcessor::new(StackInputs::default());
-    let mut host = DefaultHost::default();
-    let mut resume = processor.get_initial_resume_context_for_package(package).unwrap();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let mut resume = processor
+        .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
+        .unwrap();
     let mut activations = Vec::new();
     loop {
         for frame in resume.debug_call_frames() {
@@ -517,12 +504,11 @@ fn source_debug_call_frames_distinguish_adjacent_identical_invocations() {
                 activations.push(frame);
             }
         }
-        match processor
-            .step_with_package_debug_info_sync(&mut host, resume, &debug_info)
+        if processor
+            .step_with_package_debug_info_sync(&mut host, &mut resume, &debug_info)
             .unwrap()
         {
-            Some(next) => resume = next,
-            None => break,
+            break;
         }
     }
     assert_eq!(activations.len(), 2);
@@ -553,15 +539,14 @@ fn source_debug_call_frames_distinguish_repeated_invocations_at_one_site(
         let source = format!(
             "@locals({num_locals}) proc inner {body} end begin push.2 dup neq.0 while.true {invocation} sub.1 dup neq.0 end drop end"
         );
-        let package = Arc::<Package>::from(
-            Assembler::new(Arc::new(DefaultSourceManager::default()))
-                .assemble_program("program", source)
-                .unwrap(),
-        );
+        let fixture = named_source(&source).unwrap();
+        let package = fixture.package.clone();
         let debug_info = package.debug_info().unwrap().unwrap();
         let mut processor = FastProcessor::new(StackInputs::default());
-        let mut host = DefaultHost::default();
-        let mut resume = processor.get_initial_resume_context_for_package(package).unwrap();
+        let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+        let mut resume = processor
+            .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
+            .unwrap();
         let mut resolver = DebugCallFrameResolver::new();
         let mut activations = Vec::<DebugCallFrame>::new();
         let mut current = None::<DebugCallFrame>;
@@ -584,12 +569,11 @@ fn source_debug_call_frames_distinguish_repeated_invocations_at_one_site(
                 assert!(frame.is_same_frame(&repeated));
             }
             current = frame;
-            match processor
-                .step_with_package_debug_info_sync(&mut host, resume, &debug_info)
+            if processor
+                .step_with_package_debug_info_sync(&mut host, &mut resume, &debug_info)
                 .unwrap()
             {
-                Some(next) => resume = next,
-                None => break,
+                break;
             }
         }
         assert_eq!(activations.len(), 2, "{invocation}");
@@ -622,11 +606,8 @@ fn source_debug_call_frames_preserve_external_tail_callers() {
             source_manager.clone(),
         )
         .unwrap();
-    let library: Arc<Package> = Arc::from(
-        Assembler::new(source_manager.clone())
-            .assemble_library("dep", library_module, None::<Box<Module>>)
-            .unwrap(),
-    );
+    let (library, library_naming) =
+        named_library("dep", source_manager.clone(), library_module, []);
     for (source, callers) in [
         (
             "use dep::math proc outer exec.math::inner end begin exec.outer push.9 drop end",
@@ -638,13 +619,19 @@ fn source_debug_call_frames_preserve_external_tail_callers() {
         ),
     ] {
         let assembler = Assembler::new(source_manager.clone())
-            .with_package(library.clone(), Linkage::Dynamic)
+            .with_package(library.clone(), Linkage::Dynamic, library_naming.clone())
             .unwrap();
-        let package: Arc<Package> =
-            Arc::from(assembler.assemble_program("program", source).unwrap());
+        let fixture = named_module(
+            assembler,
+            Module::parser(Some(ModuleKind::Executable))
+                .parse_str(None, source, source_manager.clone())
+                .unwrap(),
+            [],
+        )
+        .unwrap();
         let mut host = DefaultHost::default();
         host.load_library(library.clone()).unwrap();
-        let chains = collect_package_debug_call_chains(package, host);
+        let chains = collect_package_debug_call_chains(fixture, host);
         assert!(
             chains.iter().any(|chain| chain.len() == callers.len() + 1
                 && chain[1..].iter().zip(&callers).all(|(name, caller)| name.ends_with(caller))),
@@ -698,17 +685,19 @@ fn stack_get_word_out_of_bounds_read() {
         INITIAL_STACK_TOP_IDX - MIN_STACK_DEPTH
     );
 
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let program = Assembler::new(source_manager)
-        .assemble_program("program", &program_source)
-        .expect("program should assemble")
-        .unwrap_program();
+    let program = named_source(&program_source).expect("program should assemble");
 
     let mut host = DefaultHost::default();
     let processor = FastProcessor::new(StackInputs::default());
 
     // Should not panic
-    processor.execute_sync(&program, &mut host).unwrap();
+    processor
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap();
 }
 
 #[test]
@@ -818,47 +807,53 @@ fn test_reset_stack_in_buffer_from_restore_context() {
     test.expect_stack(&final_stack);
 }
 
-/// Tests that a syscall fails when the syscall target is not in the kernel.
+/// Tests that a syscall fails when its authenticated target belongs to an ordinary child namespace.
 #[test]
 fn test_syscall_fail() {
     let mut host = DefaultHost::default();
 
-    // set the initial FMP to a value close to FMP_MAX
+    // Keep a nontrivial input while checking namespace authorization before entering code.
     let stack_inputs = StackInputs::new(&[Felt::from_u32(5)]).unwrap();
     let program = {
         let mut program = MastForest::new();
         let basic_block_id = BasicBlockNodeBuilder::new(vec![Operation::Add])
             .add_to_forest(&mut program)
             .unwrap();
-        let root_id = CallNodeBuilder::new_syscall(basic_block_id)
-            .add_to_forest(&mut program)
-            .unwrap();
+        program.make_root(basic_block_id);
+        let target = fixture_binding(&["ordinary_target"]);
+        let implementation = ImplementationRoot::new(program[basic_block_id].digest());
+        let root_id =
+            CallNodeBuilder::new_syscall(target.key()).add_to_forest(&mut program).unwrap();
         program.make_root(root_id);
 
-        Program::new(program.into(), root_id)
+        synthetic_fixture(Program::new(program.into(), root_id), [(target, implementation)])
     };
 
     let processor = FastProcessor::new(stack_inputs);
 
-    let err = processor.execute_sync(&program, &mut host).unwrap_err();
+    let err = processor
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap_err();
 
-    // Check that the error is due to the syscall target not being in the kernel
+    // The binding is authenticated, but its immediate parent is outside fixed N0.
     assert_matches!(
         err,
-        ExecutionError::OperationError {
-            err: OperationError::SyscallTargetNotInKernel { .. },
-            ..
-        }
+        ExecutionError::EnvironmentSession(crate::SessionError::UnauthorizedSyscall {
+            expected,
+            actual,
+        }) if expected == miden_core::program::Namespace::initial()
+            && actual == fixture_binding(&["ordinary_target"]).parent_namespace()
     );
 }
 
 #[test]
 fn validated_debug_child_bearing_package_executes_with_debug_info() {
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let package = Assembler::new(source_manager)
-        .assemble_program(
-            "program",
-            "
+    let fixture = named_source(
+        "
         proc add_one
             push.1 add
         end
@@ -872,17 +867,22 @@ fn validated_debug_child_bearing_package_executes_with_debug_info() {
             end
         end
         ",
-        )
-        .expect("program should assemble");
+    )
+    .expect("program should assemble");
+    let package = fixture.package.clone();
 
     assert!(package.debug_info().unwrap().is_some());
 
     let package = Package::read_from_bytes(&package.to_bytes()).unwrap();
     assert!(package.debug_info().unwrap().is_some());
 
-    let program = package.unwrap_program();
+    let program = named_package(Arc::new(package), fixture.naming, &[]).unwrap();
     let output = FastProcessor::new(StackInputs::new(&[Felt::new_unchecked(3)]).unwrap())
-        .execute_sync(&program, &mut DefaultHost::default())
+        .execute_sync(
+            &program.program,
+            program.environment,
+            &mut DefaultHost::default().with_environment_source(program.source.clone()),
+        )
         .unwrap();
 
     assert_eq!(output.stack.get_element(0), Some(Felt::new_unchecked(4)));
@@ -903,7 +903,12 @@ fn host_loaded_package_debug_info_reports_loaded_source_span() {
         .expect("loaded package should register");
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_with_package_debug_info_sync(&program, &caller_debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &caller_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -933,7 +938,11 @@ fn host_loaded_package_debug_info_requires_source_aware_execution() {
         .expect("loaded package should register");
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, &mut plain_host)
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut plain_host, &program),
+        )
         .unwrap_err();
     assert_matches!(
         err,
@@ -950,7 +959,12 @@ fn host_loaded_package_debug_info_requires_source_aware_execution() {
         .with_library(Arc::new(loaded_package))
         .expect("loaded package should register");
     let err = FastProcessor::new(StackInputs::default())
-        .execute_with_package_debug_info_sync(&program, &caller_debug_info, &mut source_aware_host)
+        .execute_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &caller_debug_info,
+            with_fixture_source(&mut source_aware_host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -981,7 +995,12 @@ fn host_loaded_package_debug_info_survives_missing_caller_entrypoint_root() {
         .expect("loaded package should register");
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_with_package_debug_info_sync(&program, &caller_debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &caller_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -1011,7 +1030,12 @@ fn host_loaded_package_debug_info_survives_step_execution() {
         .expect("loaded package should register");
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_by_step_with_package_debug_info_sync(&program, &caller_debug_info, &mut host)
+        .execute_by_step_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &caller_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -1040,15 +1064,19 @@ fn direct_step_with_package_debug_info_seeds_initial_resume_context() {
         .with_library(Arc::new(loaded_package))
         .expect("loaded package should register");
     let mut processor = FastProcessor::new(StackInputs::default());
+    host = host.with_environment_source(program.source.clone());
     let mut resume_ctx = processor
-        .get_initial_resume_context(&program)
+        .get_initial_resume_context(&program.program, program.environment)
         .expect("initial context should build");
 
     let err = loop {
-        match processor.step_with_package_debug_info_sync(&mut host, resume_ctx, &caller_debug_info)
-        {
-            Ok(Some(next_resume_ctx)) => resume_ctx = next_resume_ctx,
-            Ok(None) => panic!("program should fail before completing"),
+        match processor.step_with_package_debug_info_sync(
+            &mut host,
+            &mut resume_ctx,
+            &caller_debug_info,
+        ) {
+            Ok(false) => {},
+            Ok(true) => panic!("program should fail before completing"),
             Err(err) => break err,
         }
     };
@@ -1082,7 +1110,12 @@ fn host_loaded_stripped_package_executes_without_loaded_debug_info() {
 
     let output =
         FastProcessor::new(StackInputs::new(&[Felt::from_u32(6), Felt::from_u32(7)]).unwrap())
-            .execute_with_package_debug_info_sync(&program, &caller_debug_info, &mut host)
+            .execute_with_package_debug_info_sync(
+                &program.program,
+                program.environment,
+                &caller_debug_info,
+                with_fixture_source(&mut host, &program),
+            )
             .expect("stripped loaded package should execute without loaded debug info");
 
     assert_eq!(output.stack.get_element(0), Some(Felt::from_u32(13)));
@@ -1106,7 +1139,12 @@ fn host_loaded_stripped_package_restores_caller_debug_info() {
         .expect("stripped loaded package should register");
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_with_package_debug_info_sync(&program, &caller_debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &caller_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -1141,7 +1179,12 @@ fn host_loaded_debug_info_survives_stripped_intermediate_package() {
         .expect("leaf package should register");
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_with_package_debug_info_sync(&program, &caller_debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &caller_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -1182,7 +1225,12 @@ fn host_loaded_ambiguous_debug_root_drops_precise_loaded_source_span() {
         .expect("loaded package should register");
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_with_package_debug_info_sync(&program, &caller_debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &caller_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -1196,7 +1244,7 @@ fn host_loaded_ambiguous_debug_root_drops_precise_loaded_source_span() {
 }
 
 #[test]
-fn package_source_debug_static_call_selects_identical_proc_from_called_file() {
+fn package_source_debug_explicit_inline_selects_identical_proc_from_called_file() {
     let source_manager = Arc::new(DefaultSourceManager::default());
     let root = source_manager.load(
         SourceLanguage::Masm,
@@ -1233,10 +1281,16 @@ fn package_source_debug_static_call_selects_identical_proc_from_called_file() {
         "#
         .to_string(),
     );
-    let lib = Assembler::new(source_manager.clone())
-        .assemble_library("lib", root, [a, b])
-        .map(Arc::<Package>::from)
-        .expect("library should assemble");
+    let root = Module::parser(Some(ModuleKind::Library))
+        .parse(None, root, source_manager.clone())
+        .unwrap();
+    let a = Module::parser(Some(ModuleKind::Library))
+        .parse(None, a, source_manager.clone())
+        .unwrap();
+    let b = Module::parser(Some(ModuleKind::Library))
+        .parse(None, b, source_manager.clone())
+        .unwrap();
+    let (lib, lib_naming) = named_library("lib", source_manager.clone(), root, [a, b]);
     let lib_debug_info = lib
         .debug_info()
         .expect("library debug info should decode")
@@ -1261,16 +1315,34 @@ fn package_source_debug_static_call_selects_identical_proc_from_called_file() {
         use lib::b
 
         begin
-            call.b::same
+            inline.b::same
         end
         "#
         .to_string(),
     );
-    let package = Assembler::new(source_manager)
-        .with_package(lib, Linkage::Static)
+    let main = Module::parser(Some(ModuleKind::Executable))
+        .parse(None, main, source_manager.clone())
+        .unwrap();
+    let selected_key = lib_naming
+        .callables()
+        .key_for_visible_path(
+            &miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
+                "lib".into(),
+                "b".into(),
+                "same".into(),
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+    let selected_implementation =
+        lib_naming.callables().selected_implementation(selected_key).unwrap();
+    let assembler = Assembler::new(source_manager)
+        .with_package(lib.clone(), Linkage::Static, lib_naming)
         .expect("library should link statically")
-        .assemble_program("program", main)
-        .expect("program should assemble");
+        .with_pinned_callable(Arc::from(Path::new("::lib::b::same")), selected_implementation)
+        .expect("explicit inline pin should match the selected library code");
+    let program = named_module(assembler, main, []).expect("program should assemble");
+    let package = program.package.clone();
     let package_debug_info = package
         .debug_info()
         .expect("program debug info should decode")
@@ -1283,7 +1355,7 @@ fn package_source_debug_static_call_selects_identical_proc_from_called_file() {
             .is_some_and(|location| location.uri().as_str() == "lib/b.masm")
     });
 
-    assert!(selected_row_found, "the selected call should keep lib/b.masm metadata");
+    assert!(selected_row_found, "the selected inline should keep lib/b.masm metadata");
     assert!(
         !asm_ops.clone().any(|row| {
             row.location_idx
@@ -1294,12 +1366,13 @@ fn package_source_debug_static_call_selects_identical_proc_from_called_file() {
         "the uncalled identical procedure should not leak into the executable source map",
     );
 
-    let program = package.unwrap_program();
+    let mut host = DefaultHost::default().with_library(lib).unwrap();
     let output = FastProcessor::new(StackInputs::new(&[Felt::new_unchecked(41)]).unwrap())
         .execute_with_package_debug_info_sync(
-            &program,
+            &program.program,
+            program.environment,
             &package_debug_info,
-            &mut DefaultHost::default(),
+            with_fixture_source(&mut host, &program),
         )
         .expect("duplicate executable roots should not make source-aware execution fail");
 
@@ -1314,7 +1387,7 @@ fn package_source_debug_execution_distinguishes_same_exec_node_split_children() 
         .unwrap();
     let root_id = SplitNodeBuilder::new([block_id, block_id]).add_to_forest(&mut forest).unwrap();
     forest.make_root(root_id);
-    let program = Program::new(forest.into(), root_id);
+    let program = synthetic_fixture(Program::new(forest.into(), root_id), []);
 
     let source_manager = Arc::new(DefaultSourceManager::default());
     let uri = Uri::new("file://pkg/same-node.masm");
@@ -1355,7 +1428,12 @@ fn package_source_debug_execution_distinguishes_same_exec_node_split_children() 
 
     let processor = FastProcessor::new(StackInputs::default());
     let err = processor
-        .execute_with_package_debug_info_sync(&program, &package_debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &package_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -1382,10 +1460,13 @@ fn package_source_debug_execution_uses_manifest_entrypoint_source_node() {
         "debug info alone cannot pick the manifest-selected same-digest entrypoint"
     );
 
-    let mut host = DefaultHost::default().with_source_manager(fixture.source_manager);
+    let mut host = DefaultHost::default()
+        .with_source_manager(fixture.source_manager)
+        .with_environment_source(fixture.source.clone());
     let err = FastProcessor::new(StackInputs::default())
         .execute_with_package_debug_info_at_source_node_sync(
             &fixture.program,
+            fixture.environment,
             &fixture.debug_info,
             fixture.entrypoint_source_node_id,
             &mut host,
@@ -1421,7 +1502,9 @@ async fn program_executor_routes_package_debug_to_entrypoint_source_node() {
         "debug info alone cannot pick the manifest-selected same-digest entrypoint"
     );
 
-    let mut host = DefaultHost::default().with_source_manager(fixture.source_manager);
+    let mut host = DefaultHost::default()
+        .with_source_manager(fixture.source_manager)
+        .with_environment_source(fixture.source.clone());
     let processor = <FastProcessor as ProgramExecutor>::new(
         StackInputs::default(),
         AdviceInputs::default(),
@@ -1434,9 +1517,14 @@ async fn program_executor_routes_package_debug_to_entrypoint_source_node() {
         processor,
         Some(fixture.entrypoint_source_node_id),
     );
-    let err = <FastProcessor as ProgramExecutor>::execute(processor, &fixture.program, &mut host)
-        .await
-        .unwrap_err();
+    let err = <FastProcessor as ProgramExecutor>::execute(
+        processor,
+        &fixture.program,
+        fixture.environment,
+        &mut host,
+    )
+    .await
+    .unwrap_err();
 
     assert_matches!(
         err,
@@ -1461,26 +1549,32 @@ fn package_source_debug_trace_and_step_use_manifest_entrypoint_source_node() {
         "debug info alone cannot pick the manifest-selected same-digest entrypoint"
     );
 
-    let mut trace_host = DefaultHost::default();
-    let execution_witness =
-        FastProcessor::new(StackInputs::new(&[Felt::from_u32(3), Felt::from_u32(4)]).unwrap())
-            .execute_for_proving_with_package_debug_info_at_source_node_sync(
-                &fixture.program,
-                &fixture.debug_info,
-                fixture.entrypoint_source_node_id,
-                &mut trace_host,
-            )
-            .unwrap();
+    let mut trace_host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let execution_witness = FastProcessor::new_with_options(
+        StackInputs::new(&[Felt::from_u32(3), Felt::from_u32(4)]).unwrap(),
+        AdviceInputs::default(),
+        ExecutionOptions::default().with_environment_trace_limits(native_trace_limits()),
+    )
+    .unwrap()
+    .execute_for_proving_with_package_debug_info_at_source_node_sync(
+        &fixture.program,
+        fixture.environment,
+        &fixture.debug_info,
+        fixture.entrypoint_source_node_id,
+        &mut trace_host,
+    )
+    .unwrap();
     assert_eq!(
         execution_witness.claim().stack_outputs().get_element(0),
         Some(Felt::from_u32(7))
     );
 
-    let mut step_host = DefaultHost::default();
+    let mut step_host = DefaultHost::default().with_environment_source(fixture.source.clone());
     let stack_outputs =
         FastProcessor::new(StackInputs::new(&[Felt::from_u32(3), Felt::from_u32(4)]).unwrap())
             .execute_by_step_with_package_debug_info_at_source_node_sync(
                 &fixture.program,
+                fixture.environment,
                 &fixture.debug_info,
                 fixture.entrypoint_source_node_id,
                 &mut step_host,
@@ -1493,20 +1587,23 @@ fn package_source_debug_trace_and_step_use_manifest_entrypoint_source_node() {
 fn initial_package_resume_context_tracks_manifest_entrypoint_source_node() {
     let fixture = same_digest_entrypoint_fixture(vec![Operation::Add], "add");
     let mut processor = FastProcessor::new(StackInputs::default());
-    let resume_context = processor
-        .get_initial_resume_context_for_package(fixture.package)
+    let mut resume_context = processor
+        .get_initial_resume_context_for_package(
+            fixture.package,
+            &fixture.naming,
+            fixture.environment,
+        )
         .expect("package resume context should initialize");
 
+    let mut host = DefaultHost::default().with_environment_source(fixture.source);
+    assert!(!processor.step_sync(&mut host, &mut resume_context).unwrap());
     assert_eq!(resume_context.next_source_node_id(), Some(fixture.entrypoint_source_node_id),);
 }
 
 #[test]
 fn package_source_debug_execution_degrades_ambiguous_local_dyn_root() {
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let program = Assembler::new(source_manager)
-        .assemble_program(
-            "program",
-            "
+    let program = named_source(
+        "
         proc foo
             push.7 swap drop
         end
@@ -1516,12 +1613,12 @@ fn package_source_debug_execution_degrades_ambiguous_local_dyn_root() {
             dynexec
         end
         ",
-        )
-        .expect("program should assemble")
-        .unwrap_program();
+    )
+    .expect("program should assemble");
 
-    let entrypoint = program.entrypoint();
+    let entrypoint = program.program.entrypoint();
     let callee_root = program
+        .program
         .mast_forest()
         .procedure_roots()
         .iter()
@@ -1547,9 +1644,10 @@ fn package_source_debug_execution_degrades_ambiguous_local_dyn_root() {
     let processor = FastProcessor::new(StackInputs::default());
     let output = processor
         .execute_with_package_debug_info_sync(
-            &program,
+            &program.program,
+            program.environment,
             &package_debug_info,
-            &mut DefaultHost::default(),
+            &mut DefaultHost::default().with_environment_source(program.source.clone()),
         )
         .unwrap();
 
@@ -1582,14 +1680,14 @@ fn dynexec_propagates_inline_context_through_the_selected_target() {
         )
         .unwrap();
     set_entrypoint_inline_context(&source_manager, &mut module, "source::dynamic");
-    let package: Arc<Package> =
-        Arc::from(Assembler::new(source_manager).assemble_program("program", module).unwrap());
+    let fixture = named_module(Assembler::new(source_manager), module, []).unwrap();
+    let package = fixture.package.clone();
 
     let mut processor = FastProcessor::new(StackInputs::default());
     let mut resume_context = processor
-        .get_initial_resume_context_for_package(package)
+        .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
         .expect("package resume context should initialize");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
     let mut saw_target_context = false;
     let mut saw_context_cleared = false;
     loop {
@@ -1609,11 +1707,9 @@ fn dynexec_propagates_inline_context_through_the_selected_target() {
             saw_target_context = true;
         }
 
-        let Some(next_resume_context) = processor.step_sync(&mut host, resume_context).unwrap()
-        else {
+        if processor.step_sync(&mut host, &mut resume_context).unwrap() {
             break;
-        };
-        resume_context = next_resume_context;
+        }
     }
 
     assert!(saw_target_context, "dynexec target should inherit the call-site inline context");
@@ -1638,13 +1734,10 @@ fn external_exec_propagates_inline_context_into_the_loaded_package() {
             source_manager.clone(),
         )
         .unwrap();
-    let library: Arc<Package> = Arc::from(
-        Assembler::new(source_manager.clone())
-            .assemble_library("dep", library_module, None::<Box<Module>>)
-            .unwrap(),
-    );
+    let (library, library_naming) =
+        named_library("dep", source_manager.clone(), library_module, []);
     let assembler = Assembler::new(source_manager.clone())
-        .with_package(library.clone(), Linkage::Dynamic)
+        .with_package(library.clone(), Linkage::Dynamic, library_naming.clone())
         .unwrap();
     let mut program_parser = Module::parser(Some(ModuleKind::Executable));
     let mut program_module = program_parser
@@ -1665,15 +1758,15 @@ fn external_exec_propagates_inline_context_into_the_loaded_package() {
         )
         .unwrap();
     set_entrypoint_inline_context(&source_manager, &mut program_module, "source::external");
-    let package: Arc<Package> =
-        Arc::from(assembler.assemble_program("program", program_module).unwrap());
+    let fixture = named_module(assembler, program_module, []).unwrap();
+    let package = fixture.package.clone();
     let caller_forest = package.mast_forest().clone();
 
     let mut processor = FastProcessor::new(StackInputs::default());
     let mut resume_context = processor
-        .get_initial_resume_context_for_package(package)
+        .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
         .expect("package resume context should initialize");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
     host.load_library(library).unwrap();
     let mut saw_target_context = false;
     let mut saw_context_cleared = false;
@@ -1695,7 +1788,7 @@ fn external_exec_propagates_inline_context_into_the_loaded_package() {
                 );
             }
         } else {
-            assert_eq!(names, ["::dep::math::target", "source::external"]);
+            assert_eq!(names, ["source::external"]);
             let frames = resume_context.debug_call_frames();
             assert_eq!(frames.first().unwrap().inherited_inline_calls(), 0);
             if let Some(target) = frames
@@ -1707,11 +1800,9 @@ fn external_exec_propagates_inline_context_into_the_loaded_package() {
             saw_target_context = true;
         }
 
-        let Some(next_resume_context) = processor.step_sync(&mut host, resume_context).unwrap()
-        else {
+        if processor.step_sync(&mut host, &mut resume_context).unwrap() {
             break;
-        };
-        resume_context = next_resume_context;
+        }
     }
 
     assert!(saw_target_context, "loaded target should inherit the external boundary context");
@@ -1729,8 +1820,25 @@ fn nested_external_returns_restore_the_caller_before_resuming() {
     let leaf_forest = leaf_package.mast_forest().clone();
     let (forwarder_package, forwarder_digest) = host_loaded_forwarder_package(leaf_digest);
     let forwarder_forest = forwarder_package.mast_forest().clone();
-    let (program, caller_debug_info) = external_program_for_digest(forwarder_digest);
-    let caller_forest = program.mast_forest().clone();
+    // ENTRY resolves an External-only hint directly to its selected body. Use an actual caller
+    // JOIN with a clock after the external chain so there is a caller execution to restore.
+    let mut forest = MastForest::new();
+    let external = ExternalNodeBuilder::new(forwarder_digest).add_to_forest(&mut forest).unwrap();
+    let after = BasicBlockNodeBuilder::new(vec![Operation::Noop])
+        .add_to_forest(&mut forest)
+        .unwrap();
+    let root = JoinNodeBuilder::new([external, after]).add_to_forest(&mut forest).unwrap();
+    forest.make_root(root);
+    let program = synthetic_fixture(Program::new(forest.into(), root), []);
+    let mut debug = PackageDebugInfoBuilder::default();
+    let external_source = debug.add_node(debug_source_node(external, vec![], 1, vec![])).unwrap();
+    let after_source = debug.add_node(debug_source_node(after, vec![], 1, vec![])).unwrap();
+    let root_source = debug
+        .add_node(debug_source_node(root, vec![external_source, after_source], 1, vec![]))
+        .unwrap();
+    debug.add_root(root_source);
+    let caller_debug_info = *debug.build();
+    let caller_forest = program.program.mast_forest().clone();
 
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
@@ -1739,8 +1847,9 @@ fn nested_external_returns_restore_the_caller_before_resuming() {
         .with_library(Arc::new(leaf_package))
         .expect("leaf package should register");
     let mut processor = FastProcessor::new(StackInputs::default());
+    host = host.with_environment_source(program.source.clone());
     let mut resume_context = processor
-        .get_initial_resume_context(&program)
+        .get_initial_resume_context(&program.program, program.environment)
         .expect("program resume context should initialize");
     let mut saw_leaf = false;
     let mut saw_restored_caller = false;
@@ -1764,13 +1873,12 @@ fn nested_external_returns_restore_the_caller_before_resuming() {
             );
         }
 
-        let Some(next_resume_context) = processor
-            .step_with_package_debug_info_sync(&mut host, resume_context, &caller_debug_info)
+        if processor
+            .step_with_package_debug_info_sync(&mut host, &mut resume_context, &caller_debug_info)
             .unwrap()
-        else {
+        {
             break;
-        };
-        resume_context = next_resume_context;
+        }
     }
 
     assert!(saw_leaf, "execution should enter the leaf package");
@@ -1779,6 +1887,78 @@ fn nested_external_returns_restore_the_caller_before_resuming() {
 
 fn absolute_path(name: &str) -> Arc<Path> {
     Arc::from(Path::validate(&format!("::{name}")).unwrap())
+}
+
+fn named_library(
+    name: &str,
+    manager: Arc<DefaultSourceManager>,
+    root: Box<Module>,
+    support: impl IntoIterator<Item = Box<Module>>,
+) -> (Arc<Package>, miden_mast_package::PackageNaming) {
+    let support = support.into_iter().collect::<Vec<_>>();
+    let mut names = miden_assembly::testing::FixtureNamespace::assembly_tests();
+    for module in core::iter::once(root.as_ref()).chain(support.iter().map(Box::as_ref)) {
+        names.add_module(module).unwrap();
+    }
+    let assembler = names
+        .configure(
+            Assembler::new(manager),
+            core::iter::once(root.as_ref()).chain(support.iter().map(Box::as_ref)),
+        )
+        .unwrap();
+    let product = assembler
+        .assemble_library_modules(name.into(), root, support, TargetType::Library)
+        .unwrap();
+    let naming = product.naming().clone();
+    (Arc::from(product.into_artifact(true).unwrap()), naming)
+}
+
+fn fixture_binding(path: &[&str]) -> miden_mast_package::CallableBinding {
+    miden_mast_package::CallableBinding::new(
+        package_fixture_home(),
+        miden_mast_package::CallableProcedurePath::from_semantic_components(
+            path.iter().map(|component| (*component).to_string()).collect(),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+/// Explicit fixture names and selected implementations remain separate inputs.
+fn synthetic_library_naming(declarations: &[(&[&str], Word)]) -> miden_mast_package::PackageNaming {
+    let bindings = declarations.iter().map(|(path, _)| fixture_binding(path)).collect::<Vec<_>>();
+    let visible = bindings.iter().map(|binding| (binding.path().clone(), binding.key()));
+    let selected = bindings
+        .iter()
+        .zip(declarations)
+        .map(|(binding, (_, digest))| (binding.key(), ImplementationRoot::new(*digest)));
+    let callables =
+        miden_mast_package::PackageCallables::new(bindings.iter().cloned(), visible, selected)
+            .unwrap();
+    miden_mast_package::PackageNaming::new(package_fixture_home(), callables, None).unwrap()
+}
+
+/// ENTRY uses a fixed child-home name; runtime targets are separately declared by each fixture.
+fn synthetic_fixture(
+    program: Program,
+    targets: impl IntoIterator<Item = (miden_mast_package::CallableBinding, ImplementationRoot)>,
+) -> NamedFixture {
+    named_program(program, fixture_binding(&["entry"]), targets).unwrap()
+}
+
+trait FixtureHost {
+    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentWitnessSource>);
+}
+
+impl FixtureHost for DefaultHost {
+    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentWitnessSource>) {
+        *self = core::mem::take(self).with_environment_source(source);
+    }
+}
+
+fn with_fixture_source<'a, H: FixtureHost>(host: &'a mut H, fixture: &NamedFixture) -> &'a mut H {
+    host.attach_fixture_source(fixture.source.clone());
+    host
 }
 
 fn package_fixture_home() -> miden_mast_package::NamespacePlan {
@@ -1830,12 +2010,7 @@ fn host_loaded_package_fixture(
     );
     let mast = Arc::new(forest);
     let exports = vec![export];
-    let naming = miden_mast_package::arbitrary::fixture_naming(
-        package_fixture_home(),
-        TargetType::Library,
-        &mast,
-        &exports,
-    );
+    let naming = synthetic_library_naming(&[(&["loaded", "target"], target_digest)]);
     let mut package = Package::create(
         PackageId::from("loaded"),
         Version::new(1, 0, 0),
@@ -1888,12 +2063,7 @@ fn host_loaded_forwarder_package(target_digest: Word) -> (Package, Word) {
     ));
     let mast = Arc::new(forest);
     let exports = vec![export];
-    let naming = miden_mast_package::arbitrary::fixture_naming(
-        package_fixture_home(),
-        TargetType::Library,
-        &mast,
-        &exports,
-    );
+    let naming = synthetic_library_naming(&[(&["forwarder", "target"], forwarder_digest)]);
     let package = Package::create(
         PackageId::from("forwarder"),
         Version::new(1, 0, 0),
@@ -1908,11 +2078,11 @@ fn host_loaded_forwarder_package(target_digest: Word) -> (Package, Word) {
     (package, forwarder_digest)
 }
 
-fn external_program_for_digest(target_digest: Word) -> (Program, PackageDebugInfo) {
+fn external_program_for_digest(target_digest: Word) -> (NamedFixture, PackageDebugInfo) {
     let mut forest = MastForest::new();
     let external_id = ExternalNodeBuilder::new(target_digest).add_to_forest(&mut forest).unwrap();
     forest.make_root(external_id);
-    let program = Program::new(forest.into(), external_id);
+    let program = synthetic_fixture(Program::new(forest.into(), external_id), []);
     let mut builder = PackageDebugInfoBuilder::default();
     let source_node_id = builder
         .add_node(debug_source_node(external_id, Vec::new(), 1, Vec::new()))
@@ -1925,7 +2095,7 @@ fn external_program_for_digest(target_digest: Word) -> (Program, PackageDebugInf
 fn external_then_fail_program_for_digest(
     source_manager: Arc<DefaultSourceManager>,
     target_digest: Word,
-) -> (Program, PackageDebugInfo, Arc<SourceFile>) {
+) -> (NamedFixture, PackageDebugInfo, Arc<SourceFile>) {
     let mut forest = MastForest::new();
     let external_id = ExternalNodeBuilder::new(target_digest).add_to_forest(&mut forest).unwrap();
     let fail_id = BasicBlockNodeBuilder::new(vec![Operation::Assert(Felt::from_u32(11))])
@@ -1933,7 +2103,7 @@ fn external_then_fail_program_for_digest(
         .unwrap();
     let root_id = JoinNodeBuilder::new([external_id, fail_id]).add_to_forest(&mut forest).unwrap();
     forest.make_root(root_id);
-    let program = Program::new(forest.into(), root_id);
+    let program = synthetic_fixture(Program::new(forest.into(), root_id), []);
 
     let uri = Uri::new("file://caller/main.masm");
     let source_file = source_manager.load_from_raw_parts(
@@ -1966,6 +2136,9 @@ fn external_then_fail_program_for_digest(
 
 struct SameDigestEntrypointFixture {
     package: Arc<Package>,
+    naming: miden_mast_package::PackageNaming,
+    environment: crate::ExecutionEnvironment,
+    source: Arc<dyn crate::EnvironmentWitnessSource>,
     program: Program,
     debug_info: PackageDebugInfo,
     entrypoint_source_node_id: DebugSourceNodeId,
@@ -1993,7 +2166,8 @@ fn same_digest_entrypoint_fixture(
                 ProcedureExport::new(path, Some(block_id), digest, None)
                     .with_source_node(Some(source_node_id)),
             )
-        });
+        })
+        .collect::<Vec<_>>();
 
     let source_manager = Arc::new(DefaultSourceManager::default());
     let uri = Uri::new("file://pkg/same-digest-entrypoint.masm");
@@ -2031,12 +2205,8 @@ fn same_digest_entrypoint_fixture(
     let package_debug_info = builder.build();
 
     let mast = Arc::new(forest);
-    let naming = miden_mast_package::arbitrary::fixture_naming(
-        package_fixture_home(),
-        TargetType::Library,
-        &mast,
-        &exports,
-    );
+    let naming =
+        synthetic_library_naming(&[(&["app", "alias_a"], digest), (&["app", "alias_b"], digest)]);
     let mut package = Package::create(
         PackageId::from("app"),
         Version::new(1, 0, 0),
@@ -2063,9 +2233,22 @@ fn same_digest_entrypoint_fixture(
         .expect("entrypoint source node should be present");
     assert_eq!(entrypoint_source_node_id, source_alias_b);
 
+    let naming = executable
+        .admit_naming(
+            &PackageFixtureHomes,
+            &package_fixture_home(),
+            miden_mast_package::interface::serialization::CodecLimits::new(
+                1_000_000, 10_000, 10_000, 1_000_000,
+            ),
+        )
+        .unwrap();
+    let fixture = named_package(Arc::new(executable.clone()), naming, &[]).unwrap();
     SameDigestEntrypointFixture {
-        package: Arc::new(executable.clone()),
-        program: executable.unwrap_program(),
+        package: fixture.package,
+        naming: fixture.naming,
+        program: fixture.program,
+        environment: fixture.environment,
+        source: fixture.source,
         debug_info: executable.debug_info().unwrap().unwrap(),
         entrypoint_source_node_id,
         source_manager,
@@ -2074,7 +2257,7 @@ fn same_digest_entrypoint_fixture(
 }
 
 fn missing_external_package_source_debug_fixture() -> (
-    Program,
+    NamedFixture,
     PackageDebugInfo,
     DefaultHost,
     Arc<DefaultSourceManager>,
@@ -2084,9 +2267,14 @@ fn missing_external_package_source_debug_fixture() -> (
     let mut forest = MastForest::new();
     let missing_digest = Word::from([ONE, ONE, ONE, ONE]);
     let external_id = ExternalNodeBuilder::new(missing_digest).add_to_forest(&mut forest).unwrap();
-    let root_id = CallNodeBuilder::new(external_id).add_to_forest(&mut forest).unwrap();
+    forest.make_root(external_id);
+    let missing = fixture_binding(&["missing", "proc"]);
+    let root_id = CallNodeBuilder::new(missing.key()).add_to_forest(&mut forest).unwrap();
     forest.make_root(root_id);
-    let program = Program::new(forest.into(), root_id);
+    let program = synthetic_fixture(
+        Program::new(forest.into(), root_id),
+        [(missing, ImplementationRoot::new(missing_digest))],
+    );
 
     let source_manager = Arc::new(DefaultSourceManager::default());
     let uri = Uri::new("file://pkg/missing-external.masm");
@@ -2106,11 +2294,8 @@ fn missing_external_package_source_debug_fixture() -> (
         "call.missing::proc",
         2,
     );
-    let source_external = builder
-        .add_node(debug_source_node(external_id, Vec::new(), 1, vec![external_asm_op]))
-        .unwrap();
     let source_root = builder
-        .add_node(debug_source_node(root_id, vec![source_external], 1, Vec::new()))
+        .add_node(debug_source_node(root_id, Vec::new(), 1, vec![external_asm_op]))
         .unwrap();
     builder.add_root(source_root);
     let package_debug_info = *builder.build();
@@ -2121,11 +2306,13 @@ fn missing_external_package_source_debug_fixture() -> (
 struct MalformedExternalHost {
     source_manager: Arc<DefaultSourceManager>,
     loaded_mast_forest: LoadedMastForest,
+    environment_source: Option<Arc<dyn crate::EnvironmentWitnessSource>>,
 }
 
 struct CountingMastForestHost {
     mast_forests: Vec<LoadedMastForest>,
     lookup_count: Cell<usize>,
+    environment_source: Option<Arc<dyn crate::EnvironmentWitnessSource>>,
 }
 
 impl CountingMastForestHost {
@@ -2133,6 +2320,7 @@ impl CountingMastForestHost {
         Self {
             mast_forests: mast_forests.into_iter().map(LoadedMastForest::new).collect(),
             lookup_count: Cell::new(0),
+            environment_source: None,
         }
     }
 
@@ -2150,7 +2338,20 @@ impl BaseHost for CountingMastForestHost {
     }
 }
 
+impl FixtureHost for CountingMastForestHost {
+    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentWitnessSource>) {
+        self.environment_source = Some(source);
+    }
+}
+
 impl SyncHost for CountingMastForestHost {
+    fn get_environment_witness(
+        &mut self,
+        request: crate::EnvironmentWitnessRequest,
+    ) -> Result<Option<crate::ResolutionWitness>, crate::EnvironmentSourceError> {
+        self.environment_source.as_ref().map_or(Ok(None), |source| source.get(request))
+    }
+
     fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest> {
         self.lookup_count.set(self.lookup_count.get() + 1);
         self.mast_forests
@@ -2164,7 +2365,7 @@ impl SyncHost for CountingMastForestHost {
     }
 }
 
-fn program_calling_external_procedures(procedure_digests: [Word; 2]) -> Program {
+fn program_calling_external_procedures(procedure_digests: [Word; 2]) -> NamedFixture {
     let mut forest = MastForest::new();
     let first = ExternalNodeBuilder::new(procedure_digests[0])
         .add_to_forest(&mut forest)
@@ -2174,7 +2375,7 @@ fn program_calling_external_procedures(procedure_digests: [Word; 2]) -> Program 
         .unwrap();
     let root = JoinNodeBuilder::new([first, second]).add_to_forest(&mut forest).unwrap();
     forest.make_root(root);
-    Program::new(forest.into(), root)
+    synthetic_fixture(Program::new(forest.into(), root), [])
 }
 
 impl BaseHost for MalformedExternalHost {
@@ -2188,7 +2389,20 @@ impl BaseHost for MalformedExternalHost {
     }
 }
 
+impl FixtureHost for MalformedExternalHost {
+    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentWitnessSource>) {
+        self.environment_source = Some(source);
+    }
+}
+
 impl SyncHost for MalformedExternalHost {
+    fn get_environment_witness(
+        &mut self,
+        request: crate::EnvironmentWitnessRequest,
+    ) -> Result<Option<crate::ResolutionWitness>, crate::EnvironmentSourceError> {
+        self.environment_source.as_ref().map_or(Ok(None), |source| source.get(request))
+    }
+
     fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
         Some(self.loaded_mast_forest.clone())
     }
@@ -2218,16 +2432,28 @@ fn caches_all_procedures_and_advice_from_a_loaded_mast_forest() {
     let mut host = CountingMastForestHost::new([mast_forest]);
     let mut processor = FastProcessor::new(StackInputs::default());
 
-    processor.execute_mut_sync(&program, &mut host).unwrap();
+    processor
+        .execute_mut_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap();
 
     assert_eq!(host.lookup_count(), 1);
-    assert_eq!(processor.loaded_mast_forests.len(), 2);
+    assert_eq!(processor.loaded_mast_forests.len(), procedure_digests.len() + 1);
+    assert!(processor.loaded_mast_forests.contains_key(&program.program.hash()));
     assert!(
         procedure_digests
             .iter()
             .all(|digest| { processor.loaded_mast_forests.contains_key(digest) })
     );
-    assert_eq!(processor.merged_mast_forests.len(), 1);
+    assert_eq!(processor.merged_mast_forests.len(), 2);
+    assert!(
+        processor
+            .merged_mast_forests
+            .contains(&program.program.mast_forest().commitment())
+    );
     assert!(processor.merged_mast_forests.contains(&forest_commitment));
     assert!(processor.advice.contains_map_key(&advice_key));
 }
@@ -2261,11 +2487,26 @@ async fn caches_advice_from_distinct_mast_forests() {
     let mut host = CountingMastForestHost::new([first_forest, second_forest]);
     let mut processor = FastProcessor::new(StackInputs::default());
 
-    processor.execute_mut(&program, &mut host).await.unwrap();
+    processor
+        .execute_mut(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(host.lookup_count(), 2);
-    assert_eq!(processor.loaded_mast_forests.len(), 2);
-    assert_eq!(processor.merged_mast_forests.len(), 2);
+    assert_eq!(processor.loaded_mast_forests.len(), 3);
+    for digest in [program.program.hash(), first_digest, second_digest] {
+        assert!(processor.loaded_mast_forests.contains_key(&digest));
+    }
+    assert_eq!(processor.merged_mast_forests.len(), 3);
+    assert!(
+        processor
+            .merged_mast_forests
+            .contains(&program.program.mast_forest().commitment())
+    );
     assert!(processor.advice.contains_map_key(&first_advice_key));
     assert!(processor.advice.contains_map_key(&second_advice_key));
 }
@@ -2302,7 +2543,13 @@ fn preserves_first_cached_forest_for_a_shared_procedure() {
     let mut host = CountingMastForestHost::new([first_forest, second_forest]);
     let mut processor = FastProcessor::new(StackInputs::default());
 
-    processor.execute_mut_sync(&program, &mut host).unwrap();
+    processor
+        .execute_mut_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap();
 
     let cached_shared_forest = processor.loaded_mast_forests.get(&shared_digest).unwrap();
     assert_eq!(cached_shared_forest.mast_forest().commitment(), first_commitment);
@@ -2314,7 +2561,12 @@ fn package_source_debug_missing_external_preserves_external_source_span() {
         missing_external_package_source_debug_fixture();
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_with_package_debug_info_sync(&program, &package_debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &package_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -2341,10 +2593,16 @@ fn package_source_debug_malformed_external_preserves_external_source_span() {
     let mut host = MalformedExternalHost {
         source_manager,
         loaded_mast_forest: LoadedMastForest::new(Arc::new(wrong_forest)),
+        environment_source: None,
     };
 
     let err = FastProcessor::new(StackInputs::new(&[Felt::ONE, Felt::ONE]).unwrap())
-        .execute_with_package_debug_info_sync(&program, &package_debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &program.program,
+            program.environment,
+            &package_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .unwrap_err();
 
     assert_matches!(
@@ -2371,10 +2629,16 @@ async fn package_source_debug_malformed_external_preserves_external_source_span_
     let mut host = MalformedExternalHost {
         source_manager,
         loaded_mast_forest: LoadedMastForest::new(Arc::new(wrong_forest)),
+        environment_source: None,
     };
 
     let err = FastProcessor::new(StackInputs::new(&[Felt::ONE, Felt::ONE]).unwrap())
-        .execute_with_package_debug_info(&program, &package_debug_info, &mut host)
+        .execute_with_package_debug_info(
+            &program.program,
+            program.environment,
+            &package_debug_info,
+            with_fixture_source(&mut host, &program),
+        )
         .await
         .unwrap_err();
 
@@ -2422,7 +2686,13 @@ fn test_cycle_limit_exceeded() {
     let processor =
         FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
             .expect("processor advice inputs should fit advice map limits");
-    let err = processor.execute_sync(&program, &mut host).unwrap_err();
+    let err = processor
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap_err();
 
     assert_matches!(err, ExecutionError::CycleLimitExceeded(max_cycles) if max_cycles == MIN_TRACE_LEN as u32);
 }
@@ -2454,7 +2724,11 @@ fn test_cycle_limit_exactly_max_cycles_succeeds() {
     let processor =
         FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
             .expect("processor advice inputs should fit advice map limits");
-    let result = processor.execute_sync(&program, &mut host);
+    let result = processor.execute_sync(
+        &program.program,
+        program.environment,
+        with_fixture_source(&mut host, &program),
+    );
 
     // The program should succeed since it uses exactly max_cycles cycles.
     assert!(
@@ -2479,6 +2753,7 @@ fn test_prover_memory_budget_exceeded() {
         // precheck (based on `fragment_size`, not the actual padded height) from dominating the
         // exact byte-budget boundary this test targets.
         let options = ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MIN_TRACE_LEN)
             .unwrap();
         let processor = FastProcessor::new_with_options(
@@ -2488,7 +2763,11 @@ fn test_prover_memory_budget_exceeded() {
         )
         .expect("processor advice inputs should fit advice map limits");
         let witness = processor
-            .execute_for_proving_sync(&program, &mut host)
+            .execute_for_proving_sync(
+                &program.program,
+                program.environment,
+                with_fixture_source(&mut host, &program),
+            )
             .expect("execution is unaffected by the prover memory budget");
         witness.into_parts().0
     };
@@ -2523,11 +2802,15 @@ fn test_prover_memory_default_budget_accepts_normal_trace() {
     let processor = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_environment_trace_limits(native_trace_limits()),
     )
     .expect("processor advice inputs should fit advice map limits");
     let witness = processor
-        .execute_for_proving_sync(&program, &mut host)
+        .execute_for_proving_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
         .expect("execution should succeed");
     let (vm_witness, _) = witness.into_parts();
 
@@ -2545,7 +2828,11 @@ fn test_assert() {
         let program = simple_program_with_ops(vec![Operation::Assert(ZERO)]);
 
         let processor = FastProcessor::new(stack_inputs);
-        let result = processor.execute_sync(&program, &mut host);
+        let result = processor.execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        );
 
         // Check that the execution succeeds
         assert!(result.is_ok());
@@ -2557,7 +2844,13 @@ fn test_assert() {
         let program = simple_program_with_ops(vec![Operation::Assert(ZERO)]);
 
         let processor = FastProcessor::new(stack_inputs);
-        let err = processor.execute_sync(&program, &mut host).unwrap_err();
+        let err = processor
+            .execute_sync(
+                &program.program,
+                program.environment,
+                with_fixture_source(&mut host, &program),
+            )
+            .unwrap_err();
 
         // Check that the error is due to a failed assertion
         assert_matches!(
@@ -2584,7 +2877,14 @@ fn test_valid_combinations_and(#[case] stack_inputs: Vec<Felt>, #[case] expected
 
     let mut host = DefaultHost::default();
     let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-    let stack_outputs = processor.execute_sync(&program, &mut host).unwrap().stack;
+    let stack_outputs = processor
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap()
+        .stack;
 
     assert_eq!(stack_outputs.get_num_elements(1)[0], expected_output);
 }
@@ -2603,7 +2903,14 @@ fn test_valid_combinations_or(#[case] stack_inputs: Vec<Felt>, #[case] expected_
 
     let mut host = DefaultHost::default();
     let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-    let stack_outputs = processor.execute_sync(&program, &mut host).unwrap().stack;
+    let stack_outputs = processor
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap()
+        .stack;
 
     assert_eq!(stack_outputs.get_num_elements(1)[0], expected_output);
 }
@@ -2650,7 +2957,14 @@ fn test_frie2f4() {
 
     // fast processor
     let fast_processor = FastProcessor::new(stack_inputs);
-    let stack_outputs = fast_processor.execute_sync(&program, &mut host).unwrap().stack;
+    let stack_outputs = fast_processor
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap()
+        .stack;
 
     insta::assert_debug_snapshot!(stack_outputs);
 }
@@ -2689,7 +3003,10 @@ fn test_call_node_preserves_stack_overflow_table() {
         .unwrap();
 
         // call
-        let call_node_id = CallNodeBuilder::new(foo_id).add_to_forest(&mut program).unwrap();
+        program.make_root(foo_id);
+        let target = fixture_binding(&["foo"]);
+        let implementation = ImplementationRoot::new(program[foo_id].digest());
+        let call_node_id = CallNodeBuilder::new(target.key()).add_to_forest(&mut program).unwrap();
         // after call
         let swap_drop_swap_drop = BasicBlockNodeBuilder::new(vec![
             Operation::Swap,
@@ -2710,7 +3027,7 @@ fn test_call_node_preserves_stack_overflow_table() {
 
         program.make_root(root_id);
 
-        Program::new(program.into(), root_id)
+        synthetic_fixture(Program::new(program.into(), root_id), [(target, implementation)])
     };
 
     // initial stack: (top) [1, 2, 3, 4, ..., 16] (bot)
@@ -2737,7 +3054,13 @@ fn test_call_node_preserves_stack_overflow_table() {
     );
 
     // Execute the program
-    let result = processor.execute_mut_sync(&program, &mut host).unwrap();
+    let result = processor
+        .execute_mut_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap();
 
     assert_eq!(
         result.get_num_elements(16),
@@ -2774,7 +3097,11 @@ fn stack_depth_default_limit_exact_boundary_succeeds() {
     let program = simple_program_with_ops(pad_then_drop_ops(pushes_to_default_limit));
 
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, &mut host)
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
         .expect("using the full default stack depth limit should succeed");
 }
 
@@ -2786,7 +3113,11 @@ fn stack_depth_default_limit_exceeded_returns_typed_error() {
     let program = simple_program_with_ops(vec![Operation::Pad; pushes_past_default_limit]);
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, &mut host)
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
         .expect_err("pushing past the default stack depth limit should fail");
 
     assert_matches!(
@@ -2808,7 +3139,11 @@ fn stack_depth_small_custom_limit_fails_before_buffer_growth() {
     let err =
         FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
             .expect("processor advice inputs should fit advice map limits")
-            .execute_sync(&program, &mut host)
+            .execute_sync(
+                &program.program,
+                program.environment,
+                with_fixture_source(&mut host, &program),
+            )
             .expect_err("small configured stack depth limit should fail before buffer growth");
 
     assert_matches!(
@@ -2834,7 +3169,11 @@ fn issue_2818_fast_processor_stack_grows_past_initial_buffer_by_multiple_element
 
     FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
         .expect("processor advice inputs should fit advice map limits")
-        .execute_sync(&program, &mut host)
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
         .expect("stack growth multiple elements past the initial buffer should succeed");
 }
 
@@ -2847,13 +3186,18 @@ fn issue_2818_traced_execution_stack_grows_past_initial_buffer() {
     let pushes_past_initial_buffer = DEFAULT_MAX_STACK_DEPTH - MIN_STACK_DEPTH + GROWTH_MARGIN;
     let program = simple_program_with_ops(pad_then_drop_ops(pushes_past_initial_buffer));
     let options = ExecutionOptions::default()
+        .with_environment_trace_limits(native_trace_limits())
         .with_max_stack_depth(DEFAULT_MAX_STACK_DEPTH + GROWTH_MARGIN)
         .unwrap();
 
     let execution_witness =
         FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
             .expect("processor advice inputs should fit advice map limits")
-            .execute_for_proving_sync(&program, &mut host)
+            .execute_for_proving_sync(
+                &program.program,
+                program.environment,
+                with_fixture_source(&mut host, &program),
+            )
             .expect("traced execution should grow the stack buffer past the initial buffer");
     let (vm_witness, _) = execution_witness.into_parts();
 
@@ -2875,7 +3219,11 @@ fn issue_2818_step_execution_stack_grows_past_initial_buffer() {
 
     FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
         .expect("processor advice inputs should fit advice map limits")
-        .execute_by_step_sync(&program, &mut host)
+        .execute_by_step_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
         .expect("step execution should grow the stack buffer past the initial buffer");
 }
 
@@ -2946,10 +3294,12 @@ fn stack_buffer_is_not_preallocated_to_operand_stack_depth_limit() {
     );
 
     let mut host = DefaultHost::default();
+    let shallow = simple_program_with_ops(vec![Operation::Pad, Operation::Drop]);
     processor
         .execute_mut_sync(
-            &simple_program_with_ops(vec![Operation::Pad, Operation::Drop]),
-            &mut host,
+            &shallow.program,
+            shallow.environment,
+            with_fixture_source(&mut host, &shallow),
         )
         .expect("ordinary shallow stack use should succeed");
     assert_eq!(
@@ -2966,7 +3316,11 @@ fn stack_buffer_is_not_preallocated_to_operand_stack_depth_limit() {
     let mut host = DefaultHost::default();
 
     processor
-        .execute_mut_sync(&program, &mut host)
+        .execute_mut_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
         .expect("deep stack use should grow the buffer on demand");
     assert!(
         processor.stack.len() > INITIAL_STACK_BUFFER_SIZE,
@@ -3165,7 +3519,11 @@ fn stack_depth_limit_exceeded() {
     let err =
         FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
             .expect("processor advice inputs should fit advice map limits")
-            .execute_sync(&program, &mut host)
+            .execute_sync(
+                &program.program,
+                program.environment,
+                with_fixture_source(&mut host, &program),
+            )
             .expect_err("pushing past the configured stack depth should fail");
 
     assert_matches!(
@@ -3222,19 +3580,15 @@ fn nested_calls_enforce_aggregate_stack_depth_limit() {
         end
         ";
 
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let program = Assembler::new(source_manager)
-        .assemble_program("program", source)
-        .expect("program should assemble")
-        .unwrap_program();
+    let program = named_source(source).expect("program should assemble");
 
     let options = ExecutionOptions::default().with_max_stack_depth(max_stack_depth).unwrap();
     let mut processor =
         FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
             .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
     let mut resume_ctx = processor
-        .get_initial_resume_context(&program)
+        .get_initial_resume_context(&program.program, program.environment)
         .expect("initial resume context should be created");
 
     // Step until execution halts. At every step the aggregate operand-stack depth (active context
@@ -3248,9 +3602,9 @@ fn nested_calls_enforce_aggregate_stack_depth_limit() {
             "aggregate operand-stack depth must never exceed the configured limit"
         );
 
-        match processor.step_sync(&mut host, resume_ctx) {
-            Ok(Some(next_ctx)) => resume_ctx = next_ctx,
-            Ok(None) => panic!("nested-call chain should not complete within the aggregate limit"),
+        match processor.step_sync(&mut host, &mut resume_ctx) {
+            Ok(false) => {},
+            Ok(true) => panic!("nested-call chain should not complete within the aggregate limit"),
             Err(err) => break err,
         }
     };
@@ -3303,11 +3657,7 @@ fn nested_calls_within_aggregate_budget_succeed() {
         end
         ";
 
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let program = Assembler::new(source_manager)
-        .assemble_program("program", source)
-        .expect("program should assemble")
-        .unwrap_program();
+    let program = named_source(source).expect("program should assemble");
 
     let options = ExecutionOptions::default().with_max_stack_depth(max_stack_depth).unwrap();
     let mut processor =
@@ -3316,7 +3666,11 @@ fn nested_calls_within_aggregate_budget_succeed() {
     let mut host = DefaultHost::default();
 
     processor
-        .execute_mut_sync(&program, &mut host)
+        .execute_mut_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
         .expect("a nested-call chain within the aggregate budget should succeed");
 
     // Every context returned, so the suspended-overflow budget is fully released.
@@ -3351,7 +3705,7 @@ fn test_continuation_stack_limit_exceeded() {
         }
 
         forest.make_root(current);
-        Program::new(forest.into(), current)
+        synthetic_fixture(Program::new(forest.into(), current), [])
     };
 
     // Set a very small continuation stack limit that will be exceeded by the nested joins.
@@ -3360,7 +3714,13 @@ fn test_continuation_stack_limit_exceeded() {
     let processor =
         FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
             .expect("processor advice inputs should fit advice map limits");
-    let err = processor.execute_sync(&program, &mut host).unwrap_err();
+    let err = processor
+        .execute_sync(
+            &program.program,
+            program.environment,
+            with_fixture_source(&mut host, &program),
+        )
+        .unwrap_err();
 
     assert_matches!(err, ExecutionError::Internal(msg) if msg.contains("continuation stack"));
 }
@@ -3379,18 +3739,32 @@ fn test_continuation_stack_limit_exactly_max_continuations_succeeds() {
 
         let root = JoinNodeBuilder::new([leaf_id, leaf_id]).add_to_forest(&mut forest).unwrap();
         forest.make_root(root);
-        Program::new(forest.into(), root)
+        synthetic_fixture(Program::new(forest.into(), root), [])
     };
 
-    // A single join peaks at three continuations after the join start step:
-    // FinishJoin(root), StartNode(second), StartNode(first).
-    let options = ExecutionOptions::default().with_max_num_continuations(3);
+    // ENTRY retains its root marker below the three JOIN continuations:
+    // RootBoundary, FinishJoin(root), StartNode(second), StartNode(first).
+    const EXACT_CONTINUATIONS: usize = 4;
+    let options = ExecutionOptions::default().with_max_num_continuations(EXACT_CONTINUATIONS);
 
-    let processor =
+    let mut processor =
         FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
             .expect("processor advice inputs should fit advice map limits");
 
-    processor.execute_sync(&program, &mut host).unwrap();
+    host = host.with_environment_source(program.source.clone());
+    let mut resume = processor
+        .get_initial_resume_context(&program.program, program.environment)
+        .unwrap();
+    let mut peak = resume.continuation_stack().len();
+    loop {
+        let complete = processor.step_sync(&mut host, &mut resume).unwrap();
+        peak = peak.max(resume.continuation_stack().len());
+        assert!(peak <= EXACT_CONTINUATIONS);
+        if complete {
+            break;
+        }
+    }
+    assert_eq!(peak, EXACT_CONTINUATIONS);
 }
 
 /// Tests that preparing a context restore fails when the stack overflow save stack is empty.
@@ -3430,16 +3804,11 @@ fn test_restore_call_state_empty_system_call_state_stack() {
 // TEST HELPERS
 // -----------------------------------------------------------------------------------------------
 
-fn simple_program_with_ops(ops: Vec<Operation>) -> Program {
-    let program: Program = {
-        let mut program = MastForest::new();
-        let root_id = BasicBlockNodeBuilder::new(ops).add_to_forest(&mut program).unwrap();
-        program.make_root(root_id);
-
-        Program::new(program.into(), root_id)
-    };
-
-    program
+fn simple_program_with_ops(ops: Vec<Operation>) -> NamedFixture {
+    let mut program = MastForest::new();
+    let root_id = BasicBlockNodeBuilder::new(ops).add_to_forest(&mut program).unwrap();
+    program.make_root(root_id);
+    synthetic_fixture(Program::new(program.into(), root_id), [])
 }
 
 fn pad_then_drop_ops(num_pads: usize) -> Vec<Operation> {
@@ -3456,14 +3825,14 @@ fn source_debug_call_frames_preserve_locals_wrappers_and_padding(#[case] invocat
     let source = format!(
         "@locals(4) proc inner push.7 loc_store.0 push.5 drop end @locals(4) proc outer push.42 loc_store.0 push.3 drop {invocation} push.9 drop end begin procref.inner mem_storew_le.100 dropw exec.outer push.11 drop end"
     );
-    let package: Arc<Package> = Assembler::new(Arc::new(DefaultSourceManager::default()))
-        .assemble_program("program", source)
-        .unwrap()
-        .into();
+    let fixture = named_source(&source).unwrap();
+    let package = fixture.package.clone();
     let info = package.debug_info().unwrap().unwrap();
     let mut processor = FastProcessor::new(StackInputs::default());
-    let mut host = DefaultHost::default();
-    let mut resume = processor.get_initial_resume_context_for_package(package).unwrap();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let mut resume = processor
+        .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
+        .unwrap();
     let mut resolver = DebugCallFrameResolver::new();
     let mut identities = [None::<DebugCallFrame>, None];
     let mut active = [false; 2];
@@ -3501,9 +3870,11 @@ fn source_debug_call_frames_preserve_locals_wrappers_and_padding(#[case] invocat
             assert!(present[0], "suspended locals owner must remain recovered: {invocation}");
             seen_nested = true;
         }
-        match processor.step_with_package_debug_info_sync(&mut host, resume, &info).unwrap() {
-            Some(next) => resume = next,
-            None => break,
+        if processor
+            .step_with_package_debug_info_sync(&mut host, &mut resume, &info)
+            .unwrap()
+        {
+            break;
         }
     }
     assert!(seen_nested);
@@ -3520,7 +3891,7 @@ fn source_debug_call_frames_keep_inline_depth_from_selected_occurrence(#[case] n
     let mut module = Module::parser(Some(ModuleKind::Executable))
         .parse_str(
             None,
-            format!("@locals({num_locals}) proc entrypoint push.2 push.3 add nop drop end begin exec.entrypoint end"),
+            format!("@locals({num_locals}) proc entrypoint push.2 push.3 add nop drop end begin inline.entrypoint end"),
             manager.clone(),
         )
         .unwrap();
@@ -3536,12 +3907,14 @@ fn source_debug_call_frames_keep_inline_depth_from_selected_occurrence(#[case] n
             }
         }
     }
-    let package: Arc<Package> =
-        Assembler::new(manager).assemble_program("program", module).unwrap().into();
+    let fixture = named_module(Assembler::new(manager), module, []).unwrap();
+    let package = fixture.package.clone();
     let info = package.debug_info().unwrap().unwrap();
     let mut processor = FastProcessor::new(StackInputs::default());
-    let mut host = DefaultHost::default();
-    let mut resume = processor.get_initial_resume_context_for_package(package).unwrap();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let mut resume = processor
+        .get_initial_resume_context_for_package(package, &fixture.naming, fixture.environment)
+        .unwrap();
     let mut resolver = DebugCallFrameResolver::new();
     let mut seen = false;
     loop {
@@ -3550,14 +3923,16 @@ fn source_debug_call_frames_keep_inline_depth_from_selected_occurrence(#[case] n
                 assert_eq!(
                     frame.inherited_inline_calls(),
                     1,
-                    "the selected caller occurrence includes its exec boundary"
+                    "the selected caller occurrence includes its explicit inline boundary"
                 );
                 seen = true;
             }
         }
-        match processor.step_with_package_debug_info_sync(&mut host, resume, &info).unwrap() {
-            Some(next) => resume = next,
-            None => break,
+        if processor
+            .step_with_package_debug_info_sync(&mut host, &mut resume, &info)
+            .unwrap()
+        {
+            break;
         }
     }
     assert!(seen);
