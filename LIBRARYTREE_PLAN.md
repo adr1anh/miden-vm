@@ -498,7 +498,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 10 Projects/imports | implemented-awaiting-validation | Native `82e671c01`; assembly `e151d65c5`; instances `116a2d736`; supply `049d9ea68`; prior SHAs below; base `0ec317994` | Independent reviews; project90, assembly598/six existing skips, supply379/one existing skip and native3 pass; mast-package/both registries/project/assembly all-target strict Clippy, native-target Clippy and four shared no_std checks pass | Inherited public-statement/proof/recursive/security and final qualification remain; selected publication-profile behavior is not claimed |
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Fifteen request K/D failures at PR14, three preserved cost gates at PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
-| 13 Core library | in-progress | Base `56f44aa0f`; implementation pending | Read-only source/cost audit; no fresh PR13 validation claimed | Explicit manifest packaging/advice/private-helper acceptance and deliberate inline choices; preserve three cost gates and inherited qualification |
+| 13 Core library | in-progress | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; base `56f44aa0f` | Independent reviews; focused18/18 including package/advice/private callback/changed-D, full security matrix and unchanged three cost caps; four-crate all-target strict Clippy; VM/PVM generation/check pass | Ordinary675-case baseline running; domain/AEAD diagnostics and exact crypto cost snapshots under focused follow-up; inherited PR14/qualification gates |
 | 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
@@ -3035,3 +3035,27 @@ yet qualified. No D==K fallback, duplicate proof registration or whitelist updat
 PR12 is implemented-awaiting-validation. Continue PR13 explicit source packaging and deliberate
 inline choices, then PR14 identity/request closure. All counterfactual/principal, full recursive,
 security/guest/fuzz/performance/final gates and the general goal/M1 remain open. No PRs or pushes.
+
+
+### PR13 package and fixed-leaf checkpoint, 4 November 2026
+
+`2b9de9e38` declares core defining-paths/custom empty home in its manifest and removes build/project
+benchmark providers; the remaining per-module helper uses shared naming. `5cec11f38` verifies safe
+export/import, package-only arbitrary advice through private pipe_2, and an unchanged declaration-only
+caller across independently authorized changed D/R_E. `c14c1f3d4` explicitly inlines fixed leaf calls,
+regenerating VM/PVM OOD hooks while retaining pipe procref/dynexec roots. All signatures verify.
+
+Guarded focused18/18 pass: VM25 scatter cases max1097<=1300 cycles, PVM37 max2773<=3200, proven
+security peak2200<2250 with its complete numeric matrix now passing. Previous measurements were
+1461/3713/2270. Four affected crates pass all-target strict custom Clippy, including core benchmark;
+both generators write/check coherently with all circuit/relation pins unchanged. Logs:
+`.scratch/librarytree/pr13-{focused-checks,clippy,vm-generation-check,pvm-generation-check}.log`.
+
+The ordinary675-case baseline is still running, not reported passed. Eight failures found so far:
+five AEAD diagnostics select IES assertion metadata for equal-D standalone range helpers; one parity
+test still expects removed kernel metadata; two crypto exact snapshots retain pre-keyed-runtime
+counts. Follow-up source is frozen for narrow local inline/metadata fixes; original AEAD range,
+zero-event and message oracles remain intact. Exact snapshots are measurement checks, distinct
+from the three unchanged upper cost gates. Their final new measurements and affected correctness
+checks remain pending. No general D-indexed diagnostic-variant fix or full PR13/M1/goal closure
+is claimed. PR14 typed identity/request and all inherited gates remain open.
