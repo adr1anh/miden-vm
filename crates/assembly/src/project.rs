@@ -38,6 +38,8 @@ pub use self::{
 #[cfg(test)]
 mod artifact_expectation_tests;
 #[cfg(test)]
+mod catalog_resolution_tests;
+#[cfg(test)]
 mod target_naming_tests;
 #[cfg(test)]
 mod tests;
