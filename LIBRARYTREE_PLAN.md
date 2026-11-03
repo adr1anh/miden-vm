@@ -2667,3 +2667,46 @@ not a permissive production fallback. `cli/{run,prove,data,utils}.rs` still use 
 verify retains legacy statement handling until PR12. PR10 artifact expectations, PR12 claim transport,
 core generation, whole-VM/CLI and final security/qualification gates remain open. Scratch audit
 findings retain exact source sites. Overall scope, PR09 and M1 are unchanged.
+
+### PR09 retained core naming and explicit CLI policy checkpoint, 3 November 2026
+
+`ad3a47cd3` adds ProjectAssembler naming-retaining normal/interruptible entrypoints returning the
+existing ResolvedPackage. Legacy package-only APIs delegate to the same assembly path; interruption,
+caching, providers and postprocessors retain their behavior. The regression checks exact package
+correspondence, executable entry, private declarations, reexport defining keys and stable naming
+across implementation changes. All 55 project tests and strict project-library Clippy pass.
+
+`88b75005d` supplies the core producer's explicit empty custom compilation home and complete
+defining semantic paths, including root/support/private/generated procedures. Core's ordinary sys
+modules keep child namespace paths; this is not kernel publication. A deterministic Rust sidecar
+retains the compiler-owned homes, bindings, aliases, selected D values and optional entry. CoreLibrary
+reconstructs that inventory, checks exact Package9 correspondence and exposes retained naming;
+it does not admit arbitrary artifact-controlled names through a fabricated profile. The compilation
+benchmark uses the same explicit source convention. Legacy recursive-helper D versus procref K
+documentation is clarified without changing runtime behavior or proof assertions.
+
+**Core gate:** the producer and library build. The full library unit run is **14 pass, 1 fail**,
+with all three new private-address-taken/reexport/home-mismatch tests passing. The unchanged
+`proof_compatibility_roots_match_the_embedded_core_library` assertion fails because the rebuilt core
+verifier's implementation root differs from the old Verifier compatibility constant. This is a
+remaining PR14 identity/recursive qualification gate, not a passing core/proof suite. Do not bypass
+the assertion or update the whitelist merely to green this producer change. Strict library plus
+compilation-bench Clippy and core-library no_std pass.
+
+`965c4f7cb` adds shared required run/prove arguments for independently authorized K_entry/R_E,
+opening-evidence path, caller resource-policy path and explicit policy-file byte cap. Versioned
+resource JSON requires all native opening/ledger/session/trace/source limits, preserves zero values,
+and rejects unknown/authority fields and duplicates; it supplies no descriptor. Commands admit once,
+attach the bounded source, install trace limits and pass caller ExecutionEnvironment in every native
+execution/debug branch. The focused harness includes the actual adapter and actual evidence loader;
+its four tests and strict Clippy pass, including file-to-admission, exact policy-file cap, mismatch
+rejection and retained policies. Whole CLI commands and their existing tests remain uncompiled:
+source/raw-package loaders still discard or omit required naming, and verify remains pre-PR12.
+
+All three source commits have verified signatures; scoped formatting/whitespace pass. Parallel
+bounded implementers/reviewers ran no builds; root centralized focused AC/heavy-guarded checks.
+No new skips, weakened security oracles, broad workspace build, regeneration of proof identities,
+pushes or GitHub PRs. Next migrate CLI source/package loaders and CoreLibrary linking callers with
+retained or independently admitted naming. Raw inputs need caller-selected profile/context and
+expected mappings; PR10/PR12/PR14 and all previous security/final gates remain open. PR09/M1/overall
+completion is not claimed. Short scratch findings retain exact remaining caller sites.
