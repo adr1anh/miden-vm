@@ -32,7 +32,7 @@ use miden_project::TargetType;
 
 #[cfg(feature = "std")]
 use crate::diagnostics::reporting::set_panic_hook;
-use crate::{CallableBinding, assembler::Assembler};
+use crate::{CallableBinding, assembler::Assembler, linker::SymbolResolutionContext};
 
 /// Admits fixture naming only under the complete homes explicitly chosen by its owner.
 /// Unknown TypedIds reject unless their exact codec/bytes occur in those expected homes.
@@ -192,6 +192,117 @@ impl FixtureNamespace {
             let binding =
                 CallableBinding::new(self.namespace_plan.clone(), canonical).into_diagnostic()?;
             self.add_binding(declaration.into(), binding)?;
+        }
+        Ok(())
+    }
+
+    /// Names a kernel source cohort using the fixture's explicit D8 placement convention.
+    ///
+    /// The first module is the root. Public modules determine the exported surface. Public item
+    /// re-exports resolve through the base assembler's actual imported bindings to their defining
+    /// procedure; aliases never create a second key. Exported definitions use their existing leaf
+    /// as a globally unique root label, and private definitions retain this fixture's child home.
+    pub fn add_kernel_modules(
+        &mut self,
+        base: &Assembler,
+        modules: &[&Module],
+    ) -> Result<(), Report> {
+        let Some(root) = modules.first() else {
+            return Err(Report::msg("kernel fixture requires a root module"));
+        };
+        let mut public_modules = BTreeSet::new();
+        let mut pending = vec![Arc::<Path>::from(root.path())];
+        while let Some(path) = pending.pop() {
+            if !public_modules.insert(path.clone()) {
+                continue;
+            }
+            let Some(module) = modules.iter().find(|module| module.path() == path.as_ref()) else {
+                continue;
+            };
+            for child in module.submodules() {
+                if child.visibility.is_exported() {
+                    pending.push(module.path().join(&child.name).into());
+                }
+            }
+        }
+
+        let mut exports = BTreeSet::new();
+        for module in modules {
+            if public_modules.contains(module.path()) {
+                for procedure in module.procedures() {
+                    if procedure.visibility().is_exported() {
+                        exports
+                            .insert(absolute_fixture_path(&module.path().join(procedure.name()))?);
+                    }
+                }
+            }
+        }
+
+        // Reuse the linker's visibility and alias resolution for public item re-exports. This
+        // scratch graph retains the actual prebound package inputs, never guessed foreign naming.
+        if modules.iter().any(|module| {
+            public_modules.contains(module.path())
+                && module.imports().any(|import| import.visibility().is_exported())
+        }) {
+            let mut linker = base.linker().clone();
+            linker.link_modules(modules.iter().map(|module| Box::new((**module).clone())))?;
+            for module in linker.modules() {
+                if !public_modules.contains(module.path()) {
+                    continue;
+                }
+                for import in module.imports().filter(|import| import.visibility().is_exported()) {
+                    let caller = SymbolResolutionContext {
+                        span: import.span(),
+                        module: module.id(),
+                        kind: None,
+                    };
+                    let path = module.path().join(import.local_name());
+                    if let Some(gid) = linker.resolve_path(&caller, &path)?.into_global_id()
+                        && linker[gid].is_procedure()
+                    {
+                        exports.insert(absolute_fixture_path(
+                            &linker[gid.module].path().join(linker[gid].name()),
+                        )?);
+                    }
+                }
+            }
+        }
+
+        let mut root_keys = BTreeSet::new();
+        for module in modules {
+            for procedure in module.procedures() {
+                let declaration = absolute_fixture_path(&module.path().join(procedure.name()))?;
+                if exports.contains(&declaration) {
+                    let path = CallableProcedurePath::from_semantic_components(vec![
+                        procedure.name().to_string(),
+                    ])
+                    .into_diagnostic()?;
+                    let binding =
+                        CallableBinding::new(NamespacePlan::new(vec![]), path).into_diagnostic()?;
+                    if !root_keys.insert(binding.key()) {
+                        return Err(Report::msg(
+                            "kernel fixture has conflicting root export labels",
+                        ));
+                    }
+                    self.add_binding(declaration, binding)?;
+                } else {
+                    let components = declaration
+                        .components()
+                        .filter_map(|component| match component {
+                            Ok(PathComponent::Root) => None,
+                            component => {
+                                Some(component.map(|component| component.as_str().to_string()))
+                            },
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                        .into_diagnostic()?;
+                    let path = CallableProcedurePath::from_semantic_components(components)
+                        .into_diagnostic()?;
+                    let binding = CallableBinding::new(self.namespace_plan().clone(), path)
+                        .into_diagnostic()?;
+                    self.add_binding(declaration, binding)?;
+                }
+            }
         }
         Ok(())
     }
@@ -552,7 +663,7 @@ mod package_features {
     use super::*;
     use crate::{
         NamespaceInputs, ProjectAssembler, ProjectSourceInputs, ProjectTargetSelector,
-        TargetAssemblyContext, linker::SymbolResolutionContext,
+        TargetAssemblyContext,
     };
 
     /// Opts a project test into the explicit source-cohort and artifact naming conventions.
@@ -583,7 +694,7 @@ mod package_features {
             .collect::<Vec<_>>();
         let mut fixture = FixtureNamespace::assembly_tests();
         if context.target.is_kernel() {
-            add_project_kernel_fixture_modules(base, &mut fixture, &modules)?;
+            fixture.add_kernel_modules(base, &modules)?;
         } else {
             for module in modules {
                 fixture.add_module(module)?;
@@ -595,111 +706,6 @@ mod package_features {
             inputs = inputs.with_callable_binding(declaration, binding)?;
         }
         Ok(inputs)
-    }
-
-    // Public modules determine the exported surface. Re-export aliases resolve to their defining
-    // procedure, whose existing leaf supplies the fixture's canonical root label; an alias never
-    // creates a second key. Private definitions retain the ordinary fixture's child Env home.
-    fn add_project_kernel_fixture_modules(
-        base: &Assembler,
-        fixture: &mut FixtureNamespace,
-        modules: &[&Module],
-    ) -> Result<(), Report> {
-        let mut public_modules = BTreeSet::new();
-        let mut pending = vec![Arc::<Path>::from(modules[0].path())];
-        while let Some(path) = pending.pop() {
-            if !public_modules.insert(path.clone()) {
-                continue;
-            }
-            let Some(module) = modules.iter().find(|module| module.path() == path.as_ref()) else {
-                continue;
-            };
-            for child in module.submodules() {
-                if child.visibility.is_exported() {
-                    pending.push(module.path().join(&child.name).into());
-                }
-            }
-        }
-
-        let mut exports = BTreeSet::new();
-        for module in modules {
-            if public_modules.contains(module.path()) {
-                for procedure in module.procedures() {
-                    if procedure.visibility().is_exported() {
-                        exports
-                            .insert(absolute_fixture_path(&module.path().join(procedure.name()))?);
-                    }
-                }
-            }
-        }
-
-        // Reuse the linker's visibility and alias resolution for public item re-exports. This
-        // scratch graph retains the actual prebound package inputs, never guessed foreign naming.
-        if modules.iter().any(|module| {
-            public_modules.contains(module.path())
-                && module.imports().any(|import| import.visibility().is_exported())
-        }) {
-            let mut linker = base.linker().clone();
-            linker.link_modules(modules.iter().map(|module| Box::new((**module).clone())))?;
-            for module in linker.modules() {
-                if !public_modules.contains(module.path()) {
-                    continue;
-                }
-                for import in module.imports().filter(|import| import.visibility().is_exported()) {
-                    let caller = SymbolResolutionContext {
-                        span: import.span(),
-                        module: module.id(),
-                        kind: None,
-                    };
-                    let path = module.path().join(import.local_name());
-                    if let Some(gid) = linker.resolve_path(&caller, &path)?.into_global_id()
-                        && linker[gid].is_procedure()
-                    {
-                        exports.insert(absolute_fixture_path(
-                            &linker[gid.module].path().join(linker[gid].name()),
-                        )?);
-                    }
-                }
-            }
-        }
-
-        let mut root_keys = BTreeSet::new();
-        for module in modules {
-            for procedure in module.procedures() {
-                let declaration = absolute_fixture_path(&module.path().join(procedure.name()))?;
-                if exports.contains(&declaration) {
-                    let path = CallableProcedurePath::from_semantic_components(vec![
-                        procedure.name().to_string(),
-                    ])
-                    .into_diagnostic()?;
-                    let binding =
-                        CallableBinding::new(NamespacePlan::new(vec![]), path).into_diagnostic()?;
-                    if !root_keys.insert(binding.key()) {
-                        return Err(Report::msg(
-                            "kernel fixture has conflicting root export labels",
-                        ));
-                    }
-                    fixture.add_binding(declaration, binding)?;
-                } else {
-                    let components = declaration
-                        .components()
-                        .filter_map(|component| match component {
-                            Ok(PathComponent::Root) => None,
-                            component => {
-                                Some(component.map(|component| component.as_str().to_string()))
-                            },
-                        })
-                        .collect::<Result<Vec<_>, _>>()
-                        .into_diagnostic()?;
-                    let path = CallableProcedurePath::from_semantic_components(components)
-                        .into_diagnostic()?;
-                    let binding = CallableBinding::new(fixture.namespace_plan().clone(), path)
-                        .into_diagnostic()?;
-                    fixture.add_binding(declaration, binding)?;
-                }
-            }
-        }
-        Ok(())
     }
 
     /// A simple in-memory package index/registry
