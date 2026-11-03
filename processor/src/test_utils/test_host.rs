@@ -6,8 +6,9 @@ use miden_debug_types::{
 };
 
 use crate::{
-    BaseHost, LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState, SyncHost,
-    Word,
+    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState, ResolutionWitness,
+    SyncHost, Word,
     advice::AdviceMutation,
     event::{EventError, TraceError},
     mast::MastForest,
@@ -115,6 +116,8 @@ pub struct TestHost<S: SourceManager = DefaultSourceManager> {
 
     /// Source manager for debugging information
     pub source_manager: Arc<S>,
+
+    environment_source: Option<super::EnvironmentSource>,
 }
 
 impl TestHost {
@@ -127,6 +130,7 @@ impl TestHost {
             trace_snapshots: BTreeMap::new(),
             store: MemMastForestStore::default(),
             source_manager: Arc::new(DefaultSourceManager::default()),
+            environment_source: None,
         }
     }
 
@@ -141,6 +145,7 @@ impl TestHost {
             trace_snapshots: BTreeMap::new(),
             store,
             source_manager: Arc::new(DefaultSourceManager::default()),
+            environment_source: None,
         }
     }
 
@@ -152,6 +157,14 @@ impl TestHost {
     /// Gets the processor state snapshots captured at trace checkpoints.
     pub fn trace_snapshots(&self) -> &BTreeMap<u64, Vec<ProcessorStateSnapshot>> {
         &self.trace_snapshots
+    }
+}
+
+impl<S: SourceManager> TestHost<S> {
+    /// Attaches a source of untrusted environment witnesses for explicit execution requests.
+    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentWitnessSource>) -> Self {
+        self.environment_source = Some(super::EnvironmentSource(source));
+        self
     }
 }
 
@@ -179,6 +192,16 @@ impl<S> SyncHost for TestHost<S>
 where
     S: SourceManagerSync,
 {
+    fn get_environment_witness(
+        &mut self,
+        request: EnvironmentWitnessRequest,
+    ) -> Result<Option<ResolutionWitness>, EnvironmentSourceError> {
+        match &self.environment_source {
+            Some(source) => source.0.get(request),
+            None => Ok(None),
+        }
+    }
+
     fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest> {
         self.store.get(node_digest)
     }
@@ -208,10 +231,13 @@ where
 mod tests {
     use alloc::vec::Vec;
 
-    use miden_assembly::Assembler;
+    use miden_utils_testing::Test;
 
     use super::TestHost;
-    use crate::{AdviceInputs, ExecutionOptions, FastProcessor, Program, StackInputs};
+    use crate::{
+        AdviceInputs, ExecutionOptions, FastProcessor, StackInputs,
+        test_utils::native_fixture_environment,
+    };
 
     #[test]
     fn test_host_records_trace_and_snapshot() {
@@ -229,18 +255,19 @@ mod tests {
         drop
     end"
         );
-        let program: Program = Assembler::default()
-            .assemble_program("program", &source)
-            .unwrap()
-            .unwrap_program();
-        let mut host = TestHost::default();
+        let test = Test::new("test_host_records_trace_and_snapshot", &source, false);
+        let (program, ..) = test.compile().unwrap();
+        let (environment, source) =
+            native_fixture_environment(&test.fixture_environment().unwrap());
+        let mut host = TestHost::default().with_environment_source(source);
+        host.source_manager = test.source_manager;
         FastProcessor::new_with_options(
             StackInputs::default(),
             AdviceInputs::default(),
             ExecutionOptions::default(),
         )
         .expect("failed to construct FastProcessor")
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program, environment, &mut host)
         .unwrap();
 
         // Each trace id is recorded, in emission order.
