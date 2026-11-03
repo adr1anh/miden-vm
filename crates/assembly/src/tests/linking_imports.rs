@@ -65,7 +65,7 @@ fn public_item_import_exports_without_alias_symbol() -> TestResult {
         "#
     ))?;
 
-    let library = Assembler::new(context.source_manager()).assemble_library("pkg", root, [dep])?;
+    let library = context.assemble_library("pkg", None, root, [dep])?;
     let exports = library.manifest.exports().map(PackageExport::path).collect::<BTreeSet<_>>();
 
     assert_eq!(exports.len(), 1);
@@ -111,8 +111,7 @@ fn link_import_module_and_item_forms_resolve() -> TestResult {
         "#
     ))?;
 
-    let package =
-        Assembler::new(context.source_manager()).assemble_library("app", consumer, [dep])?;
+    let package = context.assemble_library("app", None, consumer, [dep])?;
     let exports = package.manifest.exports().map(PackageExport::path).collect::<BTreeSet<_>>();
 
     assert!(exports.contains(&Arc::from(Path::new("::app::entry"))));
@@ -146,7 +145,7 @@ fn link_import_single_segment_module_import_resolves() -> TestResult {
         "#
     ))?;
 
-    Assembler::new(context.source_manager()).assemble_library("app", consumer, [dep])?;
+    context.assemble_library("app", None, consumer, [dep])?;
 
     Ok(())
 }
@@ -227,7 +226,7 @@ fn link_import_public_item_reexport_chain_resolves_order_independently() -> Test
         "#
     ))?;
 
-    Assembler::new(context.source_manager()).assemble_library("app", consumer, [mid, dep])?;
+    context.assemble_library("app", None, consumer, [mid, dep])?;
 
     Ok(())
 }
@@ -269,7 +268,7 @@ fn link_import_self_relative_public_item_reexport_resolves() -> TestResult {
         "#
     ))?;
 
-    Assembler::new(context.source_manager()).assemble_library("app", root, [child, dep])?;
+    context.assemble_library("app", None, root, [child, dep])?;
 
     Ok(())
 }
@@ -370,7 +369,7 @@ fn private_procedure_reexport_is_callable_from_another_module() -> TestResult {
         &context,
         "namespace root::api\nproc helper push.1 drop end\npub use {helper as exposed} from self\n"
     ))?;
-    let library = Assembler::new(context.source_manager()).assemble_library("pkg", root, [api])?;
+    let library = context.assemble_library("pkg", None, root, [api])?;
     let exports = library.manifest.exports().map(PackageExport::path).collect::<BTreeSet<_>>();
     assert_eq!(exports.len(), 2);
     assert!(exports.contains(&Arc::from(Path::new("::root::api::exposed"))));
@@ -390,11 +389,7 @@ fn private_items_can_be_reexported_from_their_own_module() -> TestResult {
         pub use {Hidden as Exposed, VALUE as EXPOSED_VALUE, helper as exposed} from self
         "#
     ))?;
-    let library = Assembler::new(context.source_manager()).assemble_library(
-        "pkg",
-        root,
-        None::<Box<Module>>,
-    )?;
+    let library = context.assemble_library("pkg", None, root, None::<Box<Module>>)?;
     let exports = library.manifest.exports().map(PackageExport::path).collect::<BTreeSet<_>>();
     assert_eq!(exports.len(), 3);
     assert!(exports.contains(&Arc::from(Path::new("::root::Exposed"))));
@@ -412,7 +407,7 @@ fn private_import_can_be_reexported_from_its_own_module() -> TestResult {
     ))?;
     let dep =
         context.parse_module(source_file!(&context, "namespace dep\npub proc foo nop end\n"))?;
-    let library = Assembler::new(context.source_manager()).assemble_library("pkg", root, [dep])?;
+    let library = context.assemble_library("pkg", None, root, [dep])?;
     assert_eq!(library.manifest.exports().count(), 1);
     assert_eq!(
         library.manifest.exports().next().unwrap().path().as_ref(),
@@ -448,7 +443,7 @@ fn public_alias_of_private_type_can_appear_in_public_signatures() -> TestResult 
         &context,
         "namespace root::api\ntype Hidden = felt\npub use {Hidden as Exposed} from ::root::api\npub proc local(value: Exposed) nop end\n"
     ))?;
-    let library = Assembler::new(context.source_manager()).assemble_library("pkg", root, [api])?;
+    let library = context.assemble_library("pkg", None, root, [api])?;
     assert_eq!(library.manifest.exports().count(), 3);
     Ok(())
 }
@@ -483,8 +478,7 @@ fn package_visibility_allows_access_without_exporting_items() -> TestResult {
         &context,
         "namespace root::internal\npub proc helper nop end\n"
     ))?;
-    let library =
-        Assembler::new(context.source_manager()).assemble_library("pkg", root, [api, internal])?;
+    let library = context.assemble_library("pkg", None, root, [api, internal])?;
     let exports = library.manifest.exports().map(PackageExport::path).collect::<BTreeSet<_>>();
     assert_eq!(exports.len(), 4);
     assert!(library.manifest.get_module(Path::new("::root::api")).is_some());
@@ -522,7 +516,7 @@ fn package_reexport_is_accessible_from_another_module() -> TestResult {
         pub(package) use {helper as local_helper, VALUE as LOCAL_VALUE, Word as LocalWord} from self
         "#
     ))?;
-    let library = Assembler::new(context.source_manager()).assemble_library("pkg", root, [api])?;
+    let library = context.assemble_library("pkg", None, root, [api])?;
     assert_eq!(library.manifest.exports().count(), 1);
     assert_eq!(
         library.manifest.exports().next().unwrap().path().as_ref(),

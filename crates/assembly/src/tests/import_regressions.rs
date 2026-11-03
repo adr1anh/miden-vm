@@ -2,6 +2,7 @@
 // ================================================================================================
 
 use super::*;
+use crate::testing::FixtureNamespace;
 
 #[test]
 fn asm_import_source_digest_reexport_is_rejected_without_panicking() {
@@ -60,17 +61,41 @@ fn asm_import_direct_digest_invoke_assembles_without_source_import() {
         end
     "#;
 
+    let context = TestContext::new();
     let assembled = catch_unwind(AssertUnwindSafe(|| {
-        Assembler::default().assemble_program("program", program)
+        let module = context.parse_module(program).expect("program parsing must succeed");
+        let mut bindings = FixtureNamespace::assembly_tests();
+        bindings.add_module(&module).expect("entrypoint naming must succeed");
+        let assembler = bindings
+            .configure(Assembler::new(context.source_manager()), [&*module])
+            .expect("fixture configuration must succeed");
+        assembler.assemble_program("program", module)
     }));
 
     assert!(
         assembled.is_ok(),
-        "assembly panicked, expected direct opaque digest invoke to be allowed"
+        "assembly panicked, expected direct opaque key invoke to be allowed"
     );
-    assembled
+    let package = assembled
         .unwrap()
-        .expect("expected direct digest invocation to assemble successfully");
+        .expect("expected direct word invocation to assemble successfully");
+    let targets = package
+        .mast_forest()
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            MastNode::Exec(exec) => Some(*exec.target().as_word()),
+            MastNode::External(_) => panic!("a target word is a key, not an external body digest"),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        targets,
+        vec![
+            Word::parse("0xc2545da99d3a1f3f38d957c7893c44d78998d8ea8b11aba7e22c8c2b2a213dae")
+                .unwrap()
+        ],
+    );
 }
 
 #[test]
@@ -96,11 +121,7 @@ fn asm_import_direct_digest_invoke_parses_with_warnings_as_errors() {
 
 #[test]
 fn asm_import_direct_digest_forward_decl_assembles_without_source_import() {
-    use std::sync::Arc;
-
-    use crate::DefaultSourceManager;
-
-    let source_manager: Arc<dyn crate::SourceManager> = Arc::new(DefaultSourceManager::default());
+    let context = TestContext::new();
     let program = r#"
         proc helper
             exec.0xc2545da99d3a1f3f38d957c7893c44d78998d8ea8b11aba7e22c8c2b2a213dae
@@ -111,9 +132,22 @@ fn asm_import_direct_digest_forward_decl_assembles_without_source_import() {
         end
     "#;
 
-    Assembler::new(source_manager)
-        .assemble_program("program", program)
-        .expect("expected direct digest invocation in helper proc to assemble");
+    let module = context.parse_module(program).expect("program parsing must succeed");
+    let mut bindings = FixtureNamespace::assembly_tests();
+    bindings.add_module(&module).expect("entrypoint and helper naming must succeed");
+    let assembler = bindings
+        .configure(Assembler::new(context.source_manager()), [&*module])
+        .expect("fixture configuration must succeed");
+    let package = assembler
+        .assemble_program("program", module)
+        .expect("expected direct word invocation in helper proc to assemble");
+    assert_eq!(package.mast_forest().procedure_roots().len(), 2);
+    assert!(package.mast_forest().nodes().iter().any(|node| matches!(
+        node,
+        MastNode::Exec(exec)
+            if *exec.target().as_word()
+                == Word::parse("0xc2545da99d3a1f3f38d957c7893c44d78998d8ea8b11aba7e22c8c2b2a213dae").unwrap()
+    )));
 }
 
 #[test]
@@ -271,8 +305,8 @@ pub proc fun(in: foo)
 end"
     );
     let lib = context.parse_module(lib_src).expect("library module parsing must succeed");
-    let library = Assembler::new(context.source_manager())
-        .assemble_library("test", lib, None::<Box<Module>>)
+    let (library, mut bindings) = context
+        .assemble_library_with_fixture("test", None, lib, None::<Box<Module>>)
         .expect("library assembly must succeed");
 
     let mut assembler = Assembler::new(context.source_manager());
@@ -280,7 +314,13 @@ end"
         .link_package(Arc::from(library), Linkage::Dynamic)
         .expect("library linking must succeed");
 
-    let program = "use test::types\nbegin\n    exec.types::foo\nend\n";
+    let program = context
+        .parse_module("use test::types\nbegin\n    exec.types::foo\nend\n")
+        .expect("program parsing must succeed before resolving the imported type");
+    bindings.add_module(&program).expect("entrypoint naming must succeed");
+    let assembler = bindings
+        .configure(assembler, [&*program])
+        .expect("fixture configuration must succeed");
     let result = catch_unwind(AssertUnwindSafe(|| assembler.assemble_program("program", program)));
 
     let result = result.expect("assembly panicked, expected a structured error");

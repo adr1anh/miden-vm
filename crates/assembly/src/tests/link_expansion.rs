@@ -19,15 +19,13 @@ fn test_linking_imported_symbols_with_duplicate_prefix_components() -> TestResul
         "#
     ))?;
 
-    let assembler = Assembler::new(context.source_manager());
-    let lib = assembler.assemble_library("lib", lib, None::<Box<Module>>)?;
+    let (lib, mut bindings) =
+        context.assemble_library_with_fixture("lib", None, lib, None::<Box<Module>>)?;
 
     // This import's default alias is `lib`, which is also the first component of its global
     // target. That must still resolve globally rather than being mistaken for an import-through-
     // import attempt.
-    let assembler = Assembler::new(context.source_manager());
-    let _ = assembler.with_package(Arc::from(lib), Linkage::Static)?.assemble_program(
-        "program",
+    let program = context.parse_module(
         r#"
         use lib::lib
 
@@ -36,6 +34,11 @@ fn test_linking_imported_symbols_with_duplicate_prefix_components() -> TestResul
         end
         "#,
     )?;
+    bindings.add_module(&program)?;
+    let assembler =
+        Assembler::new(context.source_manager()).with_package(Arc::from(lib), Linkage::Static)?;
+    let assembler = bindings.configure(assembler, [&*program])?;
+    let _ = assembler.assemble_program("program", program)?;
 
     Ok(())
 }
