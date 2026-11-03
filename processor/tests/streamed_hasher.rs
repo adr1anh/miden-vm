@@ -4,12 +4,17 @@
 //! `make test-wasm-threadless` runs the equality tests through the compact
 //! buffered fallback and proves the entry point returns without trapping.
 
-use miden_assembly::Assembler;
+#[path = "common/named_source.rs"]
+mod named_source;
 use miden_processor::{
     DefaultHost, ExecutionOptions, FastProcessor, Felt, StackInputs, advice::AdviceInputs,
     trace::build_trace,
 };
-use miden_utils_testing::crypto::{MerkleTree, init_merkle_leaf, init_merkle_store};
+use miden_utils_testing::{
+    crypto::{MerkleTree, init_merkle_leaf, init_merkle_store},
+    librarytree::trace_limits,
+};
+use named_source::named_source;
 
 /// A program mixing basic blocks (including repeats, which exercise the
 /// hasher's memoized-trace path), control blocks, and a `compress` request. The test processor
@@ -56,6 +61,7 @@ fn processor(stack: &[u64], advice: AdviceInputs) -> FastProcessor {
         StackInputs::new(&stack).unwrap(),
         advice,
         ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
             .with_core_trace_fragment_size(64)
             .expect("valid fragment size"),
     )
@@ -65,15 +71,12 @@ fn processor(stack: &[u64], advice: AdviceInputs) -> FastProcessor {
 /// Runs `program_src` through both trace-build paths and asserts byte-for-byte
 /// equality of every trace segment.
 fn assert_overlapped_matches_buffered(program_src: &str, stack: &[u64], advice: &AdviceInputs) {
-    let program = Assembler::default()
-        .assemble_program("test", program_src)
-        .unwrap()
-        .unwrap_program();
+    let (program, environment) = named_source(program_src);
 
     let buffered = {
-        let mut host = DefaultHost::default();
+        let mut host = DefaultHost::default().with_environment_source(environment.source());
         let execution_witness = processor(stack, advice.clone())
-            .execute_for_proving_sync(&program, &mut host)
+            .execute_for_proving_sync(&program, environment.execution(), &mut host)
             .unwrap();
         let (vm_witness, precompiles_witness) = execution_witness.into_parts();
         assert!(precompiles_witness.is_none());
@@ -81,10 +84,11 @@ fn assert_overlapped_matches_buffered(program_src: &str, stack: &[u64], advice: 
     };
 
     let streamed = {
-        let mut host = DefaultHost::default();
+        let mut host = DefaultHost::default().with_environment_source(environment.source());
         let (trace, precompiles_witness) = processor(stack, advice.clone())
             .execute_and_build_trace_sync(
                 &program,
+                environment.execution(),
                 &mut host,
                 &miden_vm_stark::memory::default_budget(),
             )
@@ -203,13 +207,14 @@ fn overlap_builder_thread_enters_the_instrument_span() {
     };
     let subscriber = Registry::default().with(layer);
 
-    let program = Assembler::default().assemble_program("test", PROGRAM).unwrap().unwrap_program();
+    let (program, environment) = named_source(PROGRAM);
     let caller = std::thread::current().id();
     tracing::subscriber::with_default(subscriber, || {
-        let mut host = DefaultHost::default();
+        let mut host = DefaultHost::default().with_environment_source(environment.source());
         processor(&[1], AdviceInputs::default())
             .execute_and_build_trace_sync(
                 &program,
+                environment.execution(),
                 &mut host,
                 &miden_vm_stark::memory::default_budget(),
             )
