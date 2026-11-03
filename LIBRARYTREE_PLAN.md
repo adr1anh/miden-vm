@@ -167,7 +167,7 @@ Extend the existing versioned execution witness with immutable descriptor, entry
 
 **Existing files:** `crates/assembly/src/{assembler.rs,procedure.rs,mast_forest_builder.rs,fmp.rs,instruction/procedures.rs,linker/}`, `crates/assembly-syntax/src/sema/passes/verify_invoke.rs`, `crates/mast-package/src/package/{manifest.rs,mod.rs,serialization/}`, debug-info provenance. Extend assembly tests for procref/procedures/dynamic/kernels/root calls/link cycles/imports/packages/locals; add `crates/assembly/src/tests/namespaced_execution.rs`.
 
-Before freezing Package9, deliver the focused D6 correction in small commits on the current integration branch: core descriptor/verifier configuration, processor session/replay/witness, Library AIR/public-value interfaces and assembler syscall lowering. Revalidate affected contracts without rewriting historical stack commits or undertaking PR15a cleanup. Then split identity resolution from body supply, runtime reachability/SCCs from acyclic inline dependencies, and retain all public/helper/address-taken roots. Emit K for every retained invocation/procref; explicit inline alone composes a body. Activate validated namespaced package9 metadata and MAST0.0.6 together across trusted/safe readers, commitments and strip-debug. Replace root-centric Program/kernel reconstruction, root-call lowering and hardcoded `$kernel` authority rather than wrap them.
+Before freezing Package9, deliver the focused D6/D8 correction in small commits on the current integration branch: core descriptor/verifier configuration, processor session/replay/witness, Library AIR/public-value interfaces and assembler syscall lowering/placement. Kernel tooling places public executable exports at root and private helpers beneath Env, without an extra syscall-export list. Revalidate affected contracts without rewriting historical stack commits or undertaking PR15a cleanup. Then split identity resolution from body supply, runtime reachability/SCCs from acyclic inline dependencies, and retain all public/helper/address-taken roots. Emit K for every retained invocation/procref; explicit inline alone composes a body. Activate validated namespaced package9 metadata and MAST0.0.6 together across trusted/safe readers, commitments and strip-debug. Replace root-centric Program/kernel reconstruction, root-call lowering and hardcoded `$kernel` authority rather than wrap them.
 
 D7 permits code-only package metadata without an own LibraryId/public-interface association, independently of TargetType usage tags. Required naming/callable/code information remains complete; any supplied IDs are opaque to generic consumers and are not inferred from homes, D, package names or aliases. This separation grants no Protocol admission: its profile must derive/verify D3's I and validate publisher/home, immutable interface association, release and closure inputs before acceptance. Missing required naming/code metadata still rejects. Preserve independent callable-root retention and the in-flight builder/frontend/graph work. Exact required naming must affect artifact commitments and deduplication/cache matching: equal D or source provenance with changed home/canonical binding cannot reuse old symbols or artifacts.
 
@@ -412,7 +412,21 @@ identity/interface association and D3's validation without fallback; this does n
 profiles' required fields optional or invent their schemas. Type/role/configuration API details
 remain implementation design. This closes the former own-interface applicability question.
 
-Implementation remains paused for discussion at the user's request. D6/D7 are approved design,
+**D8 Kernel-package placement, agreed with the user on 3 November 2026:** assembler/package
+tooling places public executable kernel exports directly in fixed N0 and retained private helpers
+beneath a child Env namespace. Reuse existing public/private declarations and namespace bindings;
+no additional syscall-export list is required. This is a construction convention: the VM ignores
+source visibility and authorizes actual SYSCALL solely by the authenticated immediate parent.
+Any executable binding actually placed at root is eligible, even if its source was private.
+
+Keep public root labels globally unique across composed kernel fragments; reject conflicts rather
+than silently renaming or selecting a body. Source aliases do not invent new canonical keys, and
+ordinary EXEC into a child helper preserves its existing context/principal conventions. Child
+helper homes may be package/revision-qualified using D5/custom bindings; this decision does not
+freeze the exact prefix spelling or configuration/API representation, require an own LibraryId
+for code-only packages, or derive names from implementation D. Existing source imports remain.
+
+Implementation remains paused for discussion at the user's request. D6–D8 are approved design,
 not claims that source, public-input layouts, readers or acceptance checks have been migrated.
 
 ## Open decisions and external gates
@@ -422,7 +436,7 @@ not claims that source, public-input layouts, readers or acceptance checks have 
 | Generic VM/toolchain interchange | D1 fixes VM node preimages. D3 permits opaque typed I/declarations/explicit homes at generic boundaries, while retaining selected Protocol identity/interface semantics and required external validation. Audit mandatory InterfaceArtifact/Profile consumer coupling without weakening canonical/budget/malformed-input/code-root checks. | 04, 09–10, public API closure |
 | Frontend syntax and eligibility | D2 preserves existing MASM name/path/word syntax; D4 approves optional inline.<target> for local fixed bodies or explicitly pinned imports, rejecting Latest and structural cycles. Implement source-alias versus published-alias/wrapper behavior and diagnostics without changing inner runtime keys. | 04, 09 |
 | Standard namespace convention implementation | D5 approves standard assembler/project Latest/Pinned naming plus explicit custom bindings. Implement configuration/routing, metadata persistence and cache matching; exact fields/default-selection UX remain unfrozen. No new MASM import syntax, VM path interpretation, implicit N0 or generic ID/registry/interface-commitment requirement. | 09–10, public API closure |
-| Fixed-root kernel migration | D6 resolves kernel input: fixed N0, descriptor `(K_entry,R_E)` and revised claim40/Core36/Chiplets4. Migrate descriptors/runtime/replay/assembler/AIR/public/verifier contracts and revalidate; retain trusted R_E, local parent checks and all acceptance gates. | 01, 05–09, 12–15 source/format/validation follow-up |
+| Fixed-root kernel migration | D6 resolves kernel input: fixed N0, descriptor `(K_entry,R_E)` and revised claim40/Core36/Chiplets4. D8 fixes kernel tooling placement: public executable exports at root, private helpers beneath Env, no extra export list. Migrate descriptors/runtime/replay/assembler/AIR/public/verifier contracts and revalidate; retain trusted R_E, local parent checks and all acceptance gates. | 01, 05–09, 12–15 source/format/validation follow-up |
 | Code-only Package9 implementation | D7 permits absent own I/interface for code-only artifacts; implement that boundary while retaining complete callable/code/entry metadata and mandatory selected-profile validation. | Package9 constructors/readers/admission; 09–10 |
 | Private reusable-instance ABI (deferred extension) | If later adopted, specify authenticated runtime-base transport and relative-key/procref lowering before claiming immutable randomized-instance support. Current explicit absolute homes still require final linking; no implicit relocation or caller-derived namespace. | Future optional ABI adoption only |
 | Existing shared/fresh-context behavior | Preserve D2's stack/memory/FMP/overflow and all invocation-mode conventions with regressions. Namespace authentication supplies no RAM isolation. Additional high-level layouts, heap/function-table ownership and initialization/reentrancy profiles are deferred unless an explicitly selected feature needs them; do not invent a fresh-context-only/stateless-only restriction. | 05, 09, 13, 15–16 calling-convention acceptance |
@@ -2120,3 +2134,12 @@ follow-up validation. No existing code/test result is represented as proving D6/
 documentation-only reconciliation: preserve all implementation, remain paused for discussion,
 then correct the root policy before Package9 and project-routing work. API/default-selection and
 kernel publication ergonomics remain unfrozen; no additional answer blocks this checkpoint.
+
+### D8 kernel placement discussion checkpoint
+
+At verified HEAD `3536ebd7109533900d16cc2dedecd63df3b37ee1` (source `108dc3607`), the user
+selected public kernel exports at root and private helpers beneath a child namespace. D8 records
+this as tooling placement, not a second VM authorization list or source privilege flag. Default
+dependency selection remains unfrozen; it does not block the fixed-root correction. This changes
+only plan/handoff documentation, preserves the paused implementation and claims no new code/test
+result. Exact helper-prefix/configuration details remain delegated implementation design.
