@@ -272,6 +272,7 @@ pub struct Test {
     pub advice_inputs: AdviceInputs,
     pub in_tracing_mode: bool,
     pub libraries: Vec<Arc<Package>>,
+    library_naming: Vec<(usize, Arc<miden_mast_package::PackageNaming>)>,
     pub handlers: Vec<(EventName, Arc<dyn EventHandler>)>,
     pub trace_handlers: Vec<(EventName, Arc<dyn TraceHandler>)>,
     pub add_modules: Vec<(Arc<Path>, String)>,
@@ -293,6 +294,7 @@ impl Test {
             advice_inputs: AdviceInputs::default(),
             in_tracing_mode,
             libraries: Vec::default(),
+            library_naming: Vec::new(),
             handlers: Vec::new(),
             trace_handlers: Vec::new(),
             add_modules: Vec::default(),
@@ -331,6 +333,21 @@ impl Test {
 
     /// Adds a library to link in during assembly.
     pub fn with_library(mut self, package: Arc<Package>) -> Self {
+        self.libraries.push(package);
+        self
+    }
+
+    /// Retains a compiler-owned or independently admitted inventory with its exact package.
+    ///
+    /// Compilation checks the pair before cache reuse. Unlike [`Self::with_library`], this does
+    /// not reinterpret the package under the finite source-test home convention. It grants no
+    /// publication or execution authority; the fixture still constructs its explicit environment.
+    pub fn with_library_and_naming(
+        mut self,
+        package: Arc<Package>,
+        naming: Arc<miden_mast_package::PackageNaming>,
+    ) -> Self {
+        self.library_naming.push((self.libraries.len(), naming));
         self.libraries.push(package);
         self
     }
@@ -530,6 +547,27 @@ impl Test {
         use miden_assembly_syntax::Parse;
         use miden_mast_package::TargetType;
 
+        // Revalidate all current input policies before cache lookup. The public library vector
+        // may have changed since a paired inventory was supplied, and a previous owned import
+        // must not make a later raw import bypass the finite fixture-home admission policy.
+        for (index, naming) in &self.library_naming {
+            let package = self.libraries.get(*index).ok_or_else(|| {
+                Report::msg("retained library naming has no corresponding package")
+            })?;
+            package.check_naming(naming).map_err(|error| Report::msg(error.to_string()))?;
+        }
+        let import_naming = self
+            .libraries
+            .iter()
+            .enumerate()
+            .map(|(index, package)| {
+                match self.library_naming.iter().find(|(slot, _)| *slot == index) {
+                    Some((_, naming)) => Ok(naming.as_ref().clone()),
+                    None => fixture_package_naming(package),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         #[cfg(all(feature = "std", not(target_family = "wasm")))]
         let cache_key = self.compile_cache_key();
 
@@ -548,14 +586,6 @@ impl Test {
             let _ = env_logger::Builder::from_env("MIDEN_LOG").format_timestamp(None).try_init();
         }
 
-        // Raw library imports are admitted only under the finite source fixture convention and N0.
-        // A foreign home needs a separate caller-selected admission API, never a permissive
-        // fallback.
-        let import_naming = self
-            .libraries
-            .iter()
-            .map(|package| fixture_package_naming(package))
-            .collect::<Result<Vec<_>, _>>()?;
         let (mut assembler, kernel_lib, kernel_naming) = if let Some(kernel) =
             self.kernel_source.clone()
         {
@@ -973,7 +1003,8 @@ impl Test {
                 .libraries
                 .iter()
                 // This binds code, exact required canonical naming and semantic sections. The
-                // fixture profile is fixed for this helper; unknown homes reject on preparation.
+                // Current raw/owned input checks run before cache lookup; this key does not
+                // substitute for either admission or exact package/naming correspondence.
                 .map(|library| library.commitment())
                 .collect(),
         }
@@ -982,6 +1013,7 @@ impl Test {
 
 #[cfg(all(test, feature = "std", not(target_family = "wasm")))]
 mod tests {
+    use core::num::NonZeroU32;
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         sync::{
@@ -990,9 +1022,50 @@ mod tests {
         },
     };
 
+    use miden_assembly::{Assembler, NamespaceInputs, ast::Module};
+    use miden_core::program::CanonicalLabel;
+    use miden_mast_package::{
+        CallableBinding, CallableProcedurePath, NamespacePlan, PackageNaming, TargetType,
+    };
     use miden_processor::{advice::AdviceMutation, event::EventError};
 
     use super::*;
+
+    fn compiler_owned_library(home: &str) -> (Arc<Package>, Arc<PackageNaming>, CallableBinding) {
+        let source_manager = Arc::new(DefaultSourceManager::default());
+        let module = Module::parser(None)
+            .parse_str(
+                Some(Path::new("::foreign")),
+                "namespace foreign\npub proc answer push.29 swap drop end",
+                source_manager.clone(),
+            )
+            .unwrap();
+        let binding = CallableBinding::new(
+            NamespacePlan::new(vec![
+                CanonicalLabel::text(home).unwrap(),
+                CanonicalLabel::revision(NonZeroU32::new(7).unwrap()),
+            ]),
+            CallableProcedurePath::from_semantic_components(vec![
+                "service".into(),
+                "response".into(),
+            ])
+            .unwrap(),
+        )
+        .unwrap();
+        let inputs = NamespaceInputs::new()
+            .with_namespace_plan(NamespacePlan::new(vec![
+                CanonicalLabel::text("owned-library-compilation-context").unwrap(),
+            ]))
+            .with_callable_binding(Arc::from(Path::new("::foreign::answer")), binding.clone())
+            .unwrap();
+        let product = Assembler::new(source_manager)
+            .with_namespace_inputs(inputs)
+            .assemble_library_modules("owned-library".into(), module, [], TargetType::Library)
+            .unwrap();
+        let naming = Arc::new(product.naming().clone());
+        let package = Arc::from(product.into_artifact(true).unwrap());
+        (package, naming, binding)
+    }
 
     #[test]
     fn compile_returns_error_for_invalid_kernel_without_panicking() {
@@ -1014,6 +1087,95 @@ mod tests {
 
         assert!(result.is_ok(), "invalid extra module source caused Test::compile() to panic");
         assert!(result.unwrap().is_err(), "invalid extra module source should return an error");
+    }
+
+    #[test]
+    fn compiler_owned_library_retains_foreign_binding_and_environment() {
+        let (package, naming, binding) = compiler_owned_library("selected-foreign-owner");
+        crate::assert_ne!(naming.namespace_plan(), binding.namespace_plan());
+        crate::assert_eq!(naming.callables().binding(binding.key()), Some(&binding));
+        assert!(miden_assembly::testing::fixture_package_naming(&package).is_err());
+        let implementation = naming.callables().selected_implementation(binding.key()).unwrap();
+        let test = Test::new("owned_foreign", "use foreign\nbegin exec.foreign::answer end", false)
+            .with_library_and_naming(package, naming);
+
+        test.compile().expect("compiler-owned foreign import should compile");
+        let environment = test.fixture_environment().expect("explicit foreign environment");
+        let execution = environment.execution();
+        let request = miden_processor::EnvironmentWitnessRequest {
+            root: execution.descriptor().environment_root(),
+            key: binding.key(),
+            limits: execution.opening_limits(),
+        };
+        let resolved = environment
+            .source()
+            .get(request)
+            .unwrap()
+            .expect("the exact foreign binding must be mounted")
+            .verify(request.root, request.key, request.limits)
+            .unwrap();
+        crate::assert_eq!(resolved.namespace(), binding.parent_namespace());
+        crate::assert_eq!(resolved.implementation_root(), implementation);
+
+        let (output, _) = test.execute_for_output().expect("native foreign import execution");
+        crate::assert_eq!(stack_outputs_as_int_vec(&output.stack)[0], 29);
+    }
+
+    #[test]
+    fn compiler_owned_library_mismatched_pair_rejects_warm_cache() {
+        let (package, naming, binding) = compiler_owned_library("selected-foreign-owner");
+        let (_, other_naming, other_binding) = compiler_owned_library("different-foreign-owner");
+        crate::assert_ne!(binding.key(), other_binding.key());
+        crate::assert_eq!(
+            naming.callables().selected_implementation(binding.key()),
+            other_naming.callables().selected_implementation(other_binding.key()),
+            "equal code must not make distinct canonical metadata interchangeable"
+        );
+        let warmed = Test::new("owned_pair", "use foreign\nbegin exec.foreign::answer end", false)
+            .with_library_and_naming(package.clone(), naming);
+        warmed.compile().expect("valid pair should warm the compile cache");
+
+        let mut mismatched =
+            Test::new("owned_pair", "", false).with_library_and_naming(package, other_naming);
+        mismatched.source_manager = warmed.source_manager.clone();
+        mismatched.source = warmed.source.clone();
+        crate::assert_eq!(mismatched.compile_cache_key(), warmed.compile_cache_key());
+        let error = mismatched.compile().expect_err("a cached success cannot validate a new pair");
+        assert!(error.to_string().contains("naming transport"));
+    }
+
+    #[test]
+    fn raw_foreign_library_rejects_after_owned_cache_warm() {
+        let (package, naming, _) = compiler_owned_library("selected-foreign-owner");
+        let warmed =
+            Test::new("owned_then_raw", "use foreign\nbegin exec.foreign::answer end", false)
+                .with_library_and_naming(package.clone(), naming);
+        warmed.compile().expect("owned import should warm the compile cache");
+
+        let mut raw = Test::new("owned_then_raw", "", false).with_library(package);
+        raw.source_manager = warmed.source_manager.clone();
+        raw.source = warmed.source.clone();
+        crate::assert_eq!(raw.compile_cache_key(), warmed.compile_cache_key());
+        let error = raw
+            .compile()
+            .expect_err("a raw import still requires current fixture admission");
+        assert!(error.to_string().contains("unexpected fixture home"));
+    }
+
+    #[test]
+    fn compiler_owned_library_dangling_naming_rejects_after_clear() {
+        let (package, naming, _) = compiler_owned_library("selected-foreign-owner");
+        let mut test = Test::new("removed_owned_library", "begin nop end", false)
+            .with_library_and_naming(package, naming);
+        test.compile().expect("valid owned import should prepare successfully");
+
+        test.libraries.clear();
+        let error = test.compile().expect_err("removed packages must not leave usable naming");
+        assert!(
+            error
+                .to_string()
+                .contains("retained library naming has no corresponding package")
+        );
     }
 
     #[test]

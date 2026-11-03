@@ -71,7 +71,7 @@ fn debug_handlers_with_writer(writer: SharedBuf) -> Vec<(EventName, Arc<dyn Even
 fn run(source: &str, advice: AdviceInputs) -> (String, ExecutionOutput) {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let program = assembler
         .assemble_program("program", source)
@@ -112,7 +112,7 @@ fn run_and_capture(source: &str, advice: AdviceInputs) -> String {
 fn run_with_default_core_handlers(source: &str, advice: AdviceInputs) -> ExecutionOutput {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let program = assembler
         .assemble_program("program", source)
@@ -298,7 +298,7 @@ fn print_mem_rejects_out_of_bounds_range_end() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let program = assembler
         .assemble_program("program", source)
@@ -341,7 +341,7 @@ fn print_mem_rejects_oversized_range() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let program = assembler
         .assemble_program("program", source)
@@ -384,7 +384,7 @@ fn print_mem_rejects_full_range() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let program = assembler
         .assemble_program("program", source)
@@ -587,7 +587,7 @@ fn debug_handlers_compose_with_default_core_handlers() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let program = assembler
         .assemble_program("program", source)
@@ -660,7 +660,7 @@ fn noop_debug_handlers_run_print_stack_without_output() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let program = assembler
         .assemble_program("program", source)

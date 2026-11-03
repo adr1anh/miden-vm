@@ -33,7 +33,11 @@ impl PrecompileFixture {
         let source = generate_program_source(workload);
         let core_lib = CoreLibrary::default();
         let program = Assembler::default()
-            .with_package(core_lib.package(), miden_vm::assembly::Linkage::Dynamic)
+            .with_package(
+                core_lib.package(),
+                miden_vm::assembly::Linkage::Dynamic,
+                core_lib.naming().clone(),
+            )
             .expect("failed to link core library")
             .assemble_program("precompile_workload", source.as_str())
             .expect("failed to assemble precompile benchmark program")

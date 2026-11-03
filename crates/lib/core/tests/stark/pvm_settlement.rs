@@ -115,7 +115,7 @@ fn prove_signature_execution(
         masm_push_word(&fixture.public_key_commitment),
     );
     let program = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("core library must link")
         .assemble_program("signature_deferred_settlement", source)
         .expect("signature settlement fixture must assemble")
@@ -197,7 +197,7 @@ fn assemble_settlement_program(core_lib: &CoreLibrary) -> miden_processor::Progr
     let (source, _) = example.split_once("\n```").expect("settlement code block must be closed");
 
     Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("core library must link")
         .assemble_program("async_pvm_settlement", source)
         .expect("async settlement program must assemble")

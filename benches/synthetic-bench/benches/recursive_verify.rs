@@ -127,7 +127,7 @@ fn recursive_verifier_program_masm(verify_calls: &str) -> String {
 fn assemble_recursive_program(source: &str) -> Program {
     let core_lib = CoreLibrary::default();
     Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("link core library")
         .assemble_program("recursive_verifier", source)
         .expect("assemble recursive verifier")

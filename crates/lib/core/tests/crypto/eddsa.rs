@@ -347,7 +347,7 @@ fn run_program_with_handler(
 ) -> Result<ExecutionOutput, ExecutionError> {
     let library = CoreLibrary::default();
     let program = Assembler::default()
-        .with_package(library.package(), Linkage::Dynamic)
+        .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
         .unwrap()
         .assemble_program("ed25519_test", source)
         .expect("Ed25519 verification interface must assemble")

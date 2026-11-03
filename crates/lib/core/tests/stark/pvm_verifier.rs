@@ -192,7 +192,7 @@ fn pvm_verifies_a_session_mixing_every_precompile() {
             masm_push_word(&ecdsa_p256_sha256::public_key_commitment(p256_key.verifying_key())),
     );
     let program = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .unwrap()
         .assemble_program("pvm_mixed_session", source)
         .unwrap()

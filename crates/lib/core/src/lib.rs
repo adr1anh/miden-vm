@@ -287,6 +287,19 @@ mod tests {
     }
 
     #[test]
+    fn owned_core_inventory_executes_through_shared_test_import() {
+        let core = CoreLibrary::default();
+        let test = miden_utils_testing::Test::new(
+            "owned_core_import",
+            "use miden::core::math::u64\nbegin push.0.2.0.3 exec.u64::wrapping_add swap drop swap drop end",
+            false,
+        )
+        .with_library_and_naming(core.package(), core.naming().clone());
+        let (output, _) = test.execute_for_output().expect("owned core import must execute");
+        assert_eq!(output.stack.get_element(0), Some(miden_core::Felt::from_u32(5)));
+    }
+
+    #[test]
     fn embedded_reexports_keep_the_defining_callable_key() {
         let core_lib = CoreLibrary::default();
         let callables = core_lib.naming().callables();

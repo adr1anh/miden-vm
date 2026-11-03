@@ -484,8 +484,9 @@ fn forged_division_test(dividend: u64, quotient: u64, remainder: u64) -> Test {
     const FALCON_DIV: EventName =
         EventName::new("miden::core::crypto::dsa::falcon512_eidos::falcon_div");
     let inputs = [dividend & 0xffff_ffff, dividend >> 32];
+    let core_lib = CoreLibrary::default();
     miden_utils_testing::build_test_by_mode!(false, MOD_12289_SOURCE, &inputs)
-        .with_library(CoreLibrary::default().package())
+        .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
         .with_event_handler(FALCON_DIV, move |_process: &ProcessorState| {
             let mut advice = AdviceStack::new();
             advice.append_elements([

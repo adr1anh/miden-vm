@@ -7,7 +7,7 @@ macro_rules! build_test {
         let core_lib = miden_core_lib::CoreLibrary::default();
         let source = $source;
         miden_utils_testing::build_test_by_mode!(false, source $(, $tail)*)
-            .with_library(core_lib.package())
+            .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
             .with_event_handlers(core_lib.handlers())
     }}
 }
@@ -19,7 +19,7 @@ macro_rules! build_debug_test {
         let core_lib = miden_core_lib::CoreLibrary::default();
         let source = $source;
         miden_utils_testing::build_test_by_mode!(true, source $(, $tail)*)
-            .with_library(core_lib.package())
+            .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
             .with_event_handlers(core_lib.handlers())
     }}
 }
@@ -183,9 +183,10 @@ fn core_packages_do_not_block_sibling_miden_namespaces() {
         )
         .expect("protocol utility module should parse");
 
+    let core_lib = CoreLibrary::default();
     let mut assembler = Assembler::new(source_manager);
     assembler
-        .link_package(CoreLibrary::default().package(), Linkage::Dynamic)
+        .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("official Miden packages should link");
 
     assembler

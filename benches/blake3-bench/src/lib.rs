@@ -64,9 +64,14 @@ impl Blake3Fixture {
                 panic!("failed to parse Blake3 program at {}: {err}", program_path.display())
             });
 
+        let core_lib = CoreLibrary::default();
         let mut assembler = Assembler::new(source_manager.clone());
         assembler
-            .link_package(CoreLibrary::default().package(), miden_vm::assembly::Linkage::Dynamic)
+            .link_package(
+                core_lib.package(),
+                miden_vm::assembly::Linkage::Dynamic,
+                core_lib.naming().clone(),
+            )
             .expect("failed to load core library");
         let package = assembler
             .assemble_program("program", ast)

@@ -650,7 +650,7 @@ fn run_core_program(
 ) -> Result<ExecutionOutput, ExecutionError> {
     let core_lib = CoreLibrary::default();
     let program = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to link core library")
         .assemble_program("core_ecdsa_k256_keccak_test", source)
         .expect("failed to assemble core ECDSA test program")

@@ -608,7 +608,9 @@ fn callable_from_a_kernel_procedure() {
             .unwrap();
         let core = CoreLibrary::default();
         let mut assembler = Assembler::new(source_manager.clone());
-        assembler.link_package(core.package(), Linkage::Dynamic).unwrap();
+        assembler
+            .link_package(core.package(), Linkage::Dynamic, core.naming().clone())
+            .unwrap();
         let kernel = Arc::from(assembler.assemble_kernel("kernel", kernel, None).unwrap());
         let program = Assembler::with_kernel(source_manager, Arc::clone(&kernel))
             .unwrap()

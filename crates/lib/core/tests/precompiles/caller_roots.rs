@@ -519,7 +519,7 @@ fn manual_hashes_reject_forged_digest_advice() {
             "begin push.6513249 push.128 mem_store push.256 push.3 push.128 exec.::miden::core::precompiles::hashes::{module}::hash_bytes_mem_with_root end"
         );
         let program = Assembler::default()
-            .with_package(library.package(), Linkage::Dynamic)
+            .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
             .unwrap()
             .assemble_program("forged_manual_hash", source)
             .unwrap()

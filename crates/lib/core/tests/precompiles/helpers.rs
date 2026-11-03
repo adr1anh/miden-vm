@@ -35,7 +35,7 @@ pub fn run_precompile_program_with_stack(
     let core_lib = CoreLibrary::default();
     let mut assembler = Assembler::default();
     assembler
-        .link_package(core_lib.package(), Linkage::Dynamic)
+        .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to link core library package");
     let program = assembler
         .assemble_program("precompile_test", source)
@@ -97,7 +97,7 @@ pub fn expect_precompile_trap_with_processor(source: &str) -> (ExecutionError, F
     let core_lib = CoreLibrary::default();
     let mut assembler = Assembler::default();
     assembler
-        .link_package(core_lib.package(), Linkage::Dynamic)
+        .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to link core library package");
     let program = assembler
         .assemble_program("precompile_test", source)

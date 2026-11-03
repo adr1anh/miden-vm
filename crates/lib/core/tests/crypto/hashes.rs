@@ -321,7 +321,7 @@ fn truncate_call_for_module(module: &str) -> &'static str {
 fn run_core_program(source: &str) -> Result<ExecutionOutput, ExecutionError> {
     let core_lib = CoreLibrary::default();
     let program = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to link core library")
         .assemble_program("core_hash_compat_test", source)
         .expect("failed to assemble core hash compatibility test program")
