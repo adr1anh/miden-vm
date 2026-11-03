@@ -23,6 +23,9 @@ use crate::{
 
 mod merkle_builder;
 
+/// Explicit caller-owned environment evidence for CLI/embedding integration.
+pub mod execution_inputs;
+
 // CONSTANTS
 // ================================================================================================
 

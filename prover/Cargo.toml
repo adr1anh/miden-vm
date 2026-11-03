@@ -42,6 +42,9 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+hex = { workspace = true, features = ["alloc"] }
 miden-utils-testing.workspace = true
 miden-air.workspace = true
 miden-air-definitions.workspace = true
