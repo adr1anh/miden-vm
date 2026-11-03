@@ -96,14 +96,18 @@ mod tests {
     use miden_mast_package::debug_info::{MAX_DEBUG_INFO_STRING_SIZE, PackageDebugInfoBuilder};
 
     use super::*;
-    use crate::testing::TestContext;
+    use crate::testing::{FixtureNamespace, TestContext};
 
     #[test]
     fn artifact_rejects_debug_info_beyond_standard_decoder_limits() {
         for emit_debug_info in [true, false] {
             let context = TestContext::default();
             let module = context.parse_module("begin push.42 end").unwrap();
-            let mut product = Assembler::new(context.source_manager())
+            let mut fixture_namespace = FixtureNamespace::assembly_tests();
+            fixture_namespace.add_module(&module).unwrap();
+            let mut product = fixture_namespace
+                .configure(Assembler::new(context.source_manager()), [&*module])
+                .unwrap()
                 .assemble_executable_modules("test".into(), module, [])
                 .unwrap();
             let mut debug = PackageDebugInfoBuilder::from(product.debug_info);

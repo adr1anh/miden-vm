@@ -2,6 +2,7 @@
 // ================================================================================================
 
 use super::*;
+use crate::testing::FixtureNamespace;
 
 /// Pins documented field-operation and u32max cycle costs to the number of operations the
 /// assembler actually emits, so the two cannot drift apart.
@@ -89,8 +90,13 @@ fn instruction_cycle_costs_match_docs() {
         let context = TestContext::default();
         let body = core::iter::repeat_n(instruction, copies).collect::<Vec<_>>().join("\n    ");
         let source = source_file!(&context, format!("begin\n    {body}\nend"));
-        let program = Assembler::new(context.source_manager())
-            .assemble_program("program", source)
+        let module = context.parse_module(source).expect("parsing failed");
+        let mut fixture_namespace = FixtureNamespace::assembly_tests();
+        fixture_namespace.add_module(&module).expect("fixture metadata failed");
+        let program = fixture_namespace
+            .configure(Assembler::new(context.source_manager()), [&*module])
+            .expect("fixture configuration failed")
+            .assemble_program("program", module)
             .expect("assembly failed")
             .unwrap_program();
 
@@ -128,8 +134,12 @@ fn instruction_cycle_costs_match_docs() {
 #[test]
 fn bare_exp_lowers_to_63_expacc_rows() -> Result<(), Report> {
     let context = TestContext::default();
-    let program = Assembler::new(context.source_manager())
-        .assemble_program("p", "begin push.5 push.3 exp drop end")?
+    let module = context.parse_module("begin push.5 push.3 exp drop end")?;
+    let mut fixture_namespace = FixtureNamespace::assembly_tests();
+    fixture_namespace.add_module(&module)?;
+    let program = fixture_namespace
+        .configure(Assembler::new(context.source_manager()), [&*module])?
+        .assemble_program("p", module)?
         .unwrap_program();
     let ops: Vec<Operation> = program.mast_forest()[program.entrypoint()]
         .unwrap_basic_block()
@@ -156,8 +166,12 @@ fn exp_imm_uses_exact_exponent_bit_length() -> Result<(), Report> {
 
     for pow in [(1_u64 << 63) - 1, 1_u64 << 63, Felt::ORDER_U64 - 2, Felt::ORDER_U64 - 1] {
         let source = format!("begin push.3 exp.{pow} drop end");
-        let program = Assembler::new(context.source_manager())
-            .assemble_program("p", source.as_str())?
+        let module = context.parse_module(source.as_str())?;
+        let mut fixture_namespace = FixtureNamespace::assembly_tests();
+        fixture_namespace.add_module(&module)?;
+        let program = fixture_namespace
+            .configure(Assembler::new(context.source_manager()), [&*module])?
+            .assemble_program("p", module)?
             .unwrap_program();
         let num_expacc = program.mast_forest()[program.entrypoint()]
             .unwrap_basic_block()
