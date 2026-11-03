@@ -195,6 +195,15 @@ D7 selects model C: generic Package9 carries complete naming/callable/code infor
 
 D5 selects a standard assembler/project Latest/Pinned naming convention over these generic bindings, with an explicit custom-home/binding escape hatch. Preserve selected homes and callable identities without making the VM recognize path names. D6/D7 resolve the former kernel-input and code-only-package applicability questions; the convention and manifest routing remain unimplemented.
 
+Package9 retains required naming as opaque transport in the generic code container. Decoding code
+and transport does not approve a home or unknown TypedId; canonical naming admission uses explicit
+current profile/context/limits. Locally retained canonical compiler metadata can be paired with its
+exact transport without claiming publication admission. Imports must preserve that exact naming,
+project bindings onto linker symbols and retain private callable metadata independently of source
+aliases/debug paths. Code candidates may omit an entry across usage tags; actual runnable entry
+selection requires explicit K and its own selected procedure root. An existing manifest entry must
+agree with that K. A target tag does not manufacture an entry or public API.
+
 **Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old serialized callable formats reject and required metadata survives debug stripping. Existing MASM invocation/procref source rebuilds under D2, using K and real EXEC without digest fallback. **Checks:** scoped `assembler::callable_identity_tests`, `assembler::inline::tests` and `tests::link_cycles` within `RUST_MIN_STACK=16777216 cargo test --locked -p miden-assembly --lib`; full package `cargo test --locked -p miden-mast-package --lib`; then full unit run and standard `make test-assembly EXTRA=--locked NEXTEST_PROFILE=ci` after focused failures resolve. The Makefile forwards `test=` to its filter; the previous `namespaced_execution` filter names no current assembly test. Use existing modules and verify nonzero execution counts.
 
 ### PR 10 Revision-aware projects and code supply
@@ -2263,3 +2272,27 @@ cache and shared /tmp sources remain intact. Documentation `bfe2b1aec` is separa
 its SSH signature verified. Next is Package9 required metadata and explicit raw/admitted boundaries,
 using existing enclosing-Budget seams, before project routing/cache matching. No production profile,
 native/recursive/generated closure, normal processor suite or M1 completion is claimed.
+
+### Package9 required naming and import-propagation checkpoint
+
+At verified HEAD `3ea23e3d4`, uncommitted source introduces PackageNaming and bounded NamingV1
+transport, required opaque naming in Package9, exact slice readers, v2 naming-sensitive dependency/
+artifact/full commitments, explicit current-context naming admission and producer persistence across
+debug stripping. Generic code construction has no own I/interface or publication-profile default.
+Private code candidates retain their prior applicability across usage tags; explicit entries must
+select their own real procedure root, even when another K selects equal D. Existing manifest/code
+validation precedes naming validation. Fixtures retain code/source/negative assertions.
+
+Independent bounded component/container/producer reviews found no actionable issue. Guarded full
+package278 pass/one manual seed test ignored; strict package test/bench Clippy and no-default-features
+library check pass. Earlier focused naming19 and full package270 preceded container activation;
+these are groundwork evidence, not final qualification. Producer checks52 pass/one failure:
+`pinned_static_inline_keeps_selected_export_source_after_inventory_retention` exposes a retained
+private callback root whose canonical metadata is lost by current imports. Preserve the complete-
+root gate and fix full import metadata, not source/body coverage or derived placeholder keys.
+
+Current authors are implementing exact PackageNaming/transport integrity at import, named symbol
+projection, name-aware dedup/provenance and private metadata retention without invented source paths.
+Raw read/admission checks remain distinct; selected production profiles still need their external
+owner evidence. Public import APIs and remaining consumers are intentionally in flight. No completed
+Package9 cutover, Program/kernel conversion, project routing, proof closure or M1 acceptance is claimed.
