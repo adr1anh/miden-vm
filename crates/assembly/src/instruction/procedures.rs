@@ -43,6 +43,7 @@ impl Assembler {
                 inline_calls,
             ),
             InvokeKind::ProcRef => unreachable!("procref emits a key into its basic block"),
+            InvokeKind::Inline => unreachable!("inline expands an explicitly selected body"),
         }
     }
 

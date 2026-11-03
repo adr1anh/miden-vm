@@ -342,6 +342,7 @@ impl MastForestBuilder {
         Ok(MastNodeUse::new(node_ref, source_ref))
     }
 
+    #[cfg(test)]
     fn intern_pending_node(&mut self, draft: PendingMastNodeDraft) -> Result<MastNodeRef, Report> {
         let source_child_refs = self.source_child_refs_for_node_refs(&draft.child_refs);
         Ok(self.intern_pending_node_use(draft, source_child_refs)?.node_ref())
@@ -649,12 +650,12 @@ impl MastForestBuilder {
         self.debug_info.add_function(function);
     }
 
-    /// Records a source occurrence of an `exec` target under the supplied inline call chain.
+    /// Records a source occurrence of an `inline` target under the supplied inline call chain.
     ///
-    /// `exec` reuses the callee's execution node instead of creating a control node. Clone its
+    /// `inline` reuses the callee's execution node instead of creating a control node. Clone its
     /// source tree even when debug call data is unavailable: a caller must never share its
     /// definition occurrence with the callee. Inline rows decorate only the invocation copy.
-    pub(crate) fn record_exec_inline_calls(
+    pub(crate) fn record_inline_calls(
         &mut self,
         target: MastNodeUse,
         inline_calls: &[DebugSourceInlineCall],
@@ -1985,15 +1986,15 @@ mod tests {
     }
 
     #[test]
-    fn exec_without_debug_data_keeps_source_occurrences_distinct() {
+    fn inline_without_debug_data_keeps_source_occurrences_distinct() {
         let mut builder = MastForestBuilder::new(&[]).unwrap();
         let target = builder
             .ensure_block_use(vec![Operation::Add], vec![], vec![], vec![], vec![])
             .unwrap();
         let source_node_count = builder.debug_info.debug_info().nodes().len();
 
-        let first = builder.record_exec_inline_calls(target, &[]).unwrap();
-        let second = builder.record_exec_inline_calls(target, &[]).unwrap();
+        let first = builder.record_inline_calls(target, &[]).unwrap();
+        let second = builder.record_inline_calls(target, &[]).unwrap();
         assert_eq!(first.node_ref(), target.node_ref());
         assert_eq!(second.node_ref(), target.node_ref());
         assert_ne!(first.source_ref(), target.source_ref());
@@ -2002,7 +2003,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_decorated_exec_reuses_the_same_source_tree() {
+    fn repeated_decorated_inline_reuses_the_same_source_tree() {
         let mut builder = MastForestBuilder::new(&[]).unwrap();
         let target = builder
             .ensure_block_use(vec![Operation::Add], vec![], vec![], vec![], vec![])
@@ -2011,12 +2012,12 @@ mod tests {
             let inline_call = DebugInlineCallInfo::new(
                 "source::callee",
                 FileLineCol::new(
-                    "file:///decorated-exec.masm",
+                    "file:///decorated-inline.masm",
                     LineNumber::new(1).unwrap(),
                     ColumnNumber::new(1).unwrap(),
                 ),
                 FileLineCol::new(
-                    "file:///decorated-exec.masm",
+                    "file:///decorated-inline.masm",
                     LineNumber::new(2).unwrap(),
                     ColumnNumber::new(1).unwrap(),
                 ),
@@ -2025,7 +2026,7 @@ mod tests {
             let duplicate_idx = builder.register_inline_function(&inline_call);
             assert_eq!(callee_idx, duplicate_idx);
             let call_site_span = builder.debug_info_mut().add_location(Location::new(
-                Uri::from("file:///decorated-exec.masm"),
+                Uri::from("file:///decorated-inline.masm"),
                 ByteIndex::from(1u32),
                 ByteIndex::from(2u32),
             ));
@@ -2037,14 +2038,11 @@ mod tests {
             callee_idx,
             loc_idx,
         };
-        let decorated = builder.record_exec_inline_calls(target, &[inline_call]).unwrap();
+        let decorated = builder.record_inline_calls(target, &[inline_call]).unwrap();
         let source_node_count = builder.debug_info.debug_info().nodes().len();
 
         for _ in 0..1_024 {
-            assert_eq!(
-                builder.record_exec_inline_calls(target, &[inline_call]).unwrap(),
-                decorated
-            );
+            assert_eq!(builder.record_inline_calls(target, &[inline_call]).unwrap(), decorated);
         }
 
         assert_eq!(builder.debug_info.debug_info().nodes().len(), source_node_count);
@@ -2053,7 +2051,7 @@ mod tests {
     }
 
     #[test]
-    fn external_exec_preserves_the_source_boundary_index() {
+    fn external_inline_preserves_the_source_boundary_index() {
         let mut builder = MastForestBuilder::new(&[]).unwrap();
         let mast_root = test_word(7);
         let (callee_idx, loc_idx) = {
@@ -2101,7 +2099,7 @@ mod tests {
             .unwrap();
         let target = MastNodeUse::new(external_ref, boundary_source_ref);
 
-        let decorated = builder.record_exec_inline_calls(target, &[inline_call]).unwrap();
+        let decorated = builder.record_inline_calls(target, &[inline_call]).unwrap();
         let source_node = &builder.debug_info[decorated.source_ref()];
 
         assert_eq!((source_node.op_start, source_node.op_end), (7, 7));
@@ -2211,7 +2209,7 @@ mod tests {
             .ensure_external_link_with_source_ref(block_digest, None, None, None)
             .unwrap();
         let external_use = builder.latest_node_use(external_ref).unwrap();
-        let decorated = builder.record_exec_inline_calls(external_use, &[inline_call]).unwrap();
+        let decorated = builder.record_inline_calls(external_use, &[inline_call]).unwrap();
         builder.record_procedure_root_use(decorated);
 
         let concrete = builder

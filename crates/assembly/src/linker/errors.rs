@@ -41,6 +41,15 @@ pub enum LinkerError {
     #[error("found a cycle in the call graph, involving these procedures: {}", nodes.join(", "))]
     #[diagnostic()]
     Cycle { nodes: Box<[String]> },
+    #[error("found a structural inline cycle, involving these procedures: {}", nodes.join(", "))]
+    #[diagnostic(help("use a retained exec or call for runtime recursion"))]
+    InlineCycle {
+        nodes: Box<[String]>,
+        #[label("this procedure participates in a structural inline cycle")]
+        span: SourceSpan,
+        #[source_code]
+        source_file: Option<Arc<SourceFile>>,
+    },
     #[error("duplicate definition found for module '{path}'")]
     #[diagnostic()]
     DuplicateModule { path: Arc<Path> },

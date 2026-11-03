@@ -253,6 +253,7 @@ impl MastForestBuilder {
     }
 
     /// Adds an externally-linked procedure root and returns its builder-local [`MastNodeRef`].
+    #[cfg(test)]
     pub(crate) fn ensure_external_link_with_source_ref(
         &mut self,
         mast_root: Word,
@@ -260,23 +261,41 @@ impl MastForestBuilder {
         source_root_id: Option<MastNodeId>,
         source_debug_root_id: Option<DebugSourceNodeId>,
     ) -> Result<MastNodeRef, Report> {
+        self.ensure_external_link_with_source_use(
+            mast_root,
+            source_library_commitment,
+            source_root_id,
+            source_debug_root_id,
+        )
+        .map(MastNodeUse::node_ref)
+    }
+
+    /// Adds an externally-linked root, retaining its selected source occurrence independently
+    /// of any other callable inventories imported while materializing its code.
+    pub(crate) fn ensure_external_link_with_source_use(
+        &mut self,
+        mast_root: Word,
+        source_library_commitment: Option<Word>,
+        source_root_id: Option<MastNodeId>,
+        source_debug_root_id: Option<DebugSourceNodeId>,
+    ) -> Result<MastNodeUse, Report> {
         if let Some(linked_root) = self.find_statically_linked_root(
             source_library_commitment,
             source_root_id,
             source_debug_root_id,
             mast_root,
         ) {
-            return self.copy_statically_linked_subtree_ref(linked_root);
+            return self.copy_statically_linked_subtree_use(linked_root);
         }
 
         let draft = PendingMastNodeDraft::new(PendingMastNodeKind::External, mast_root, Vec::new());
         if let Some(node_ref) = self.available_external_code_ref(mast_root)? {
             // Availability is independent of the richer full interning key. Normalize the
             // boundary against this selected node's own source data, never a same-D variant's.
-            self.record_source_occurrence(node_ref, Vec::new(), &draft)?;
-            return Ok(node_ref);
+            let source_ref = self.record_source_occurrence(node_ref, Vec::new(), &draft)?;
+            return Ok(MastNodeUse::new(node_ref, source_ref));
         }
-        self.intern_pending_node(draft)
+        self.intern_pending_node_use(draft, Vec::new())
     }
 
     /// Selects structural External(D) code independently of full-key interning and procedure keys.
@@ -373,17 +392,17 @@ impl MastForestBuilder {
 
     /// Copies the selected subtree and retains the supplied independently callable code
     /// inventories.
-    fn copy_statically_linked_subtree_ref(
+    fn copy_statically_linked_subtree_use(
         &mut self,
         linked_root: StaticLinkedRoot,
-    ) -> Result<MastNodeRef, Report> {
+    ) -> Result<MastNodeUse, Report> {
         let root_ref = self.copy_statically_linked_subtree_contents_ref(linked_root)?;
         let root_use = self
             .latest_node_use(root_ref)
             .expect("an imported execution root must have a source occurrence");
         self.record_procedure_root_use(root_use);
         self.retain_statically_linked_inventory(linked_root, root_ref)?;
-        Ok(root_ref)
+        Ok(root_use)
     }
 
     /// Retains all explicitly supplied static inventories, independently of structural or keyed

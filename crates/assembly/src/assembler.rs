@@ -1,6 +1,7 @@
 #[cfg(feature = "std")]
 pub(super) mod debuginfo;
 pub(crate) mod error;
+mod inline;
 mod product;
 
 use alloc::{
@@ -25,7 +26,7 @@ use miden_core::{
     WORD_SIZE, Word,
     mast::{MastNodeExt, MastNodeId},
     operations::{AssemblyOp, Operation},
-    program::{KernelDescriptor, ProcedureKey},
+    program::{ImplementationRoot, KernelDescriptor, ProcedureKey},
     serde::Serializable,
 };
 use miden_mast_package::{
@@ -180,6 +181,10 @@ pub struct Assembler {
     callable_paths: BTreeMap<Arc<Path>, CallableProcedurePath>,
     /// Explicit foreign-home metadata awaiting attachment to the corresponding linker symbol.
     callable_bindings: BTreeMap<Arc<Path>, CallableBinding>,
+    /// Source modules supplied as the root and support of the current assembly artifact.
+    assembly_modules: BTreeSet<ModuleIndex>,
+    /// Explicit implementation selections for structural inline expansion, by defining path.
+    inline_pins: BTreeMap<Arc<Path>, ImplementationRoot>,
 }
 
 impl Default for Assembler {
@@ -196,6 +201,8 @@ impl Default for Assembler {
             kernel_namespace_plan: None,
             callable_paths: BTreeMap::new(),
             callable_bindings: BTreeMap::new(),
+            assembly_modules: BTreeSet::new(),
+            inline_pins: BTreeMap::new(),
         }
     }
 }
@@ -345,7 +352,7 @@ impl Assembler {
                 )));
             }
         }
-        Ok(())
+        self.validate_inline_pins()
     }
 
     fn callable_binding(&self, gid: GlobalItemIndex) -> Result<&CallableBinding, Report> {
@@ -942,10 +949,12 @@ impl Assembler {
         support: impl IntoIterator<Item = Box<ast::Module>>,
         kind: TargetType,
     ) -> Result<AssemblyProduct, Report> {
+        let first_assembly_module = self.linker.modules().len();
         let module_indices = match kind {
             TargetType::Kernel => self.linker.link_kernel(root, support)?,
             _ => self.linker.link([root], support)?,
         };
+        self.record_assembly_modules(first_assembly_module);
         self.verify_exported_signature_type_visibility(&module_indices)?;
         self.assemble_library_product(name, &module_indices, kind)
     }
@@ -1160,7 +1169,9 @@ impl Assembler {
     ) -> Result<AssemblyProduct, Report> {
         // Recompute graph with executable module, and start compiling
         let namespace = Arc::<Path>::from(program.path());
+        let first_assembly_module = self.linker.modules().len();
         let module_index = self.linker.link([program], support_modules)?[0];
+        self.record_assembly_modules(first_assembly_module);
         self.prebind_callables()?;
 
         // Find the executable entrypoint Note: it is safe to use `unwrap_ast()` here, since this is
@@ -1341,8 +1352,9 @@ impl Assembler {
         for &gid in &worklist {
             self.callable_binding(gid)?;
         }
-        // `process_graph_worklist` pops its worklist. Keep compilation in stable index order;
-        // runtime callees need their identities, not an already compiled body.
+        // Only explicit inline edges require callee bodies before callers. Runtime references,
+        // including cycles that cross inline boundaries, still require identities alone.
+        worklist = self.linker.inline_compilation_order(&worklist)?;
         worklist.reverse();
 
         self.process_graph_worklist(&mut worklist, &root, mast_forest_builder)
@@ -1355,7 +1367,7 @@ impl Assembler {
         root: &SubgraphRoot,
         mast_forest_builder: &mut MastForestBuilder,
     ) -> Result<(), Report> {
-        // Keyed references impose no body-compilation order, including inside runtime cycles.
+        // The worklist orders structural inline dependencies only.
         while let Some(procedure_gid) = worklist.pop() {
             // If we have already compiled this procedure, do not recompile
             if let Some(proc) = mast_forest_builder.get_procedure(procedure_gid) {
@@ -1852,15 +1864,12 @@ impl Assembler {
         source_debug_root_id: Option<DebugSourceNodeId>,
         mast_forest_builder: &mut MastForestBuilder,
     ) -> Result<MastNodeUse, Report> {
-        let node_ref = mast_forest_builder.ensure_external_link_with_source_ref(
+        mast_forest_builder.ensure_external_link_with_source_use(
             mast_root,
             source_library_commitment,
             source_root_id,
             source_debug_root_id,
-        )?;
-        Ok(mast_forest_builder
-            .latest_node_use(node_ref)
-            .expect("linked procedure root must have a source occurrence"))
+        )
     }
 }
 

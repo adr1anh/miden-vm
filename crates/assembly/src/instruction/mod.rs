@@ -542,6 +542,18 @@ impl Assembler {
             Instruction::LogDeferred => block_builder.push_op(LogDeferred),
 
             // ----- exec/call instructions -------------------------------------------------------
+            Instruction::Inline(callee) => {
+                let inline_calls = block_builder.active_inline_call_rows(0);
+                return self
+                    .inline(
+                        callee,
+                        proc_ctx.id(),
+                        span,
+                        block_builder.mast_forest_builder_mut(),
+                        inline_calls,
+                    )
+                    .map(Into::into);
+            },
             Instruction::Exec(callee) => {
                 let inline_calls = block_builder.active_inline_call_rows(0);
                 return self

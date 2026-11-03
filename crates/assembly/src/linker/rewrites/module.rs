@@ -185,6 +185,9 @@ impl<'a, 'b: 'a> VisitMut<LinkerError> for ModuleRewriter<'a, 'b> {
     fn visit_mut_call(&mut self, target: &mut InvocationTarget) -> ControlFlow<LinkerError> {
         self.validate_target(InvokeKind::Call, target)
     }
+    fn visit_mut_inline(&mut self, target: &mut InvocationTarget) -> ControlFlow<LinkerError> {
+        self.validate_target(InvokeKind::Inline, target)
+    }
     fn visit_mut_invoke_target(
         &mut self,
         target: &mut InvocationTarget,
