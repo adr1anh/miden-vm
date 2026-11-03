@@ -143,3 +143,6 @@ impl Assembler {
         self.validate_inline_pins()
     }
 }
+
+#[cfg(test)]
+mod tests;
