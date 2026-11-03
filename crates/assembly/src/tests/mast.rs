@@ -1,8 +1,6 @@
 // MAST TESTS
 // ================================================================================================
 
-use core::num::NonZeroU32;
-
 use miden_core::{
     mast::BasicBlockNodeBuilder,
     program::{CanonicalLabel, ProcedureKey},
@@ -35,12 +33,7 @@ fn nested_blocks() -> Result<(), Report> {
         CanonicalLabel::text("nested-blocks").unwrap(),
         CanonicalLabel::text("program").unwrap(),
     ]);
-    let kernel_home = NamespacePlan::new(vec![
-        CanonicalLabel::text("nested-blocks").unwrap(),
-        CanonicalLabel::revision(NonZeroU32::new(1).unwrap()),
-        CanonicalLabel::text("kernel").unwrap(),
-        CanonicalLabel::text("syscalls").unwrap(),
-    ]);
+    let kernel_home = NamespacePlan::new(vec![]);
     let helper_home = NamespacePlan::new(vec![
         CanonicalLabel::text("nested-blocks").unwrap(),
         CanonicalLabel::text("dependency").unwrap(),
@@ -79,7 +72,6 @@ fn nested_blocks() -> Result<(), Report> {
 
         let mut assembler = Assembler::with_kernel(context.source_manager(), kernel_lib)?
             .with_namespace_plan(program_home)
-            .with_kernel_namespace_plan(kernel_home.clone())
             .with_callable_path(Path::exec_path().join("$main").into(), entry_path)
             .unwrap()
             .with_callable_path(Path::exec_path().join("foo").into(), foo_path)

@@ -48,11 +48,10 @@ fn library(
 }
 
 #[test]
-fn replacement_removes_previous_homes_and_both_forms_of_declaration_metadata() {
+fn replacement_removes_previous_home_and_both_forms_of_declaration_metadata() {
     let context = TestContext::default();
     let previous = NamespaceInputs::new()
         .with_namespace_plan(home("previous-caller"))
-        .with_kernel_namespace_plan(Some(home("previous-kernel")))
         .with_callable_path(declaration("::absent::local"), canonical("old-local"))
         .unwrap()
         .with_callable_binding(declaration("::absent::foreign"), binding("foreign", "old"))
@@ -65,7 +64,6 @@ fn replacement_removes_previous_homes_and_both_forms_of_declaration_metadata() {
     let product =
         library(&context, assembler, "namespace client\npub proc run push.1 end").unwrap();
     assert_eq!(product.namespace_plan(), &home("current-caller"));
-    assert_eq!(product.kernel_namespace_plan(), None);
     assert_eq!(
         product.callable_key_for_definition(Path::new("::client::run")),
         Some(binding("current-caller", "entry").key())
@@ -109,11 +107,7 @@ fn prelinked_assembler_clones_compile_with_independent_target_homes() {
         context.parse_module("namespace dep\npub proc helper push.7 end").unwrap(),
     )
     .unwrap();
-    let first_inputs = base
-        .namespace_inputs()
-        .clone()
-        .with_namespace_plan(home("first"))
-        .with_kernel_namespace_plan(Some(home("first-kernel")));
+    let first_inputs = base.namespace_inputs().clone().with_namespace_plan(home("first"));
     let second_inputs = base.namespace_inputs().clone().with_namespace_plan(home("second"));
     assert_ne!(first_inputs, second_inputs);
     let source = "namespace client\nuse dep\npub proc run exec.dep::helper end";
@@ -123,9 +117,6 @@ fn prelinked_assembler_clones_compile_with_independent_target_homes() {
         library(&context, base.clone().with_namespace_inputs(second_inputs), source).unwrap();
     assert_eq!(base.namespace_inputs(), &original_inputs);
     let original = library(&context, base, source).unwrap();
-    assert_eq!(first.kernel_namespace_plan(), Some(&home("first-kernel")));
-    assert_eq!(second.kernel_namespace_plan(), None);
-    assert_eq!(original.kernel_namespace_plan(), None);
     for (product, home_name) in [(&first, "first"), (&second, "second"), (&original, "original")] {
         assert_eq!(product.namespace_plan(), &home(home_name));
         assert_eq!(
@@ -295,13 +286,12 @@ fn either_input_form_must_name_a_concrete_declaration() {
 }
 
 #[test]
-fn executable_product_retains_the_replacement_homes_and_entry_key() {
+fn executable_product_retains_the_explicit_home_and_entry_key() {
     let context = TestContext::default();
     let program = context.parse_module("begin push.1 end").unwrap();
     let entry = program.path().join(ast::ProcedureName::MAIN_PROC_NAME);
     let inputs = NamespaceInputs::new()
         .with_namespace_plan(home("entry-caller"))
-        .with_kernel_namespace_plan(Some(home("entry-kernel")))
         .with_callable_path(entry.clone().into(), canonical("entry"))
         .unwrap();
     let product = Assembler::new(context.source_manager())
@@ -309,7 +299,6 @@ fn executable_product_retains_the_replacement_homes_and_entry_key() {
         .assemble_executable_modules("entry".into(), program, [])
         .unwrap();
     assert_eq!(product.namespace_plan(), &home("entry-caller"));
-    assert_eq!(product.kernel_namespace_plan(), Some(&home("entry-kernel")));
     assert_eq!(product.entry_key(), Some(binding("entry-caller", "entry").key()));
     assert_eq!(product.callable_key_for_definition(&entry), product.entry_key());
 }

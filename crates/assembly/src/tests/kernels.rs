@@ -3,23 +3,50 @@
 
 use core::num::NonZeroU32;
 
-use miden_core::program::{CanonicalLabel, ProcedureKey};
+use miden_core::program::{CanonicalLabel, Namespace, ProcedureKey};
 use miden_mast_package::{CallableProcedurePath, NamespacePlan};
 
 use super::*;
 use crate::{CallableBinding, testing::FixtureNamespace};
 
 fn kernel_fixture_namespaces() -> (FixtureNamespace, NamespacePlan) {
-    let mut home = vec![
+    let home = NamespacePlan::new(vec![
         CanonicalLabel::text("assembly-kernel-fixtures").unwrap(),
         CanonicalLabel::revision(NonZeroU32::new(1).unwrap()),
         CanonicalLabel::text("owner").unwrap(),
-    ];
-    let bindings = FixtureNamespace::new(NamespacePlan::new(home.clone()));
-    // This fixture explicitly names root exports as ["$kernel", name]. The authorized
-    // namespace is their complete accumulated immediate parent, including every home label.
-    home.push(CanonicalLabel::text("$kernel").unwrap());
-    (bindings, NamespacePlan::new(home))
+    ]);
+    (FixtureNamespace::new(home), NamespacePlan::new(vec![]))
+}
+
+// This fixture explicitly places public kernel exports at N0. Private root-module helpers keep
+// their distinct declaration paths beneath the fixture's child Env home. Visibility chooses this
+// tooling placement only; runtime SYS authorization still authenticates the actual parent.
+fn add_kernel_fixture_module(
+    bindings: &mut FixtureNamespace,
+    module: &Module,
+) -> Result<(), Report> {
+    if module.path() != Path::kernel_path() {
+        return bindings.add_module(module);
+    }
+    for procedure in module.procedures() {
+        let (home, components) = if procedure.visibility().is_public() {
+            (NamespacePlan::new(vec![]), vec![procedure.name().to_string()])
+        } else {
+            (
+                bindings.namespace_plan().clone(),
+                vec!["$kernel".into(), procedure.name().to_string()],
+            )
+        };
+        let canonical =
+            CallableProcedurePath::from_semantic_components(components).into_diagnostic()?;
+        let binding = CallableBinding::new(home, canonical).into_diagnostic()?;
+        assert_eq!(
+            binding.parent_namespace() == Namespace::initial(),
+            procedure.visibility().is_public(),
+        );
+        bindings.add_binding(module.path().join(procedure.name()).into(), binding)?;
+    }
+    Ok(())
 }
 
 fn assemble_kernel_fixture(
@@ -30,14 +57,14 @@ fn assemble_kernel_fixture(
     let support = support.into_iter().collect::<Vec<_>>();
     let (mut bindings, kernel_home) = kernel_fixture_namespaces();
     for module in core::iter::once(&kernel).chain(&support) {
-        bindings.add_module(module)?;
+        add_kernel_fixture_module(&mut bindings, module)?;
     }
     let assembler = bindings.configure(
-        Assembler::new(context.source_manager()).with_kernel_namespace_plan(kernel_home.clone()),
+        Assembler::new(context.source_manager()),
         core::iter::once(&*kernel).chain(support.iter().map(|module| &**module)),
     )?;
     let package = assembler.assemble_kernel("kernel", kernel, support)?;
-    // Legacy package metadata does not carry these callable bindings or the authorized home.
+    // These explicit fixture bindings do not establish production environment construction.
     Ok((Arc::from(package), bindings, kernel_home))
 }
 
@@ -69,14 +96,14 @@ fn can_assemble_a_multi_module_kernel() -> Result<(), Report> {
 
     let context = TestContext::new();
 
-    let (kernel_lib, mut bindings, kernel_home) = {
+    let (kernel_lib, mut bindings, _) = {
         let helpers = context.parse_module(HELPERS)?;
         let external_helpers = context.parse_module(EXTERNAL_HELPERS)?;
         let kernel = context.parse_kernel(source_file!(&context, KERNEL)).unwrap();
 
         let (mut bindings, kernel_home) = kernel_fixture_namespaces();
         for module in [&*kernel, &*helpers, &*external_helpers] {
-            bindings.add_module(module)?;
+            add_kernel_fixture_module(&mut bindings, module)?;
         }
         let mut assembler = bindings.configure(
             Assembler::new(context.source_manager()),
@@ -92,11 +119,7 @@ fn can_assemble_a_multi_module_kernel() -> Result<(), Report> {
     let program = context.parse_program(source_file!(&context, PROGRAM))?;
     bindings.add_module(&program)?;
     bindings
-        .configure(
-            Assembler::with_kernel(context.source_manager(), kernel_lib)?
-                .with_kernel_namespace_plan(kernel_home),
-            [&*program],
-        )?
+        .configure(Assembler::with_kernel(context.source_manager(), kernel_lib)?, [&*program])?
         .assemble_program("program", program)?;
 
     Ok(())
@@ -180,7 +203,7 @@ fn regression_reexport_of_kernel_procedure_from_kernel_submodule_is_rejected() {
 fn kernel_submodules_may_exec_root_kernel_exports() {
     let context = TestContext::default();
 
-    // Ordinary invocation may use the same exports as SYS; only actual SYS checks N_kernel.
+    // Ordinary invocation may use the same exports as SYS; only actual SYS checks fixed N0.
     let kernel_masm = "pub mod sub\n\npub const FOO = 1\n\npub proc root push.FOO end\n\npub proc other exec.root end";
     let submodule_masm = "namespace $kernel::sub\n\npub proc foo exec.$kernel::root end\n";
     let kernel_module = context.parse_kernel(source_file!(&context, kernel_masm)).unwrap();
@@ -224,19 +247,14 @@ fn regression_syscall_of_kernel_submodule_procedure_is_rejected() {
         .expect("source spelling does not determine syscall authority");
     bindings.add_module(&program).unwrap();
     let assembler = bindings
-        .configure(
-            Assembler::with_kernel(context.source_manager(), kernel)
-                .unwrap()
-                .with_kernel_namespace_plan(kernel_home),
-            [&*program],
-        )
+        .configure(Assembler::with_kernel(context.source_manager(), kernel).unwrap(), [&*program])
         .unwrap();
     let err = assembler
         .assemble_program("program", program)
         .expect_err("a descendant namespace is not the authorized immediate parent");
-    assert_diagnostic!(err, "outside the configured full kernel namespace");
+    assert_diagnostic!(err, "outside the fixed root syscall namespace");
     // Runtime witness rejection is covered by processor/tests/keyed_execution.rs::
-    // syscall_requires_exact_full_namespace_before_code_lookup.
+    // syscall_requires_fixed_root_namespace_before_code_lookup.
 }
 
 #[test]
@@ -274,6 +292,14 @@ fn test_kernel_linking_against_its_own_library() -> TestResult {
     let (kernel, bindings, _) = assemble_kernel_fixture(&context, kernel, vec![lib])?;
     let internal_key = bindings.binding(Path::new("::$kernel::internal_proc")).unwrap().key();
     let library_key = bindings.binding(Path::new("::$kernel::lib::lib_proc")).unwrap().key();
+    let public = bindings.binding(Path::new("::$kernel::kernel_proc")).unwrap();
+    assert_eq!(public.parent_namespace(), Namespace::initial());
+    for declaration in ["::$kernel::internal_proc", "::$kernel::lib::lib_proc"] {
+        let helper = bindings.binding(Path::new(declaration)).unwrap();
+        assert_ne!(helper.parent_namespace(), Namespace::initial());
+        assert_ne!(helper.key(), public.key());
+    }
+    assert_ne!(internal_key, library_key);
     for key in [internal_key, library_key] {
         assert!(
             kernel
@@ -337,15 +363,14 @@ fn test_syscall_resolution_uses_kernel_module() -> TestResult {
         "#
     );
 
-    let (kernel, mut bindings, kernel_home) = assemble_kernel_fixture(&context, kernel, vec![])?;
+    let (kernel, mut bindings, _) = assemble_kernel_fixture(&context, kernel, vec![])?;
     let kernel_bar_key = bindings.binding(Path::new("::$kernel::bar")).unwrap().key();
     let kernel_foo_key = bindings.binding(Path::new("::$kernel::foo")).unwrap().key();
     let program = context.parse_program(source)?;
     bindings.add_module(&lib)?;
     bindings.add_module(&program)?;
 
-    let mut assembler = Assembler::with_kernel(context.source_manager(), kernel)?
-        .with_kernel_namespace_plan(kernel_home);
+    let mut assembler = Assembler::with_kernel(context.source_manager(), kernel)?;
     assembler.compile_and_statically_link(lib)?;
     let assembler = bindings.configure(assembler, [&*program])?;
     let program = assembler.assemble_program("program", program)?.unwrap_program();
@@ -410,7 +435,7 @@ fn test_syscall_resolution_to_non_kernel_path_is_checked() -> TestResult {
     for authorized in [false, true] {
         let lib = context.parse_module(lib_source)?;
         let lib_bindings = if authorized {
-            // The owner explicitly places this source definition directly under N_kernel.
+            // The owner explicitly places this source definition directly under fixed N0.
             // Its userspace spelling neither grants nor prevents syscall authorization.
             let mut bindings = FixtureNamespace::new(kernel_home.clone());
             let canonical =
@@ -438,7 +463,6 @@ fn test_syscall_resolution_to_non_kernel_path_is_checked() -> TestResult {
             bindings.add_module(&program)?;
             bindings.add_binding(Arc::from(Path::new("::userspace::bar")), target.clone())?;
             let assembler = Assembler::with_kernel(context.source_manager(), kernel.clone())?
-                .with_kernel_namespace_plan(kernel_home.clone())
                 .with_package(package.clone(), Linkage::Static)?;
             let result =
                 bindings.configure(assembler, [&*program])?.assemble_program("program", program);
@@ -456,14 +480,38 @@ fn test_syscall_resolution_to_non_kernel_path_is_checked() -> TestResult {
                 }));
             } else {
                 let error = result.expect_err("a different immediate parent must reject syscall");
-                assert_diagnostic!(&error, "outside the configured full kernel namespace");
+                assert_diagnostic!(&error, "outside the fixed root syscall namespace");
                 assert_diagnostic!(&error, "userspace::bar");
             }
         }
     }
     // Runtime authentication is covered by processor/tests/keyed_execution.rs::
-    // syscall_requires_exact_full_namespace_before_code_lookup.
+    // syscall_requires_fixed_root_namespace_before_code_lookup.
 
+    Ok(())
+}
+
+#[test]
+fn textual_kernel_namespace_does_not_authorize_syscall() -> TestResult {
+    let context = TestContext::default();
+    let library = context.parse_module("namespace kernel\n\npub proc service push.1 end\n")?;
+    let program = context.parse_program(source_file!(
+        &context,
+        "use kernel\n\nbegin syscall.kernel::service end\n"
+    ))?;
+    let (mut bindings, _) = kernel_fixture_namespaces();
+    bindings.add_module(&library)?;
+    bindings.add_module(&program)?;
+    let target = bindings.binding(Path::new("::kernel::service")).unwrap();
+    assert_ne!(target.parent_namespace(), Namespace::initial());
+    let mut assembler = Assembler::new(context.source_manager());
+    assembler.compile_and_statically_link(library)?;
+    let error = bindings
+        .configure(assembler, [&*program])?
+        .assemble_program("program", program)
+        .expect_err("a textual kernel label does not place a binding at fixed N0");
+    assert_diagnostic!(&error, "outside the fixed root syscall namespace");
+    assert_diagnostic!(&error, "kernel::service");
     Ok(())
 }
 
@@ -479,7 +527,7 @@ pub proc k1
 end
 "#;
 
-    let (kernel_lib, mut bindings, kernel_home) = assemble_kernel_fixture(
+    let (kernel_lib, mut bindings, _) = assemble_kernel_fixture(
         &context,
         context.parse_kernel(source_file!(&context, kernel_src)).unwrap(),
         vec![],
@@ -506,8 +554,7 @@ end
     let assembler = bindings
         .configure(
             Assembler::with_kernel(context.source_manager(), kernel_lib)
-                .expect("test package should be valid")
-                .with_kernel_namespace_plan(kernel_home),
+                .expect("test package should be valid"),
             [&*program],
         )
         .unwrap();
@@ -533,7 +580,7 @@ end
 }
 
 #[test]
-fn syscall_literal_unknown_key_is_retained_when_the_full_kernel_home_is_supplied() {
+fn syscall_literal_unknown_key_is_retained_with_kernel_code_supplied() {
     let context = TestContext::default();
 
     let kernel_src = r#"
@@ -542,7 +589,7 @@ pub proc k1
 end
 "#;
 
-    let (kernel_lib, mut bindings, kernel_home) = assemble_kernel_fixture(
+    let (kernel_lib, mut bindings, _) = assemble_kernel_fixture(
         &context,
         context.parse_kernel(source_file!(&context, kernel_src)).unwrap(),
         vec![],
@@ -560,8 +607,7 @@ end
     let assembler = bindings
         .configure(
             Assembler::with_kernel(context.source_manager(), kernel_lib)
-                .expect("test kernel should be valid")
-                .with_kernel_namespace_plan(kernel_home),
+                .expect("test kernel should be valid"),
             [&*program],
         )
         .unwrap();
@@ -582,11 +628,11 @@ end
     // Assembly has not authenticated this literal. The actual witness gates are exercised by
     // processor/tests/keyed_execution.rs::{
     // entry_authenticates_fixed_root_and_key_before_loading_authenticated_body,
-    // syscall_requires_exact_full_namespace_before_code_lookup}.
+    // syscall_requires_fixed_root_namespace_before_code_lookup}.
 }
 
 #[test]
-fn syscall_without_an_explicit_full_kernel_home_is_rejected_at_assembly_time() {
+fn syscall_literal_unknown_key_is_retained_without_kernel_code() {
     let context = TestContext::default();
 
     let program_src = r#"
@@ -601,10 +647,21 @@ end
     let assembler = bindings
         .configure(Assembler::new(context.source_manager()), [&*program])
         .unwrap();
-    let err = assembler
+    let package = assembler
         .assemble_program("program", program)
-        .expect_err("expected syscall without the explicit full kernel home to be rejected");
-    assert_diagnostic!(err, "syscall requires an explicit complete kernel NamespacePlan");
+        .expect("literal keys need runtime authentication, not kernel code at assembly time");
+    let literal = ProcedureKey::new(Word::default());
+    let syscalls = package
+        .mast_forest()
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            MastNode::Call(call) if call.is_syscall() => Some(call.target()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(syscalls, vec![literal]);
+    assert_all_nodes_reachable_from_roots(package.mast_forest());
 }
 
 #[test]
@@ -698,6 +755,6 @@ end
     }
     // Execution of these exports, including dynamic modes, is covered separately by
     // processor/tests/keyed_execution.rs::{
-    // entry_and_ordinary_call_may_use_exports_in_the_authorized_kernel_namespace,
+    // entry_and_ordinary_call_may_use_root_exports,
     // native_modes_cover_local_and_host_code_with_all_public_step_apis}.
 }

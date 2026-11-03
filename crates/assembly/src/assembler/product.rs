@@ -15,7 +15,6 @@ pub struct AssemblyProduct {
     callables: PackageCallables,
     callable_sources: CallableSources,
     namespace_plan: NamespacePlan,
-    kernel_namespace_plan: Option<NamespacePlan>,
     entry_key: Option<ProcedureKey>,
 }
 
@@ -142,7 +141,6 @@ impl AssemblyProduct {
         callables: PackageCallables,
         callable_sources: CallableSources,
         namespace_plan: NamespacePlan,
-        kernel_namespace_plan: Option<NamespacePlan>,
         entry_key: Option<ProcedureKey>,
     ) -> Self {
         assert!(
@@ -156,7 +154,6 @@ impl AssemblyProduct {
             callables,
             callable_sources,
             namespace_plan,
-            kernel_namespace_plan,
             entry_key,
         }
     }
@@ -191,11 +188,6 @@ impl AssemblyProduct {
     /// Returns the explicit caller home supplied to this compilation, without admitting it.
     pub fn namespace_plan(&self) -> &NamespacePlan {
         &self.namespace_plan
-    }
-
-    /// Returns the configured kernel plan as a raw input, without selecting build/runtime policy.
-    pub fn kernel_namespace_plan(&self) -> Option<&NamespacePlan> {
-        self.kernel_namespace_plan.as_ref()
     }
 
     pub fn extend_dependencies(

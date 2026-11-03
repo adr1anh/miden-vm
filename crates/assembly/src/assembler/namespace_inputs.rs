@@ -21,7 +21,6 @@ use crate::{CallableBinding, Path};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NamespaceInputs {
     namespace_plan: Option<NamespacePlan>,
-    kernel_namespace_plan: Option<NamespacePlan>,
     declarations: BTreeMap<Arc<Path>, CallableInput>,
 }
 
@@ -46,20 +45,6 @@ impl NamespaceInputs {
     /// Returns the explicitly supplied caller home, if any.
     pub fn namespace_plan(&self) -> Option<&NamespacePlan> {
         self.namespace_plan.as_ref()
-    }
-
-    /// Sets or clears the complete kernel home as a raw input.
-    ///
-    /// This configures expected names during lowering; authenticated execution-environment
-    /// bindings and the authorized complete kernel namespace determine actual syscall authority.
-    pub fn with_kernel_namespace_plan(mut self, plan: Option<NamespacePlan>) -> Self {
-        self.kernel_namespace_plan = plan;
-        self
-    }
-
-    /// Returns the supplied kernel home without selecting build/runtime admission policy.
-    pub fn kernel_namespace_plan(&self) -> Option<&NamespacePlan> {
-        self.kernel_namespace_plan.as_ref()
     }
 
     /// Names a defining source declaration under the caller home supplied at compilation time.
@@ -99,8 +84,8 @@ impl NamespaceInputs {
         Ok(self)
     }
 
-    pub(super) fn into_plans(self) -> (Option<NamespacePlan>, Option<NamespacePlan>) {
-        (self.namespace_plan, self.kernel_namespace_plan)
+    pub(super) fn into_namespace_plan(self) -> Option<NamespacePlan> {
+        self.namespace_plan
     }
 }
 

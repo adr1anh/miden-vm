@@ -205,17 +205,14 @@ fn emitted_program_retains_entry_key_and_explicit_home_inputs_without_debug_emis
     names.add_module(&root).unwrap();
     let entry_path = root.path().join(ast::ProcedureName::MAIN_PROC_NAME);
     let entry = names.binding(&entry_path).unwrap().clone();
-    let kernel_plan = home("explicit-kernel-input");
     let product = names
         .configure(Assembler::new(context.source_manager()), [&*root])
         .unwrap()
-        .with_kernel_namespace_plan(kernel_plan.clone())
         .assemble_executable_modules("test".into(), root, [])
         .unwrap();
 
     assert_eq!(product.entry_key(), Some(entry.key()));
     assert_eq!(product.namespace_plan(), names.namespace_plan());
-    assert_eq!(product.kernel_namespace_plan(), Some(&kernel_plan));
     assert_eq!(product.callables().binding(entry.key()), Some(&entry));
     assert_eq!(product.callable_key_for_definition(&entry_path), Some(entry.key()));
     let selected = product.callables().selected_implementation(entry.key()).unwrap();

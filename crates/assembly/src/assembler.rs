@@ -27,7 +27,7 @@ use miden_core::{
     WORD_SIZE, Word,
     mast::{MastNodeExt, MastNodeId},
     operations::{AssemblyOp, Operation},
-    program::{ImplementationRoot, KernelDescriptor, ProcedureKey},
+    program::{ImplementationRoot, KernelDescriptor, Namespace, ProcedureKey},
     serde::Serializable,
 };
 use miden_mast_package::{
@@ -144,16 +144,9 @@ impl PendingProcedureExport {
 /// * If you wish to produce a kernel library, you will call [`Self::assemble_kernel`] with the
 ///   source module(s) whose exports form the public API of the kernel.
 ///
-/// In the case where you are assembling a library or program, you also need to determine if you
-/// need to specify a kernel. You will need to do so if any of your code needs to call into the
-/// kernel directly.
-///
-/// * If a kernel is needed, you should construct an `Assembler` using [`Assembler::with_kernel`]
-/// * Otherwise, you should construct an `Assembler` using [`Assembler::new`]
-///
-/// <div class="warning">
-/// Programs compiled with an empty kernel cannot use the `syscall` instruction.
-/// </div>
+/// Use [`Assembler::with_kernel`] to attach kernel code and source aliases, or
+/// [`Assembler::new`] with explicit callable declarations or literal keys. Syscall targets require
+/// authenticated bindings directly under the fixed initial namespace at execution time.
 ///
 /// Lastly, you need to provide inputs to the assembler which it will use at link time to resolve
 /// references to procedures which are externally-defined (i.e. not defined in any of the modules
@@ -253,7 +246,7 @@ impl Assembler {
         &self.namespace_inputs
     }
 
-    /// Replaces all pending caller, kernel and canonical declaration metadata together.
+    /// Replaces all pending caller-home and canonical declaration metadata together.
     ///
     /// This also clears inputs omitted by the replacement. Already-bound linker symbols keep their
     /// identities; conflicting replacement metadata is rejected during compilation prebinding.
@@ -276,15 +269,6 @@ impl Assembler {
     /// Returns the explicitly configured home for locally defined callables, if supplied.
     pub fn namespace_plan(&self) -> Option<&NamespacePlan> {
         self.namespace_inputs.namespace_plan()
-    }
-
-    /// Supplies the complete kernel home expected when lowering syscall targets.
-    ///
-    /// This raw input does not admit the home or authorize execution. The execution environment's
-    /// authenticated bindings and complete kernel namespace determine actual syscall authority.
-    pub fn with_kernel_namespace_plan(mut self, plan: NamespacePlan) -> Self {
-        self.namespace_inputs = self.namespace_inputs.with_kernel_namespace_plan(Some(plan));
-        self
     }
 
     /// Names a concrete declaration under the explicitly configured local home.
@@ -1162,7 +1146,7 @@ impl Assembler {
     ///
     /// The returned product has no package9, home/profile or environment admission. Extracting
     /// its existing Package8 artifact with [`AssemblyProduct::into_artifact`] discards that raw
-    /// metadata. A configured kernel plan is retained as an input without choosing binding policy.
+    /// metadata.
     pub fn assemble_executable_modules(
         mut self,
         name: PackageId,
@@ -1264,7 +1248,7 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
-        let (namespace_plan, kernel_namespace_plan) = self.namespace_inputs.into_plans();
+        let namespace_plan = self.namespace_inputs.into_namespace_plan();
         Ok(AssemblyProduct::new(
             package,
             None,
@@ -1272,7 +1256,6 @@ impl Assembler {
             callables,
             callable_sources,
             namespace_plan.expect("prebinding requires an explicit caller home"),
-            kernel_namespace_plan,
             None,
         ))
     }
@@ -1332,7 +1315,7 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
-        let (namespace_plan, kernel_namespace_plan) = self.namespace_inputs.into_plans();
+        let namespace_plan = self.namespace_inputs.into_namespace_plan();
         Ok(AssemblyProduct::new(
             package,
             kernel,
@@ -1340,7 +1323,6 @@ impl Assembler {
             callables,
             callable_sources,
             namespace_plan.expect("prebinding requires an explicit caller home"),
-            kernel_namespace_plan,
             Some(entry_key),
         ))
     }
@@ -1878,18 +1860,15 @@ impl Assembler {
                 unreachable!("invoke resolver returns callable identities")
             },
         };
-        if kind == InvokeKind::SysCall {
-            let kernel = self.namespace_inputs.kernel_namespace_plan().ok_or_else(|| {
-                Report::msg("syscall requires an explicit complete kernel NamespacePlan")
-            })?;
-            if parent_namespace.is_some_and(|parent| parent != kernel.namespace()) {
-                return Err(Report::msg(format!(
-                    "syscall target '{target}' is outside the configured full kernel namespace"
-                )));
-            }
-            // Literal K has no declaration parent here. The runtime authenticates its immediate
-            // parent under the configured complete kernel namespace, using the environment witness.
+        if kind == InvokeKind::SysCall
+            && parent_namespace.is_some_and(|parent| parent != Namespace::initial())
+        {
+            return Err(Report::msg(format!(
+                "syscall target '{target}' is outside the fixed root syscall namespace"
+            )));
         }
+        // Literal K has no declaration parent here. The runtime authenticates its immediate
+        // parent against Namespace::initial() using the execution-environment witness.
         Ok(ResolvedProcedure { key })
     }
 

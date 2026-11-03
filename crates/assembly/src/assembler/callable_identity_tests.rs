@@ -21,6 +21,10 @@ fn target_binding() -> CallableBinding {
     CallableBinding::new(home("published-home"), canonical(&["run"])).unwrap()
 }
 
+fn root_binding() -> CallableBinding {
+    CallableBinding::new(NamespacePlan::new(vec![]), canonical(&["run"])).unwrap()
+}
+
 fn lower_caller(body: Option<&str>) -> (Assembler, GlobalItemIndex, MastForest, Word) {
     let context = TestContext::default();
     let caller = context.parse_module(
@@ -149,31 +153,36 @@ fn caller_home_and_reachable_declaration_binding_are_required() {
 }
 
 #[test]
-fn syscall_requires_the_explicit_complete_kernel_home() {
-    let (mut assembler, caller, ..) = lower_caller(None);
+fn syscall_accepts_fixed_root_declarations_and_defers_literal_keys_to_runtime() {
+    let (assembler, caller) = link_declared_caller(
+        "namespace client\nuse dep as chosen\npub proc caller exec.chosen::run end",
+        root_binding(),
+    );
     let target = InvocationTarget::Path(miden_assembly_syntax::debuginfo::Span::new(
         SourceSpan::UNKNOWN,
         Arc::from(Path::new("::dep::run")),
     ));
-    assert!(assembler.resolve_target(InvokeKind::SysCall, &target, caller.module).is_err());
-    assembler = assembler.with_kernel_namespace_plan(home("different-home"));
-    assert!(assembler.resolve_target(InvokeKind::SysCall, &target, caller.module).is_err());
-    assembler = assembler.with_kernel_namespace_plan(target_binding().namespace_plan().clone());
-    assert_eq!(
-        assembler
-            .resolve_target(InvokeKind::SysCall, &target, caller.module)
-            .unwrap()
-            .key,
-        target_binding().key()
-    );
+    for kind in [InvokeKind::SysCall, InvokeKind::Exec, InvokeKind::Call, InvokeKind::ProcRef] {
+        assert_eq!(
+            assembler.resolve_target(kind, &target, caller.module).unwrap().key,
+            root_binding().key(),
+        );
+    }
+
+    // A literal key carries no authenticated parent at assembly time, even when the same word
+    // names a known child export. Runtime resolution must enforce the fixed-root syscall rule.
+    let (assembler, caller, ..) = lower_caller(None);
     let literal = InvocationTarget::MastRoot(miden_assembly_syntax::debuginfo::Span::new(
         SourceSpan::UNKNOWN,
         target_binding().key().into_word(),
     ));
-    assert!(assembler.resolve_target(InvokeKind::SysCall, &literal, caller.module).is_ok());
-    let inputs = assembler.namespace_inputs().clone().with_kernel_namespace_plan(None);
-    assembler = assembler.with_namespace_inputs(inputs);
-    assert!(assembler.resolve_target(InvokeKind::SysCall, &literal, caller.module).is_err());
+    assert_eq!(
+        assembler
+            .resolve_target(InvokeKind::SysCall, &literal, caller.module)
+            .unwrap()
+            .key,
+        target_binding().key(),
+    );
 }
 
 fn caller_id(assembler: &Assembler) -> GlobalItemIndex {
@@ -185,20 +194,13 @@ fn caller_id(assembler: &Assembler) -> GlobalItemIndex {
     module + ItemIndex::new(index)
 }
 
-fn link_declared_caller(
-    source: &str,
-    binding: CallableBinding,
-    kernel: Option<NamespacePlan>,
-) -> (Assembler, GlobalItemIndex) {
+fn link_declared_caller(source: &str, binding: CallableBinding) -> (Assembler, GlobalItemIndex) {
     let context = TestContext::default();
     let caller = context.parse_module(source).unwrap();
     let mut assembler = Assembler::new(context.source_manager())
         .with_namespace_plan(home("caller-home"))
         .with_callable_path(Arc::from(Path::new("::client::caller")), canonical(&["entry"]))
         .unwrap();
-    if let Some(kernel) = kernel {
-        assembler = assembler.with_kernel_namespace_plan(kernel);
-    }
     assembler
         .link_callable_declarations(
             Arc::from(Path::new("::dep")),
@@ -218,8 +220,7 @@ fn attached_kernel(context: &TestContext) -> Assembler {
         .unwrap();
     let mut assembler = Assembler::new(context.source_manager())
         .with_namespace_plan(home("caller-home"))
-        .with_kernel_namespace_plan(target_binding().namespace_plan().clone())
-        .with_callable_binding(Path::kernel_path().join("run").into(), target_binding())
+        .with_callable_binding(Path::kernel_path().join("run").into(), root_binding())
         .unwrap()
         .with_callable_path(Arc::from(Path::new("::client::caller")), canonical(&["entry"]))
         .unwrap();
@@ -314,7 +315,6 @@ fn callable_symbols_reject_conflicting_rebinding() {
     let (assembler, _) = link_declared_caller(
         "namespace client\nuse dep as chosen\npub proc caller exec.chosen::run end",
         target_binding(),
-        None,
     );
     let dep = assembler.linker.find_module_index(Path::new("::dep")).unwrap();
     let symbol = &assembler.linker[dep + ItemIndex::new(0)];
@@ -340,7 +340,7 @@ fn unqualified_syscall_preserves_the_attached_kernel_alias_over_a_local_name() {
     let context = TestContext::default();
     let local_binding =
         CallableBinding::new(home("caller-home"), canonical(&["private", "run"])).unwrap();
-    assert_ne!(local_binding.key(), target_binding().key());
+    assert_ne!(local_binding.key(), root_binding().key());
     let mut assembler = attached_kernel(&context)
         .with_callable_path(Arc::from(Path::new("::client::run")), canonical(&["private", "run"]))
         .unwrap();
@@ -358,7 +358,7 @@ fn unqualified_syscall_preserves_the_attached_kernel_alias_over_a_local_name() {
             .resolve_target(InvokeKind::SysCall, &target, caller.module)
             .unwrap()
             .key,
-        target_binding().key(),
+        root_binding().key(),
         "syscall.run retains the established attached-kernel alias"
     );
     assert_eq!(
@@ -381,7 +381,7 @@ fn unqualified_syscall_preserves_the_attached_kernel_alias_over_a_local_name() {
         MastNode::Exec(exec) if exec.target() == local_binding.key()
     )));
     assert!(forest.nodes().iter().any(|node| matches!(node,
-        MastNode::Call(call) if call.is_syscall() && call.target() == target_binding().key()
+        MastNode::Call(call) if call.is_syscall() && call.target() == root_binding().key()
     )));
 }
 
@@ -401,7 +401,7 @@ fn unqualified_syscall_accepts_a_caller_alias_to_the_same_defining_symbol() {
             .resolve_target(InvokeKind::SysCall, &target, caller.module)
             .unwrap()
             .key,
-        target_binding().key()
+        root_binding().key()
     );
     let mut builder = MastForestBuilder::new_with_static_libraries([]).unwrap();
     assembler
@@ -409,7 +409,7 @@ fn unqualified_syscall_accepts_a_caller_alias_to_the_same_defining_symbol() {
         .unwrap();
     let (forest, _) = builder.build().unwrap().into_parts();
     assert!(forest.nodes().iter().any(|node| matches!(node,
-        MastNode::Call(call) if call.is_syscall() && call.target() == target_binding().key()
+        MastNode::Call(call) if call.is_syscall() && call.target() == root_binding().key()
     )));
 }
 
@@ -417,7 +417,7 @@ fn unqualified_syscall_accepts_a_caller_alias_to_the_same_defining_symbol() {
 fn unqualified_syscall_uses_a_caller_import_when_the_attached_kernel_has_no_candidate() {
     let context = TestContext::default();
     let binding =
-        CallableBinding::new(target_binding().namespace_plan().clone(), canonical(&["other"]))
+        CallableBinding::new(root_binding().namespace_plan().clone(), canonical(&["other"]))
             .unwrap();
     let mut assembler = attached_kernel(&context);
     assembler
@@ -451,45 +451,49 @@ fn unqualified_syscall_uses_a_caller_import_when_the_attached_kernel_has_no_cand
 }
 
 #[test]
-fn syscall_rejects_matching_final_home_labels_under_different_ancestors() {
-    let kernel = NamespacePlan::new(vec![
-        CanonicalLabel::text("authorized-publisher").unwrap(),
-        CanonicalLabel::text("kernel").unwrap(),
-    ]);
-    let other = NamespacePlan::new(vec![
-        CanonicalLabel::text("other-publisher").unwrap(),
-        CanonicalLabel::text("kernel").unwrap(),
-    ]);
-    assert_eq!(kernel.home().last(), other.home().last());
-    assert_ne!(kernel.namespace(), other.namespace());
-    let binding = CallableBinding::new(other, canonical(&["run"])).unwrap();
-    let (assembler, caller) = link_declared_caller(
-        "namespace client\nuse dep as chosen\npub proc caller exec.chosen::run end",
-        binding.clone(),
-        Some(kernel),
-    );
-    let target = InvocationTarget::Path(miden_assembly_syntax::debuginfo::Span::new(
-        SourceSpan::UNKNOWN,
-        Arc::from(Path::new("::dep::run")),
-    ));
-    assert_eq!(
-        assembler.resolve_target(InvokeKind::Exec, &target, caller.module).unwrap().key,
-        binding.key(),
-        "ordinary invocation remains available for the same export"
-    );
-    let error = assembler
-        .resolve_target(InvokeKind::SysCall, &target, caller.module)
-        .err()
-        .expect("a matching final label must not authorize a different ancestor");
-    assert!(error.to_string().contains("outside the configured full kernel namespace"));
+fn syscall_rejects_child_exports_including_textual_kernel_homes() {
+    let bindings = [
+        target_binding(),
+        CallableBinding::new(home("kernel"), canonical(&["run"])).unwrap(),
+        CallableBinding::new(NamespacePlan::new(vec![]), canonical(&["child", "run"])).unwrap(),
+        CallableBinding::new(
+            NamespacePlan::new(vec![
+                CanonicalLabel::text("publisher").unwrap(),
+                CanonicalLabel::text("kernel").unwrap(),
+            ]),
+            canonical(&["run"]),
+        )
+        .unwrap(),
+    ];
+    for binding in bindings {
+        let (assembler, caller) = link_declared_caller(
+            "namespace client\nuse dep as chosen\npub proc caller exec.chosen::run end",
+            binding.clone(),
+        );
+        let target = InvocationTarget::Path(miden_assembly_syntax::debuginfo::Span::new(
+            SourceSpan::UNKNOWN,
+            Arc::from(Path::new("::dep::run")),
+        ));
+        for kind in [InvokeKind::Exec, InvokeKind::Call, InvokeKind::ProcRef] {
+            assert_eq!(
+                assembler.resolve_target(kind, &target, caller.module).unwrap().key,
+                binding.key(),
+                "ordinary invocation remains available for child exports",
+            );
+        }
+        let error = assembler
+            .resolve_target(InvokeKind::SysCall, &target, caller.module)
+            .err()
+            .expect("only the fixed initial parent authorizes a known syscall target");
+        assert!(error.to_string().contains("outside the fixed root syscall namespace"));
+    }
 }
 
 #[test]
 fn call_and_syscall_nodes_retain_keys_and_source_operations_without_code() {
     let (mut assembler, caller) = link_declared_caller(
         "namespace client\nuse dep as chosen\npub proc caller call.chosen::run syscall.chosen::run end",
-        target_binding(),
-        Some(target_binding().namespace_plan().clone()),
+        root_binding(),
     );
     let mut builder = MastForestBuilder::new_with_static_libraries([]).unwrap();
     assembler
@@ -505,7 +509,7 @@ fn call_and_syscall_nodes_retain_keys_and_source_operations_without_code() {
         })
         .collect::<Vec<_>>();
     assert_eq!(calls.len(), 2);
-    assert!(calls.iter().all(|call| call.target() == target_binding().key()));
+    assert!(calls.iter().all(|call| call.target() == root_binding().key()));
     assert_eq!(calls.iter().filter(|call| call.is_syscall()).count(), 1);
     let sources = debug
         .nodes()
