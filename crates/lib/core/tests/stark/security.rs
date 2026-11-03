@@ -1,6 +1,7 @@
 //! Tests for the common MVM/PVM recursive security estimator.
 
 use miden_air::vm::security as vm_metadata;
+use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
 
 use super::{
     EXAMPLE_FIB_SMALL, fib_stack_inputs, generate_recursive_verifier_data, vm_verify_proof_program,
@@ -770,8 +771,24 @@ fn pvm_lookup_round_matches_native_exhaustively() {
     );
 }
 
+fn security_estimator_binding(procedure: &str) -> CallableBinding {
+    // Core declares its full semantic paths under the empty custom compilation home.
+    // Derive the callable identity independently of the selected implementation root.
+    CallableBinding::new(
+        NamespacePlan::new(vec![]),
+        CallableProcedurePath::from_semantic_components(
+            ["miden", "core", "stark", "security", procedure]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
 #[test]
-fn security_estimator_root_matches_procref() {
+fn security_estimator_key_matches_procref() {
     use miden_core::Felt;
     use miden_processor::ContextId;
 
@@ -781,9 +798,16 @@ fn security_estimator_root_matches_procref() {
             mem_storew_le.0 dropw
         end
     ";
-    let expected: [u64; 4] = miden_core_lib::CoreLibrary::default()
-        .conjectured_security_estimator_root()
-        .into();
+    let core_lib = miden_core_lib::CoreLibrary::default();
+    let binding = security_estimator_binding("compute_conjectured_security_level");
+    let key = binding.key();
+    let implementation = core_lib.conjectured_security_estimator_root();
+    let callables = core_lib.naming().callables();
+    assert_eq!(callables.binding(key), Some(&binding));
+    assert_eq!(callables.key_for_visible_path(binding.path()), Some(key));
+    assert_eq!(callables.selected_implementation(key).unwrap().into_word(), implementation);
+    assert_ne!(key.into_word(), implementation);
+    let expected: [u64; 4] = key.into_word().into();
     let (output, _) = build_test!(source, &[])
         .execute_for_output()
         .expect("the estimator procref must execute");
@@ -948,9 +972,9 @@ fn synthetic_query_grid_matches_native_exhaustively() {
     );
 }
 
-/// The public root getter and the in-VM procedure reference must identify the same estimator.
+/// The in-VM procedure reference identifies the canonical key, independently of its selected body.
 #[test]
-fn proven_security_estimator_root_matches_procref() {
+fn proven_security_estimator_key_matches_procref() {
     use miden_core::Felt;
     use miden_processor::ContextId;
 
@@ -960,7 +984,16 @@ fn proven_security_estimator_root_matches_procref() {
             mem_storew_le.0 dropw
         end
     ";
-    let expected: [u64; 4] = miden_core_lib::proven_security_estimator_root().into();
+    let core_lib = miden_core_lib::CoreLibrary::default();
+    let binding = security_estimator_binding("compute_proven_security_level");
+    let key = binding.key();
+    let implementation = core_lib.proven_security_estimator_root();
+    let callables = core_lib.naming().callables();
+    assert_eq!(callables.binding(key), Some(&binding));
+    assert_eq!(callables.key_for_visible_path(binding.path()), Some(key));
+    assert_eq!(callables.selected_implementation(key).unwrap().into_word(), implementation);
+    assert_ne!(key.into_word(), implementation);
+    let expected: [u64; 4] = key.into_word().into();
     let (output, _) = build_test!(source, &[])
         .execute_for_output()
         .expect("the proven estimator procref must execute");
