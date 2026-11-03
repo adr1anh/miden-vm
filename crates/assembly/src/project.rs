@@ -333,7 +333,22 @@ where
         target_selector: ProjectTargetSelector<'_>,
         profile_name: &str,
     ) -> Result<Arc<MastPackage>, Report> {
-        let result = self.assemble_interruptible(target_selector, profile_name)?;
+        self.assemble_with_naming(target_selector, profile_name)
+            .map(|resolved| resolved.package)
+    }
+
+    /// Like [`Self::assemble`], retaining the compiler's complete canonical naming inventory.
+    ///
+    /// The result includes private declarations, source-visible aliases and the executable entry
+    /// key, together with any required linked kernel package and its naming. This metadata is
+    /// structurally checked against the exact package; it does not grant home/profile admission
+    /// or execution authority.
+    pub fn assemble_with_naming(
+        &mut self,
+        target_selector: ProjectTargetSelector<'_>,
+        profile_name: &str,
+    ) -> Result<ResolvedPackage, Report> {
+        let result = self.assemble_interruptible_with_naming(target_selector, profile_name)?;
 
         match result {
             ControlFlow::Continue(package) => Ok(package),
@@ -365,6 +380,17 @@ where
         target_selector: ProjectTargetSelector<'_>,
         profile_name: &str,
     ) -> Result<ControlFlow<AssemblyInterrupted, Arc<MastPackage>>, Report> {
+        self.assemble_interruptible_with_naming(target_selector, profile_name)
+            .map(|resolved| resolved.map_continue(|r| r.package))
+    }
+
+    /// Like [`Self::assemble_interruptible`], retaining the complete naming described by
+    /// [`Self::assemble_with_naming`] when assembly succeeds.
+    pub fn assemble_interruptible_with_naming(
+        &mut self,
+        target_selector: ProjectTargetSelector<'_>,
+        profile_name: &str,
+    ) -> Result<ControlFlow<AssemblyInterrupted, ResolvedPackage>, Report> {
         let target = target_selector.select_target(self.project.as_ref())?;
 
         // When building an executable target from a project with a library target, we require
@@ -406,7 +432,6 @@ where
             &mut cache,
             None,
         )
-        .map(|resolved| resolved.map_continue(|r| r.package))
     }
 
     /// This is a low-level utility function of the project assembly infrastructure for assembling
@@ -418,8 +443,8 @@ where
     /// indicates the package/target which was interrupted, and the role that target played in
     /// assembly of the provided project and target.
     ///
-    /// In almost all cases you should prefer to use [`ProjectAssembler::assemble`] or
-    /// [`ProjectAssembler::assemble_interruptible`] instead.
+    /// In almost all cases you should prefer to use [`ProjectAssembler::assemble_with_naming`] or
+    /// [`ProjectAssembler::assemble_interruptible_with_naming`] instead.
     ///
     /// Callers are required to uphold the following invariants:
     ///

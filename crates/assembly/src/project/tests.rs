@@ -154,6 +154,126 @@ end
 }
 
 #[test]
+fn top_level_project_assembly_retains_aliases_private_bindings_and_entry() {
+    let tempdir = TempDir::new().unwrap();
+    let manifest_path = tempdir.path().join("miden-project.toml");
+    write_file(
+        &manifest_path,
+        r#"[package]
+name = "named-project"
+version = "1.0.0"
+
+[lib]
+namespace = "named::library"
+path = "library/root.masm"
+
+[[bin]]
+name = "entry"
+path = "main.masm"
+"#,
+    );
+    write_file(
+        &tempdir.path().join("library/root.masm"),
+        r#"pub mod api
+pub use {run as exported} from named::library::api
+
+proc hidden
+    push.1
+end
+
+pub proc call
+    exec.hidden
+    exec.api::run
+end
+"#,
+    );
+    let api_path = tempdir.path().join("library/api.masm");
+    write_file(&api_path, "pub proc run push.2 end");
+    write_file(
+        &tempdir.path().join("main.masm"),
+        r#"use named::library
+
+begin
+    exec.library::exported
+    exec.library::call
+end
+"#,
+    );
+    let path = |components: &[&str]| {
+        miden_mast_package::CallableProcedurePath::from_semantic_components(
+            components.iter().map(|component| (*component).to_string()).collect(),
+        )
+        .unwrap()
+    };
+    let definition = path(&["named", "library", "api", "run"]);
+    let alias = path(&["named", "library", "exported"]);
+    let private = path(&["named", "library", "hidden"]);
+
+    let mut context = TestContext::new();
+    let mut assembler = context.project_assembler_for_path(&manifest_path).unwrap();
+    let library = assembler
+        .assemble_with_naming(ProjectTargetSelector::Library, "release")
+        .expect("library build should retain its compiler naming");
+    library.package.check_naming(&library.naming).unwrap();
+    assert!(library.package.debug_info().unwrap().is_none());
+    let callables = library.naming.callables();
+    let run_key = callables.key_for_visible_path(&definition).unwrap();
+    assert_eq!(callables.key_for_visible_path(&alias), Some(run_key));
+    assert_eq!(callables.binding(run_key).unwrap().path(), &definition);
+    assert_eq!(
+        callables.binding(run_key).unwrap().namespace_plan(),
+        FixtureNamespace::assembly_tests().namespace_plan()
+    );
+    let private_key = callables
+        .bindings()
+        .find_map(|(&key, binding)| (binding.path() == &private).then_some(key))
+        .expect("private definition must retain its canonical binding");
+    assert_eq!(callables.key_for_visible_path(&private), None);
+    assert!(callables.selected_implementation(private_key).is_some());
+    assert_eq!(library.naming.entry_key(), None);
+
+    let executable = match assembler
+        .assemble_interruptible_with_naming(ProjectTargetSelector::Executable("entry"), "release")
+        .expect("executable build should retain its compiler naming")
+    {
+        ControlFlow::Continue(resolved) => resolved,
+        ControlFlow::Break(_) => panic!("source build unexpectedly interrupted"),
+    };
+    executable.package.check_naming(&executable.naming).unwrap();
+    let entry_key = executable.naming.entry_key().expect("executable entry must be retained");
+    let entry_path = path(&["$exec", "$main"]);
+    assert_eq!(executable.naming.callables().key_for_visible_path(&entry_path), Some(entry_key));
+    assert!(executable.naming.callables().selected_implementation(entry_key).is_some());
+    assert_eq!(
+        executable.naming.callables().binding(private_key),
+        callables.binding(private_key),
+        "static linking must retain the library's private canonical binding"
+    );
+
+    write_file(&api_path, "pub proc run push.3 end");
+    let mut rebuilt_context = TestContext::new();
+    let mut rebuilt_assembler = rebuilt_context.project_assembler_for_path(&manifest_path).unwrap();
+    let rebuilt = rebuilt_assembler
+        .assemble_with_naming(ProjectTargetSelector::Library, "release")
+        .expect("changed source should rebuild with the same naming convention");
+    rebuilt.package.check_naming(&rebuilt.naming).unwrap();
+    assert_ne!(library.package.code_commitment(), rebuilt.package.code_commitment());
+    assert_eq!(
+        callables.bindings().collect::<Vec<_>>(),
+        rebuilt.naming.callables().bindings().collect::<Vec<_>>(),
+        "implementation changes must preserve canonical keys and private bindings"
+    );
+    assert_eq!(
+        callables.visible_paths().collect::<Vec<_>>(),
+        rebuilt.naming.callables().visible_paths().collect::<Vec<_>>()
+    );
+    assert_ne!(
+        callables.selected_implementation(run_key),
+        rebuilt.naming.callables().selected_implementation(run_key)
+    );
+}
+
+#[test]
 fn builds_kernel_package_and_supports_kernel_code_validation() {
     let tempdir = TempDir::new().unwrap();
     let manifest_path = tempdir.path().join("miden-project.toml");
