@@ -33,7 +33,7 @@ pub use self::{
             InterfaceProfile, LibraryId,
         },
     },
-    namespace_plan::NamespacePlan,
+    namespace_plan::{CallableBinding, NamespacePlan},
     package::{
         ConstantExport, EventHandlerManifestEntry, EventHandlerSection, EventHandlerSectionError,
         InvalidSectionIdError, InvalidTargetTypeError, MAX_HANDLERS, MAX_MODULE_BYTES,

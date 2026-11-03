@@ -5,61 +5,14 @@ use miden_assembly_syntax::{
     debuginfo::{SourceManager, SourceSpan, Spanned},
     diagnostics::Report,
 };
-use miden_core::{
-    Word,
-    program::{LabelError, Namespace, ProcedureKey},
-};
-use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_core::Word;
+use miden_mast_package::CallableBinding;
 
 use super::{
     GlobalItemIndex,
     assembler::{MAX_PROC_LOCALS, error::AssemblerError},
     mast_forest_builder::{MastNodeRef, MastNodeUse, SourceNodeRef},
 };
-
-/// A declaration's explicit canonical name, independent of its implementation and source aliases.
-///
-/// This derives a callable identity; it does not authenticate an environment binding or authorize
-/// the supplied home. The owning profile must validate publisher and home policy separately.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CallableBinding {
-    namespace_plan: NamespacePlan,
-    path: CallableProcedurePath,
-    key: ProcedureKey,
-    parent_namespace: Namespace,
-}
-
-impl CallableBinding {
-    pub fn new(
-        namespace_plan: NamespacePlan,
-        path: CallableProcedurePath,
-    ) -> Result<Self, LabelError> {
-        let key = namespace_plan.callable_procedure_key(&path)?;
-        let parent_namespace = namespace_plan.callable_parent_namespace(&path)?;
-        Ok(Self {
-            namespace_plan,
-            path,
-            key,
-            parent_namespace,
-        })
-    }
-
-    pub fn namespace_plan(&self) -> &NamespacePlan {
-        &self.namespace_plan
-    }
-
-    pub fn path(&self) -> &CallableProcedurePath {
-        &self.path
-    }
-
-    pub fn key(&self) -> ProcedureKey {
-        self.key
-    }
-
-    pub fn parent_namespace(&self) -> Namespace {
-        self.parent_namespace
-    }
-}
 
 /// A callable declaration with no selected implementation root or body.
 ///

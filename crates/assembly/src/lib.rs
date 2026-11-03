@@ -41,6 +41,7 @@ pub use miden_assembly_syntax::{
 /// Merkelized abstract syntax tree (MAST) components defining Miden VM programs.
 pub use miden_core::{mast, serde, utils};
 pub use miden_mast_package as package;
+pub use miden_mast_package::CallableBinding;
 
 #[doc(hidden)]
 pub use self::linker::LinkerError;
@@ -54,7 +55,7 @@ pub use self::project::{
 pub use self::{
     assembler::Assembler,
     linker::Linkage,
-    procedure::{CallableBinding, CallableDeclaration, Procedure, ProcedureContext},
+    procedure::{CallableDeclaration, Procedure, ProcedureContext},
 };
 
 // CONSTANTS

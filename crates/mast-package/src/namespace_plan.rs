@@ -10,7 +10,10 @@ use miden_core::program::{CanonicalLabel, LabelError, Namespace, ProcedureKey};
 
 use crate::{CallableProcedurePath, PublicProcedurePath};
 
+mod callable_binding;
 mod serialization;
+
+pub use callable_binding::CallableBinding;
 
 /// An explicitly supplied complete home path, independent of code and source import aliases.
 ///
