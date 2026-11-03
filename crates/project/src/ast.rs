@@ -31,7 +31,7 @@ pub use self::{
     dependency_binding::{DependencyBindingSpec, ExpectedCallableSpec, HomeLabelSpec},
     package::{PackageConfig, PackageDetail, PackageTable, ProjectFile},
     profile::Profile,
-    target::{BinTarget, LibTarget},
+    target::{BinTarget, LibTarget, SourceNamingSpec},
     workspace::WorkspaceFile,
 };
 use crate::{Diagnostic, Label, RelatedError, Report, SourceFile, SourceSpan, miette};

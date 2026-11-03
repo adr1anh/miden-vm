@@ -358,7 +358,7 @@ impl Package {
 
         // Extract the build targets for this project
         let lib = package_ast.extract_library_target()?;
-        let bins = package_ast.extract_executable_targets();
+        let bins = package_ast.extract_executable_targets()?;
 
         let mut lints = workspace.map(|ws| ws.workspace.config.lints.clone()).unwrap_or_default();
         lints.extend(package_ast.config.lints.clone());
@@ -509,27 +509,45 @@ impl Package {
                     .collect::<Result<_, _>>()?,
                 lints: self.lints.clone(),
             },
-            lib: self.lib.as_ref().map(|lib| {
-                Span::unknown(ast::LibTarget {
-                    kind: if matches!(lib.ty, TargetType::Library) {
-                        None
-                    } else {
-                        Some(Span::unknown(lib.ty))
-                    },
-                    namespace: Some(lib.namespace.as_ref().map(|path| path.as_str().into())),
-                    path: lib.path.clone(),
+            lib: self
+                .lib
+                .as_ref()
+                .map(|lib| -> Result<_, Report> {
+                    lib.validate_naming()?;
+                    Ok(Span::unknown(ast::LibTarget {
+                        kind: if matches!(lib.ty, TargetType::Library) {
+                            None
+                        } else {
+                            Some(Span::unknown(lib.ty))
+                        },
+                        namespace: Some(lib.namespace.as_ref().map(|path| path.as_str().into())),
+                        path: lib.path.clone(),
+                        naming: lib
+                            .naming
+                            .as_ref()
+                            .map(ast::SourceNamingSpec::try_from)
+                            .transpose()?
+                            .map(Span::unknown),
+                    }))
                 })
-            }),
+                .transpose()?,
             bins: self
                 .bins
                 .iter()
-                .map(|bin| {
-                    Span::unknown(ast::BinTarget {
+                .map(|bin| -> Result<_, Report> {
+                    bin.validate_naming()?;
+                    Ok(Span::unknown(ast::BinTarget {
                         name: Some(bin.name.clone()),
                         path: bin.path.clone(),
-                    })
+                        naming: bin
+                            .naming
+                            .as_ref()
+                            .map(ast::SourceNamingSpec::try_from)
+                            .transpose()?
+                            .map(Span::unknown),
+                    }))
                 })
-                .collect(),
+                .collect::<Result<_, _>>()?,
             profiles: self
                 .profiles()
                 .iter()

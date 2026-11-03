@@ -11,7 +11,7 @@ use tempfile::TempDir;
 
 use crate::{
     DependencyBinding, DependencyVersionScheme, LibraryImport, LibrarySelection, Linkage, Project,
-    TargetType, Word, Workspace,
+    SourceNamingConvention, TargetType, Word, Workspace,
 };
 
 struct TestContext {
@@ -493,6 +493,94 @@ fn project_dependencies_require_explicit_runtime_selection() {
                 .contains("requires an explicit Latest/Pinned binding or custom home"),
             "{error}"
         );
+    }
+}
+
+#[test]
+fn source_target_naming_roundtrip_preserves_explicit_conventions_and_bindings() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    let id = "0x0100000000000000020000000000000003000000000000000400000000000000";
+    for (kind, convention) in [
+        ("library", SourceNamingConvention::DefiningPaths),
+        ("kernel", SourceNamingConvention::KernelRootExports),
+    ] {
+        for binding in [
+            "selection = 'custom', home = [{text = 'root-home'}, {revision = 2}]".into(),
+            format!("selection = 'latest', base = [{{text = 'tenant'}}], library-id = '{id}'"),
+            format!("selection = 'pinned', base = [], library-id = '{id}', revision = 7"),
+        ] {
+            fs::write(
+                &manifest,
+                format!(
+                    "[package]\nname = 'app'\nversion = '1.0.0'\n\
+                     [lib]\nkind = '{kind}'\npath = 'mod.masm'\n\
+                     naming = {{convention = '{}', binding = {{{binding}}}}}\n\
+                     [[bin]]\nname = 'main'\npath = 'main.masm'\n\
+                     naming = {{convention = 'defining-paths', binding = {{selection = 'custom', home = []}}}}\n",
+                    convention.as_str()
+                ),
+            )
+            .unwrap();
+            let context = TestContext::default();
+            let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+            let library = package.library_target().unwrap();
+            let naming = library.naming.as_ref().unwrap();
+            assert_eq!(naming.convention(), convention);
+            let expected: toml::Table =
+                toml::from_str(&format!("binding = {{{binding}}}")).unwrap();
+            let expected: crate::ast::DependencyBindingSpec =
+                expected["binding"].clone().try_into().unwrap();
+            assert_eq!(naming.binding(), &expected.resolve().unwrap());
+            let bin_naming = package.executable_targets()[0].naming.as_ref().unwrap();
+            assert_eq!(bin_naming.convention(), SourceNamingConvention::DefiningPaths);
+            assert!(bin_naming.binding().namespace_plan().home().is_empty());
+
+            let written = package.to_toml().unwrap();
+            // The AST writer and reader must retain both independently selected target records.
+            let ast: crate::ast::ProjectFile = toml::from_str(&written).unwrap();
+            assert_eq!(ast.lib.as_ref().unwrap().naming.as_ref().unwrap().convention, convention);
+            assert!(ast.bins[0].naming.is_some());
+            fs::write(&manifest, written).unwrap();
+            let restored = Project::load(&manifest, &context.source_manager).unwrap().package();
+            assert_eq!(restored.library_target().unwrap().naming, library.naming);
+            assert_eq!(
+                restored.executable_targets()[0].naming,
+                package.executable_targets()[0].naming
+            );
+        }
+    }
+}
+
+#[test]
+fn source_target_naming_rejects_conventions_for_the_wrong_target_kind() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    for target in [
+        "[lib]\nkind = 'kernel'\npath = 'mod.masm'\nnaming = {convention = 'defining-paths', binding = {selection = 'custom', home = []}}",
+        "[lib]\npath = 'mod.masm'\nnaming = {convention = 'kernel-root-exports', binding = {selection = 'custom', home = []}}",
+        "[[bin]]\npath = 'main.masm'\nnaming = {convention = 'kernel-root-exports', binding = {selection = 'custom', home = []}}",
+    ] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n{target}\n"))
+            .unwrap();
+        let context = TestContext::default();
+        let error = Project::load(&manifest, &context.source_manager).unwrap_err();
+        assert!(error.to_string().contains("is invalid for target kind"), "{error}");
+    }
+}
+
+#[test]
+fn omitted_source_target_naming_remains_unconfigured_for_default_and_explicit_targets() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    for targets in ["", "[lib]\npath = 'mod.masm'\n[[bin]]\npath = 'main.masm'\n"] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n{targets}"))
+            .unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert!(package.library_target().unwrap().naming.is_none());
+        assert!(package.executable_targets().iter().all(|target| target.naming.is_none()));
+        assert!(!package.to_toml().unwrap().contains("naming"));
     }
 }
 

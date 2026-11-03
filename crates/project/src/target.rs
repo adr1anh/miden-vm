@@ -1,8 +1,98 @@
 use alloc::string::{String, ToString};
+use core::fmt::Write;
 
 use miden_assembly_syntax::Path;
 
 use crate::*;
+
+/// Explicit construction convention for naming concrete procedures in a source target.
+///
+/// These conventions do not select an implementation, authenticate a publisher, or establish a
+/// package's public callable surface. Complete bindings and aliases retain their own declarations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+pub enum SourceNamingConvention {
+    /// Name concrete procedures by their defining module and procedure paths.
+    DefiningPaths,
+    /// Place public executable kernel exports at fixed root and private helpers beneath their home.
+    KernelRootExports,
+}
+
+impl SourceNamingConvention {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DefiningPaths => "defining-paths",
+            Self::KernelRootExports => "kernel-root-exports",
+        }
+    }
+}
+
+/// A source naming convention and an explicit fallback default-home request.
+///
+/// An importing dependency's home request takes precedence over this fallback. This configuration
+/// supplies no ownership, expected implementation, profile admission, or publication authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceNaming {
+    convention: SourceNamingConvention,
+    binding: DependencyBinding,
+}
+
+impl SourceNaming {
+    pub fn new(convention: SourceNamingConvention, binding: DependencyBinding) -> Self {
+        Self { convention, binding }
+    }
+
+    pub const fn convention(&self) -> SourceNamingConvention {
+        self.convention
+    }
+
+    pub fn binding(&self) -> &DependencyBinding {
+        &self.binding
+    }
+
+    /// Reject a convention that cannot construct the selected target kind.
+    pub fn validate_target_type(&self, ty: TargetType) -> Result<(), Report> {
+        let valid = match self.convention {
+            SourceNamingConvention::DefiningPaths => !matches!(ty, TargetType::Kernel),
+            SourceNamingConvention::KernelRootExports => matches!(ty, TargetType::Kernel),
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(Report::msg(format!(
+                "source naming convention '{}' is invalid for target kind '{ty}'",
+                self.convention.as_str()
+            )))
+        }
+    }
+
+    fn append_build_provenance_projection(&self, out: &mut String) {
+        out.push_str("target:naming:convention:");
+        out.push_str(self.convention.as_str());
+        out.push('\n');
+        out.push_str("target:naming:binding:");
+        match &self.binding {
+            DependencyBinding::Custom(_) => out.push_str("custom"),
+            DependencyBinding::Standard(import) => match import.selection() {
+                LibrarySelection::Latest => out.push_str("latest"),
+                LibrarySelection::Pinned(revision) => {
+                    write!(out, "pinned:{revision}").expect("writing to a String cannot fail");
+                },
+            },
+        }
+        out.push('\n');
+        out.push_str("target:naming:home:");
+        for label in self.binding.namespace_plan().home() {
+            write!(out, "{}:", label.as_bytes().len()).expect("writing to a String cannot fail");
+            for byte in label.as_bytes() {
+                write!(out, "{byte:02x}").expect("writing to a String cannot fail");
+            }
+            out.push('/');
+        }
+        out.push('\n');
+    }
+}
 
 /// Represents build target configuration
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +112,8 @@ pub struct Target {
     /// `mod.masm`, while for Rust it might refer to `src/lib.rs` - as long as an appropriate
     /// source provider is registered with the assembler.
     pub path: Span<Uri>,
+    /// Explicit source naming configuration; omission preserves provider-driven naming.
+    pub naming: Option<SourceNaming>,
 }
 
 impl Target {
@@ -49,7 +141,23 @@ impl Target {
             name: Span::unknown(name.into()),
             namespace: Span::unknown(namespace.into()),
             path: Span::unknown(uri),
+            naming: None,
         }
+    }
+
+    /// Select an explicit source convention and fallback home for this target.
+    pub fn with_naming(mut self, naming: SourceNaming) -> Result<Self, Report> {
+        naming.validate_target_type(self.ty)?;
+        self.naming = Some(naming);
+        Ok(self)
+    }
+
+    /// Validate source naming after direct edits to the public target fields.
+    pub fn validate_naming(&self) -> Result<(), Report> {
+        if let Some(naming) = &self.naming {
+            naming.validate_target_type(self.ty)?;
+        }
+        Ok(())
     }
 
     /// Returns true if this target is an executable target
@@ -69,7 +177,7 @@ impl Target {
 
     /// Append the selected target fields that affect package artifact reuse to `out`.
     pub fn append_build_provenance_projection(&self, out: &mut String) {
-        let Self { ty, name, namespace, path } = self;
+        let Self { ty, name, namespace, path, naming } = self;
 
         out.push_str("target:kind:");
         out.push_str(ty.to_string().as_str());
@@ -83,5 +191,112 @@ impl Target {
         out.push_str("target:path:");
         out.push_str(path.inner().as_str());
         out.push('\n');
+        if let Some(naming) = naming {
+            naming.append_build_provenance_projection(out);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::sync::Arc;
+
+    use miden_core::program::CanonicalLabel;
+    use miden_mast_package::NamespacePlan;
+
+    use super::*;
+
+    fn naming(convention: SourceNamingConvention, home: &str) -> SourceNaming {
+        SourceNaming::new(
+            convention,
+            DependencyBinding::Custom(NamespacePlan::new(vec![
+                CanonicalLabel::text(home).unwrap(),
+            ])),
+        )
+    }
+
+    #[test]
+    fn constructors_keep_source_naming_opt_in_and_validate_explicit_conventions() {
+        let library = Target::library(Arc::<Path>::from(Path::new("app")), Uri::new("mod.masm"));
+        let executable = Target::executable("app", Uri::new("main.masm"));
+        let kernel = Target::new(
+            TargetType::Kernel,
+            "kernel",
+            Arc::<Path>::from(Path::kernel_path()),
+            Uri::new("kernel.masm"),
+        );
+        assert!(library.naming.is_none());
+        assert!(executable.naming.is_none());
+        assert!(kernel.naming.is_none());
+        for target in [library, executable] {
+            assert!(
+                target
+                    .clone()
+                    .with_naming(naming(SourceNamingConvention::DefiningPaths, "home"))
+                    .is_ok()
+            );
+            assert!(
+                target
+                    .with_naming(naming(SourceNamingConvention::KernelRootExports, "home"))
+                    .is_err()
+            );
+        }
+        assert!(
+            kernel
+                .clone()
+                .with_naming(naming(SourceNamingConvention::KernelRootExports, "helpers"))
+                .is_ok()
+        );
+        assert!(
+            kernel
+                .with_naming(naming(SourceNamingConvention::DefiningPaths, "helpers"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn target_provenance_records_convention_home_and_explicit_binding_selection() {
+        let target = Target::library(Arc::<Path>::from(Path::new("app")), Uri::new("mod.masm"));
+        let projection = |target: &Target| {
+            let mut projection = String::new();
+            target.append_build_provenance_projection(&mut projection);
+            projection
+        };
+        let absent = projection(&target);
+        let configured = target
+            .clone()
+            .with_naming(naming(SourceNamingConvention::DefiningPaths, "home"))
+            .unwrap();
+        let changed = target
+            .clone()
+            .with_naming(naming(SourceNamingConvention::DefiningPaths, "other"))
+            .unwrap();
+        assert_ne!(projection(&configured), absent);
+        assert_ne!(projection(&configured), projection(&changed));
+        assert!(projection(&configured).contains("target:naming:convention:defining-paths\n"));
+
+        let import = LibraryImport::new(
+            NamespacePlan::new(vec![]),
+            Word::default(),
+            LibrarySelection::Latest,
+        );
+        let custom = target
+            .clone()
+            .with_naming(SourceNaming::new(
+                SourceNamingConvention::DefiningPaths,
+                DependencyBinding::Custom(import.namespace_plan()),
+            ))
+            .unwrap();
+        let standard = target
+            .with_naming(SourceNaming::new(
+                SourceNamingConvention::DefiningPaths,
+                DependencyBinding::Standard(import),
+            ))
+            .unwrap();
+        assert_eq!(
+            custom.naming.as_ref().unwrap().binding().namespace_plan(),
+            standard.naming.as_ref().unwrap().binding().namespace_plan()
+        );
+        assert_ne!(projection(&custom), projection(&standard));
     }
 }

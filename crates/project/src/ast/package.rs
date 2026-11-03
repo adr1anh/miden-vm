@@ -438,6 +438,7 @@ impl ProjectFile {
                     name,
                     namespace,
                     path: Span::new(span, Uri::new("mod.masm")),
+                    naming: None,
                 },
             )));
         }
@@ -470,11 +471,12 @@ impl ProjectFile {
                 name,
                 namespace,
                 path: lib.path.clone(),
+                naming: lib.naming.as_ref().map(|naming| naming.resolve(kind)).transpose()?,
             },
         )))
     }
 
-    pub fn extract_executable_targets(&self) -> Vec<Span<crate::Target>> {
+    pub fn extract_executable_targets(&self) -> Result<Vec<Span<crate::Target>>, Report> {
         use miden_assembly_syntax::Path as MasmPath;
 
         use crate::TargetType;
@@ -494,11 +496,16 @@ impl ProjectFile {
                     name,
                     namespace,
                     path: target.path.clone(),
+                    naming: target
+                        .naming
+                        .as_ref()
+                        .map(|naming| naming.resolve(TargetType::Executable))
+                        .transpose()?,
                 },
             ));
         }
 
-        bins
+        Ok(bins)
     }
 }
 

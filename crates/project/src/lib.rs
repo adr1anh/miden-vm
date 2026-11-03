@@ -43,7 +43,7 @@ pub use self::{
     linkage::Linkage,
     package::Package,
     profile::Profile,
-    target::Target,
+    target::{SourceNaming, SourceNamingConvention, Target},
     workspace::Workspace,
 };
 
