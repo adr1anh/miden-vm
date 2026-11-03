@@ -36,7 +36,7 @@ use miden_mast_package::{
     Section, SectionId, TypeExport,
     debug_info::{DebugSourceNodeId, PackageDebugInfo},
 };
-use miden_project::{Linkage, TargetType};
+use miden_project::{Linkage, PackageSourceMount, TargetType};
 
 use self::error::AssemblerError;
 pub use self::{namespace_inputs::NamespaceInputs, product::AssemblyProduct};
@@ -460,6 +460,40 @@ impl Assembler {
             },
         }
     }
+
+    /// Links a library package at an explicit source prefix, retaining its exact canonical naming.
+    ///
+    /// Kernel attachment remains a separate operation through [`Self::link_package`].
+    pub fn with_package_at(
+        mut self,
+        package: Arc<Package>,
+        linkage: Linkage,
+        naming: impl Into<Arc<PackageNaming>>,
+        mount: PackageSourceMount,
+    ) -> Result<Self, Report> {
+        self.link_package_at(package, linkage, naming, mount)?;
+        Ok(self)
+    }
+
+    /// Links a library package at an explicit source prefix without rebasing its callable keys.
+    ///
+    /// Naming admission and every route/surface/capacity check complete before linker mutation.
+    /// Kernel packages require separate attachment through [`Self::link_package`].
+    pub fn link_package_at(
+        &mut self,
+        package: Arc<Package>,
+        linkage: Linkage,
+        naming: impl Into<Arc<PackageNaming>>,
+        mount: PackageSourceMount,
+    ) -> Result<(), Report> {
+        self.linker.link_library_at(
+            LinkLibrary::from_package(package, naming)
+                .map_err(Report::msg)?
+                .with_linkage(linkage),
+            mount,
+        )?;
+        Ok(())
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -819,7 +853,7 @@ impl Assembler {
                             item.source_debug_root_id().map(DebugSourceNodeId::from),
                             mast_forest_builder,
                         )?;
-                        let path = self.linker[gid.module].path().join(&item.name);
+                        let path = self.linker[gid.module].package_path().join(&item.name);
                         if let Some(library_id) = item.source_library_commitment()
                             && let Some(library) = self.linker.library_by_commitment(library_id)
                         {
@@ -1526,11 +1560,12 @@ impl Assembler {
         if let Some(library_id) = item.source_library_commitment()
             && let Some(library) = self.linker.library_by_commitment(library_id)
         {
+            let package_path = self.linker[gid.module].package_path().join(&item.name);
             mast_forest_builder.import_procedure_function(
                 gid,
                 library_id,
                 library,
-                &path,
+                &package_path,
                 item.source_debug_root_id().map(DebugSourceNodeId::from),
                 item.digest,
             )?;

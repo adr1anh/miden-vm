@@ -477,7 +477,7 @@ impl Assembler {
         }) {
             return Ok(None);
         }
-        let mut bytes = b"miden.assembly.project-inputs.v1".to_vec();
+        let mut bytes = b"miden.assembly.project-inputs.v2".to_vec();
         bytes.extend_from_slice(&self.namespace_inputs.cache_commitment()?.as_bytes());
         append_cache_bytes(&mut bytes, profile_name.as_bytes())?;
         bytes.extend_from_slice(&[
@@ -499,6 +499,19 @@ impl Assembler {
                 miden_project::Linkage::Static => 0,
                 miden_project::Linkage::Dynamic => 1,
             });
+        }
+        let routes = self.linker.library_routes().collect::<Vec<_>>();
+        append_cache_len(&mut bytes, routes.len())?;
+        for (commitment, mount) in routes {
+            bytes.extend_from_slice(&commitment.as_bytes());
+            match mount {
+                Some(mount) => {
+                    bytes.push(1);
+                    append_cache_bytes(&mut bytes, mount.package_base().as_str().as_bytes())?;
+                    append_cache_bytes(&mut bytes, mount.source_base().as_str().as_bytes())?;
+                },
+                None => bytes.push(0),
+            }
         }
         match self.linker.kernel_package() {
             Some(kernel) => {

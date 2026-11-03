@@ -100,6 +100,11 @@ impl ModuleDescriptor {
         &self.path
     }
 
+    /// Sets the source lookup path while retaining the module's version and complete surface.
+    pub fn set_path(&mut self, path: Arc<Path>) {
+        self.path = path;
+    }
+
     /// Returns the number of procedures in the module.
     pub fn num_procedures(&self) -> usize {
         self.items.iter().filter(|item| matches!(item, ItemInfo::Procedure(_))).count()

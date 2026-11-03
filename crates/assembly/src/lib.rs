@@ -42,6 +42,7 @@ pub use miden_assembly_syntax::{
 pub use miden_core::{mast, serde, utils};
 pub use miden_mast_package as package;
 pub use miden_mast_package::CallableBinding;
+pub use miden_project::PackageSourceMount;
 
 #[doc(hidden)]
 pub use self::linker::LinkerError;
