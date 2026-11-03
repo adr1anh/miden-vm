@@ -23,6 +23,8 @@ use miden::core::mem
 # Number of field elements in the canonical claim encoding.
 const NUM_CLAIM_ELEMENTS = 40
 
+# EXECUTION_CLAIM_DOMAIN_TAG = 0x01000102
+
 # Initial CV for the claim commitment:
 # init(EXECUTION_CLAIM v2 = 0x01000102, [40, 0, 0]). The fixed lanes match
 # core/src/program/claim.rs::commitment_uses_v2_domain_length_40_and_exactly_five_payload_blocks.
