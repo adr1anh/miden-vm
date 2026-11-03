@@ -5,6 +5,7 @@ version = "1.0.0-rc.1"
 [lib]
 namespace = "miden::core"
 path = "mod.masm"
+naming = { convention = "defining-paths", binding = { selection = "custom", home = [] } }
 
 [dependencies]
 

@@ -24,13 +24,6 @@ fn core_lib(c: &mut Criterion) {
             let manifest_path = Path::new(manifest_dir).join("asm/miden-project.toml");
             let mut project_assembler =
                 assembler.for_project_at_path(manifest_path, &mut registry).unwrap();
-            project_assembler.with_namespace_inputs_provider(|_, sources, _| {
-                source_naming::source_namespace_inputs(
-                    NamespacePlan::new(vec![]),
-                    core::iter::once(sources.root.as_ref())
-                        .chain(sources.support.iter().map(Box::as_ref)),
-                )
-            });
             black_box(
                 project_assembler.assemble_with_naming(ProjectTargetSelector::Library, "release"),
             )
