@@ -56,9 +56,9 @@ pub proc encrypt_with_ad(
     # Key and nonce stay on the operand stack throughout encryption and authentication.
     movupw.2 loc_storew_le.0 dropw movup.8 loc_store.4
     loc_load.3 loc_load.1 exec.assert_message_lengths
-    locaddr.0 loc_load.1 loc_load.0 exec.assert_range
-    locaddr.0 loc_load.3 loc_load.2 exec.assert_range
-    locaddr.0 loc_load.1 mul.2 loc_load.4 exec.assert_range
+    locaddr.0 loc_load.1 loc_load.0 inline.assert_range
+    locaddr.0 loc_load.3 loc_load.2 inline.assert_range
+    locaddr.0 loc_load.1 mul.2 loc_load.4 inline.assert_range
     loc_load.1 mul.2 loc_load.4 loc_load.1 loc_load.0 exec.assert_disjoint
     loc_load.1 mul.2 loc_load.4 loc_load.3 loc_load.2 exec.assert_disjoint
 
@@ -122,10 +122,10 @@ pub proc decrypt_with_ad(
     # loc[4..8] = [ad_ptr, ad_len, tag0, tag1]
     movupw.3 loc_storew_le.4 dropw movupw.2 loc_storew_le.0 dropw
     loc_load.5 loc_load.2 exec.assert_message_lengths
-    locaddr.0 loc_load.2 mul.2 loc_load.0 exec.assert_range
-    locaddr.0 loc_load.2 loc_load.1 exec.assert_range
-    locaddr.0 loc_load.2 mul.2 loc_load.3 exec.assert_range
-    locaddr.0 loc_load.5 loc_load.4 exec.assert_range
+    locaddr.0 loc_load.2 mul.2 loc_load.0 inline.assert_range
+    locaddr.0 loc_load.2 loc_load.1 inline.assert_range
+    locaddr.0 loc_load.2 mul.2 loc_load.3 inline.assert_range
+    locaddr.0 loc_load.5 loc_load.4 inline.assert_range
 
     loc_load.2 loc_load.1 loc_load.2 mul.2 loc_load.0 exec.assert_disjoint
     loc_load.2 mul.2 loc_load.3 loc_load.2 mul.2 loc_load.0 exec.assert_disjoint
