@@ -232,6 +232,39 @@ fn package_serialization_roundtrip() {
 }
 
 #[test]
+fn package_roundtrip_preserves_content_addressed_and_arbitrary_advice_entries() {
+    let resource = vec![Felt::from_u32(1), Felt::from_u32(2), Felt::from_u32(3)];
+    let resource_key = miden_core::chiplets::hasher::hash_elements(&resource);
+    let private = vec![Felt::from_u32(7), Felt::from_u32(8)];
+    let private_key = Word::from([9_u32, 10, 11, 12]);
+    assert_ne!(private_key, miden_core::chiplets::hasher::hash_elements(&private));
+    let mut advice = AdviceMap::default();
+    advice.insert(resource_key, resource.clone());
+    advice.insert(private_key, private.clone());
+    let package = build_package_with_debug_info().with_advice_map(advice);
+    let expected_commitment = package.dependency_commitment();
+    let debug_commitment = package.commitment();
+
+    let mut decoded = Package::read_from_bytes_trusted(&package.to_bytes()).unwrap();
+    assert!(decoded.sections.iter().any(|section| section.id.is_debug()));
+    assert_eq!(decoded.commitment(), debug_commitment);
+    for strip_debug in [false, true] {
+        if strip_debug {
+            decoded.strip_debug_info().unwrap();
+            assert!(!decoded.sections.iter().any(|section| section.id.is_debug()));
+            assert_ne!(decoded.commitment(), debug_commitment);
+        }
+        let untrusted = Package::read_from_bytes(&decoded.to_bytes()).unwrap();
+        for candidate in [&decoded, &untrusted] {
+            let advice = candidate.mast_forest().advice_map();
+            assert_eq!(advice.get(&resource_key).unwrap().as_ref(), resource.as_slice());
+            assert_eq!(advice.get(&private_key).unwrap().as_ref(), private.as_slice());
+            assert_eq!(candidate.dependency_commitment(), expected_commitment);
+        }
+    }
+}
+
+#[test]
 fn private_only_code_package_roundtrips_without_public_exports() {
     let (forest, _) = build_forest();
     // An explicit implementation reference is also a code candidate. Its root records the
