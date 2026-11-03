@@ -1,18 +1,14 @@
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{path::PathBuf, time::Instant};
 
 use clap::Parser;
-use miden_assembly::{
-    Assembler, DefaultSourceManager,
-    diagnostics::{IntoDiagnostic, Report, Result, WrapErr},
-};
-use miden_mast_package::Package;
+use miden_assembly::diagnostics::{IntoDiagnostic, Report, Result, WrapErr};
 use miden_vm::{
-    ExecutionClaim, KernelDescriptor, PrecompileStatus, ProgramInfo,
-    default_verification_precompile_limits, internal::InputFile,
+    ExecutionClaim, PrecompileStatus, default_verification_precompile_limits, internal::InputFile,
 };
 
 use super::{
-    data::{OutputFile, ProgramHash, ProofFile},
+    data::{OutputFile, ProofFile},
+    execution_inputs::DescriptorArgs,
     precompile_limits::PrecompileArgs,
 };
 
@@ -28,13 +24,8 @@ pub struct VerifyCmd {
     /// Path to proof file
     #[arg(short = 'p', long = "proof", value_parser)]
     proof_file: PathBuf,
-    /// Program hash (hex)
-    #[arg(short = 'x', long = "program-hash")]
-    program_hash: String,
-
-    /// Path to a file (.masm or .masp) containing the kernel to be loaded with the program
-    #[arg(long = "kernel", value_parser)]
-    kernel_file: Option<PathBuf>,
+    #[command(flatten)]
+    descriptor: DescriptorArgs,
 
     #[command(flatten)]
     precompile_limits: PrecompileArgs,
@@ -52,20 +43,11 @@ impl VerifyCmd {
     pub fn execute(&self) -> Result<(), Report> {
         let verification_limits =
             self.precompile_limits.apply(default_verification_precompile_limits());
-        // Validate the kernel file's extension before doing any other file I/O (mirrors the
-        // same ordering issue already fixed for `prove` in #3587).
-        if let Some(ref kernel_path) = self.kernel_file {
-            validate_kernel_extension(kernel_path)?;
-        }
-
         let (input_file, output_file) = self.infer_defaults()?;
 
         println!("===============================================================================");
         println!("Verifying proof: {}", self.proof_file.display());
         println!("-------------------------------------------------------------------------------");
-
-        // read program hash from input
-        let program_hash = ProgramHash::read(&self.program_hash).map_err(Report::msg)?;
 
         // load input data from file
         let input_data = InputFile::read(&Some(input_file), self.proof_file.as_ref())?;
@@ -91,23 +73,9 @@ impl VerifyCmd {
 
         let now = Instant::now();
 
-        // Load kernel if provided, otherwise use default
-        let kernel = if let Some(ref kernel_path) = self.kernel_file {
-            if !kernel_path.is_file() {
-                return Err(Report::msg(format!(
-                    "Kernel file `{}` must be a file.",
-                    kernel_path.display()
-                )));
-            }
-            load_kernel_descriptor(kernel_path)?
-        } else {
-            KernelDescriptor::default()
-        };
-        let program_info = ProgramInfo::new(program_hash, kernel);
-
         // verify proof
         let stack_outputs = outputs_data.stack_outputs().map_err(Report::msg)?;
-        let claim = ExecutionClaim::from_program_info(program_info, stack_inputs, stack_outputs);
+        let claim = ExecutionClaim::new(self.descriptor.descriptor(), stack_inputs, stack_outputs);
         let outcome = miden_vm::Verifier::new()
             .with_verification_precompile_limits(verification_limits)
             .verify(&claim, &proof)
@@ -169,70 +137,20 @@ fn format_security_level((conjectured, proven): (u32, u32)) -> String {
     format!("{conjectured} bits conjectured, {proven} bits proven")
 }
 
-/// Validates that `kernel_path` has a `.masm` or `.masp` extension, without touching the
-/// filesystem.
-fn validate_kernel_extension(kernel_path: &std::path::Path) -> Result<(), Report> {
-    let ext = kernel_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    match ext.as_str() {
-        "masm" | "masp" => Ok(()),
-        _ => Err(Report::msg(format!(
-            "Kernel file `{}` must have a .masm or .masp extension",
-            kernel_path.display()
-        ))),
-    }
-}
-
-/// Loads a kernel descriptor from a file (.masm or .masp).
-///
-/// Callers are expected to have already validated the extension via
-/// [`validate_kernel_extension`]; this only re-derives it to pick the right loading path.
-fn load_kernel_descriptor(kernel_path: &PathBuf) -> Result<KernelDescriptor, Report> {
-    // Determine file type based on extension
-    let ext = kernel_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-
-    // Load kernel from .masp package or compile from .masm source
-    let kernel_pkg = match ext.as_str() {
-        "masp" => {
-            // Load kernel from package file
-            let package =
-                Package::deserialize_from_file(kernel_path).into_diagnostic().wrap_err_with(
-                    || format!("Failed to deserialize kernel package `{}`", kernel_path.display()),
-                )?;
-            if !package.is_kernel() {
-                return Err(Report::msg(format!(
-                    "invalid kernel package, package is of type {}",
-                    package.kind,
-                )));
-            }
-            Arc::new(package)
-        },
-        "masm" => {
-            // Compile kernel from assembly source
-            let source_manager = Arc::new(DefaultSourceManager::default());
-            Assembler::new(source_manager)
-                .assemble_kernel_from_root("kernel", kernel_path)
-                .map(Arc::<Package>::from)
-                .wrap_err_with(|| {
-                    format!("Failed to compile kernel from `{}`", kernel_path.display())
-                })?
-        },
-        _ => {
-            return Err(Report::msg(format!(
-                "Kernel file `{}` must have a .masm or .masp extension",
-                kernel_path.display()
-            )));
-        },
-    };
-
-    // Extract the kernel descriptor from the kernel package.
-    kernel_pkg.to_kernel_descriptor()
-}
-
 #[cfg(test)]
 mod tests {
     use std::{fs, fs::File};
 
     use super::*;
+
+    fn command() -> VerifyCmd {
+        VerifyCmd::try_parse_from(
+            ["verify", "--proof", "test.proof"]
+                .into_iter()
+                .chain(super::super::execution_inputs::tests::required_args().into_iter().take(4)),
+        )
+        .unwrap()
+    }
 
     #[test]
     fn infer_defaults_uses_proof_file_basename_for_defaults() {
@@ -246,15 +164,8 @@ mod tests {
         File::create(&proof_path).expect("create proof file");
 
         // build command with no explicit input/output
-        let cmd = VerifyCmd {
-            input_file: None,
-            output_file: None,
-            proof_file: proof_path.clone(),
-            program_hash: "00".to_string(),
-            kernel_file: None,
-            precompile_limits: PrecompileArgs::default(),
-            require_complete: false,
-        };
+        let mut cmd = command();
+        cmd.proof_file = proof_path.clone();
 
         // exercise
         let (input, output) = cmd.infer_defaults().expect("infer defaults");
@@ -269,24 +180,39 @@ mod tests {
     }
 
     #[test]
-    fn execute_rejects_bad_kernel_extension_before_touching_other_files() {
-        // None of these paths need to exist: the bad kernel extension must be rejected before
-        // any of that file I/O runs.
-        let cmd = VerifyCmd {
-            input_file: None,
-            output_file: None,
-            proof_file: PathBuf::from("/nonexistent/does-not-exist.proof"),
-            program_hash: "00".to_string(),
-            kernel_file: Some(PathBuf::from("kernel.txt")),
-            precompile_limits: PrecompileArgs::default(),
-            require_complete: false,
-        };
+    fn verifier_requires_only_caller_descriptor_and_rejects_legacy_authority() {
+        let expected = command().descriptor.descriptor();
+        assert_eq!(expected.entry_key().as_word().as_bytes()[0], 1);
+        assert_eq!(expected.environment_root().as_word().as_bytes()[0], 2);
 
-        let err = cmd.execute().expect_err("expected the bad kernel extension to be rejected");
-        let message = format!("{err}");
-        assert!(
-            message.contains("must have a .masm or .masp extension"),
-            "expected a kernel-extension error, got: {message}"
-        );
+        let descriptor_args = super::super::execution_inputs::tests::required_args();
+        for index in [0, 2] {
+            let mut args = descriptor_args[..4].to_vec();
+            args.drain(index..index + 2);
+            assert!(
+                VerifyCmd::try_parse_from(
+                    ["verify", "--proof", "missing.proof"].into_iter().chain(args),
+                )
+                .is_err()
+            );
+        }
+        for unsupported in [
+            ["--program-hash", "00"],
+            ["-x", "00"],
+            ["--kernel", "kernel.masm"],
+            ["--environment-openings", "openings.json"],
+            ["--environment-policy", "policy.json"],
+            ["--max-environment-policy-bytes", "8192"],
+        ] {
+            assert!(
+                VerifyCmd::try_parse_from(
+                    ["verify", "--proof", "missing.proof"]
+                        .into_iter()
+                        .chain(descriptor_args[..4].iter().copied())
+                        .chain(unsupported),
+                )
+                .is_err()
+            );
+        }
     }
 }

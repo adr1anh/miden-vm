@@ -16,7 +16,7 @@ use miden_vm::internal::execution_inputs::{AdmittedExecutionInputs, ExecutionInp
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Args)]
-pub struct ExecutionArgs {
+pub struct DescriptorArgs {
     /// Independently authorized entry key (0x-prefixed canonical Word)
     #[arg(long, value_parser = parse_entry_key)]
     expected_entry_key: ProcedureKey,
@@ -24,6 +24,18 @@ pub struct ExecutionArgs {
     /// Independently authorized environment root (0x-prefixed canonical Word)
     #[arg(long, value_parser = parse_environment_root)]
     expected_environment_root: EnvironmentRoot,
+}
+
+impl DescriptorArgs {
+    pub fn descriptor(&self) -> ExecutionDescriptor {
+        ExecutionDescriptor::new(self.expected_entry_key, self.expected_environment_root)
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ExecutionArgs {
+    #[command(flatten)]
+    descriptor: DescriptorArgs,
 
     /// Versioned JSON opening evidence; supplies no authority or private advice
     #[arg(long, value_name = "PATH")]
@@ -44,7 +56,7 @@ impl ExecutionArgs {
             .map_err(|error| Report::msg(format!("execution policy file: {error}")))?;
         let policy = Policy::parse(&bytes).map_err(Report::msg)?;
         let environment = ExecutionEnvironment::new(
-            ExecutionDescriptor::new(self.expected_entry_key, self.expected_environment_root),
+            self.descriptor.descriptor(),
             policy.opening,
             policy.ledger,
             policy.session,
@@ -340,7 +352,7 @@ pub(super) mod tests {
         let error = args.admit().err().expect("policy file must exceed its limit");
         assert!(error.to_string().contains("execution policy file"));
         args.max_environment_policy_bytes += 1;
-        args.expected_entry_key = ProcedureKey::new(Word::empty());
+        args.descriptor.expected_entry_key = ProcedureKey::new(Word::empty());
         let error = args.admit().err().expect("evidence must not supply caller authority");
         assert!(error.to_string().contains("descriptor differs from caller"));
     }

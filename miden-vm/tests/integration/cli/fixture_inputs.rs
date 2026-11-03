@@ -18,7 +18,7 @@ use miden_assembly::{
     ast::{Item, Module, ModuleKind, Path as SourcePath},
     testing::{FixtureNamespace, parser},
 };
-use miden_core::program::{CanonicalLabel, ProcedureKey};
+use miden_core::program::{CanonicalLabel, ExecutionDescriptor, ProcedureKey};
 use miden_core_lib::CoreLibrary;
 use miden_mast_package::{
     CallableBinding, NamespacePlan, Package, PackageCallables, PackageNaming, TargetType,
@@ -304,6 +304,7 @@ fn project(naming: &PackageNaming, bindings: &[CallableBinding]) -> PackageNamin
 
 pub struct ProgramFixture {
     pub named: NamedProgram,
+    expected_descriptor: ExecutionDescriptor,
     source: NamingFile,
     artifact: NamingFile,
     execution_args: Vec<OsString>,
@@ -458,6 +459,7 @@ impl ProgramFixture {
         ];
         Self {
             named,
+            expected_descriptor: descriptor,
             source,
             artifact,
             execution_args,
@@ -466,6 +468,24 @@ impl ProgramFixture {
     }
     pub fn write_package(&self, path: &Path) {
         self.named.package.write_to_file(path).unwrap();
+    }
+    /// Verifier authority fixed by the fixture before any CLI output or proof is read.
+    pub fn descriptor_args(&self) -> [String; 4] {
+        [
+            "--expected-entry-key".into(),
+            hex(self.expected_descriptor.entry_key().as_word().as_bytes()),
+            "--expected-environment-root".into(),
+            hex(self.expected_descriptor.environment_root().as_word().as_bytes()),
+        ]
+    }
+    pub fn verify_command(&self, dir: &Path, proof: impl AsRef<Path>) -> Command {
+        let mut command = super::bin_under_test(dir);
+        command
+            .arg("verify")
+            .arg("--proof")
+            .arg(proof.as_ref())
+            .args(self.descriptor_args());
+        command
     }
     pub fn apply<'a>(&self, command: &'a mut Command, artifact: bool) -> &'a mut Command {
         if artifact {
