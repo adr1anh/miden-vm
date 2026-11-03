@@ -8,7 +8,7 @@ The repository baseline is `00b12150715891582864d256ef51c5ea46bfb282`, inspected
 
 Read the linked design chapters when implementing their contracts. This plan selects implementation boundaries; it does not silently decide remaining Protocol policy or compiler ABI questions.
 
-**Scope correction, 3 November 2026:** implement the minimum VM/toolchain support that can host LibraryTree, not the full LibraryTree Protocol. D3 below supersedes Protocol-specific identity/interface/registration/closure requirements in older stage descriptions and historical evidence. Those are optional future integrations, not gates for completing the VM portion. Preserve every VM authentication, calling-convention, malformed-input, resource, native/generated/recursive and security acceptance requirement. Do not add a default library identity algorithm or mandatory Protocol metadata while integrating the in-flight assembler work.
+**Scope and identity clarification, 3 November 2026:** implement VM/toolchain support without implementing a Protocol registry. Generic APIs may consume opaque typed LibraryIds, declarations and explicit homes. D3 retains the Pages' selected identity/interface formulas and permanent registration binding: any Protocol profile must derive/verify that identity and satisfy its required external validation gates. The earlier opaque-assignment decision and wording treating the Page formulas as historical are superseded. Do not invent an identity codec/domain or make Protocol metadata mandatory for generic compilation. Preserve every existing security and acceptance gate; continue independent VM work while external inputs remain pending.
 
 - [LibraryTree design workspace](https://chatgpt.com/space/page_2e2830d3aca081919395850e2d6425c3), [design overview](https://chatgpt.com/space/page_78e4c04efdb48191a07eb544f8729784), and [decisions and next steps](https://chatgpt.com/space/page_a19f6685aeb88191a31a35296a82e48b).
 - [Namespaced execution shared contracts](https://chatgpt.com/space/page_11597d3254d8819196b4f5b3d0d13718), [execution, MAST and processor design](https://chatgpt.com/space/page_6260aefe8dd481919833c1414f870d34), and [environment execution model](https://chatgpt.com/space/page_0cb8fddb96a88191809388bf83fe686a).
@@ -28,10 +28,10 @@ Breaking changes are accepted subject to D2: existing MASM programs must remain 
 6. **Runtime exec:** every retained source exec, including local/bundled helpers, becomes real keyed EXEC (`0x5f`). Structural inline expansion requires explicit eligible fixed-body opt-in. Latest implementations are not silently frozen. Runtime recursion is distinct from forbidden structural inline cycles.
 7. **Packed proof relation:** Library/Controller/AEAD/Memory/ACE/Bitwise/PAD share Chiplets24/4, the selected 22-cell Library overlay, nine fixed periodic columns and `[4,4,3,2]` lookup capacity. Four production AIRs remain. Degree bounds, lookup multiplicities and physical prefix relocation require actual capture/testing.
 8. **Statement cutover:** claim44 v2, Core36 public Felts, Chiplets8 public Felts and deferred-only aux4 replace the present claim40/Core32/kernel-list authority. Expected public claims come from the verifier caller. Root END authenticates K_entry/D_root and closes the initial binding; all-HALT is invalid. Transport format 3 is separate from claim v2.
-9. **Toolchain separation:** a library-supplied opaque ID, declarations, explicit namespace home, code materialization and source aliases are separate. Derive K from the supplied home/export labels without requiring D or an interface commitment. Latest/Pinned selection and registered-release semantics belong to optional adapters; bundling does not imply inlining. Retain all public/helper/address-taken callable roots. Final runnable artifacts contain no unresolved namespace relocations.
+9. **Toolchain separation:** an opaque typed ID at the generic API boundary, declarations, explicit namespace home, code materialization and source aliases are separate. Derive K from the supplied home/export labels without requiring D or an interface commitment. Protocol-profile identity and registered-release validation must satisfy D3; generic consumers need not implement a registry. Bundling does not imply inlining. Retain all public/helper/address-taken callable roots. Final runnable artifacts contain no unresolved namespace relocations.
 10. **Witness and resource trust:** host resolution/code loading supplies witnesses. AIR authenticates resolution; guest resource loaders must authenticate advice values before use. Code loading retains current requested-D/procedure-root checks and merge-advice-once behavior. Debug metadata never grants authority.
 
-Included: core identities/MAST, processor and replay, packed AIR/proofs, assembler/project/package changes needed for opaque IDs/declarations/explicit homes, existing calling conventions, core library, public API/CLI, adversarial qualification and measured costs. Library-ID derivation, interface commitments, publisher/registry rules, release selection/closure algorithms, inclusion freshness and concrete account policy are outside this VM scope. Future integrations must validate their own authority; existing optional prototypes do not establish it. Upstream Rust compiler lowering is a tracked handoff where its source is outside this repository. Do not implement a new registry or claim these external obligations are solved by the VM.
+Included: core identities/MAST, processor and replay, packed AIR/proofs, assembler/project/package changes needed for opaque typed IDs/declarations/explicit homes, existing calling conventions, core library, public API/CLI, adversarial qualification and measured costs. Protocol registry/account implementation remains external; its selected identity/interface semantics are D3, not undecided policy. Exact owner-supplied codecs/domains, publisher/home/profile validation, registration and authenticated closure remain required before claiming Protocol-profile acceptance. Existing prototypes do not establish it. Upstream Rust compiler lowering is a tracked handoff where its source is outside this repository. Do not claim these external obligations are solved by the VM or weaken their validation to unblock generic consumers.
 
 ## Workflow and completion rules
 
@@ -103,13 +103,13 @@ validated cleanup makes it unnecessary. This follow-up does not waive PR 03's ou
 
 ### PR 04 Namespace plans and declaration-only interfaces
 
-**Branch:** `adr1anh/librarytree-04-toolchain-contracts`. **Git base:** PR 03. **Semantic dependencies:** 01. Protocol-owned interface codecs are optional deferred integration, not a dependency of generic declaration/home support.
+**Branch:** `adr1anh/librarytree-04-toolchain-contracts`. **Git base:** PR 03. **Semantic dependencies:** 01. Protocol-owned interface codecs remain required external inputs for Protocol-profile acceptance, independently of generic declaration/home support.
 
 **Existing files:** `crates/assembly-syntax/src/{module.rs,ast/invocation_target.rs,ast/instruction/mod.rs,ast/instruction/print.rs,parser/cst/instructions.rs}`, parser/sema tests, `crates/mast-package/src/{lib.rs,package/manifest.rs,package/mod.rs}`. **New:** `crates/mast-package/src/{interface.rs,namespace_plan.rs,interface/serialization.rs}` as needed. Touch CST lexer/parser only if selected explicit-key/inline syntax requires it.
 
 Separate canonical declarations and optional body availability; add validated NamespacePlan/interface-only artifact and preserve existing key-literal/name/path forms. Explicit inline syntax remains optional. Preserve exact-byte optional ABI metadata separately from tooling FunctionType. Do not invent placeholder D/forest or activate a partially migrated package9 executable. Reuse existing parsed Path components and core hashes.
 
-Under superseding D3, generic compilation consumes the library's supplied ID, declarations and explicit home. It must not require publisher/name/interface-version fields, interface-commitment derivation or registered association/closure proofs. Existing InterfaceArtifact/Profile code is a Protocol-oriented prototype; any required consumer coupling must be separated at a focused implementation checkpoint, preserving input validation and tests.
+Under D3, generic compilation may consume an opaque typed ID, declarations and explicit home without publisher metadata or registered association/closure proofs. The Protocol profile must derive/verify the Page-defined I and validate its interface association and closure. Existing InterfaceArtifact/Profile code is a prototype, not production acceptance; separate mandatory generic-consumer coupling at a focused implementation checkpoint while preserving validation and tests.
 
 **Acceptance:** declaration-only Latest keys need no D; quoted `::`, exact Unicode bytes, typed labels and absent/present-empty ABI differ correctly; unknown versions/malformed homes reject; existing name/path/word invocation syntax remains accepted, with digest-shaped words interpreted as keys under D2. Explicit inline opt-in is an optional extension. **Checks:** `make test-assembly-syntax`; `cargo test -p miden-mast-package --lib interface`; CST tests only if changed.
 
@@ -169,17 +169,17 @@ Extend the existing versioned execution witness with immutable descriptor, entry
 
 Split identity resolution from body supply, runtime reachability/SCCs from acyclic inline dependencies, and retain all public/helper/address-taken roots. Emit K for every retained invocation/procref; explicit inline alone composes a body. Activate validated namespaced package9 metadata and MAST0.0.6 together across trusted/safe readers, commitments and strip-debug. Replace root-centric Program/kernel reconstruction, root-call lowering and hardcoded `$kernel` authority rather than wrap them.
 
-Required package metadata is limited to the opaque library ID and naming/callable/code information needed by VM/toolchain consumers. No Protocol interface commitment, publisher descriptor, identity derivation, registration proof, registered-release record or exact dependency closure is required for generic package admission. Missing required naming/code metadata still rejects. Preserve independent callable-root retention and the in-flight builder/frontend/graph work.
+Generic package metadata covers the opaque typed library ID and naming/callable/code information needed by VM/toolchain consumers, independently of Protocol artifacts. This separation grants no Protocol admission: its profile must derive/verify D3's I and validate publisher/home, immutable interface association, release and closure inputs before acceptance. Missing required naming/code metadata still rejects. Preserve independent callable-root retention and the in-flight builder/frontend/graph work.
 
 **Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old serialized callable formats reject and required metadata survives debug stripping. Existing MASM invocation/procref source rebuilds under D2, using K and real EXEC without digest fallback. **Checks:** `make test-assembly test=namespaced_execution`; `cargo test -p miden-mast-package --lib package::serialization`; then `make test-assembly` and package lib tests after focused failures resolve.
 
 ### PR 10 Revision-aware projects and code supply
 
-**Branch:** `adr1anh/librarytree-10-project-imports`. **Git base:** PR 09. **Semantic dependencies:** 04, 09. Exact Protocol release codecs and selection rules are deferred adapters, not VM dependencies.
+**Branch:** `adr1anh/librarytree-10-project-imports`. **Git base:** PR 09. **Semantic dependencies:** 04, 09. Exact Protocol release codecs remain external inputs; generic dependency-instance support can proceed independently.
 
 **Existing files:** `crates/project/src/{dependencies.rs,dependencies/graph.rs,linkage.rs,package.rs,ast/dependency.rs,ast/package.rs,ast/parsing.rs}`, project tests, `crates/mast-package/src/dependency/mod.rs`, manifest, `crates/assembly/src/project/{dependency_graph.rs,runtime_dependencies.rs,build_provenance.rs,post_process.rs,tests.rs}`, linker module ownership and packaging fixtures. **New if justified:** `crates/project/src/library_import.rs`.
 
-Separate source aliases, supplied opaque library IDs, dependency instances, explicit namespace bindings and optional code/artifact supply. Replace PackageId-only graph/manifest/cache ownership where it prevents distinct bound artifacts from coexisting. Bundling supplies code without changing K or implying inlining. Propagate required callable/helper mounts and separately authorized N_kernel. Latest/Pinned registered-release policy can be a future adapter over these capabilities; do not require its registry, record, revision or closure codec here.
+Separate source aliases, opaque typed library IDs, dependency instances, explicit namespace bindings and optional code/artifact supply. Replace PackageId-only graph/manifest/cache ownership where it prevents distinct bound artifacts from coexisting. Bundling supplies code without changing K or implying inlining. Propagate required callable/helper mounts and separately authorized N_kernel. Generic consumers need not implement registry storage or release codecs. Protocol adapters must retain D3: revisions may change bodies/helpers/pinned choices, while retained Latest dependencies remain dynamic; validate required release/closure inputs before claiming that behavior.
 
 **Acceptance:** distinct explicitly bound dependency instances coexist with equal module paths or D; ambiguous/conflicting callable bindings reject rather than selecting a body from an alias or ID alone; bundled/external code preserves K and runtime invocation semantics; source semver/Git provenance remains separate from runtime naming; required self/helper mounts propagate. Do not freeze a new generic artifact-ID or release-history algorithm merely to support this. **Checks:** `make test-project`; `make test-assembly test=project::tests`; `cargo test -p miden-assembly --test packaging`.
 
@@ -300,50 +300,65 @@ runtime digest dispatch or infer an authenticated binding from code availability
 require preserving child-ID invocation nodes, old serialized layouts or digest-based implementation
 lookup. Include existing source and stack/memory regressions in PRs 04/05/09 and final qualification.
 
-**D3 Minimal VM scope and opaque library IDs, clarified by the user on 3 November 2026:**
-this supersedes the earlier publisher/name/interface-version derivation requirement as VM scope,
-its repeated Page-formula confirmations, and the subsequently proposed default assembly identity
-profile. A library supplies its `LibraryId` as a canonical opaque Word in metadata. The assembler
-reads that value; it does not derive it from mandatory publisher/name/version fields, source,
-implementation bodies or interface declarations. No default ID algorithm is selected. Applications
-or Protocols may define an ID scheme and additional metadata without changing the VM relation.
+**D3 Page-defined identity and required Protocol profile, reaffirmed by the user on 3 November
+2026:** this supersedes the earlier Protocol-assigned opaque-I decision and the later wording
+treating the Page formulas as historical. Retain the LibraryTree Space's actual formulas:
 
-VM/toolchain ownership is limited to canonical Word/label/object encoding, N0, namespace extension,
-procedure-key derivation from an explicit complete home and export label, callable declarations,
-code supply and authenticated K-to-D execution under the caller-selected fixed descriptor. Declared
-paths can be used without D, publisher metadata or an interface commitment. Library IDs do not
-establish publisher authority, global registration, release validity or permitted kernel namespaces.
-Executable-path uniqueness and expected descriptor authority remain separate required obligations.
+```text
+LibraryId = H_LIBRARY(publisher_id, name, interface_version)
+interface_comm = CommitLibInterface(publisher_id, name, interface_version,
+    List(proc_exports), List(dynamic_deps), List(dynamic_deps_closure))
+```
 
-Interface-commitment algorithms, publisher schemas, interface-version policy, permanent registration,
-release-record/selected-release commitments and dynamic/pinned closure validation are not being
-specified or implemented as requirements of this VM work. Latest/Pinned paths may be conventions
-of an adapter; they are not special VM namespace classes or a requirement to implement a registry.
-LibraryTree can later implement its chosen semantics using these generic capabilities. Historical
-Page formulas and L(I)/external(I) discussion remain reference material, not active VM release gates.
+Registration permanently associates LibraryId with that interface commitment. I is independent of
+implementation bodies, private helpers, release revision and pinned dependency choices. Changes
+to public API or declared dynamic dependencies require a new interface version. Release revisions
+may change implementations, private helpers and pinned dependencies; retained Latest dependencies
+remain dynamic. Do not adopt `merge(user_supplied, assembler_derived_interface_or_code_hash)`.
 
-Existing generic InterfaceArtifactV1/Profile/commitment code is an optional Protocol-oriented
-prototype, not an enshrined VM commitment or a mandatory generic compilation interface. Audit and
-separate required consumers in focused implementation commits; this documentation checkpoint does
-not remove code, change formats or claim that separation is complete. Keep declarations/explicit
-homes usable independently. No missing required VM input may be silently replaced, and no existing
-codec check may be weakened merely to ignore an optional artifact's failed validation.
+Generic VM APIs may receive opaque typed I, declarations and explicit homes without publisher
+metadata or D. This is an API boundary, not permission for arbitrary Protocol identity assignment:
+the Protocol profile must derive/verify the Page-defined I and authenticate its permanent interface
+association. Exact canonical identity encoding and H_LIBRARY domain remain required external
+Protocol-owner inputs. Do not invent a VM hash, default generator or permissive fallback.
 
-Preserve all VM authentication, root-END, invocation/principal, kernel-namespace, code-root, malformed
-input, replay, resource, degree/lookup, generated/native/MASM/recursive and security acceptance gates.
-Protocol-specific identity/registration/closure fixtures are required only when that future adapter
-is adopted, not to complete the generic VM. Supported calling conventions remain D2; no private
-account ABI, new default home or automatic library-ID generator is decided by this scope correction.
+The Page's full closure **L(I) includes I itself**; `external(I) = L(I) \ {I}`. The generic codec's
+stored closure represents external(I), with full logical closure `{I} ∪ stored_external`.
+Authenticate that projection and complete contributing declarations, including direct external
+requirements. Do not claim the Page's full closure excludes self or add a VM-level cycle prohibition.
+
+Existing InterfaceArtifact/Home v1 codecs retain canonical encodings, exact input, caller budgets
+and expected-I/context checks. Their generic transport commitment is not evidence of equivalence
+to CommitLibInterface: owner-approved encoding/domain and closure-projection fixtures must establish
+that mapping. Publisher-descriptor canonicalization, permitted homes/TypedIds, allocated domains,
+profile validation, immutable registration and authenticated closure remain mandatory external
+inputs with no fallback. Package9/ReleaseRecord and production-profile acceptance remain separate,
+unclaimed gates. Keep generic declaration/home consumers independent without weakening existing
+artifact validation; continue independent VM work while these inputs are pending.
+
+Preserve all existing authentication, root-END, invocation/principal, full N_kernel, code/root,
+malformed-input, replay, resource, degree/lookup, generated/native/MASM/recursive and security gates.
+This correction changes documentation only and does not implement Protocol registry/account policy.
+
+Sources: [LibraryTree proposal](https://chatgpt.com/space/page_d5d09034b1e881919a4c425fe6429d0a)
+(identity/interface/registration blocks f83b18f1, 6d71b671, c1b6063f; closure 88b6753b/b8c4a9c4) and
+[compiler/assembler contract](https://chatgpt.com/space/page_ad138e12f6cc8191a0e7af15a751dbf1)
+(block 996d90e2 retains the formula). Bounded excerpts have Page/date/block/hash cache provenance.
+
+**D4 Explicit inline opt-in, approved by the user on 3 November 2026:** add optional
+`inline.<target>` syntax. Existing `exec.<target>` remains a runtime invocation. Inline requires a
+local fixed body or an explicitly pinned import, rejects Latest imports and structural cycles,
+and preserves inner runtime keys. Approval selects syntax/eligibility, not completed implementation.
 
 ## Open decisions and external gates
 
 | Gate | Required decision/evidence | Blocks |
 | --- | --- | --- |
-| Generic VM/toolchain interchange | D1 fixes VM node preimages. D3 requires supplied opaque IDs, declarations and explicit homes independently of Protocol artifacts. Audit generic consumers for mandatory InterfaceArtifact/Profile coupling; retain canonical encoding, budgets, malformed-input and code/root checks. Protocol identity/interface/release codecs are deferred integration. | 04, 09–10, public API closure |
-| Frontend syntax and eligibility | Preserve existing MASM name/path/word syntax under D2. Agree optional explicit key/inline extensions, fixed-body inline eligibility and diagnostics for genuinely invalid forms; source alias versus published alias versus wrapper semantics. | 04, 09 |
+| Generic VM/toolchain interchange | D1 fixes VM node preimages. D3 permits opaque typed I/declarations/explicit homes at generic boundaries, while retaining selected Protocol identity/interface semantics and required external validation. Audit mandatory InterfaceArtifact/Profile consumer coupling without weakening canonical/budget/malformed-input/code-root checks. | 04, 09–10, public API closure |
+| Frontend syntax and eligibility | D2 preserves existing MASM name/path/word syntax; D4 approves optional inline.<target> for local fixed bodies or explicitly pinned imports, rejecting Latest and structural cycles. Implement source-alias versus published-alias/wrapper behavior and diagnostics without changing inner runtime keys. | 04, 09 |
 | Private reusable-instance ABI (deferred extension) | If later adopted, specify authenticated runtime-base transport and relative-key/procref lowering before claiming immutable randomized-instance support. Current explicit absolute homes still require final linking; no implicit relocation or caller-derived namespace. | Future optional ABI adoption only |
 | Existing shared/fresh-context behavior | Preserve D2's stack/memory/FMP/overflow and all invocation-mode conventions with regressions. Namespace authentication supplies no RAM isolation. Additional high-level layouts, heap/function-table ownership and initialization/reentrancy profiles are deferred unless an explicitly selected feature needs them; do not invent a fresh-context-only/stateless-only restriction. | 05, 09, 13, 15–16 calling-convention acceptance |
-| Protocol integration (deferred, outside VM completion) | A future adapter owns ID derivation, publisher/interface registration, permitted mounts, release/closure selection, account construction and freshness. It must validate its policy when adopted. Generic VM callers still supply expected descriptor authority; executable-path uniqueness and exact N_kernel checks remain required. | Future adapter adoption only |
+| Protocol profile and production fixtures | D3 fixes Page-derived I and permanent interface association. Exact identity/interface/release codecs/domains, publisher/home/TypedId policy and authenticated registration/closure fixtures remain required external owner inputs, with no fallback. Generic VM work may continue; production-profile acceptance is unclaimed. Expected descriptor authority, executable-path uniqueness and full N_kernel checks remain required. | Protocol-profile acceptance; dependent codec/admission work |
 | AIR feasibility | Capture actual global degree ≤9, namespace degree and complete `[4,4,3,2]` lookup groups; prove unit rooted provenance/no-wrap under combined bounds and typed address relocation. | 06–08, 12, 14, 16 |
 | Verifier closure | Canonical entry/config/helper/resource/mount identity including authorized N_kernel; no self-identity fixed point or entry-D-only trust. | 12–14, recursive acceptance |
 | Measured costs and limits | Agree representative workload/limit matrix; report actual overhead and guard allocations/counts/replay. | 16, release readiness |
@@ -360,7 +375,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Environment-aware executable generator restored at 05 (`4bfa6fc94`, `15a9a07c0`). D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
-| 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Under 3 November D3, Protocol identity/interface/registration/closure fixtures are deferred outside VM completion. Audit and separate generic declaration/home consumers from mandatory Protocol profile coupling; no production adapter adoption claimed. Executable lowering at09; fuzz at16. |
+| 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | D3 Page-derived identity/interface/registration/closure production fixtures remain required, unresolved and unclaimed. Audit generic declaration/home consumer coupling while preserving profile validation. Executable lowering at09; fuzz at16. |
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
@@ -1677,14 +1692,30 @@ Frontend tests moved to a child module; review corrected an iterator-method erro
 CALL/SYS source-operation pairing. Integration checks wait for coherent owner checkpoints.
 
 
-### PR 09 User scope correction: minimum VM support
+### PR 09 Earlier scope checkpoint — identity wording superseded by D3
 
 At verified branch `adr1anh/librarytree-09-keyed-packages`, HEAD `b6807f1b700b92849ceeede66d511f1b7bc29705`,
 the user clarified that LibraryId is an opaque Word contained in the library, and publisher/name/
 version derivation and interface commitments should not be specified now. D3 and scope above
-supersede older Protocol requirements as VM completion gates. Generic assembly/package consumers
+now supersede that identity wording with the Page formulas and required Protocol validation.
+Generic assembly/package consumers
 need supplied IDs, declarations, explicit homes and callable/code metadata; separating any required
 InterfaceArtifact/Profile coupling is follow-up implementation, not a claimed result of this edit.
 Builder/frontend/graph changes are in flight and preserved. This checkpoint changes only the plan
 and current brief, with no source, codec, format, test or implementation change. Existing VM
 security/acceptance gates and no-PR/no-push restriction remain.
+
+### PR 09 Reaffirmed Page identity and documentation checkpoint
+
+Verified branch `adr1anh/librarytree-09-keyed-packages`, source HEAD
+`ee32f09562da67002f4b315caf8c28a65705b026`, base `82935d6733278d871ab1f3f5a7e94f88b6e468d9`.
+The latest user clarification retains the actual Page formulas, permanent registration association
+and full L(I)/external(I) distinction. D3 replaces arbitrary opaque Protocol assignment and the
+later historical-formula wording, while generic APIs may still receive typed I independently.
+Exact production inputs remain external, without weakening any acceptance gate. D4 separately
+records the user's inline syntax approval; expansion is not yet implemented.
+
+This checkpoint changes only the plan/current brief. Four private-code package files remain
+uncommitted and untouched. Existing PR05–08 implementation and committed PR09 builder/frontend/
+graph/fixture work are preserved. All11 cached source hashes match provenance; shared /tmp copies
+remain retained. No Protocol production acceptance, code/format change, push or GitHub PR is claimed.
