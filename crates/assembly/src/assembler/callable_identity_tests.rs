@@ -1,7 +1,11 @@
+use core::num::NonZeroU32;
+
 use miden_core::{
+    Felt,
     mast::{MastForest, MastNode},
     program::CanonicalLabel,
 };
+use miden_project::{LibraryImport, LibrarySelection};
 
 use super::*;
 use crate::testing::TestContext;
@@ -17,8 +21,14 @@ fn canonical(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
+fn library_import(selection: LibrarySelection) -> LibraryImport {
+    LibraryImport::new(home("published-home"), Word::new([Felt::from_u32(17); 4]), selection)
+}
+
 fn target_binding() -> CallableBinding {
-    CallableBinding::new(home("published-home"), canonical(&["run"])).unwrap()
+    library_import(LibrarySelection::Latest)
+        .callable_binding(canonical(&["run"]))
+        .unwrap()
 }
 
 fn root_binding() -> CallableBinding {
@@ -26,6 +36,13 @@ fn root_binding() -> CallableBinding {
 }
 
 fn lower_caller(body: Option<&str>) -> (Assembler, GlobalItemIndex, MastForest, Word) {
+    lower_caller_with_binding(body, target_binding())
+}
+
+fn lower_caller_with_binding(
+    body: Option<&str>,
+    binding: CallableBinding,
+) -> (Assembler, GlobalItemIndex, MastForest, Word) {
     let context = TestContext::default();
     let caller = context.parse_module(
         "namespace client\nuse dep as chosen\npub proc caller exec.chosen::run procref.chosen::run end",
@@ -34,7 +51,6 @@ fn lower_caller(body: Option<&str>) -> (Assembler, GlobalItemIndex, MastForest, 
         .with_namespace_plan(home("caller-home"))
         .with_callable_path(Arc::from(Path::new("::client::caller")), canonical(&["entry"]))
         .unwrap();
-    let binding = target_binding();
     let support = match body {
         Some(body) => {
             assembler = assembler
@@ -540,4 +556,27 @@ fn call_and_syscall_nodes_retain_keys_and_source_operations_without_code() {
         1,
         "declaration-only calls must not fabricate an implementation root"
     );
+}
+
+#[test]
+fn standard_pinned_names_change_only_with_explicit_binding_inputs_not_code_supply() {
+    let revision = NonZeroU32::new(3).unwrap();
+    let pinned = library_import(LibrarySelection::Pinned(revision))
+        .callable_binding(canonical(&["run"]))
+        .unwrap();
+    let (_, _, missing, declaration_digest) = lower_caller_with_binding(None, pinned.clone());
+    let (_, _, selected, selected_digest) =
+        lower_caller_with_binding(Some("push.7"), pinned.clone());
+    assert_eq!(declaration_digest, selected_digest);
+    for forest in [&missing, &selected] {
+        assert!(forest.nodes().iter().any(|node| matches!(node,
+            MastNode::Exec(exec) if exec.target() == pinned.key())));
+    }
+    let (_, _, _, latest_digest) = lower_caller(None);
+    assert_ne!(declaration_digest, latest_digest);
+    let another = library_import(LibrarySelection::Pinned(NonZeroU32::new(4).unwrap()))
+        .callable_binding(canonical(&["run"]))
+        .unwrap();
+    let (_, _, _, changed_revision_digest) = lower_caller_with_binding(None, another);
+    assert_ne!(declaration_digest, changed_revision_digest);
 }
