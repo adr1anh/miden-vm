@@ -177,6 +177,17 @@ fn build_dependency() -> Dependency {
     }
 }
 
+fn same_name_dependencies() -> Vec<Dependency> {
+    let original = build_dependency();
+    let mut versioned = original.clone();
+    versioned.version = crate::Version::new(2, 0, 0);
+    let mut different_kind = original.clone();
+    different_kind.kind = TargetType::AccountComponent;
+    let mut different_commitment = original.clone();
+    different_commitment.digest = Word::from([1_u32, 2, 3, 4]);
+    vec![original, versioned, different_kind, different_commitment]
+}
+
 fn package_bytes_with_sections_count(count: usize) -> Vec<u8> {
     let package = build_package();
     let mut bytes = Vec::new();
@@ -984,6 +995,80 @@ fn package_manifest_add_dependency_rejects_duplicate_dependencies() {
         .add_dependency(dependency)
         .expect_err("duplicate dependencies should be rejected by helpers");
     assert_matches!(err, ManifestValidationError::DuplicateDependency(pkgid) if pkgid == "dep");
+    assert_eq!(manifest.num_dependencies(), 1);
+}
+
+#[test]
+fn package_manifest_preserves_distinct_same_name_dependencies_in_all_readers() {
+    let dependencies = same_name_dependencies();
+    let manifest = PackageManifest::new([])
+        .unwrap()
+        .with_dependencies(dependencies.clone())
+        .expect("same-name supplies with distinct exact metadata must coexist");
+    let bytes = manifest.to_bytes();
+    let (mast, _) = build_forest();
+
+    for decoded in [
+        PackageManifest::read_from_bytes(&bytes),
+        PackageManifest::read_from_safe(&mut SliceReader::new(&bytes), &mast),
+        PackageManifest::read_from_trusted(&mut SliceReader::new(&bytes), &mast),
+    ] {
+        let decoded = decoded.expect("each reader must retain distinct same-name records");
+        assert_eq!(decoded, manifest);
+        assert_eq!(decoded.dependencies().cloned().collect::<Vec<_>>(), dependencies);
+    }
+}
+
+#[test]
+fn package_readers_preserve_and_commit_each_same_name_dependency_record() {
+    let dependencies = same_name_dependencies();
+    let mut package = build_package();
+    package.manifest = package.manifest.with_dependencies(dependencies.clone()).unwrap();
+    let bytes = package.to_bytes();
+
+    for decoded in [Package::read_from_bytes(&bytes), Package::read_from_bytes_trusted(&bytes)] {
+        let decoded = decoded.expect("distinct same-name supplies must roundtrip");
+        assert_eq!(decoded.manifest.dependencies().cloned().collect::<Vec<_>>(), dependencies);
+        assert_eq!(decoded.dependency_commitment(), package.dependency_commitment());
+        assert_eq!(decoded.commitment(), package.commitment());
+    }
+
+    // None of these fields can be silently projected away before computing the commitment.
+    let original = &dependencies[3];
+    let mut renamed = original.clone();
+    renamed.name = PackageId::from("another-dep");
+    let mut versioned = original.clone();
+    versioned.version = crate::Version::new(3, 0, 0);
+    let mut different_kind = original.clone();
+    different_kind.kind = TargetType::Note;
+    let mut different_commitment = original.clone();
+    different_commitment.digest = Word::from([5_u32, 6, 7, 8]);
+    for replacement in [renamed, versioned, different_kind, different_commitment] {
+        let mut tampered = package.clone();
+        tampered.manifest.dependencies[3] = replacement;
+        let bytes = tampered.to_bytes();
+        for decoded in [Package::read_from_bytes(&bytes), Package::read_from_bytes_trusted(&bytes)]
+        {
+            let decoded = decoded.expect("changed distinct records remain structurally valid");
+            assert_eq!(decoded.manifest.num_dependencies(), dependencies.len());
+            assert_eq!(decoded.code_commitment(), package.code_commitment());
+            assert_ne!(decoded.dependency_commitment(), package.dependency_commitment());
+            assert_ne!(decoded.commitment(), package.commitment());
+        }
+    }
+}
+
+#[test]
+fn package_readers_reject_tampered_exact_duplicate_dependency_records() {
+    let mut package = build_package();
+    package.manifest.dependencies = same_name_dependencies();
+    package.manifest.dependencies[3] = package.manifest.dependencies[0].clone();
+    let bytes = package.to_bytes();
+
+    for result in [Package::read_from_bytes(&bytes), Package::read_from_bytes_trusted(&bytes)] {
+        let error = result.expect_err("reader trust must not admit duplicate exact requirements");
+        assert!(error.to_string().contains("duplicate dependency 'dep'"));
+    }
 }
 
 #[test]
@@ -1017,10 +1102,16 @@ fn package_manifest_rejects_duplicate_dependencies() {
     dependency.write_into(&mut bytes);
     bytes.write_bool(false);
 
-    let mut reader = SliceReader::new(&bytes);
-    let err = PackageManifest::read_from(&mut reader)
-        .expect_err("duplicate dependencies should be rejected during deserialization");
-    assert!(matches!(err, DeserializationError::InvalidValue(_)));
+    let (mast, _) = build_forest();
+    for result in [
+        PackageManifest::read_from_bytes(&bytes),
+        PackageManifest::read_from_safe(&mut SliceReader::new(&bytes), &mast),
+        PackageManifest::read_from_trusted(&mut SliceReader::new(&bytes), &mast),
+    ] {
+        let err = result.expect_err("duplicate exact dependencies must reject in every reader");
+        assert!(matches!(err, DeserializationError::InvalidValue(_)));
+        assert!(err.to_string().contains("duplicate dependency 'dep'"));
+    }
 }
 
 #[test]

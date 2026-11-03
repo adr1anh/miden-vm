@@ -19,7 +19,8 @@ use miden_core::{
 use miden_mast_package::Package as MastPackage;
 use miden_package_registry::{
     InMemoryPackageRegistry, PackageCache, PackageId, PackageIndex, PackageProvider, PackageRecord,
-    PackageRegistry, PackageStore, PackageVersions, Version, VersionRequirement,
+    PackageRegistry, PackageRequirements, PackageStore, PackageVersions, Version,
+    VersionRequirement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -116,7 +117,7 @@ pub struct PackageSummary {
     /// The package description
     pub description: Option<Arc<str>>,
     /// The version requirements for dependencies of this package
-    pub dependencies: BTreeMap<PackageId, VersionRequirement>,
+    pub dependencies: PackageRequirements,
     /// The location of the assembled artifact on disk.
     ///
     /// If `None`, the package has been registered virtually, and so has no location on disk.
@@ -538,11 +539,7 @@ impl LocalPackageRegistry {
     ) -> PackageSummary {
         PackageSummary {
             artifact_path: self.artifact_path_for_summary(&name, &version),
-            dependencies: record
-                .dependencies()
-                .iter()
-                .map(|(dependency, requirement)| (dependency.clone(), requirement.clone()))
-                .collect(),
+            dependencies: record.dependencies().clone(),
             description: record.description().cloned(),
             name,
             version,
@@ -1006,11 +1003,70 @@ mod tests {
         let shown = reloaded.show(&PackageId::from("pkg"), None).expect("missing package");
         assert_eq!(shown.version.version, "2.0.0".parse().unwrap());
         assert_eq!(shown.dependencies.len(), 1);
-        assert_eq!(shown.dependencies.keys().next().unwrap(), &PackageId::from("dep"));
+        assert_eq!(shown.dependencies[0].0, PackageId::from("dep"));
         assert_eq!(
-            shown.dependencies.values().next().unwrap().to_string(),
+            shown.dependencies[0].1.to_string(),
             format!("1.0.0#{}", dep.dependency_commitment())
         );
+    }
+
+    #[test]
+    fn cache_and_summary_roundtrip_same_name_dependency_requirements() {
+        let tempdir = TempDir::new().unwrap();
+        let mut registry = load_registry(&tempdir);
+        let first = miden_core::Word::from([1_u32, 2, 3, 4]);
+        let second = miden_core::Word::from([5_u32, 6, 7, 8]);
+        let package = Arc::<MastPackage>::from(build_package(
+            "pkg",
+            "1.0.0",
+            [
+                ("dep", "1.0.0", TargetType::Library, first),
+                ("dep", "2.0.0", TargetType::Library, first),
+                ("dep", "1.0.0", TargetType::Library, second),
+                ("dep", "1.0.0", TargetType::AccountComponent, first),
+            ],
+        ));
+        let expected = package
+            .manifest
+            .dependencies()
+            .map(|dependency| {
+                (
+                    dependency.name.clone(),
+                    VersionRequirement::Exact(Version::new(
+                        dependency.version.clone(),
+                        dependency.digest,
+                    )),
+                )
+            })
+            .collect::<Vec<_>>();
+        let version = registry.cache_package(package.clone()).unwrap();
+        drop(registry);
+
+        let reloaded = load_registry(&tempdir);
+        let record = reloaded.get_by_version(&package.name, &version).unwrap();
+        assert_eq!(record.dependencies(), &expected);
+        let shown = reloaded.show(&package.name, Some(&version)).unwrap();
+        assert_eq!(shown.dependencies, expected);
+        let listed = reloaded.list();
+        assert_eq!(listed[0].dependencies, expected);
+        let loaded = reloaded.load_package(&package.name, &version).unwrap();
+        assert_eq!(loaded.manifest, package.manifest);
+    }
+
+    #[test]
+    fn legacy_dependency_maps_remain_readable_without_collapsing_new_records() {
+        let version = Version::new("1.0.0".parse().unwrap(), miden_core::Word::default());
+        let dependency = VersionRequirement::Exact(version.clone());
+        let record = PackageRecord::new(version.clone(), [(PackageId::from("dep"), dependency)]);
+        let mut table = toml::Value::try_from(&record).unwrap();
+        table["dependencies"] = toml::Value::Table(toml::map::Map::from_iter([(
+            "dep".into(),
+            toml::Value::String(version.to_string()),
+        )]));
+
+        let decoded = table.try_into::<PackageRecord>().unwrap();
+        assert_eq!(decoded, record);
+        assert!(toml::Value::try_from(&decoded).unwrap()["dependencies"].is_array());
     }
 
     #[test]

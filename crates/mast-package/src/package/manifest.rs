@@ -32,8 +32,9 @@ use crate::{Dependency, PackageId, debug_info::DebugSourceNodeId};
 /// downstream linkers validate `use module` and submodule traversal without treating modules as
 /// exported items.
 ///
-/// Dependencies must each specify a unique package identifier, i.e. it is not allowed to have
-/// multiple dependencies on the same package identifier, even if they are different versions.
+/// Dependencies specify exact code-supply requirements. Multiple records may share a package name
+/// when their kind, semantic version, or dependency commitment differs. Duplicate exact records
+/// are rejected rather than silently coalesced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(proptest_derive::Arbitrary))]
 #[cfg_attr(
@@ -256,12 +257,15 @@ impl PackageManifest {
         Ok(())
     }
 
-    /// Add a dependency to the manifest
+    /// Add an exact dependency to the manifest.
+    ///
+    /// Returns [`ManifestValidationError::DuplicateDependency`] when the complete record is already
+    /// present. Distinct supplies with the same package name are retained.
     pub fn add_dependency(
         &mut self,
         dependency: Dependency,
     ) -> Result<(), ManifestValidationError> {
-        if self.dependencies.iter().any(|existing| existing.id() == dependency.id()) {
+        if self.dependencies.contains(&dependency) {
             return Err(ManifestValidationError::DuplicateDependency(dependency.name));
         }
 
@@ -676,12 +680,12 @@ impl fmt::Debug for TypeExport {
 #[cfg(any(test, feature = "arbitrary"))]
 fn arbitrary_dependencies() -> impl Strategy<Value = Vec<Dependency>> {
     proptest::collection::vec(any::<Dependency>(), 0..10).prop_filter(
-        "package dependencies must have unique ids",
+        "package dependencies must have unique exact records",
         |dependencies| {
-            use alloc::collections::BTreeSet;
-
-            let mut seen = BTreeSet::new();
-            dependencies.iter().all(|dependency| seen.insert(dependency.id().clone()))
+            dependencies
+                .iter()
+                .enumerate()
+                .all(|(index, dependency)| !dependencies[..index].contains(dependency))
         },
     )
 }

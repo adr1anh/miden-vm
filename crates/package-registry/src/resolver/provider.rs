@@ -215,26 +215,31 @@ impl<R: PackageRegistry + ?Sized> PackageResolver<'_, R> {
         &self,
         record: &PackageRecord,
     ) -> pubgrub::DependencyConstraints<PackageId, VersionSet> {
-        record
-            .dependencies()
-            .iter()
-            .map(|(name, requirement)| {
-                let set = match requirement {
-                    VersionRequirement::Digest(digest) => self
-                        .index
-                        .available_versions(name)
-                        .map(|versions| {
-                            VersionSet::from_available_digest(
-                                digest.into_inner(),
-                                versions.values().map(PackageRecord::version),
-                            )
-                        })
-                        .unwrap_or_else(<VersionSet as pubgrub::VersionSet>::empty),
-                    _ => VersionSet::from(requirement.clone()),
-                };
-                (name.clone(), set)
-            })
-            .collect()
+        let mut constraints = pubgrub::DependencyConstraints::<PackageId, VersionSet>::default();
+        for (name, requirement) in record.dependencies() {
+            let set = match requirement {
+                VersionRequirement::Digest(digest) => self
+                    .index
+                    .available_versions(name)
+                    .map(|versions| {
+                        VersionSet::from_available_digest(
+                            digest.into_inner(),
+                            versions.values().map(PackageRecord::version),
+                        )
+                    })
+                    .unwrap_or_else(<VersionSet as pubgrub::VersionSet>::empty),
+                _ => VersionSet::from(requirement.clone()),
+            };
+            // This resolver selects one version per package name. Repeated requirements must all
+            // hold; collecting directly into its map would silently keep only the last record.
+            constraints
+                .entry(name.clone())
+                .and_modify(|existing| {
+                    *existing = <VersionSet as pubgrub::VersionSet>::intersection(existing, &set);
+                })
+                .or_insert(set);
+        }
+        constraints
     }
 }
 
@@ -430,6 +435,62 @@ mod tests {
         let digest = Eidos::hash(b"foo");
         let requirement = exact_requirement("1.0.0", digest);
         assert_eq!(format!("{requirement}"), format!("1.0.0#{digest}"));
+    }
+
+    #[test]
+    fn resolver_intersects_repeated_name_requirements_in_both_orders() {
+        for requirements in [
+            vec![("b", req("^1")), ("b", req("<1.2"))],
+            vec![("b", req("<1.2")), ("b", req("^1"))],
+        ] {
+            let index = InMemoryPackageRegistry::from_iter([
+                ("a", vec![("1.0.0".parse().unwrap(), requirements)]),
+                (
+                    "b",
+                    vec![
+                        ("1.1.0".parse().unwrap(), vec![]),
+                        ("1.3.0".parse().unwrap(), vec![]),
+                        ("0.9.0".parse().unwrap(), vec![]),
+                    ],
+                ),
+            ]);
+            let selected = PackageResolver::for_package("a", "1.0.0".parse().unwrap(), &index)
+                .resolve()
+                .unwrap();
+            assert_eq!(selected.get(&PackageId::from("b")), Some(&"1.1.0".parse().unwrap()));
+        }
+    }
+
+    #[test]
+    fn resolver_rejects_incompatible_repeated_exact_name_requirements() {
+        let first = Eidos::hash(b"first exact b");
+        let second = Eidos::hash(b"second exact b");
+        let index = InMemoryPackageRegistry::from_iter([
+            (
+                "a",
+                vec![(
+                    "1.0.0".parse().unwrap(),
+                    vec![
+                        ("b", exact_requirement("1.0.0", first)),
+                        ("b", exact_requirement("2.0.0", second)),
+                    ],
+                )],
+            ),
+            (
+                "b",
+                vec![
+                    (Version::new("1.0.0".parse().unwrap(), first), vec![]),
+                    (Version::new("2.0.0".parse().unwrap(), second), vec![]),
+                ],
+            ),
+        ]);
+
+        assert!(
+            PackageResolver::for_package("a", "1.0.0".parse().unwrap(), &index)
+                .resolve()
+                .is_err(),
+            "the single-name resolver must not keep only the last exact requirement"
+        );
     }
 
     #[test]
