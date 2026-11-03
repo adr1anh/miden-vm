@@ -476,7 +476,9 @@ impl Assembler {
     }
 
     #[cfg(feature = "std")]
-    pub(crate) fn source_manager(&self) -> Arc<dyn SourceManager> {
+    /// Returns this assembler's source manager for parsing modules in the same source context.
+    /// Source locations are diagnostic metadata; they supply no canonical naming or authority.
+    pub fn source_manager(&self) -> Arc<dyn SourceManager> {
         self.source_manager.clone()
     }
 
