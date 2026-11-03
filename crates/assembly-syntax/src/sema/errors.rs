@@ -219,20 +219,6 @@ pub enum SemanticAnalysisError {
         #[label]
         span: SourceSpan,
     },
-    #[error("invalid re-export target: kernel procedures may not be re-exported")]
-    #[diagnostic()]
-    ReexportedKernelProcedure {
-        #[label]
-        span: SourceSpan,
-    },
-    #[error(
-        "invalid re-exported procedure: kernel modules may not re-export procedures from other modules"
-    )]
-    #[diagnostic()]
-    ReexportFromKernel {
-        #[label]
-        span: SourceSpan,
-    },
     #[error("invalid syscall: callee must be resolvable to kernel module")]
     #[diagnostic()]
     InvalidSyscallTarget {

@@ -1361,9 +1361,7 @@ mod tests {
             ))
             .expect("kernel module should parse");
         let kernel_package: Arc<MastPackage> = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
-                CanonicalLabel::text("kernel-fixture-home").unwrap(),
-            ]))
+            .with_namespace_plan(NamespacePlan::new(vec![]))
             .with_callable_path(
                 Arc::from(Path::new("::$kernel::foo")),
                 CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
@@ -1371,11 +1369,7 @@ mod tests {
             .unwrap()
             .with_callable_path(
                 Arc::from(Path::new("::$kernel::helpers::helper")),
-                CallableProcedurePath::from_semantic_components(vec![
-                    "helpers".into(),
-                    "helper".into(),
-                ])
-                .unwrap(),
+                CallableProcedurePath::from_semantic_components(vec!["helper".into()]).unwrap(),
             )
             .unwrap()
             .assemble_kernel("kernel", kernel, [helpers])

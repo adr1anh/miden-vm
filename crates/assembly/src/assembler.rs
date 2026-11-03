@@ -666,6 +666,9 @@ impl Assembler {
                 _ => None,
             }),
         )?;
+        if kind == TargetType::Kernel {
+            callables.validate_kernel_placement()?;
+        }
         let (mast_forest, node_id_by_ref, debug_info, source_id_by_ref) =
             mast_forest_builder.build()?.into_parts_with_debug_info();
         let (callables, callable_sources) =
@@ -1930,3 +1933,5 @@ pub(super) struct ResolvedProcedure {
 mod callable_identity_tests;
 #[cfg(test)]
 mod emitted_callables_tests;
+#[cfg(test)]
+mod kernel_placement_tests;

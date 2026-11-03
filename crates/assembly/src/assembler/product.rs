@@ -80,6 +80,28 @@ impl Assembler {
 }
 
 impl PendingCallables {
+    /// Checks the kernel construction convention against resolved exports and canonical homes.
+    /// Foreign descriptors may name other fragments' public root exports; only concrete source
+    /// definitions retained in this product are subject to the nonexported helper restriction.
+    pub(super) fn validate_kernel_placement(&self) -> Result<(), Report> {
+        let exported = self.visible_paths.iter().map(|(_, key)| *key).collect::<BTreeSet<_>>();
+        for (path, binding, _, is_source_definition) in &self.definitions {
+            let at_root = binding.parent_namespace() == Namespace::initial();
+            if exported.contains(&binding.key()) {
+                if !at_root {
+                    return Err(Report::msg(format!(
+                        "kernel export '{path}' must be in the fixed root syscall namespace"
+                    )));
+                }
+            } else if *is_source_definition && at_root {
+                return Err(Report::msg(format!(
+                    "retained kernel helper '{path}' must be beneath a child Env namespace"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn finish(
         self,
         mast: &MastForest,

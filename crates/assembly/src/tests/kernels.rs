@@ -3,6 +3,7 @@
 
 use core::num::NonZeroU32;
 
+use miden_assembly_syntax::PathComponent;
 use miden_core::program::{CanonicalLabel, Namespace, ProcedureKey};
 use miden_mast_package::{CallableProcedurePath, NamespacePlan};
 
@@ -18,33 +19,61 @@ fn kernel_fixture_namespaces() -> (FixtureNamespace, NamespacePlan) {
     (FixtureNamespace::new(home), NamespacePlan::new(vec![]))
 }
 
-// This fixture explicitly places public kernel exports at N0. Private root-module helpers keep
-// their distinct declaration paths beneath the fixture's child Env home. Visibility chooses this
-// tooling placement only; runtime SYS authorization still authenticates the actual parent.
-fn add_kernel_fixture_module(
+// Follow the fixture's public module surface, placing exported definitions at N0. Private
+// definitions and support reached through private modules keep explicit child Env homes. Import
+// aliases keep their defining bindings; production export resolution validates their placement.
+fn add_kernel_fixture_modules(
     bindings: &mut FixtureNamespace,
-    module: &Module,
+    modules: &[&Module],
 ) -> Result<(), Report> {
-    if module.path() != Path::kernel_path() {
-        return bindings.add_module(module);
-    }
-    for procedure in module.procedures() {
-        let (home, components) = if procedure.visibility().is_public() {
-            (NamespacePlan::new(vec![]), vec![procedure.name().to_string()])
-        } else {
-            (
-                bindings.namespace_plan().clone(),
-                vec!["$kernel".into(), procedure.name().to_string()],
-            )
+    let mut exported_modules = BTreeSet::<Arc<Path>>::new();
+    let mut pending = vec![Arc::<Path>::from(Path::kernel_path())];
+    while let Some(path) = pending.pop() {
+        if !exported_modules.insert(path.clone()) {
+            continue;
+        }
+        let Some(module) = modules.iter().find(|module| module.path() == path.as_ref()) else {
+            continue;
         };
-        let canonical =
-            CallableProcedurePath::from_semantic_components(components).into_diagnostic()?;
-        let binding = CallableBinding::new(home, canonical).into_diagnostic()?;
-        assert_eq!(
-            binding.parent_namespace() == Namespace::initial(),
-            procedure.visibility().is_public(),
-        );
-        bindings.add_binding(module.path().join(procedure.name()).into(), binding)?;
+        for child in module.submodules() {
+            if child.visibility.is_exported() {
+                pending.push(module.path().join(&child.name).into());
+            }
+        }
+    }
+    let mut root_keys = BTreeSet::new();
+    for module in modules {
+        if !exported_modules.contains(module.path()) {
+            bindings.add_module(module)?;
+            continue;
+        }
+        for procedure in module.procedures() {
+            let declaration = module.path().join(procedure.name());
+            let exported = procedure.visibility().is_exported();
+            let (home, components) = if exported {
+                (NamespacePlan::new(vec![]), vec![procedure.name().to_string()])
+            } else {
+                let components = declaration
+                    .components()
+                    .filter_map(|component| match component {
+                        Ok(PathComponent::Root) => None,
+                        component => {
+                            Some(component.map(|component| component.as_str().to_string()))
+                        },
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .into_diagnostic()?;
+                (bindings.namespace_plan().clone(), components)
+            };
+            let canonical =
+                CallableProcedurePath::from_semantic_components(components).into_diagnostic()?;
+            let binding = CallableBinding::new(home, canonical).into_diagnostic()?;
+            assert_eq!(binding.parent_namespace() == Namespace::initial(), exported);
+            if exported && !root_keys.insert(binding.key()) {
+                return Err(Report::msg("kernel fixture has conflicting root export labels"));
+            }
+            bindings.add_binding(declaration.into(), binding)?;
+        }
     }
     Ok(())
 }
@@ -56,9 +85,10 @@ fn assemble_kernel_fixture(
 ) -> Result<(Arc<Package>, FixtureNamespace, NamespacePlan), Report> {
     let support = support.into_iter().collect::<Vec<_>>();
     let (mut bindings, kernel_home) = kernel_fixture_namespaces();
-    for module in core::iter::once(&kernel).chain(&support) {
-        add_kernel_fixture_module(&mut bindings, module)?;
-    }
+    let modules = core::iter::once(&*kernel)
+        .chain(support.iter().map(|module| &**module))
+        .collect::<Vec<_>>();
+    add_kernel_fixture_modules(&mut bindings, &modules)?;
     let assembler = bindings.configure(
         Assembler::new(context.source_manager()),
         core::iter::once(&*kernel).chain(support.iter().map(|module| &**module)),
@@ -102,9 +132,7 @@ fn can_assemble_a_multi_module_kernel() -> Result<(), Report> {
         let kernel = context.parse_kernel(source_file!(&context, KERNEL)).unwrap();
 
         let (mut bindings, kernel_home) = kernel_fixture_namespaces();
-        for module in [&*kernel, &*helpers, &*external_helpers] {
-            add_kernel_fixture_module(&mut bindings, module)?;
-        }
+        add_kernel_fixture_modules(&mut bindings, &[&*kernel, &*helpers, &*external_helpers])?;
         let mut assembler = bindings.configure(
             Assembler::new(context.source_manager()),
             [&*kernel, &*helpers, &*external_helpers],
@@ -174,29 +202,97 @@ fn kernel_candidate_with_private_submodule_code_cannot_become_a_runnable_kernel(
 }
 
 #[test]
-fn regression_empty_kernel_with_nonempty_submodule_is_rejected() {
+fn kernel_reexport_from_private_submodule_preserves_the_defining_root_key() -> TestResult {
     let context = TestContext::default();
 
-    // Preserve the source-language restriction on re-exporting procedures from a kernel module.
     let kernel_masm = "mod sub\n\npub use {foo} from self::sub\n\npub const FOO = 1\n\npub proc root push.FOO end\n";
-    let err = context
-        .parse_kernel(source_file!(&context, kernel_masm))
-        .expect_err("expected sema to reject re-export from kernel module");
-    assert_diagnostic!(err, "invalid re-exported procedure");
+    let submodule_masm = "namespace $kernel::sub\n\npub proc foo push.1 end\n";
+    let kernel_module = context.parse_kernel(source_file!(&context, kernel_masm))?;
+    let submodule = context.parse_module(source_file!(&context, submodule_masm))?;
+    let (mut bindings, root_home) = kernel_fixture_namespaces();
+    // The root's public item re-export exposes this definition despite its private module edge.
+    // Bind the definition directly; the source alias must not acquire a separate callable key.
+    for (declaration, export) in [("::$kernel::root", "root"), ("::$kernel::sub::foo", "foo")] {
+        let canonical =
+            CallableProcedurePath::from_semantic_components(vec![export.into()]).unwrap();
+        bindings.add_binding(
+            Arc::from(Path::new(declaration)),
+            CallableBinding::new(root_home.clone(), canonical).unwrap(),
+        )?;
+    }
+    let root = bindings.binding(Path::new("::$kernel::root")).unwrap().clone();
+    let foo = bindings.binding(Path::new("::$kernel::sub::foo")).unwrap().clone();
+    assert_eq!(root.parent_namespace(), Namespace::initial());
+    assert_eq!(foo.parent_namespace(), Namespace::initial());
+    assert_ne!(root.key(), foo.key());
+    let product = bindings
+        .configure(Assembler::new(context.source_manager()), [&*kernel_module, &*submodule])?
+        .assemble_library_modules(
+            "kernel".into(),
+            kernel_module,
+            [submodule],
+            TargetType::Kernel,
+        )?;
+    let alias =
+        CallableProcedurePath::from_semantic_components(vec!["$kernel".into(), "foo".into()])
+            .unwrap();
+    assert_eq!(product.callables().key_for_visible_path(&alias), Some(foo.key()));
+    assert_eq!(
+        product.callable_key_for_definition(Path::new("::$kernel::sub::foo")),
+        Some(foo.key()),
+    );
+    assert_eq!(product.callable_key_for_definition(Path::new("::$kernel::foo")), None);
+    assert_eq!(product.callables().binding(foo.key()), Some(&foo));
+    assert_eq!(product.callables().bindings().len(), 2);
+    assert!(product.callables().selected_implementation(foo.key()).is_some());
+    assert_eq!(
+        product.callables().selected_implementation(foo.key()),
+        product.callables().selected_implementation(root.key()),
+        "equal push.1 bodies retain distinct canonical callable keys",
+    );
+    Ok(())
 }
 
 #[test]
-fn regression_reexport_of_kernel_procedure_from_kernel_submodule_is_rejected() {
+fn kernel_submodule_reexport_preserves_the_root_definition_key() -> TestResult {
     let context = TestContext::default();
 
     let kernel_masm = "pub mod sub\n\npub const FOO = 1\n\npub proc root push.FOO end\n";
     let submodule_masm =
         "namespace $kernel::sub\n\npub use {root} from $kernel\n\npub proc foo push.1 end\n";
-    let kernel_module = context.parse_kernel(source_file!(&context, kernel_masm)).unwrap();
-    let submodule = context.parse_module(source_file!(&context, submodule_masm)).unwrap();
-    let err = assemble_kernel_fixture(&context, kernel_module, vec![submodule])
-        .expect_err("expected kernel submodule re-exporting kernel syscall to be rejected");
-    assert_diagnostic!(err, "invalid re-export of kernel syscall");
+    let kernel_module = context.parse_kernel(source_file!(&context, kernel_masm))?;
+    let submodule = context.parse_module(source_file!(&context, submodule_masm))?;
+    let (mut bindings, _) = kernel_fixture_namespaces();
+    add_kernel_fixture_modules(&mut bindings, &[&*kernel_module, &*submodule])?;
+    let root = bindings.binding(Path::new("::$kernel::root")).unwrap().clone();
+    let foo = bindings.binding(Path::new("::$kernel::sub::foo")).unwrap().clone();
+    assert_eq!(root.parent_namespace(), Namespace::initial());
+    assert_eq!(foo.parent_namespace(), Namespace::initial());
+    assert_ne!(root.key(), foo.key());
+    let product = bindings
+        .configure(Assembler::new(context.source_manager()), [&*kernel_module, &*submodule])?
+        .assemble_library_modules(
+            "kernel".into(),
+            kernel_module,
+            [submodule],
+            TargetType::Kernel,
+        )?;
+    for components in [vec!["$kernel", "root"], vec!["$kernel", "sub", "root"]] {
+        let alias = CallableProcedurePath::from_semantic_components(
+            components.into_iter().map(String::from).collect(),
+        )
+        .unwrap();
+        assert_eq!(product.callables().key_for_visible_path(&alias), Some(root.key()));
+    }
+    assert_eq!(
+        product.callable_key_for_definition(Path::new("::$kernel::root")),
+        Some(root.key()),
+    );
+    assert_eq!(product.callable_key_for_definition(Path::new("::$kernel::sub::root")), None);
+    assert_eq!(product.callables().binding(root.key()), Some(&root));
+    assert_eq!(product.callables().bindings().len(), 2);
+    assert!(product.callables().selected_implementation(root.key()).is_some());
+    Ok(())
 }
 
 #[test]
@@ -227,7 +323,7 @@ fn kernel_submodules_may_exec_root_kernel_exports() {
 }
 
 #[test]
-fn regression_syscall_of_kernel_submodule_procedure_is_rejected() {
+fn syscall_of_public_kernel_submodule_export_uses_its_root_binding() {
     let context = TestContext::default();
 
     let kernel_masm = "pub mod sub\n\npub const FOO = 1\n\npub proc root push.FOO end\n";
@@ -238,10 +334,10 @@ fn regression_syscall_of_kernel_submodule_procedure_is_rejected() {
     let (kernel, mut bindings, kernel_home) =
         assemble_kernel_fixture(&context, kernel_module, vec![submodule])
             .expect("expected valid kernel");
-    assert_ne!(
-        bindings.binding(Path::new("::$kernel::sub::foo")).unwrap().parent_namespace(),
-        kernel_home.namespace(),
-    );
+    let target = bindings.binding(Path::new("::$kernel::sub::foo")).unwrap();
+    assert_eq!(target.parent_namespace(), kernel_home.namespace());
+    assert_eq!(target.parent_namespace(), Namespace::initial());
+    let target_key = target.key();
     let program = context
         .parse_module(source_file!(&context, program_masm))
         .expect("source spelling does not determine syscall authority");
@@ -249,12 +345,14 @@ fn regression_syscall_of_kernel_submodule_procedure_is_rejected() {
     let assembler = bindings
         .configure(Assembler::with_kernel(context.source_manager(), kernel).unwrap(), [&*program])
         .unwrap();
-    let err = assembler
+    let program = assembler
         .assemble_program("program", program)
-        .expect_err("a descendant namespace is not the authorized immediate parent");
-    assert_diagnostic!(err, "outside the fixed root syscall namespace");
-    // Runtime witness rejection is covered by processor/tests/keyed_execution.rs::
-    // syscall_requires_fixed_root_namespace_before_code_lookup.
+        .expect("the exported submodule definition has an explicit root binding");
+    assert!(program.mast_forest().nodes().iter().any(|node| {
+        matches!(node, MastNode::Call(call)
+            if call.is_syscall() && call.target() == target_key)
+    }));
+    assert_all_nodes_reachable_from_roots(program.mast_forest());
 }
 
 #[test]
@@ -294,11 +392,12 @@ fn test_kernel_linking_against_its_own_library() -> TestResult {
     let library_key = bindings.binding(Path::new("::$kernel::lib::lib_proc")).unwrap().key();
     let public = bindings.binding(Path::new("::$kernel::kernel_proc")).unwrap();
     assert_eq!(public.parent_namespace(), Namespace::initial());
-    for declaration in ["::$kernel::internal_proc", "::$kernel::lib::lib_proc"] {
-        let helper = bindings.binding(Path::new(declaration)).unwrap();
-        assert_ne!(helper.parent_namespace(), Namespace::initial());
-        assert_ne!(helper.key(), public.key());
-    }
+    let internal = bindings.binding(Path::new("::$kernel::internal_proc")).unwrap();
+    let library_export = bindings.binding(Path::new("::$kernel::lib::lib_proc")).unwrap();
+    assert_ne!(internal.parent_namespace(), Namespace::initial());
+    assert_eq!(library_export.parent_namespace(), Namespace::initial());
+    assert_ne!(internal.key(), public.key());
+    assert_ne!(library_export.key(), public.key());
     assert_ne!(internal_key, library_key);
     for key in [internal_key, library_key] {
         assert!(

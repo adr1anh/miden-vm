@@ -212,11 +212,6 @@ impl VisitMut for VerifyInvokeTargets<'_> {
         if import.visibility().is_public() {
             // Mark all public imported symbols as used
             if let Import::Item(import) = import {
-                if import.module_path().is_kernel_path() {
-                    self.analyzer.error(SemanticAnalysisError::ReexportedKernelProcedure {
-                        span: import.span(),
-                    });
-                }
                 import.uses += 1;
             }
         }
