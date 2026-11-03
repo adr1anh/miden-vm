@@ -7,11 +7,13 @@ use std::{
 
 use miden_assembly_syntax::{ast::ModuleKind, diagnostics::Report};
 use miden_core::serde::Deserializable;
-use miden_mast_package::{Package as MastPackage, PackageNaming, SectionId, TargetType};
+use miden_mast_package::{
+    NamespacePlan, Package as MastPackage, PackageNaming, SectionId, TargetType,
+};
 use miden_package_registry::{PackageCache, PackageId, Version as PackageVersion};
 use miden_project::{
     ExpectedVisibleCallables, Linkage, Package as ProjectPackage, PreassembledDependencyMetadata,
-    Profile, ProjectDependencyNodeProvenance, ProjectSource, Target,
+    Profile, ProjectDependencyNodeProvenance, ProjectSource, SourceNamingConvention, Target,
 };
 
 use crate::{Assembler, NamespaceInputs, ast::Module};
@@ -35,6 +37,8 @@ pub use self::{
 
 #[cfg(test)]
 mod artifact_expectation_tests;
+#[cfg(test)]
+mod target_naming_tests;
 #[cfg(test)]
 mod tests;
 
@@ -490,6 +494,7 @@ where
             binding: requested_binding,
             expected_callables,
         } = naming;
+        target.validate_naming()?;
         assert!(
             source_provenance.is_none() || sources.is_some(),
             "source provenance may only be provided with sources"
@@ -582,13 +587,9 @@ where
             assembler.link_package(kernel_package, Linkage::Dynamic, kernel_naming)?;
         }
 
-        let namespace_inputs = {
-            let provider = self.namespace_inputs_provider.as_ref().ok_or_else(|| {
-                Report::msg(format!(
-                    "source target '{}' requires an explicit namespace inputs provider; configure with_namespace_inputs_provider",
-                    target.name.inner()
-                ))
-            })?;
+        let selected_binding =
+            requested_binding.or_else(|| target.naming.as_ref().map(|naming| naming.binding()));
+        let namespace_inputs = if let Some(provider) = &self.namespace_inputs_provider {
             let mut context = self.get_target_assembly_context(
                 &project,
                 target,
@@ -597,17 +598,43 @@ where
             )?;
             context.dependency_binding = requested_binding;
             provider(&context, &sources, &assembler)?
+        } else if let Some(naming) = &target.naming {
+            let inputs = NamespaceInputs::new().with_namespace_plan(
+                selected_binding
+                    .expect("configured target has an explicit fallback binding")
+                    .namespace_plan(),
+            );
+            let modules = core::iter::once(sources.root.as_ref())
+                .chain(sources.support.iter().map(Box::as_ref))
+                .collect::<Vec<_>>();
+            match naming.convention() {
+                SourceNamingConvention::DefiningPaths => {
+                    inputs.with_default_callable_paths(modules)?
+                },
+                SourceNamingConvention::KernelRootExports => {
+                    inputs.with_kernel_root_exports(&assembler, &modules)?
+                },
+            }
+        } else {
+            return Err(Report::msg(format!(
+                "source target '{}' requires an explicit namespace inputs provider or target naming configuration; configure with_namespace_inputs_provider or target naming",
+                target.name.inner()
+            )));
         };
         // Validate even when inherited AST inputs prevent persistent cache reuse.
-        if let Some(binding) = requested_binding
+        if let Some(binding) = selected_binding
             && namespace_inputs.namespace_plan() != Some(&binding.namespace_plan())
         {
             return Err(Report::msg(format!(
-                "source target '{}' namespace inputs differ from its requested dependency home",
+                "source target '{}' namespace inputs differ from its requested source home",
                 target.name.inner()
             )));
         }
         namespace_inputs.cache_commitment()?;
+        let selected_home = namespace_inputs
+            .namespace_plan()
+            .expect("checked namespace inputs have an explicit home")
+            .clone();
         assembler = assembler.with_namespace_inputs(namespace_inputs);
 
         // Extend, rather than replace, source/Git, graph and effective profile provenance with
@@ -647,6 +674,7 @@ where
         {
             Self::check_source_dependency_sections(&cached.package)?;
             cached.package.check_naming(&cached.naming).map_err(Report::msg)?;
+            Self::check_selected_source_home(target, &cached.naming, &selected_home)?;
             if let Some(expected) = expected_callables {
                 expected.check(&cached.naming)?;
             }
@@ -664,6 +692,7 @@ where
         };
         if let RegisteredSourcePackage::Loaded(package) = &reuse {
             let resolved = self.resolve_loaded_package(package.clone())?;
+            Self::check_selected_source_home(target, &resolved.naming, &selected_home)?;
             if let Some(expected) = expected_callables {
                 expected.check(&resolved.naming)?;
             }
@@ -710,6 +739,7 @@ where
         }
 
         package.check_naming(&naming).map_err(|error| Report::msg(error.to_string()))?;
+        Self::check_selected_source_home(target, &naming, &selected_home)?;
         if let Some(expected) = expected_callables {
             expected.check(&naming)?;
         }
@@ -738,6 +768,20 @@ where
         cache.insert(cache_key, resolved.clone());
 
         Ok(ControlFlow::Continue(resolved))
+    }
+
+    fn check_selected_source_home(
+        target: &Target,
+        naming: &PackageNaming,
+        selected_home: &NamespacePlan,
+    ) -> Result<(), Report> {
+        if naming.namespace_plan() != selected_home {
+            return Err(Report::msg(format!(
+                "source target '{}' default home differs from its selected source home",
+                target.name.inner()
+            )));
+        }
+        Ok(())
     }
 
     fn resolve_dependency_package(

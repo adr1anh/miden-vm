@@ -4241,7 +4241,7 @@ fn standard_dependency_bindings_match_compiled_homes_and_reject_changed_requests
         assert!(
             error
                 .to_string()
-                .contains("namespace inputs differ from its requested dependency home"),
+                .contains("namespace inputs differ from its requested source home"),
             "{error}"
         );
     }
