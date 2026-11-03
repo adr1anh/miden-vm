@@ -67,7 +67,7 @@ use miden_assembly_syntax::{
     debuginfo::{SourceManager, SourceSpan, Span, Spanned},
     module::{ItemInfo, ModuleDescriptor},
 };
-use miden_core::{Word, advice::AdviceMap, program::KernelDescriptor};
+use miden_core::{Word, advice::AdviceMap};
 use miden_mast_package::{CallableProcedurePath, Package as MastPackage, PackageNaming};
 use smallvec::{SmallVec, smallvec};
 
@@ -159,12 +159,11 @@ pub struct Linker {
     /// The set of MAST roots which have procedure definitions in this graph. There can be
     /// multiple procedures bound to the same root due to having identical code.
     procedures_by_mast_root: BTreeMap<Word, SmallVec<[GlobalItemIndex; 1]>>,
-    /// The index of the kernel module in `modules`, if present
+    /// The optional source module used for unqualified kernel procedure lookup.
+    ///
+    /// This is a source alias convention, independent of canonical kernel export placement.
     kernel_index: Option<ModuleIndex>,
     /// The kernel library being linked against.
-    ///
-    /// This is always provided, with an empty kernel being the default.
-    kernel: KernelDescriptor,
     kernel_library: Option<LinkLibrary>,
     /// The source manager to use when emitting diagnostics.
     source_manager: Arc<dyn SourceManager>,
@@ -183,7 +182,6 @@ impl Linker {
             inline_callgraph: Default::default(),
             procedures_by_mast_root: Default::default(),
             kernel_index: None,
-            kernel: Default::default(),
             kernel_library: None,
             source_manager,
         }
@@ -580,15 +578,8 @@ impl Linker {
     ) -> Result<(), Report> {
         let library =
             LinkLibrary::from_package(kernel_package.clone(), naming).map_err(Report::msg)?;
-        if !kernel_package.is_kernel() {
-            return Err(Report::msg("invalid kernel package: not a kernel"));
-        }
-        let kernel = kernel_package.to_kernel_descriptor()?;
-        if kernel.is_empty() {
-            return Err(Report::msg("invalid kernel package: kernel cannot be empty"));
-        }
-        assert!(self.kernel.is_empty());
-        assert!(self.kernel_library.is_none());
+        kernel_package.check_kernel_code(library.naming())?;
+        assert!(!self.has_kernel());
 
         log::debug!(target: "linker", "modifying linker with kernel package {}@{}", kernel_package.name, kernel_package.version);
 
@@ -598,25 +589,22 @@ impl Linker {
                 reason: err.to_string(),
             }
         })?;
+        // Source lookup may use only the attached package's own optional kernel alias.
+        // An unrelated existing module named `$kernel` must not become this package's adapter.
+        let has_kernel_source_alias =
+            module_descriptors.iter().any(|module| module.path().is_kernel_path());
         let bindings = Self::library_export_bindings(&library);
         let modules = self.preflight_library_modules(module_descriptors, &bindings)?;
         self.insert_library_modules(modules, &bindings);
-        let kernel_index = self
-            .modules
-            .iter()
-            .find(|module| module.path().is_kernel_path())
-            .map(LinkModule::id);
-        assert!(kernel_index.is_some());
-
+        let kernel_index = if has_kernel_source_alias {
+            self.find_module_index(Path::kernel_path())
+        } else {
+            None
+        };
         self.kernel_index = kernel_index;
-        self.kernel = kernel;
         self.kernel_library = Some(library);
 
         Ok(())
-    }
-
-    pub fn kernel(&self) -> &KernelDescriptor {
-        &self.kernel
     }
 
     pub fn kernel_package(&self) -> Option<Arc<MastPackage>> {
@@ -627,8 +615,9 @@ impl Linker {
         self.kernel_library.as_ref().map(|library| library.naming().clone())
     }
 
-    pub fn has_nonempty_kernel(&self) -> bool {
-        self.kernel_index.is_some() || !self.kernel.is_empty()
+    /// Returns whether kernel source or a compiled kernel package has been linked.
+    pub fn has_kernel(&self) -> bool {
+        self.kernel_index.is_some() || self.kernel_library.is_some()
     }
 }
 
@@ -1250,7 +1239,7 @@ mod tests {
             .expect_err("expected unresolved kernel target to be rejected");
 
         assert!(matches!(first_err, LinkerError::UndefinedSymbol { .. }));
-        assert!(!linker.has_nonempty_kernel(), "failed kernel link must not leave a kernel set");
+        assert!(!linker.has_kernel(), "failed kernel link must not leave a kernel set");
         assert_eq!(linker[userspace_index].kind(), ast::ModuleKind::Library);
         assert_eq!(linker.modules().len(), 1, "failed kernel module must be removed");
 
@@ -1264,7 +1253,7 @@ mod tests {
             .expect_err("expected unresolved kernel target retry to be rejected");
         assert!(matches!(&second_err, LinkerError::UndefinedSymbol { .. }));
         assert!(!second_err.to_string().contains("duplicate module"));
-        assert!(!linker.has_nonempty_kernel(), "retry must also restore the kernel state");
+        assert!(!linker.has_kernel(), "retry must also restore the kernel state");
         assert_eq!(linker[userspace_index].kind(), ast::ModuleKind::Library);
         assert_eq!(linker.modules().len(), 1);
 
@@ -1304,7 +1293,7 @@ mod tests {
         let kernel_index = modules[0];
         let a = proc_gid(&linker, kernel_index, "a");
         let b = proc_gid(&linker, kernel_index, "b");
-        assert!(linker.has_nonempty_kernel());
+        assert!(linker.has_kernel());
         assert_eq!(linker.kernel_index, Some(kernel_index));
         assert_eq!(linker[kernel_index].kind(), ast::ModuleKind::Kernel);
         assert!(linker[kernel_index].is_linked());
@@ -1541,15 +1530,120 @@ mod tests {
     #[test]
     fn imported_kernel_keeps_canonical_exports_and_private_naming_together() {
         let context = TestContext::default();
-        let kernel = context
-            .parse_kernel(source_file!(
+        for source_path in [Path::kernel_path(), Path::new("::arbitrary::source")] {
+            let mut kernel = context
+                .parse_kernel(source_file!(
+                    &context,
+                    r#"
+                pub proc foo exec.helper end
+                proc helper push.1 end
+            "#
+                ))
+                .unwrap();
+            kernel.set_path(source_path);
+            let export = CallableBinding::new(
+                NamespacePlan::new(vec![]),
+                CallableProcedurePath::from_semantic_components(vec!["canonical_export".into()])
+                    .unwrap(),
+            )
+            .unwrap();
+            let product = Assembler::new(context.source_manager())
+                .with_namespace_plan(NamespacePlan::new(vec![
+                    CanonicalLabel::text("private-kernel-home").unwrap(),
+                ]))
+                .with_callable_binding(source_path.join("foo").into(), export.clone())
+                .unwrap()
+                .with_callable_path(
+                    source_path.join("helper").into(),
+                    CallableProcedurePath::from_semantic_components(vec!["helper".into()]).unwrap(),
+                )
+                .unwrap()
+                .assemble_library_modules(
+                    "kernel".into(),
+                    kernel,
+                    [],
+                    miden_mast_package::TargetType::Kernel,
+                )
+                .unwrap();
+            let naming = product.naming().clone();
+            let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
+            let linker =
+                Linker::with_kernel(context.source_manager(), package.clone(), naming.clone())
+                    .unwrap();
+            assert!(linker.has_kernel());
+            assert_eq!(linker.kernel_package().as_ref(), Some(&package));
+            assert_eq!(linker.kernel_naming().unwrap().as_ref(), &naming);
+            let module = linker.find_module(source_path).unwrap();
+            assert_eq!(module.get("foo").unwrap().callable_binding(), Some(&export));
+            assert!(module.get("helper").is_none());
+            assert_eq!(linker.kernel_naming().unwrap().callables().bindings().len(), 2);
+            assert_eq!(linker.kernel_index, source_path.is_kernel_path().then(|| module.id()));
+
+            let mut assembler =
+                Assembler::with_kernel(context.source_manager(), package.clone(), naming.clone())
+                    .unwrap();
+            assert!(assembler.has_kernel());
+            let err = assembler
+                .link_package(package, Linkage::Dynamic, naming)
+                .expect_err("an attached package must prevent another kernel");
+            assert!(err.to_string().contains("duplicate kernels"));
+        }
+    }
+
+    #[test]
+    fn imported_kernel_does_not_borrow_an_unrelated_kernel_source_alias() {
+        let context = TestContext::default();
+        let mut ordinary = context
+            .parse_module(source_file!(
                 &context,
-                r#"
-            pub proc foo exec.helper end
-            proc helper push.1 end
-        "#
+                "namespace ordinary\n pub proc ordinary push.1 end"
             ))
             .unwrap();
+        ordinary.set_path(Path::kernel_path());
+        let ordinary_home =
+            NamespacePlan::new(vec![CanonicalLabel::text("ordinary-fixture-home").unwrap()]);
+        let ordinary_binding = CallableBinding::new(
+            ordinary_home.clone(),
+            CallableProcedurePath::from_semantic_components(vec!["ordinary".into()]).unwrap(),
+        )
+        .unwrap();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(ordinary_home)
+            .with_callable_binding(
+                Arc::from(Path::new("::$kernel::ordinary")),
+                ordinary_binding.clone(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "ordinary".into(),
+                ordinary,
+                [],
+                miden_mast_package::TargetType::Library,
+            )
+            .unwrap();
+        let ordinary_naming = product.naming().clone();
+        let ordinary_library = LinkLibrary::from_package(
+            product.into_artifact(false).unwrap().into(),
+            ordinary_naming,
+        )
+        .unwrap();
+        let mut linker = Linker::new(context.source_manager());
+        linker.link_library(ordinary_library).unwrap();
+        assert!(!linker.has_kernel());
+        assert_eq!(
+            linker
+                .find_module(Path::kernel_path())
+                .unwrap()
+                .get("ordinary")
+                .unwrap()
+                .callable_binding(),
+            Some(&ordinary_binding)
+        );
+
+        let source_path = Path::new("::arbitrary::source");
+        let mut kernel =
+            context.parse_kernel(source_file!(&context, "pub proc foo push.2 end")).unwrap();
+        kernel.set_path(source_path);
         let export = CallableBinding::new(
             NamespacePlan::new(vec![]),
             CallableProcedurePath::from_semantic_components(vec!["canonical_export".into()])
@@ -1557,15 +1651,8 @@ mod tests {
         )
         .unwrap();
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
-                CanonicalLabel::text("private-kernel-home").unwrap(),
-            ]))
-            .with_callable_binding(Arc::from(Path::new("::$kernel::foo")), export.clone())
-            .unwrap()
-            .with_callable_path(
-                Arc::from(Path::new("::$kernel::helper")),
-                CallableProcedurePath::from_semantic_components(vec!["helper".into()]).unwrap(),
-            )
+            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .with_callable_binding(source_path.join("foo").into(), export.clone())
             .unwrap()
             .assemble_library_modules(
                 "kernel".into(),
@@ -1576,14 +1663,16 @@ mod tests {
             .unwrap();
         let naming = product.naming().clone();
         let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
-        let linker =
-            Linker::with_kernel(context.source_manager(), package.clone(), naming.clone()).unwrap();
+        linker.link_with_kernel(package.clone(), naming.clone()).unwrap();
+
+        assert!(linker.has_kernel());
         assert_eq!(linker.kernel_package().as_ref(), Some(&package));
         assert_eq!(linker.kernel_naming().unwrap().as_ref(), &naming);
-        let module = linker.find_module(Path::kernel_path()).unwrap();
-        assert_eq!(module.get("foo").unwrap().callable_binding(), Some(&export));
-        assert!(module.get("helper").is_none());
-        assert_eq!(linker.kernel_naming().unwrap().callables().bindings().len(), 2);
+        assert_eq!(linker.kernel_index, None);
+        assert_eq!(
+            linker.find_module(source_path).unwrap().get("foo").unwrap().callable_binding(),
+            Some(&export)
+        );
     }
 
     fn linker_at_module_capacity(context: &TestContext) -> Linker {
@@ -1718,7 +1807,7 @@ mod tests {
             modules_before,
             "capacity failure must not partially add kernel modules"
         );
-        assert!(!linker.has_nonempty_kernel());
+        assert!(!linker.has_kernel());
         assert!(linker.kernel_package().is_none());
 
         let retry_err = linker

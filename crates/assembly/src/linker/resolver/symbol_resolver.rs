@@ -234,7 +234,8 @@ impl<'a> SymbolResolver<'a> {
                 let mut context = context.clone();
                 // Preserve the established unqualified syscall source alias even when a caller
                 // has a same-named local symbol. This lookup adapter selects only a definition;
-                // its explicit canonical binding and the full kernel plan govern authorization.
+                // its canonical binding must have parent N0, and runtime authenticates it under the
+                // caller-selected environment.
                 if context.in_syscall()
                     && let Some(kernel) = self.graph.kernel_index
                     && (self.graph[kernel].get(symbol.as_str()).is_some()

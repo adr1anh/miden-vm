@@ -1,6 +1,5 @@
 // MAST TESTS
 // ================================================================================================
-
 use miden_core::{
     mast::BasicBlockNodeBuilder,
     program::{CanonicalLabel, ProcedureKey},
@@ -79,7 +78,7 @@ fn nested_blocks() -> Result<(), Report> {
             admit_fixture_package(&dummy_library, core::slice::from_ref(&helper_home))?;
         let mut assembler =
             Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)?
-                .with_namespace_plan(program_home)
+                .with_namespace_plan(program_home.clone())
                 .with_callable_path(Path::exec_path().join("$main").into(), entry_path)
                 .unwrap()
                 .with_callable_path(Path::exec_path().join("foo").into(), foo_path)
@@ -88,12 +87,12 @@ fn nested_blocks() -> Result<(), Report> {
                 .unwrap()
                 .with_callable_binding(
                     Path::kernel_path().join("foo").into(),
-                    CallableBinding::new(kernel_home, kernel_foo_path).unwrap(),
+                    CallableBinding::new(kernel_home.clone(), kernel_foo_path).unwrap(),
                 )
                 .unwrap()
                 .with_callable_binding(
                     Arc::from(Path::new("::libs::helpers::help")),
-                    CallableBinding::new(helper_home, helper_path).unwrap(),
+                    CallableBinding::new(helper_home.clone(), helper_path).unwrap(),
                 )
                 .unwrap();
         assembler
@@ -161,7 +160,9 @@ fn nested_blocks() -> Result<(), Report> {
         syscall.foo
     end"#;
 
-    let program = assembler.assemble_program("program", program).unwrap().unwrap_program();
+    let package = assembler.assemble_program("program", program).unwrap();
+    let naming = admit_fixture_package(&package, &[program_home, kernel_home, helper_home])?;
+    let program = package.unwrap_program(&naming);
 
     // Dynamic code supply also retains D separately from the helper's keyed EXEC.
     let helper_digest = BasicBlockNodeBuilder::new(vec![Operation::Push(Felt::from_u32(29))])

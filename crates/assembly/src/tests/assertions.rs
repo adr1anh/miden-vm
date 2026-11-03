@@ -1,8 +1,7 @@
 // ASSERTIONS
 // ================================================================================================
-
 use super::*;
-use crate::testing::FixtureNamespace;
+use crate::testing::{FixtureNamespace, FixtureProgram};
 
 #[test]
 fn assert_with_code() -> TestResult {
@@ -252,7 +251,7 @@ fn asserts_and_mpverify_with_code_in_duplicate_procedure() -> TestResult {
     let package = naming
         .configure(Assembler::new(context.source_manager()), [&*module])?
         .assemble_program("test", module)?;
-    let program = package.unwrap_program();
+    let program = package.fixture_program();
     let forest = program.mast_forest();
     let mut exec_targets = Vec::new();
     let mut pending = vec![program.entrypoint()];

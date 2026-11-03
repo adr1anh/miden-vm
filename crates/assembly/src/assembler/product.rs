@@ -256,6 +256,18 @@ impl AssemblyProduct {
         self.naming.namespace_plan()
     }
 
+    /// Extracts executable code using this compilation's exact retained entry metadata.
+    ///
+    /// No raw naming decoder or default home policy is involved. This supplies code/source hints,
+    /// while the execution environment and authenticated entry opening remain caller inputs.
+    pub fn into_program(
+        self,
+        emit_debug_info: bool,
+    ) -> Result<miden_core::program::Program, Report> {
+        let naming = self.naming.clone();
+        self.into_artifact(emit_debug_info)?.try_into_program(&naming)
+    }
+
     pub fn extend_dependencies(
         &mut self,
         deps: impl IntoIterator<Item = Dependency>,

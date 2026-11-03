@@ -92,6 +92,37 @@ pub fn admit_fixture_package(
         .map_err(Report::msg)
 }
 
+/// Admits only the explicit ordinary and root homes selected by assembly fixtures.
+///
+/// Foreign homes require an explicitly chosen fixture profile instead of this helper.
+pub fn fixture_package_naming(package: &Package) -> Result<PackageNaming, Report> {
+    admit_fixture_package(
+        package,
+        &[
+            FixtureNamespace::assembly_tests().namespace_plan().clone(),
+            NamespacePlan::new(vec![]),
+        ],
+    )
+}
+
+/// Selects fixture executable code without reconstructing environment or kernel authority.
+pub fn fixture_program(package: &Package) -> Program {
+    let naming =
+        fixture_package_naming(package).expect("fixture must use an explicitly allowed home");
+    package.unwrap_program(&naming)
+}
+
+/// Chaining convenience restricted to the explicit assembly fixture home convention.
+pub trait FixtureProgram {
+    fn fixture_program(&self) -> Program;
+}
+
+impl FixtureProgram for Package {
+    fn fixture_program(&self) -> Program {
+        fixture_program(self)
+    }
+}
+
 /// Explicit naming metadata for assembly test fixtures.
 ///
 /// This utility convention is independent of bodies, source import aliases, and package digests.
@@ -442,10 +473,17 @@ impl TestContext {
     #[track_caller]
     pub fn assemble(&self, source: impl Parse) -> Result<Program, Report> {
         let module = self.parse_module(source)?;
+        if !module.is_executable() {
+            return Err(Report::msg(
+                "unable to assemble program: source is not an executable module",
+            ));
+        }
         let mut fixture_namespace = self.fixture_namespace.clone();
         fixture_namespace.add_module(&module)?;
         let assembler = fixture_namespace.configure(self.assembler(), [&*module])?;
-        Ok(assembler.assemble_program("test", module)?.unwrap_program())
+        assembler
+            .assemble_executable_modules("test".into(), module, [])?
+            .into_program(self.assembler.emit_debug_info)
     }
 
     /// Compile a library package from `modules` using the [Assembler] constructed by this context.

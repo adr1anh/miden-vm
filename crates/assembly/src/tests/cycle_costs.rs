@@ -1,8 +1,7 @@
 // INSTRUCTION CYCLE COSTS
 // ================================================================================================
-
 use super::*;
-use crate::testing::FixtureNamespace;
+use crate::testing::{FixtureNamespace, FixtureProgram};
 
 /// Pins documented field-operation and u32max cycle costs to the number of operations the
 /// assembler actually emits, so the two cannot drift apart.
@@ -98,7 +97,7 @@ fn instruction_cycle_costs_match_docs() {
             .expect("fixture configuration failed")
             .assemble_program("program", module)
             .expect("assembly failed")
-            .unwrap_program();
+            .fixture_program();
 
         program
             .mast_forest()
@@ -140,7 +139,7 @@ fn bare_exp_lowers_to_63_expacc_rows() -> Result<(), Report> {
     let program = fixture_namespace
         .configure(Assembler::new(context.source_manager()), [&*module])?
         .assemble_program("p", module)?
-        .unwrap_program();
+        .fixture_program();
     let ops: Vec<Operation> = program.mast_forest()[program.entrypoint()]
         .unwrap_basic_block()
         .operations()
@@ -172,7 +171,7 @@ fn exp_imm_uses_exact_exponent_bit_length() -> Result<(), Report> {
         let program = fixture_namespace
             .configure(Assembler::new(context.source_manager()), [&*module])?
             .assemble_program("p", module)?
-            .unwrap_program();
+            .fixture_program();
         let num_expacc = program.mast_forest()[program.entrypoint()]
             .unwrap_basic_block()
             .operations()

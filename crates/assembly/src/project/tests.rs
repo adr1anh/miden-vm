@@ -4,6 +4,7 @@ use miden_assembly_syntax::{ast::DebugVarLocation, source_file};
 use miden_core::{
     mast::{BasicBlockNodeBuilder, MastForest, MastNodeExt, MastNodeId},
     operations::Operation,
+    program::Namespace,
     serde::{Deserializable, Serializable, SliceReader},
     utils::{Idx, hash_string_to_word},
 };
@@ -19,7 +20,10 @@ use miden_package_registry::PackageRegistry;
 use tempfile::TempDir;
 
 use super::*;
-use crate::testing::{FixtureNamespace, TestContext, TestRegistry, configure_project_fixture};
+use crate::testing::{
+    FixtureNamespace, TestContext, TestRegistry, configure_project_fixture, fixture_package_naming,
+    fixture_program,
+};
 
 #[test]
 fn builds_library_package_from_project_profiles() {
@@ -150,7 +154,7 @@ end
 }
 
 #[test]
-fn builds_kernel_package_and_supports_kernel_conversion() {
+fn builds_kernel_package_and_supports_kernel_code_validation() {
     let tempdir = TempDir::new().unwrap();
     let manifest_path = tempdir.path().join("miden-project.toml");
     write_file(
@@ -189,7 +193,7 @@ end
         .expect("kernel build should succeed");
 
     assert_eq!(package.kind, TargetType::Kernel);
-    assert!(package.to_kernel_descriptor().is_ok());
+    assert!(package.check_kernel_code(&fixture_package_naming(&package).unwrap()).is_ok());
 }
 
 #[test]
@@ -2475,8 +2479,41 @@ end
     assert_eq!(dependencies[0].version.to_string(), "1.0.0");
 }
 
+fn assert_embedded_kernel_preserved(package: &MastPackage, expected: &MastPackage) {
+    let embedded = package
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
+        .expect("executable distribution must retain the selected kernel package");
+    assert_eq!(embedded.name, expected.name);
+    assert_eq!(embedded.version, expected.version);
+    assert_eq!(embedded.dependency_commitment(), expected.dependency_commitment());
+    let naming =
+        fixture_package_naming(&embedded).expect("embedded kernel naming must be admitted");
+    let expected_naming =
+        fixture_package_naming(expected).expect("selected kernel naming must be admitted");
+    assert_eq!(naming, expected_naming);
+    embedded
+        .check_kernel_code(&naming)
+        .expect("embedded kernel must retain public executable code");
+    let mut has_root_key = false;
+    for (key, binding) in naming
+        .callables()
+        .bindings()
+        .filter(|(_, binding)| binding.parent_namespace() == Namespace::initial())
+    {
+        has_root_key = true;
+        assert_eq!(*key, binding.key());
+        let implementation = naming
+            .callables()
+            .selected_implementation(*key)
+            .expect("root kernel key must select retained code");
+        assert!(embedded.mast_forest().find_procedure_root(implementation.into_word()).is_some());
+    }
+    assert!(has_root_key, "selected kernel must retain callable keys at N0");
+}
+
 #[test]
-fn executable_packages_preserve_kernel_when_converted_back_to_program() {
+fn executable_packages_preserve_kernel_distribution_with_code_only_program_conversion() {
     let tempdir = TempDir::new().unwrap();
     let manifest_path = write_kernel_program_project(tempdir.path());
 
@@ -2484,9 +2521,6 @@ fn executable_packages_preserve_kernel_when_converted_back_to_program() {
     let kernel_package = context
         .assemble_library_package(&manifest_path, None)
         .expect("kernel package build should succeed");
-    let expected_kernel = kernel_package
-        .to_kernel_descriptor()
-        .expect("kernel package should round-trip as a kernel library");
     let saw_kernel = std::rc::Rc::new(std::cell::Cell::new(false));
     let mut assembler = context.project_assembler_for_path(&manifest_path).unwrap();
     assembler.with_namespace_inputs_provider({
@@ -2494,7 +2528,7 @@ fn executable_packages_preserve_kernel_when_converted_back_to_program() {
         move |context, sources, base| {
             if context.target.is_executable() {
                 assert!(
-                    !base.kernel().is_empty(),
+                    base.has_kernel(),
                     "required kernel must be linked before target naming selection"
                 );
                 assert!(base.linker().kernel_naming().is_some());
@@ -2514,10 +2548,8 @@ fn executable_packages_preserve_kernel_when_converted_back_to_program() {
         .cloned()
         .expect("executable package should record the linked kernel runtime dependency");
     let embedded_kernel_package = package
-        .sections
-        .iter()
-        .find(|section| section.id == SectionId::KERNEL)
-        .map(|section| MastPackage::read_from_bytes_trusted(section.data.as_ref()).unwrap())
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
         .expect("executable package should embed the linked kernel package");
     assert_eq!(embedded_kernel_package.kind, TargetType::Kernel);
     assert_eq!(embedded_kernel_package.name, kernel_dependency.name);
@@ -2526,15 +2558,13 @@ fn executable_packages_preserve_kernel_when_converted_back_to_program() {
 
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
-    let round_tripped_program = round_tripped_package
-        .try_into_program()
-        .expect("executable package conversion should preserve kernel information");
-
-    assert_eq!(round_tripped_program.kernel(), &expected_kernel);
+    let round_tripped_program = fixture_program(&round_tripped_package);
+    assert!(round_tripped_program.kernel().is_empty());
+    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
 }
 
 #[test]
-fn executable_packages_preserve_transitive_kernel_when_converted_back_to_program() {
+fn executable_packages_preserve_transitive_kernel_distribution_with_code_only_conversion() {
     let tempdir = TempDir::new().unwrap();
     let (root_manifest, kernel_manifest) = write_transitive_kernel_program_project(tempdir.path());
 
@@ -2543,9 +2573,6 @@ fn executable_packages_preserve_transitive_kernel_when_converted_back_to_program
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
     assert!(kernel_package.is_kernel());
-    let expected_kernel = kernel_package
-        .to_kernel_descriptor()
-        .expect("kernel package should round-trip as a kernel library");
     let package = context
         .assemble_executable_package(&root_manifest, Some("main"), None)
         .expect("executable package build should succeed");
@@ -2556,10 +2583,8 @@ fn executable_packages_preserve_transitive_kernel_when_converted_back_to_program
         .cloned()
         .expect("executable package should record the transitive kernel runtime dependency");
     let embedded_kernel_package = package
-        .sections
-        .iter()
-        .find(|section| section.id == SectionId::KERNEL)
-        .map(|section| MastPackage::read_from_bytes_trusted(section.data.as_ref()).unwrap())
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
         .expect("executable package should embed the transitive kernel package");
     assert_eq!(embedded_kernel_package.kind, TargetType::Kernel);
     assert_eq!(embedded_kernel_package.name, kernel_dependency.name);
@@ -2568,11 +2593,9 @@ fn executable_packages_preserve_transitive_kernel_when_converted_back_to_program
 
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
-    let round_tripped_program = round_tripped_package
-        .try_into_program()
-        .expect("executable package conversion should preserve transitive kernel information");
-
-    assert_eq!(round_tripped_program.kernel(), &expected_kernel);
+    let round_tripped_program = fixture_program(&round_tripped_package);
+    assert!(round_tripped_program.kernel().is_empty());
+    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
 }
 
 #[test]
@@ -2606,9 +2629,6 @@ fn preassembled_libraries_prefer_store_kernel_over_embedded_copy() {
     let kernel_package = build_context
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
-    let expected_kernel = kernel_package
-        .to_kernel_descriptor()
-        .expect("kernel package should round-trip as a kernel library");
     let mut mid_package = MastPackage::read_from_bytes(
         &build_context
             .assemble_library_package(&mid_manifest, None)
@@ -2639,19 +2659,17 @@ fn preassembled_libraries_prefer_store_kernel_over_embedded_copy() {
         .expect("executable package build should prefer the store kernel");
     drop(project_assembler);
     let embedded_kernel_package = package
-        .sections
-        .iter()
-        .find(|section| section.id == SectionId::KERNEL)
-        .map(|section| MastPackage::read_from_bytes_trusted(section.data.as_ref()).unwrap())
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
         .expect("executable package should embed the store-provided kernel package");
     assert_eq!(embedded_kernel_package.version, kernel_package.version);
     assert_eq!(embedded_kernel_package.commitment(), kernel_package.commitment());
 
-    let round_tripped_program = MastPackage::read_from_bytes(&package.to_bytes())
-        .expect("serialized executable package should round-trip")
-        .try_into_program()
-        .expect("program reconstruction should use the store-provided kernel");
-    assert_eq!(round_tripped_program.kernel(), &expected_kernel);
+    let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
+        .expect("serialized executable package should round-trip");
+    let round_tripped_program = fixture_program(&round_tripped_package);
+    assert!(round_tripped_program.kernel().is_empty());
+    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
 }
 
 #[test]
@@ -2698,9 +2716,6 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
     let kernel_package = build_context
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
-    let expected_kernel = kernel_package
-        .to_kernel_descriptor()
-        .expect("kernel package should round-trip as a kernel library");
     let kernel_version = miden_package_registry::Version::new(
         kernel_package.version.clone(),
         kernel_package.dependency_commitment(),
@@ -2737,10 +2752,8 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
         .expect("embedded kernel should be used when the indexed artifact is unreadable");
     drop(project_assembler);
     let embedded_kernel_package = package
-        .sections
-        .iter()
-        .find(|section| section.id == SectionId::KERNEL)
-        .map(|section| MastPackage::read_from_bytes_trusted(section.data.as_ref()).unwrap())
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
         .expect("executable package should embed the fallback kernel package");
     assert_eq!(embedded_kernel_package.version, kernel_package.version);
     assert_eq!(embedded_kernel_package.commitment(), kernel_package.commitment());
@@ -2756,11 +2769,11 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
             .any(|entry| entry == &format!("kernelpkg@{kernel_version}"))
     );
 
-    let round_tripped_program = MastPackage::read_from_bytes(&package.to_bytes())
-        .expect("serialized executable package should round-trip")
-        .try_into_program()
-        .expect("program reconstruction should use the embedded fallback kernel");
-    assert_eq!(round_tripped_program.kernel(), &expected_kernel);
+    let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
+        .expect("serialized executable package should round-trip");
+    let round_tripped_program = fixture_program(&round_tripped_package);
+    assert!(round_tripped_program.kernel().is_empty());
+    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
 }
 
 #[test]
@@ -2840,7 +2853,7 @@ end
 }
 
 #[test]
-fn preassembled_libraries_without_store_or_embedded_kernel_cannot_reconstruct_program() {
+fn preassembled_libraries_without_store_or_embedded_kernel_cannot_resolve_dependencies() {
     let tempdir = TempDir::new().unwrap();
     write_transitive_kernel_program_project(tempdir.path());
     let mid_manifest = tempdir.path().join("mid").join("miden-project.toml");
@@ -2891,16 +2904,17 @@ fn embedded_kernel_package_must_match_runtime_dependency() {
     embedded_kernel_package.version = "2.0.0".parse().unwrap();
     embedded_kernel_section.data = embedded_kernel_package.to_bytes().into();
 
+    assert!(fixture_program(&round_tripped_package).kernel().is_empty());
     let error = round_tripped_package
-        .try_into_program()
-        .expect_err("mismatched embedded kernel metadata should be rejected");
+        .try_embedded_kernel_package()
+        .expect_err("mismatched embedded kernel metadata should be rejected independently");
     let kernel_name = kernel_dependency.name.to_string();
     assert!(error.to_string().contains("does not match the embedded kernel package"));
     assert!(error.to_string().contains(&kernel_name));
 }
 
 #[test]
-fn executable_packages_without_embedded_kernel_section_are_rejected() {
+fn executable_code_conversion_does_not_require_embedded_kernel_code() {
     let tempdir = TempDir::new().unwrap();
     let manifest_path = write_kernel_program_project(tempdir.path());
 
@@ -2912,10 +2926,14 @@ fn executable_packages_without_embedded_kernel_section_are_rejected() {
         .expect("serialized executable package should round-trip");
     round_tripped_package.sections.retain(|section| section.id != SectionId::KERNEL);
 
-    let error = round_tripped_package
-        .try_into_program()
-        .expect_err("packages without embedded kernels should be rejected");
-    assert!(error.to_string().contains("does not embed the kernel package required"));
+    assert!(fixture_program(&round_tripped_package).kernel().is_empty());
+    assert!(round_tripped_package.kernel_runtime_dependency().unwrap().is_some());
+    assert!(
+        round_tripped_package
+            .try_embedded_kernel_package()
+            .expect("an absent embedded kernel section is a valid distribution choice")
+            .is_none()
+    );
 }
 
 #[test]

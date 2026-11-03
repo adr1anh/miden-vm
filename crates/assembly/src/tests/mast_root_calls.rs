@@ -1,8 +1,7 @@
 // MAST ROOT CALLS
 // ================================================================================================
-
 use super::*;
-use crate::testing::FixtureNamespace;
+use crate::testing::{FixtureNamespace, FixtureProgram};
 
 #[test]
 fn program_with_incorrect_mast_root_length() {
@@ -61,7 +60,7 @@ fn program_with_phantom_mast_call() -> TestResult {
     let mut fixture = FixtureNamespace::assembly_tests();
     fixture.add_module(&ast)?;
     let assembler = fixture.configure(Assembler::new(context.source_manager()), [&*ast])?;
-    let program = assembler.assemble_program("test", ast)?.unwrap_program();
+    let program = assembler.assemble_program("test", ast)?.fixture_program();
     let targets = program
         .mast_forest()
         .nodes()

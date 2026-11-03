@@ -1,8 +1,7 @@
 // PROGRAM WITH $main CALL
 // ================================================================================================
-
 use super::*;
-use crate::testing::FixtureNamespace;
+use crate::testing::{FixtureNamespace, FixtureProgram};
 
 #[test]
 fn simple_main_call() -> TestResult {
@@ -128,7 +127,7 @@ end
         [&*account_code1, &*account_code2, &*main],
     )?;
     assembler.compile_and_statically_link_all([account_code1, account_code2])?;
-    let program = assembler.assemble_program("main", main)?.unwrap_program();
+    let program = assembler.assemble_program("main", main)?.fixture_program();
     let targets = program
         .mast_forest()
         .nodes()

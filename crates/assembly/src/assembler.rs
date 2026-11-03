@@ -27,7 +27,7 @@ use miden_core::{
     WORD_SIZE, Word,
     mast::{MastNodeExt, MastNodeId},
     operations::{AssemblyOp, Operation},
-    program::{ImplementationRoot, KernelDescriptor, Namespace, ProcedureKey},
+    program::{ImplementationRoot, Namespace, ProcedureKey},
     serde::Serializable,
 };
 use miden_mast_package::{
@@ -437,7 +437,7 @@ impl Assembler {
     ) -> Result<(), Report> {
         match package.kind {
             TargetType::Kernel => {
-                if !self.kernel().is_empty() {
+                if self.has_kernel() {
                     return Err(Report::msg(format!(
                         "duplicate kernels present in the dependency graph: '{}@{}' conflicts with another kernel we've already linked",
                         package.name, package.version
@@ -470,11 +470,9 @@ impl Assembler {
         self.warnings_as_errors
     }
 
-    /// Returns a reference to the kernel for this assembler.
-    ///
-    /// If the assembler was instantiated without a kernel, the internal kernel will be empty.
-    pub fn kernel(&self) -> &KernelDescriptor {
-        self.linker.kernel()
+    /// Returns whether kernel source or a compiled kernel package has been linked.
+    pub fn has_kernel(&self) -> bool {
+        self.linker.has_kernel()
     }
 
     #[cfg(feature = "std")]

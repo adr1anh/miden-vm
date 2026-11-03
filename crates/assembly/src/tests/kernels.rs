@@ -142,11 +142,19 @@ fn can_assemble_a_multi_module_kernel() -> Result<(), Report> {
         (Arc::<Package>::from(package), bindings, kernel_home)
     };
 
-    assert_eq!(kernel_lib.to_kernel_descriptor().ok().map(|k| k.proc_hashes().len()), Some(1));
+    let kernel_naming = bindings.admit_package(&kernel_lib)?;
+    kernel_lib.check_kernel_code(&kernel_naming)?;
+    assert_eq!(
+        kernel_lib
+            .manifest
+            .exports()
+            .filter(|export| export.as_procedure().is_some())
+            .count(),
+        1
+    );
 
     let program = context.parse_program(source_file!(&context, PROGRAM))?;
     bindings.add_module(&program)?;
-    let kernel_naming = bindings.admit_package(&kernel_lib)?;
     bindings
         .configure(
             Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)?,
@@ -196,15 +204,15 @@ fn kernel_candidate_with_private_submodule_code_cannot_become_a_runnable_kernel(
     assert!(operations.iter().skip(2).all(|op| *op == Operation::Noop));
     assert!(candidate.manifest.exports().all(|export| export.as_procedure().is_none()));
 
-    let error = candidate
-        .to_kernel_descriptor()
-        .expect_err("private code cannot manufacture a runnable root kernel surface");
-    assert_diagnostic!(error, "invalid kernel package: does not export any kernel procedures");
     let naming = bindings.admit_package(&candidate).expect("fixture naming must be valid");
+    let error = candidate
+        .check_kernel_code(&naming)
+        .expect_err("private code cannot manufacture a runnable root kernel surface");
+    assert_diagnostic!(error, "invalid kernel package: does not export any procedures");
     let error = Assembler::with_kernel(context.source_manager(), candidate, naming)
         .err()
         .expect("a code candidate with no root kernel exports cannot be attached as a kernel");
-    assert_diagnostic!(error, "invalid kernel package: does not export any kernel procedures");
+    assert_diagnostic!(error, "invalid kernel package: does not export any procedures");
 }
 
 #[test]
@@ -483,7 +491,9 @@ fn test_syscall_resolution_uses_kernel_module() -> TestResult {
     let mut assembler = Assembler::with_kernel(context.source_manager(), kernel, kernel_naming)?;
     assembler.compile_and_statically_link(lib)?;
     let assembler = bindings.configure(assembler, [&*program])?;
-    let program = assembler.assemble_program("program", program)?.unwrap_program();
+    let package = assembler.assemble_program("program", program)?;
+    let naming = bindings.admit_package(&package)?;
+    let program = package.unwrap_program(&naming);
 
     let mast = {
         let entry = program.get_node_by_id(program.entrypoint()).unwrap();
