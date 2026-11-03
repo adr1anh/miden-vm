@@ -1,9 +1,12 @@
-use std::hint::black_box;
+use std::{hint::black_box, sync::Arc};
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use miden_core_lib::CoreLibrary;
 use miden_processor::{ExecutionOptions, FastProcessor, advice::AdviceInputs};
-use miden_vm::{Assembler, DefaultHost, StackInputs, internal::InputFile};
+use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
+use miden_vm::{
+    Assembler, DefaultHost, StackInputs, assembly::DefaultSourceManager, internal::InputFile,
+};
 use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 
@@ -46,40 +49,55 @@ fn program_execution_for_trace(c: &mut Criterion) {
                 // Create a benchmark for the masm file
                 let file_stem = entry.path().file_stem().unwrap().to_string_lossy();
                 group.bench_function(file_stem, |bench| {
-                    let mut assembler = Assembler::default();
+                    let source_manager = Arc::new(DefaultSourceManager::default());
+                    let core_lib = CoreLibrary::default();
+                    let mut assembler = Assembler::new(source_manager.clone());
                     assembler
                         .link_package(
-                            CoreLibrary::default().package(),
+                            core_lib.package(),
                             miden_assembly::Linkage::Dynamic,
+                            core_lib.naming().clone(),
                         )
                         .expect("failed to load core library");
 
-                    let program = assembler
-                        .assemble_program("program", &source)
-                        .expect("Failed to compile test source.")
-                        .unwrap_program();
+                    let fixture: NamedProgram = assemble_fixture_program(
+                        assembler,
+                        "program",
+                        source.as_str(),
+                        &[core_lib.naming()],
+                    );
                     let stack_inputs_vec: Vec<_> = stack_inputs.iter().rev().copied().collect();
                     let stack_inputs = StackInputs::new(&stack_inputs_vec).unwrap();
                     bench.to_async(Runtime::new().unwrap()).iter_batched(
                         || {
                             let host = DefaultHost::default()
-                                .with_library(&CoreLibrary::default())
-                                .unwrap();
+                                .with_source_manager(source_manager.clone())
+                                .with_library(&core_lib)
+                                .unwrap()
+                                .with_environment_source(fixture.environment.source());
 
                             let processor = FastProcessor::new_with_options(
                                 stack_inputs,
                                 advice_inputs.clone(),
                                 ExecutionOptions::default()
+                                    .with_environment_trace_limits(trace_limits())
                                     .with_core_trace_fragment_size(TRACE_FRAGMENT_SIZE)
                                     .unwrap(),
                             )
                             .expect("processor advice inputs should fit advice map limits");
 
-                            (host, program.clone(), processor)
+                            (
+                                host,
+                                fixture.program.clone(),
+                                fixture.environment.execution(),
+                                processor,
+                            )
                         },
-                        |(mut host, program, processor)| async move {
-                            let out =
-                                processor.execute_for_proving(&program, &mut host).await.unwrap();
+                        |(mut host, program, environment, processor)| async move {
+                            let out = processor
+                                .execute_for_proving(&program, environment, &mut host)
+                                .await
+                                .unwrap();
                             black_box(out);
                         },
                         BatchSize::SmallInput,
