@@ -2749,3 +2749,37 @@ executable/CLI-test/proof success is claimed. Remaining manual core/benchmark so
 program extraction, native environment/trace setup and legacy claims stay in the scratch source
 index. Existing PR14 compatibility-root, security-counterfactual and guest/project gates remain;
 PR09/M1/final acceptance and PR10/PR12/PR14 work are still open. No proof constant regeneration.
+
+### PR09 manual core execution and external test builders, 3 November 2026
+
+`661a52d88` routes exported test-builder macros through Test::from_source_parts, preserving the
+caller's loaded source/manager, stack/advice and tracing settings while keeping naming private.
+Two external integration tests cover every input arity and source identity. Explicit raw/owned
+append also discards naming for removed tail slots, preventing clear-and-reselection from inheriting
+old owned metadata or a warmed cache. New same-object regressions cover raw rejection and valid
+owned replacement. Helper units 18 plus external builders 2 pass; no fixture admission was broadened.
+
+`3cce2348e` exposes the existing std source-manager accessor and reexports Parse, allowing callers
+to parse in the assembler's exact source context without a second manager or extra dependency.
+`1acd73374` migrates manual core debug/memory/crypto/precompile/recursive fixtures. The shared nested
+test support module configures local fixture declarations, retains AssemblyProduct naming, and
+builds finite environments from exact local/core/kernel inventories. Kernel public/private placement,
+full batch cohorts, actual host sources, async forwarding, mutable stepping contexts and explicit
+proving trace policies are preserved through extraction/execution. Imported core is never renamed
+under the fixture convention. Existing forged handlers, memory overlap, security/proof/root assertions
+and zero precompile ceilings remain intact; no new ignores/skips, refreshed proof-root constants
+or deployment defaults.
+
+**Qualification:** the 656-case core-lib integration target compiles. The separate auto-discovered
+debug target runs 27 tests successfully; it is not selected by filtering the core-lib target.
+Memory copy 4, manual precompile roots 10 (including forged advice), deferred wrapper 1 and defensive
+signature-load/overlapping-local-write 1 pass. Strict Clippy for the core-lib/debug targets and
+helper library/external builders passes; assembly/helper no_std, scoped formatting and whitespace
+pass. Independent reviews found no remaining actionable issue. Three source signatures verified;
+root centralized guarded checks, bounded agents ran no builds. No pushes or GitHub PRs.
+
+Full 656-case execution, recursive/proof paths and compatibility identities are not qualified by
+these focused native tests. Legacy claim construction and every existing PR12/PR14 security oracle
+remain, without padding old public values or refreshing root constants. Next migrate benchmark/VM
+integration source naming and environment/trace consumers; the CLI verification compile error and
+previous claim/security/guest/final gates remain open. PR09, M1 and the overall goal are not complete.
