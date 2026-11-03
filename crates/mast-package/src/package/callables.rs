@@ -229,5 +229,8 @@ pub enum PackageCallablesError {
     #[error("implementation selection refers to undeclared callable key {key:?}")]
     UnknownImplementationTarget { key: ProcedureKey },
 }
+
+#[cfg(test)]
+mod home_validation_tests;
 #[cfg(test)]
 mod tests;
