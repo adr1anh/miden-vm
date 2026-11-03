@@ -150,3 +150,6 @@ impl Assembler {
         mast_forest_builder.record_inline_calls(body, &inline_calls)
     }
 }
+
+#[cfg(all(test, feature = "std"))]
+mod tests;
