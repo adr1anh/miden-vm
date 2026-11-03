@@ -1,7 +1,158 @@
 // DEBUG INFO
 // ================================================================================================
 
+use miden_core::program::{CanonicalLabel, ProcedureKey};
+use miden_mast_package::{
+    NamespacePlan,
+    debug_info::{DebugFunctionInfo, DebugSourceNodeId, PackageDebugInfo},
+};
+
 use super::*;
+use crate::testing::FixtureNamespace;
+
+fn dependency_fixture_namespace() -> FixtureNamespace {
+    FixtureNamespace::new(NamespacePlan::new(vec![
+        CanonicalLabel::text("debug-info-dependency-fixtures").unwrap(),
+        CanonicalLabel::revision(core::num::NonZeroU32::new(1).unwrap()),
+    ]))
+}
+
+fn configure_debug_fixture(
+    assembler: Assembler,
+    bindings: &mut FixtureNamespace,
+    modules: &[&Module],
+) -> Result<Assembler, Report> {
+    for module in modules {
+        bindings.add_module(module)?;
+    }
+    bindings.configure(assembler, modules.iter().copied())
+}
+
+fn add_debug_package_bindings(
+    bindings: &mut FixtureNamespace,
+    package: &Package,
+    foreign: &FixtureNamespace,
+) -> TestResult {
+    for export in package.manifest.exports().filter_map(|export| export.as_procedure()) {
+        let binding = foreign
+            .binding(&export.path)
+            .expect("foreign fixture must name each concrete package descriptor");
+        bindings.add_binding(export.path.clone(), binding.clone())?;
+    }
+    Ok(())
+}
+
+fn add_debug_reexport_binding(
+    bindings: &mut FixtureNamespace,
+    definition: &str,
+    alias: &str,
+) -> TestResult {
+    let binding = bindings.binding(Path::new(definition)).unwrap().clone();
+    bindings.add_binding(Arc::from(Path::new(alias)), binding)?;
+    Ok(())
+}
+
+fn debug_function<'a>(debug: &'a PackageDebugInfo, name: &str) -> &'a DebugFunctionInfo {
+    let mut functions = debug.functions().iter().filter(|function| {
+        let index = function.linkage_name_idx.into_option().unwrap_or(function.name_idx);
+        debug[index].as_ref() == name
+    });
+    let function = functions.next().unwrap_or_else(|| panic!("missing function {name}"));
+    assert!(functions.next().is_none(), "ambiguous function {name}");
+    function
+}
+
+fn debug_definition_function<'a>(debug: &'a PackageDebugInfo, name: &str) -> &'a DebugFunctionInfo {
+    // A bridge may also carry a source-less declaration for the same name. Select the
+    // independently retained definition explicitly, without choosing a function by body D.
+    let mut functions = debug.functions().iter().filter(|function| {
+        let index = function.linkage_name_idx.into_option().unwrap_or(function.name_idx);
+        debug[index].as_ref() == name && function.source_node.into_option().is_some()
+    });
+    let function = functions.next().unwrap_or_else(|| panic!("missing definition {name}"));
+    assert!(functions.next().is_none(), "ambiguous definition {name}");
+    function
+}
+
+fn assert_debug_definition(
+    package: &Package,
+    debug: &PackageDebugInfo,
+    function: &DebugFunctionInfo,
+) -> DebugSourceNodeId {
+    let source = function.source_node.into_option().expect("retained body has a definition");
+    let node = debug[source].exec_node;
+    assert!(package.mast_forest().procedure_roots().contains(&node));
+    assert_eq!(package.mast_forest()[node].digest(), function.mast_root);
+    source
+}
+
+fn runtime_exec_sources(
+    package: &Package,
+    debug: &PackageDebugInfo,
+    root: DebugSourceNodeId,
+) -> Vec<DebugSourceNodeId> {
+    reachable_source_nodes(debug, root)
+        .into_iter()
+        .filter(|source| {
+            matches!(package.mast_forest()[debug[*source].exec_node], MastNode::Exec(_))
+        })
+        .collect()
+}
+
+fn assert_runtime_exec_source(
+    package: &Package,
+    debug: &PackageDebugInfo,
+    source: DebugSourceNodeId,
+    key: ProcedureKey,
+    operation: &str,
+) {
+    let source = &debug[source];
+    let MastNode::Exec(exec) = &package.mast_forest()[source.exec_node] else {
+        panic!("runtime invocation must be a keyed EXEC");
+    };
+    assert_eq!(exec.target(), key);
+    assert!(source.children.is_empty(), "runtime EXEC has no callee source child");
+    assert_eq!((source.op_start, source.op_end), (0, 1));
+    assert_eq!(source.asm_ops.len(), 1);
+    let op = &source.asm_ops[0];
+    assert_eq!(op.op_idx, 0);
+    assert_eq!(op.num_cycles, 1);
+    assert_eq!(debug[op.op_name_idx].as_ref(), operation);
+}
+
+fn assert_definition_operation(
+    package: &Package,
+    debug: &PackageDebugInfo,
+    root: DebugSourceNodeId,
+    expected: &str,
+) {
+    assert!(
+        reachable_source_nodes(debug, root).into_iter().any(|source| {
+            debug[source]
+                .asm_ops
+                .iter()
+                .any(|op| debug[op.op_name_idx].as_ref() == expected)
+        }),
+        "definition must retain {expected}"
+    );
+    let operation = match expected {
+        "add" => Operation::Add,
+        "mul" => Operation::Mul,
+        "push.42" => Operation::Push(Felt::from_u32(42)),
+        "push.43" => Operation::Push(Felt::from_u32(43)),
+        _ => panic!("missing concrete fixture operation for {expected}"),
+    };
+    let mut pending = vec![debug[root].exec_node];
+    let mut found = false;
+    while let Some(node) = pending.pop() {
+        let node = &package.mast_forest()[node];
+        if let MastNode::Block(block) = node {
+            found |= block.operations().any(|actual| *actual == operation);
+        }
+        node.append_children_to(&mut pending);
+    }
+    assert!(found, "independently retained body must execute {expected}");
+}
 
 fn replace_nops_with_named_inline_call_markers(
     context: &TestContext,
@@ -93,7 +244,13 @@ fn inline_call_chains_are_recorded_on_call_and_structured_control_occurrences() 
         &[None, Some("source::inlined"), None, Some("source::inlined")],
     )?;
 
-    let package = Assembler::new(context.source_manager()).assemble_program("test", module)?;
+    let mut bindings = FixtureNamespace::assembly_tests();
+    let package = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut bindings,
+        &[&module],
+    )?
+    .assemble_program("test", module)?;
     let debug_info = package
         .debug_info()
         .into_diagnostic()?
@@ -121,8 +278,28 @@ fn inline_call_chains_are_recorded_on_call_and_structured_control_occurrences() 
             .get_function(inline_calls[0].callee_idx)
             .expect("inline callee should be registered");
         assert_eq!(debug_info[function.name_idx].as_ref(), "source::inlined");
+        if expected_op == "call." {
+            let MastNode::Call(call) = &package.mast_forest()[source_node.exec_node] else {
+                panic!("call source occurrence must retain its invocation mode");
+            };
+            assert!(!call.is_syscall());
+            assert_eq!(
+                call.target(),
+                bindings.binding(Path::new("::$exec::callee")).unwrap().key()
+            );
+            assert!(source_node.children.is_empty());
+            assert_eq!((source_node.op_start, source_node.op_end), (0, 1));
+            assert_eq!(source_node.asm_ops.len(), 1);
+            assert_eq!(source_node.asm_ops[0].num_cycles, 1);
+        }
     }
-
+    let callee = assert_debug_definition(
+        &package,
+        &debug_info,
+        debug_function(&debug_info, "::$exec::callee"),
+    );
+    assert_definition_operation(&package, &debug_info, callee, "add");
+    assert!(debug_info[callee].inline_calls.is_empty());
     Ok(())
 }
 
@@ -336,63 +513,47 @@ fn nested_exec_inline_chains_are_innermost_first() -> TestResult {
 #[test]
 fn external_exec_records_inline_context_at_the_boundary() -> TestResult {
     let context = TestContext::default();
-    let library_module = context.parse_module(
-        "
-        namespace dep::math
-
-        pub proc callee
-            add
-        end
-        ",
-    )?;
-    let library = Assembler::new(context.source_manager()).assemble_library(
-        "dep",
-        library_module,
-        None::<Box<Module>>,
-    )?;
-    let assembler = Assembler::new(context.source_manager())
-        .with_package(Arc::from(library), Linkage::Dynamic)?;
-    let source = source_file!(
-        &context,
-        "
-        use dep::math
-
-        begin
-            nop
-            nop
-            exec.math::callee
-        end
-        "
-    );
+    let library_module = context.parse_module("namespace dep::math\npub proc callee add end")?;
+    let mut foreign = dependency_fixture_namespace();
+    let library = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&library_module],
+    )?
+    .assemble_library("dep", library_module, None::<Box<Module>>)?;
+    let expected_root =
+        library.mast_forest()[library.get_export_node_id("dep::math::callee")].digest();
+    let key = foreign.binding(Path::new("::dep::math::callee")).unwrap().key();
+    let source = source_file!(&context, "use dep::math\nbegin nop nop exec.math::callee end");
     let mut module = context.parse_module(source)?;
-    let entrypoint = module
-        .procedures_mut()
-        .find(|procedure| procedure.is_entrypoint())
-        .expect("executable module should contain an entrypoint");
+    let entrypoint = module.procedures_mut().find(|procedure| procedure.is_entrypoint()).unwrap();
     replace_nops_with_named_inline_call_markers(
         &context,
         entrypoint,
         &[None, Some("source::external")],
     )?;
-
-    let package = assembler.assemble_program("test", module)?;
-    let debug_info = package
-        .debug_info()
-        .into_diagnostic()?
-        .expect("assembled package should contain debug info");
-    let external_source = debug_info
-        .nodes()
-        .iter()
-        .find(|source_node| {
-            package.mast_forest()[source_node.exec_node].is_external()
-                && !source_node.inline_calls.is_empty()
-        })
-        .expect("decorated external exec should carry boundary inline context");
-
-    assert_eq!(external_source.op_start, external_source.op_end);
-    assert!(external_source.inline_calls.iter().all(|inline_call| {
-        inline_call.op_idx == external_source.op_start
-            && inline_call.op_end == external_source.op_end
+    let mut bindings = FixtureNamespace::assembly_tests();
+    add_debug_package_bindings(&mut bindings, &library, &foreign)?;
+    let assembler = Assembler::new(context.source_manager())
+        .with_package(Arc::from(library), Linkage::Dynamic)?;
+    let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
+        .assemble_program("test", module)?;
+    let debug = package.debug_info().into_diagnostic()?.unwrap();
+    let root = package.entrypoint_source_node().unwrap();
+    let sources = runtime_exec_sources(&package, &debug, root);
+    assert_eq!(sources.len(), 1);
+    assert_runtime_exec_source(&package, &debug, sources[0], key, "exec.math::callee");
+    let rows = &debug[sources[0]].inline_calls;
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].op_idx, rows[0].op_end), (0, 1));
+    let annotation = debug.get_function(rows[0].callee_idx).unwrap();
+    assert_eq!(debug[annotation.name_idx].as_ref(), "source::external");
+    let callee = debug_function(&debug, "::dep::math::callee");
+    assert_eq!(callee.mast_root, expected_root);
+    assert_eq!(callee.source_node.into_option(), None);
+    assert!(package.mast_forest().procedure_roots().iter().any(|node| {
+        let body = &package.mast_forest()[*node];
+        body.is_external() && body.digest() == expected_root
     }));
     Ok(())
 }
@@ -524,11 +685,13 @@ fn source_name_attribute_sets_debug_name_and_linkage_name() -> TestResult {
         end
         "#
     ))?;
-    let package = Assembler::new(context.source_manager()).assemble_library(
-        "debug-names",
-        module,
-        None::<Box<Module>>,
-    )?;
+    let mut bindings = FixtureNamespace::assembly_tests();
+    let package = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut bindings,
+        &[&module],
+    )?
+    .assemble_library("debug-names", module, None::<Box<Module>>)?;
 
     let assert_function_names = |package: &Package| {
         let debug_info = package
@@ -599,9 +762,14 @@ fn malformed_source_name_attributes_are_rejected() -> TestResult {
             )
         );
         let module = context.parse_module(source)?;
-        let error = Assembler::new(context.source_manager())
-            .assemble_library("invalid-source-name", module, None::<Box<Module>>)
-            .expect_err("malformed @source_name should be rejected");
+        let mut bindings = FixtureNamespace::assembly_tests();
+        let error = configure_debug_fixture(
+            Assembler::new(context.source_manager()),
+            &mut bindings,
+            &[&module],
+        )?
+        .assemble_library("invalid-source-name", module, None::<Box<Module>>)
+        .expect_err("malformed @source_name should be rejected");
         assert_diagnostic!(&error, "invalid `@source_name` procedure attribute");
         assert_diagnostic!(&error, "expected exactly one quoted string");
     }
@@ -613,101 +781,113 @@ fn malformed_source_name_attributes_are_rejected() -> TestResult {
 fn plain_exec_preserves_canonical_definitions() -> TestResult {
     for visibility in ["pub ", ""] {
         let context = TestContext::default();
-        let source = format!(
-            "namespace debug::repro\n{visibility}proc leaf push.42 end\npub proc wrapper exec.leaf end"
-        );
-        let package = Assembler::new(context.source_manager()).assemble_library(
-            "probe",
-            source,
-            None::<String>,
-        )?;
+        let module = context.parse_module(format!(
+            "namespace debug::repro\n{visibility}proc leaf push.42 end\npub proc twin push.42 end\npub proc wrapper exec.leaf end"
+        ))?;
+        let mut bindings = FixtureNamespace::assembly_tests();
+        let package = configure_debug_fixture(
+            Assembler::new(context.source_manager()),
+            &mut bindings,
+            &[&module],
+        )?
+        .assemble_library("probe", module, None::<Box<Module>>)?;
         let debug = package.debug_info().into_diagnostic()?.unwrap();
-        let leaf = debug
-            .functions()
-            .iter()
-            .find(|f| debug[f.name_idx].ends_with("::leaf"))
-            .unwrap();
-        let wrapper = debug
-            .functions()
-            .iter()
-            .find(|f| debug[f.name_idx].ends_with("::wrapper"))
-            .unwrap();
-        assert_eq!(leaf.mast_root, wrapper.mast_root);
-        assert_ne!(leaf.source_node, wrapper.source_node);
-        assert!(debug[leaf.source_node.into_option().unwrap()].inline_calls.is_empty());
+        let leaf = debug_function(&debug, "::debug::repro::leaf");
+        let twin = debug_function(&debug, "::debug::repro::twin");
+        let wrapper = debug_function(&debug, "::debug::repro::wrapper");
+        assert_eq!(leaf.mast_root, twin.mast_root);
+        assert_ne!(leaf.mast_root, wrapper.mast_root);
+        let leaf_source = assert_debug_definition(&package, &debug, leaf);
+        let twin_source = assert_debug_definition(&package, &debug, twin);
+        let wrapper_source = assert_debug_definition(&package, &debug, wrapper);
+        assert_ne!(leaf_source, twin_source);
+        assert_ne!(leaf_source, wrapper_source);
+        assert!(debug[leaf_source].inline_calls.is_empty());
+        assert!(debug[twin_source].inline_calls.is_empty());
+        assert_definition_operation(&package, &debug, leaf_source, "push.42");
+        assert_definition_operation(&package, &debug, twin_source, "push.42");
+        let leaf_key = bindings.binding(Path::new("::debug::repro::leaf")).unwrap().key();
+        let twin_key = bindings.binding(Path::new("::debug::repro::twin")).unwrap().key();
+        assert_ne!(leaf_key, twin_key, "equal bodies retain different callable keys");
+        assert_runtime_exec_source(&package, &debug, wrapper_source, leaf_key, "exec.leaf");
+        assert!(debug[wrapper_source].inline_calls.is_empty());
     }
-
     Ok(())
 }
 
 #[test]
 fn plain_exec_preserves_invocation_identity_through_merging() -> TestResult {
     use miden_assembly_syntax::debuginfo::{SourceLanguage, Uri};
-    use miden_core::serde::{Deserializable, Serializable};
 
     let source = "proc leaf push.42 end\nproc wrapper exec.leaf end\nbegin\n exec.wrapper\n drop\n exec.wrapper\n drop\nend";
-    let assemble = |text: &str| {
+    let assemble = |text: &str| -> Result<_, Report> {
         let context = TestContext::default();
         let file = context.source_manager().load(
             SourceLanguage::Masm,
             Uri::new("memory://reproducer.masm"),
             text.to_string(),
         );
-        Assembler::new(context.source_manager()).assemble_program("program", file)
+        let module = context.parse_module(file)?;
+        let mut bindings = FixtureNamespace::assembly_tests();
+        let package = configure_debug_fixture(
+            Assembler::new(context.source_manager()),
+            &mut bindings,
+            &[&module],
+        )?
+        .assemble_program("program", module)?;
+        Ok((package, bindings))
     };
-    let wrapper_package = assemble(source)?;
-    let leaf_package =
+    let (wrapper_package, bindings) = assemble(source)?;
+    let (leaf_package, _) =
         assemble(&source.replace("exec.wrapper\n drop\nend", "exec.leaf   \n drop\nend"))?;
-    assert_eq!(wrapper_package.mast_forest().to_bytes(), leaf_package.mast_forest().to_bytes());
-    // Invocation source identity must not alter execution bytes.
-    let baseline = include_bytes!("fixtures/exec-source-identity.mast");
-    assert_eq!(wrapper_package.mast_forest().to_bytes(), baseline.as_slice());
+    // Replacing a runtime target changes K, even when the selected bodies used to inline equally.
+    assert_ne!(wrapper_package.mast_forest().to_bytes(), leaf_package.mast_forest().to_bytes());
     let debug = wrapper_package.debug_info().into_diagnostic()?.unwrap();
-    let decoded =
-        miden_mast_package::debug_info::PackageDebugInfo::read_from_bytes(&debug.to_bytes())
-            .into_diagnostic()?;
+    let decoded = PackageDebugInfo::read_from_bytes(&debug.to_bytes()).into_diagnostic()?;
     assert_eq!(decoded, debug);
     assert_ne!(
         debug.to_bytes(),
         leaf_package.debug_info().into_diagnostic()?.unwrap().to_bytes()
     );
     let root = wrapper_package.entrypoint_source_node().unwrap();
-    let pushes = debug[root]
-        .asm_ops
-        .iter()
-        .filter(|op| debug[op.op_name_idx].as_ref() == "push.42");
-    let mut count = 0;
-    for op in pushes {
-        let calls = debug.inline_calls_for_operation(root, op.op_idx).collect::<Vec<_>>();
-        let names = calls
-            .iter()
-            .map(|row| debug[debug.get_function(row.callee_idx).unwrap().name_idx].to_string())
-            .collect::<Vec<_>>();
-        assert!(names[0].ends_with("::leaf"));
-        assert!(names[1].ends_with("::wrapper"));
-        assert_eq!(names.len(), 2);
-        let inner_location = debug.get_location(calls[0].loc_idx).unwrap();
-        let outer_location = debug.get_location(calls[1].loc_idx).unwrap();
-        let inner_start = source.find("exec.leaf").unwrap() as u32;
-        let outer_start = source.match_indices("exec.wrapper").nth(count).unwrap().0 as u32;
-        assert_eq!(inner_location.start.to_u32(), inner_start);
-        assert_eq!(inner_location.end.to_u32(), inner_start + "exec.leaf".len() as u32);
-        assert_eq!(outer_location.start.to_u32(), outer_start);
-        assert_eq!(outer_location.end.to_u32(), outer_start + "exec.wrapper".len() as u32);
-        assert_eq!(outer_location.uri, Uri::new("memory://reproducer.masm"));
-        for row in calls {
-            let function = debug.get_function(row.callee_idx).unwrap();
-            let canonical = function.source_node.into_option().unwrap();
-            assert_ne!(canonical, root);
-            assert_eq!(
-                wrapper_package.mast_forest()[debug[canonical].exec_node].digest(),
-                function.mast_root
-            );
-            assert!(debug.get_location(row.loc_idx).is_some());
-        }
-        count += 1;
+    let calls = runtime_exec_sources(&wrapper_package, &debug, root);
+    assert_eq!(calls.len(), 2);
+    assert_ne!(calls[0], calls[1], "repeated keyed controls retain separate source occurrences");
+    let wrapper_key = bindings.binding(Path::new("::$exec::wrapper")).unwrap().key();
+    let mut locations = Vec::new();
+    for call in calls {
+        assert_runtime_exec_source(&wrapper_package, &debug, call, wrapper_key, "exec.wrapper");
+        assert!(debug[call].inline_calls.is_empty());
+        let op = &debug[call].asm_ops[0];
+        let location = debug.get_location(op.location_idx.into_option().unwrap()).unwrap();
+        assert_eq!(location.uri, Uri::new("memory://reproducer.masm"));
+        locations.push((location.start.to_u32(), location.end.to_u32()));
     }
-    assert_eq!(count, 2);
+    locations.sort();
+    assert_eq!(
+        locations,
+        source
+            .match_indices("exec.wrapper")
+            .map(|(start, _)| { (start as u32, (start + "exec.wrapper".len()) as u32) })
+            .collect::<Vec<_>>()
+    );
+    let leaf = debug_function(&debug, "::$exec::leaf");
+    let wrapper = debug_function(&debug, "::$exec::wrapper");
+    let leaf_source = assert_debug_definition(&wrapper_package, &debug, leaf);
+    let wrapper_source = assert_debug_definition(&wrapper_package, &debug, wrapper);
+    assert_ne!(leaf_source, wrapper_source);
+    assert_ne!(leaf_source, root);
+    assert_ne!(wrapper_source, root);
+    assert_definition_operation(&wrapper_package, &debug, leaf_source, "push.42");
+    assert_runtime_exec_source(
+        &wrapper_package,
+        &debug,
+        wrapper_source,
+        bindings.binding(Path::new("::$exec::leaf")).unwrap().key(),
+        "exec.leaf",
+    );
+    assert!(debug[leaf_source].inline_calls.is_empty());
+    assert!(debug[wrapper_source].inline_calls.is_empty());
     Ok(())
 }
 
@@ -757,60 +937,65 @@ fn plain_exec_inline_ranges_cover_only_inlined_operations() -> TestResult {
 
 #[test]
 fn plain_exec_preserves_imported_alias_identity() -> TestResult {
-    use miden_core::serde::{Deserializable, Serializable};
-
     let context = TestContext::default();
-    let library = Assembler::new(context.source_manager()).assemble_library(
-        "dep",
+    let module = context.parse_module(
         "namespace dep::math\n@source_name(\"same\")\npub proc leaf() -> felt\n push.42\nend\n@source_name(\"same\")\npub proc wrapper() -> felt\n exec.leaf\nend",
-        None::<String>,
     )?;
+    let mut foreign = dependency_fixture_namespace();
+    let library = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&module],
+    )?
+    .assemble_library("dep", module, None::<Box<Module>>)?;
     let library = Arc::new(Package::read_from_bytes(&library.to_bytes()).into_diagnostic()?);
+    let leaf_key = foreign.binding(Path::new("::dep::math::leaf")).unwrap().key();
+    let wrapper_key = foreign.binding(Path::new("::dep::math::wrapper")).unwrap().key();
     for (linkage, tail) in
         [(Linkage::Static, ""), (Linkage::Static, "drop"), (Linkage::Dynamic, "drop")]
     {
-        let package = Assembler::new(context.source_manager())
-            .with_package(Arc::clone(&library), linkage)?
-            .assemble_program(
-                "test",
-                if tail.is_empty() { "use dep::math\nproc caller exec.math::wrapper end\nbegin call.caller end".to_string() }
-                else { format!("use dep::math\nbegin exec.math::wrapper {tail} exec.math::wrapper {tail} end") },
-            )?;
+        let source = if tail.is_empty() {
+            "use dep::math\nproc caller exec.math::wrapper end\nbegin call.caller end".to_string()
+        } else {
+            format!("use dep::math\nbegin exec.math::wrapper {tail} exec.math::wrapper {tail} end")
+        };
+        let module = context.parse_module(source)?;
+        let mut bindings = FixtureNamespace::assembly_tests();
+        add_debug_package_bindings(&mut bindings, &library, &foreign)?;
+        let assembler =
+            Assembler::new(context.source_manager()).with_package(Arc::clone(&library), linkage)?;
+        let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
+            .assemble_program("test", module)?;
         let debug = package.debug_info().into_diagnostic()?.unwrap();
         let root = package.entrypoint_source_node().unwrap();
-        let mut names = Vec::new();
-        for source in reachable_source_nodes(&debug, root) {
-            for row in &debug[source].inline_calls {
-                let function = debug.get_function(row.callee_idx).unwrap();
-                let name = function.linkage_name_idx.into_option().unwrap_or(function.name_idx);
-                names.push(debug[name].to_string());
-                assert_ne!(function.mast_root, Word::default());
-                assert!(
-                    function.type_idx.into_option().is_some(),
-                    "exec must reference the typed declaration"
-                );
-                if linkage == Linkage::Static && tail.is_empty() {
-                    let definition = function
-                        .source_node
-                        .into_option()
-                        .expect("linked alias must retain its definition");
-                    assert_ne!(definition, root);
-                    assert_eq!(
-                        package.mast_forest()[debug[definition].exec_node].digest(),
-                        function.mast_root
-                    );
-                } else {
-                    assert_eq!(
-                        function.source_node.into_option(),
-                        None,
-                        "a pruned or dynamic definition must not be attributed to the invocation copy"
-                    );
-                }
-            }
+        let caller = if tail.is_empty() {
+            assert_debug_definition(&package, &debug, debug_function(&debug, "::$exec::caller"))
+        } else {
+            root
+        };
+        let calls = runtime_exec_sources(&package, &debug, caller);
+        assert_eq!(calls.len(), if tail.is_empty() { 1 } else { 2 });
+        for call in calls {
+            assert_runtime_exec_source(&package, &debug, call, wrapper_key, "exec.math::wrapper");
+            assert!(debug[call].inline_calls.is_empty());
         }
-        assert!(names.iter().any(|name| name.ends_with("::wrapper")));
-        if linkage == Linkage::Static {
-            assert!(names.iter().any(|name| name.ends_with("::leaf")));
+        for name in ["::dep::math::leaf", "::dep::math::wrapper"] {
+            let function = debug_function(&debug, name);
+            assert_eq!(debug[function.name_idx].as_ref(), "::dep::math::same");
+            assert!(function.type_idx.into_option().is_some());
+            assert_ne!(function.mast_root, Word::default());
+            if linkage == Linkage::Static {
+                let definition = assert_debug_definition(&package, &debug, function);
+                assert_ne!(definition, root);
+                assert!(debug[definition].inline_calls.is_empty());
+                if name.ends_with("::leaf") {
+                    assert_definition_operation(&package, &debug, definition, "push.42");
+                } else {
+                    assert_runtime_exec_source(&package, &debug, definition, leaf_key, "exec.leaf");
+                }
+            } else {
+                assert_eq!(function.source_node.into_option(), None);
+            }
         }
     }
     Ok(())
@@ -818,80 +1003,121 @@ fn plain_exec_preserves_imported_alias_identity() -> TestResult {
 
 #[test]
 fn plain_exec_preserves_reexported_function_identity() -> TestResult {
-    use miden_core::serde::{Deserializable, Serializable};
-
     let context = TestContext::default();
     let root =
         context.parse_module("namespace root\npub use {foo as bar, other as baz} from dep")?;
     let dep = context.parse_module(
         "namespace dep\n@source_name(\"same\")\npub proc foo() -> felt\n push.42\nend\n@source_name(\"same\")\npub proc other() -> felt\n push.42\nend",
     )?;
-    let library = Assembler::new(context.source_manager()).assemble_library("dep", root, [dep])?;
+    let mut foreign = dependency_fixture_namespace();
+    let assembler = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&root, &dep],
+    )?;
+    add_debug_reexport_binding(&mut foreign, "::dep::foo", "::root::bar")?;
+    add_debug_reexport_binding(&mut foreign, "::dep::other", "::root::baz")?;
+    let library = assembler.assemble_library("dep", root, [dep])?;
     let library = Arc::new(Package::read_from_bytes(&library.to_bytes()).into_diagnostic()?);
     let library_debug = library.debug_info().into_diagnostic()?.unwrap();
-    let expected = ["::root::bar", "::root::baz"];
-    assert_eq!(library_debug.functions()[0].mast_root, library_debug.functions()[1].mast_root);
-
+    let first = debug_function(&library_debug, "::root::bar");
+    let second = debug_function(&library_debug, "::root::baz");
+    assert_eq!(first.mast_root, second.mast_root);
+    assert_ne!(first.source_node, second.source_node);
+    let bar_key = foreign.binding(Path::new("::root::bar")).unwrap().key();
+    let baz_key = foreign.binding(Path::new("::root::baz")).unwrap().key();
+    assert_ne!(bar_key, baz_key);
+    assert_eq!(bar_key, foreign.binding(Path::new("::dep::foo")).unwrap().key());
+    assert_eq!(baz_key, foreign.binding(Path::new("::dep::other")).unwrap().key());
     for (linkage, tail) in
         [(Linkage::Static, ""), (Linkage::Static, "drop"), (Linkage::Dynamic, "drop")]
     {
-        let package = Assembler::new(context.source_manager())
-            .with_package(Arc::clone(&library), linkage)?
-            .assemble_program(
-                "test",
-                if tail.is_empty() {
-                    "use root\nproc first exec.root::bar end\nproc second exec.root::baz end\nbegin call.first call.second end"
-                        .to_string()
-                } else {
-                    format!("use root\nbegin exec.root::bar {tail} exec.root::baz {tail} end")
-                },
-            )?;
+        let source = if tail.is_empty() {
+            "use root\nproc first exec.root::bar end\nproc second exec.root::baz end\nbegin call.first call.second end".to_string()
+        } else {
+            format!("use root\nbegin exec.root::bar {tail} exec.root::baz {tail} end")
+        };
+        let module = context.parse_module(source)?;
+        let mut bindings = FixtureNamespace::assembly_tests();
+        add_debug_package_bindings(&mut bindings, &library, &foreign)?;
+        let assembler =
+            Assembler::new(context.source_manager()).with_package(Arc::clone(&library), linkage)?;
+        let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
+            .assemble_program("test", module)?;
         let package = Package::read_from_bytes(&package.to_bytes()).into_diagnostic()?;
         let debug = package.debug_info().into_diagnostic()?.unwrap();
-        let root = package.entrypoint_source_node().unwrap();
-        let calls = reachable_source_nodes(&debug, root)
-            .iter()
-            .flat_map(|source| debug[*source].inline_calls.iter())
+        let entry = package.entrypoint_source_node().unwrap();
+        let callers = if tail.is_empty() {
+            ["::$exec::first", "::$exec::second"]
+                .into_iter()
+                .map(|name| assert_debug_definition(&package, &debug, debug_function(&debug, name)))
+                .collect::<Vec<_>>()
+        } else {
+            vec![entry]
+        };
+        let calls = callers
+            .into_iter()
+            .flat_map(|source| runtime_exec_sources(&package, &debug, source))
             .collect::<Vec<_>>();
-        assert_eq!(calls.len(), 2, "re-exported exec calls must retain invocation rows");
-        assert_ne!(calls[0].callee_idx, calls[1].callee_idx);
-        let mut names = Vec::new();
+        assert_eq!(calls.len(), 2);
+        let mut seen_keys = BTreeSet::new();
         for call in calls {
-            let function = debug.get_function(call.callee_idx).unwrap();
-            names.push(debug[function.linkage_name_idx.into_option().unwrap()].to_string());
+            let operation = debug[debug[call].asm_ops[0].op_name_idx].as_ref();
+            let key = match operation {
+                "exec.root::bar" => bar_key,
+                "exec.root::baz" => baz_key,
+                _ => panic!("unexpected invocation {operation}"),
+            };
+            assert_runtime_exec_source(&package, &debug, call, key, operation);
+            assert!(debug[call].inline_calls.is_empty());
+            assert!(debug[call].asm_ops[0].location_idx.into_option().is_some());
+            seen_keys.insert(key);
+        }
+        assert_eq!(seen_keys, [bar_key, baz_key].into_iter().collect());
+        let functions =
+            [debug_function(&debug, "::root::bar"), debug_function(&debug, "::root::baz")];
+        assert_eq!(functions[0].mast_root, functions[1].mast_root);
+        for (function, linkage_name) in functions.into_iter().zip(["::root::bar", "::root::baz"]) {
+            assert_eq!(debug[function.name_idx].as_ref(), "::dep::same");
+            let linkage_index = function
+                .linkage_name_idx
+                .into_option()
+                .expect("source-named re-export must retain its canonical linkage name");
+            assert_eq!(debug[linkage_index].as_ref(), linkage_name);
             assert!(function.type_idx.into_option().is_some());
-            if linkage == Linkage::Static && tail.is_empty() {
-                let definition = function.source_node.into_option().unwrap();
-                assert_ne!(definition, root);
-                assert_eq!(
-                    package.mast_forest()[debug[definition].exec_node].digest(),
-                    function.mast_root
-                );
+            if linkage == Linkage::Static {
+                let definition = assert_debug_definition(&package, &debug, function);
+                assert_ne!(definition, entry);
+                assert_definition_operation(&package, &debug, definition, "push.42");
+                assert!(debug[definition].inline_calls.is_empty());
             } else {
                 assert_eq!(function.source_node.into_option(), None);
             }
-            assert!(debug.get_location(call.loc_idx).is_some());
         }
-        names.sort();
-        assert_eq!(names, expected);
+        if linkage == Linkage::Static {
+            assert_ne!(functions[0].source_node, functions[1].source_node);
+        }
     }
     Ok(())
 }
 
 #[test]
 fn plain_exec_prefers_named_function_with_shared_provenance() -> TestResult {
-    use miden_core::serde::Serializable;
     use miden_mast_package::{SectionId, debug_info::PackageDebugInfoBuilder};
 
     let context = TestContext::default();
-    let mut library = Assembler::new(context.source_manager()).assemble_library(
-        "dep",
-        "namespace dep\npub proc foo push.42 end",
-        None::<String>,
-    )?;
+    let module = context.parse_module("namespace dep\npub proc foo push.42 end")?;
+    let mut foreign = dependency_fixture_namespace();
+    let mut library = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&module],
+    )?
+    .assemble_library("dep", module, None::<Box<Module>>)?;
+    let key = foreign.binding(Path::new("::dep::foo")).unwrap().key();
     let mut debug =
         PackageDebugInfoBuilder::from(Box::new(library.debug_info().into_diagnostic()?.unwrap()));
-    let mut alias = debug.debug_info().functions()[0];
+    let mut alias = *debug_function(debug.debug_info(), "::dep::foo");
     alias.name_idx = debug.add_string("::dep::alias");
     debug.add_function(alias);
     library
@@ -901,124 +1127,199 @@ fn plain_exec_prefers_named_function_with_shared_provenance() -> TestResult {
         .unwrap()
         .data = debug.build().to_bytes().into();
     let library: Arc<Package> = Arc::from(library);
-
     for linkage in [Linkage::Static, Linkage::Dynamic] {
-        let package = Assembler::new(context.source_manager())
-            .with_package(Arc::clone(&library), linkage)?
-            .assemble_program("test", "use dep\nbegin exec.dep::foo drop end")?;
+        let module = context.parse_module("use dep\nbegin exec.dep::foo drop end")?;
+        let mut bindings = FixtureNamespace::assembly_tests();
+        add_debug_package_bindings(&mut bindings, &library, &foreign)?;
+        let assembler =
+            Assembler::new(context.source_manager()).with_package(Arc::clone(&library), linkage)?;
+        let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
+            .assemble_program("test", module)?;
         let debug = package.debug_info().into_diagnostic()?.unwrap();
-        let root = package.entrypoint_source_node().unwrap();
-        let calls = reachable_source_nodes(&debug, root)
-            .iter()
-            .flat_map(|source| debug[*source].inline_calls.iter())
-            .collect::<Vec<_>>();
-        assert_eq!(calls.len(), 1, "named exec must retain its invocation row under {linkage:?}");
-        let function = debug.get_function(calls[0].callee_idx).unwrap();
-        assert_eq!(debug[function.name_idx].as_ref(), "::dep::foo");
+        let calls =
+            runtime_exec_sources(&package, &debug, package.entrypoint_source_node().unwrap());
+        assert_eq!(calls.len(), 1);
+        assert_runtime_exec_source(&package, &debug, calls[0], key, "exec.dep::foo");
+        assert!(debug[calls[0]].inline_calls.is_empty());
+        let function = debug_function(&debug, "::dep::foo");
+        let alias = debug_function(&debug, "::dep::alias");
+        assert_eq!(function.mast_root, alias.mast_root);
+        assert_eq!(function.source_node, alias.source_node);
+        if linkage == Linkage::Static {
+            let definition = assert_debug_definition(&package, &debug, function);
+            assert_definition_operation(&package, &debug, definition, "push.42");
+        } else {
+            assert_eq!(function.source_node.into_option(), None);
+        }
     }
     Ok(())
 }
 
 #[test]
 fn plain_exec_preserves_dynamic_dependency_reexports() -> TestResult {
-    use miden_core::serde::{Deserializable, Serializable};
-
     let context = TestContext::default();
-    let dependency = Assembler::new(context.source_manager()).assemble_library(
-        "dep",
+    let dependency_module = context.parse_module(
         "namespace dep\n@source_name(\"same\")\npub proc foo() -> felt\n push.42\nend\n@source_name(\"same\")\npub proc other() -> felt\n push.42\nend",
-        None::<String>,
     )?;
-    let bridge = Assembler::new(context.source_manager())
-        .with_package(Arc::from(dependency), Linkage::Dynamic)?
-        .assemble_library(
-            "bridge",
-            "namespace bridge\npub use {foo as bar, other as baz} from dep",
-            None::<String>,
-        )?;
+    let mut foreign = dependency_fixture_namespace();
+    let dependency = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&dependency_module],
+    )?
+    .assemble_library("dep", dependency_module, None::<Box<Module>>)?;
+    let bridge_module =
+        context.parse_module("namespace bridge\npub use {foo as bar, other as baz} from dep")?;
+    let mut bridge_bindings = FixtureNamespace::assembly_tests();
+    add_debug_package_bindings(&mut bridge_bindings, &dependency, &foreign)?;
+    add_debug_reexport_binding(&mut bridge_bindings, "::dep::foo", "::bridge::bar")?;
+    add_debug_reexport_binding(&mut bridge_bindings, "::dep::other", "::bridge::baz")?;
+    let assembler = Assembler::new(context.source_manager())
+        .with_package(Arc::from(dependency), Linkage::Dynamic)?;
+    let bridge = configure_debug_fixture(assembler, &mut bridge_bindings, &[&bridge_module])?
+        .assemble_library("bridge", bridge_module, None::<Box<Module>>)?;
     let bridge = Arc::new(Package::read_from_bytes(&bridge.to_bytes()).into_diagnostic()?);
     let bridge_debug = bridge.debug_info().into_diagnostic()?.unwrap();
     for path in ["::bridge::bar", "::bridge::baz"] {
-        let function = bridge_debug
-            .functions()
-            .iter()
-            .find(|function| {
-                let name = function.linkage_name_idx.into_option().unwrap_or(function.name_idx);
-                bridge_debug[name].as_ref() == path
-            })
-            .expect("re-exports must retain their declaration");
+        let function = debug_function(&bridge_debug, path);
+        assert_eq!(bridge_debug[function.name_idx].as_ref(), "::dep::same");
+        let linkage_index = function
+            .linkage_name_idx
+            .into_option()
+            .expect("source-named re-export must retain its canonical linkage name");
+        assert_eq!(bridge_debug[linkage_index].as_ref(), path);
         assert!(function.type_idx.into_option().is_some());
         assert_eq!(function.source_node.into_option(), None);
     }
+    let bar_key = bridge_bindings.binding(Path::new("::bridge::bar")).unwrap().key();
+    let baz_key = bridge_bindings.binding(Path::new("::bridge::baz")).unwrap().key();
+    assert_ne!(bar_key, baz_key);
+    assert_eq!(bar_key, foreign.binding(Path::new("::dep::foo")).unwrap().key());
+    assert_eq!(baz_key, foreign.binding(Path::new("::dep::other")).unwrap().key());
     for linkage in [Linkage::Static, Linkage::Dynamic] {
-        let package = Assembler::new(context.source_manager())
-            .with_package(Arc::clone(&bridge), linkage)?
-            .assemble_program(
-                "test",
-                "use bridge\nbegin exec.bridge::bar drop exec.bridge::baz drop end",
-            )?;
+        let module = context
+            .parse_module("use bridge\nbegin exec.bridge::bar drop exec.bridge::baz drop end")?;
+        let mut bindings = FixtureNamespace::assembly_tests();
+        add_debug_package_bindings(&mut bindings, &bridge, &bridge_bindings)?;
+        let assembler =
+            Assembler::new(context.source_manager()).with_package(Arc::clone(&bridge), linkage)?;
+        let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
+            .assemble_program("test", module)?;
         let package = Package::read_from_bytes(&package.to_bytes()).into_diagnostic()?;
         let debug = package.debug_info().into_diagnostic()?.unwrap();
-        let root = package.entrypoint_source_node().unwrap();
-        let calls = reachable_source_nodes(&debug, root)
-            .iter()
-            .flat_map(|source| debug[*source].inline_calls.iter())
-            .collect::<Vec<_>>();
+        let calls =
+            runtime_exec_sources(&package, &debug, package.entrypoint_source_node().unwrap());
         assert_eq!(calls.len(), 2);
-        assert_ne!(calls[0].callee_idx, calls[1].callee_idx);
-        let mut paths = Vec::new();
+        let mut seen_keys = BTreeSet::new();
         for call in calls {
-            let function = debug.get_function(call.callee_idx).unwrap();
+            let operation = debug[debug[call].asm_ops[0].op_name_idx].as_ref();
+            let key = match operation {
+                "exec.bridge::bar" => bar_key,
+                "exec.bridge::baz" => baz_key,
+                _ => panic!("unexpected invocation {operation}"),
+            };
+            assert_runtime_exec_source(&package, &debug, call, key, operation);
+            assert!(debug[call].inline_calls.is_empty());
+            assert!(debug[call].asm_ops[0].location_idx.into_option().is_some());
+            seen_keys.insert(key);
+        }
+        assert_eq!(seen_keys, [bar_key, baz_key].into_iter().collect());
+        let functions =
+            [debug_function(&debug, "::bridge::bar"), debug_function(&debug, "::bridge::baz")];
+        assert_eq!(functions[0].mast_root, functions[1].mast_root);
+        for (function, linkage_name) in
+            functions.into_iter().zip(["::bridge::bar", "::bridge::baz"])
+        {
+            assert_eq!(debug[function.name_idx].as_ref(), "::dep::same");
+            let linkage_index = function
+                .linkage_name_idx
+                .into_option()
+                .expect("source-named re-export must retain its canonical linkage name");
+            assert_eq!(debug[linkage_index].as_ref(), linkage_name);
             assert!(function.type_idx.into_option().is_some());
             assert_eq!(function.source_node.into_option(), None);
-            assert!(debug.get_location(call.loc_idx).is_some());
-            paths.push(debug[function.linkage_name_idx.into_option().unwrap()].to_string());
         }
-        paths.sort();
-        assert_eq!(paths, ["::bridge::bar", "::bridge::baz"]);
     }
     Ok(())
 }
 
 #[test]
-fn static_imports_preserve_resolved_external_inline_calls_in_either_order() -> TestResult {
+fn static_imports_preserve_runtime_keys_and_definition_provenance_in_either_order() -> TestResult {
     let context = TestContext::default();
-    let dependency: Arc<Package> =
-        Arc::from(Assembler::new(context.source_manager()).assemble_library(
-            "dep",
-            "namespace dep\npub proc foo push.42 end\npub proc marker push.43 end",
-            None::<String>,
-        )?);
-    let bridge: Arc<Package> = Arc::from(
-        Assembler::new(context.source_manager())
-            .with_package(Arc::clone(&dependency), Linkage::Dynamic)?
-            .assemble_library(
-                "bridge",
-                "namespace bridge\nuse dep\npub proc wrapper exec.dep::foo end\npub proc other exec.dep::foo end",
-                None::<String>,
-            )?,
-    );
+    let dependency_module = context
+        .parse_module("namespace dep\npub proc foo push.42 end\npub proc marker push.43 end")?;
+    let mut foreign = dependency_fixture_namespace();
+    let dependency: Arc<Package> = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&dependency_module],
+    )?
+    .assemble_library("dep", dependency_module, None::<Box<Module>>)?
+    .into();
+    let foo_key = foreign.binding(Path::new("::dep::foo")).unwrap().key();
+    let bridge_module = context.parse_module(
+        "namespace bridge\nuse dep\npub proc wrapper exec.dep::foo end\npub proc other exec.dep::foo end",
+    )?;
+    let mut bridge_bindings = FixtureNamespace::assembly_tests();
+    add_debug_package_bindings(&mut bridge_bindings, &dependency, &foreign)?;
+    let assembler = Assembler::new(context.source_manager())
+        .with_package(Arc::clone(&dependency), Linkage::Dynamic)?;
+    let bridge: Arc<Package> =
+        configure_debug_fixture(assembler, &mut bridge_bindings, &[&bridge_module])?
+            .assemble_library("bridge", bridge_module, None::<Box<Module>>)?
+            .into();
+    let wrapper_key = bridge_bindings.binding(Path::new("::bridge::wrapper")).unwrap().key();
+    let other_key = bridge_bindings.binding(Path::new("::bridge::other")).unwrap().key();
+    assert_ne!(wrapper_key, other_key);
     for calls in [
         "exec.dep::foo drop exec.bridge::wrapper drop exec.bridge::other drop",
         "exec.bridge::other drop exec.bridge::wrapper drop exec.dep::foo drop",
     ] {
-        let package = Assembler::new(context.source_manager())
+        let module = context.parse_module(format!("use dep\nuse bridge\nbegin {calls} end"))?;
+        let mut bindings = FixtureNamespace::assembly_tests();
+        add_debug_package_bindings(&mut bindings, &dependency, &foreign)?;
+        add_debug_package_bindings(&mut bindings, &bridge, &bridge_bindings)?;
+        let assembler = Assembler::new(context.source_manager())
             .with_package(Arc::clone(&dependency), Linkage::Static)?
-            .with_package(Arc::clone(&bridge), Linkage::Static)?
-            .assemble_program("test", format!("use dep\nuse bridge\nbegin {calls} end"))?;
+            .with_package(Arc::clone(&bridge), Linkage::Static)?;
+        let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
+            .assemble_program("test", module)?;
         let debug = package.debug_info().into_diagnostic()?.unwrap();
         let root = package.entrypoint_source_node().unwrap();
-        let mut names = reachable_source_nodes(&debug, root)
-            .iter()
-            .flat_map(|source| debug[*source].inline_calls.iter())
-            .map(|call| debug[debug.get_function(call.callee_idx).unwrap().name_idx].to_string())
-            .collect::<Vec<_>>();
-        names.sort();
-        assert_eq!(
-            names,
-            ["::bridge::other", "::bridge::wrapper", "::dep::foo", "::dep::foo", "::dep::foo"],
-            "{calls}"
-        );
+        let invocations = runtime_exec_sources(&package, &debug, root);
+        assert_eq!(invocations.len(), 3);
+        let mut keys = BTreeSet::new();
+        for invocation in invocations {
+            let operation = debug[debug[invocation].asm_ops[0].op_name_idx].as_ref();
+            let key = match operation {
+                "exec.dep::foo" => foo_key,
+                "exec.bridge::wrapper" => wrapper_key,
+                "exec.bridge::other" => other_key,
+                _ => panic!("unexpected invocation {operation}"),
+            };
+            assert_runtime_exec_source(&package, &debug, invocation, key, operation);
+            assert!(debug[invocation].inline_calls.is_empty());
+            keys.insert(key);
+        }
+        assert_eq!(keys, [foo_key, wrapper_key, other_key].into_iter().collect());
+        let wrapper = debug_function(&debug, "::bridge::wrapper");
+        let other = debug_function(&debug, "::bridge::other");
+        assert_eq!(wrapper.mast_root, other.mast_root);
+        let wrapper_source = assert_debug_definition(&package, &debug, wrapper);
+        let other_source = assert_debug_definition(&package, &debug, other);
+        assert_ne!(wrapper_source, other_source);
+        for (source, context_name) in
+            [(wrapper_source, "::bridge::wrapper"), (other_source, "::bridge::other")]
+        {
+            assert_runtime_exec_source(&package, &debug, source, foo_key, "exec.dep::foo");
+            assert_eq!(debug[debug[source].asm_ops[0].context_name_idx].as_ref(), context_name);
+            assert!(debug[source].inline_calls.is_empty());
+        }
+        for (name, operation) in [("::dep::foo", "push.42"), ("::dep::marker", "push.43")] {
+            let definition =
+                assert_debug_definition(&package, &debug, debug_definition_function(&debug, name));
+            assert_definition_operation(&package, &debug, definition, operation);
+        }
     }
     Ok(())
 }
@@ -1026,21 +1327,38 @@ fn static_imports_preserve_resolved_external_inline_calls_in_either_order() -> T
 #[test]
 fn linking_does_not_invent_definitions_for_source_less_functions() -> TestResult {
     let context = TestContext::default();
-    let dependency = Assembler::new(context.source_manager()).assemble_library(
-        "dep",
+    let dependency_module = context.parse_module(
         "namespace dep::math\npub proc leaf push.42 end\npub proc wrapper exec.leaf end",
-        None::<String>,
     )?;
-    let bridge = Assembler::new(context.source_manager())
-        .with_package(Arc::from(dependency), Linkage::Dynamic)?
-        .assemble_library(
-            "bridge",
-            "namespace bridge::math\nuse dep::math\npub proc wrapper exec.math::wrapper end",
-            None::<String>,
-        )?;
-    let package = Assembler::new(context.source_manager())
-        .with_package(Arc::from(bridge), Linkage::Static)?
-        .assemble_program("test", "use bridge::math\nbegin exec.math::wrapper end")?;
+    let mut foreign = dependency_fixture_namespace();
+    let dependency = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&dependency_module],
+    )?
+    .assemble_library("dep", dependency_module, None::<Box<Module>>)?;
+    let dependency_debug = dependency.debug_info().into_diagnostic()?.unwrap();
+    let leaf_root = debug_function(&dependency_debug, "::dep::math::leaf").mast_root;
+    let wrapper_root = debug_function(&dependency_debug, "::dep::math::wrapper").mast_root;
+    assert_ne!(leaf_root, wrapper_root);
+    let foreign_key = foreign.binding(Path::new("::dep::math::wrapper")).unwrap().key();
+    let bridge_module = context.parse_module(
+        "namespace bridge::math\nuse dep::math\npub proc wrapper exec.math::wrapper end",
+    )?;
+    let mut bridge_bindings = FixtureNamespace::assembly_tests();
+    add_debug_package_bindings(&mut bridge_bindings, &dependency, &foreign)?;
+    let assembler = Assembler::new(context.source_manager())
+        .with_package(Arc::from(dependency), Linkage::Dynamic)?;
+    let bridge = configure_debug_fixture(assembler, &mut bridge_bindings, &[&bridge_module])?
+        .assemble_library("bridge", bridge_module, None::<Box<Module>>)?;
+    let bridge_key = bridge_bindings.binding(Path::new("::bridge::math::wrapper")).unwrap().key();
+    let module = context.parse_module("use bridge::math\nbegin exec.math::wrapper end")?;
+    let mut bindings = FixtureNamespace::assembly_tests();
+    add_debug_package_bindings(&mut bindings, &bridge, &bridge_bindings)?;
+    let assembler = Assembler::new(context.source_manager())
+        .with_package(Arc::from(bridge), Linkage::Static)?;
+    let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
+        .assemble_program("test", module)?;
     let debug = package.debug_info().into_diagnostic()?.unwrap();
     let dependency_functions = debug
         .functions()
@@ -1051,13 +1369,25 @@ fn linking_does_not_invent_definitions_for_source_less_functions() -> TestResult
     for function in dependency_functions {
         assert_eq!(function.source_node.into_option(), None);
     }
+    assert_eq!(debug_function(&debug, "::dep::math::leaf").mast_root, leaf_root);
+    assert_eq!(debug_function(&debug, "::dep::math::wrapper").mast_root, wrapper_root);
     let root = package.entrypoint_source_node().unwrap();
-    let names = reachable_source_nodes(&debug, root)
-        .iter()
-        .flat_map(|source| debug[*source].inline_calls.iter())
-        .map(|row| debug[debug.get_function(row.callee_idx).unwrap().name_idx].to_string())
-        .collect::<Vec<_>>();
-    assert_eq!(names, ["::dep::math::wrapper", "::bridge::math::wrapper"]);
+    let calls = runtime_exec_sources(&package, &debug, root);
+    assert_eq!(calls.len(), 1);
+    assert_runtime_exec_source(&package, &debug, calls[0], bridge_key, "exec.math::wrapper");
+    assert!(debug[calls[0]].inline_calls.is_empty());
+    let bridge_source = assert_debug_definition(
+        &package,
+        &debug,
+        debug_function(&debug, "::bridge::math::wrapper"),
+    );
+    assert_ne!(bridge_source, root);
+    assert_runtime_exec_source(&package, &debug, bridge_source, foreign_key, "exec.math::wrapper");
+    assert!(debug[bridge_source].inline_calls.is_empty());
+    assert!(package.mast_forest().procedure_roots().iter().any(|node| {
+        let body = &package.mast_forest()[*node];
+        body.is_external() && body.digest() == wrapper_root
+    }));
     Ok(())
 }
 
@@ -1076,40 +1406,204 @@ fn exec_without_a_call_site_still_separates_definitions() -> TestResult {
             }
         }
     }
-    let package = Assembler::new(context.source_manager()).assemble_library(
-        "test",
-        module,
-        None::<String>,
+    let mut bindings = FixtureNamespace::assembly_tests();
+    let assembler = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut bindings,
+        &[&module],
     )?;
+    let package =
+        assembler
+            .clone()
+            .assemble_library("test", module.clone(), None::<Box<Module>>)?;
+    let without_debug = assembler
+        .with_profile(&miden_project::Profile::release())
+        .assemble_library("test", module, None::<Box<Module>>)?;
+    assert!(without_debug.debug_info().into_diagnostic()?.is_none());
+    assert_eq!(package.mast_forest().commitment(), without_debug.mast_forest().commitment());
     let debug = package.debug_info().into_diagnostic()?.unwrap();
-    let functions = debug.functions();
-    assert_eq!(functions.len(), 2);
-    assert_ne!(functions[0].source_node, functions[1].source_node);
-    assert_eq!(functions[0].mast_root, functions[1].mast_root);
+    assert_eq!(debug.functions().len(), 2);
+    let leaf = debug_function(&debug, "::debug::missing::leaf");
+    let wrapper = debug_function(&debug, "::debug::missing::wrapper");
+    assert_ne!(leaf.mast_root, wrapper.mast_root);
+    let leaf_source = assert_debug_definition(&package, &debug, leaf);
+    let wrapper_source = assert_debug_definition(&package, &debug, wrapper);
+    assert_ne!(leaf_source, wrapper_source);
+    assert_definition_operation(&package, &debug, leaf_source, "push.42");
+    assert_runtime_exec_source(
+        &package,
+        &debug,
+        wrapper_source,
+        bindings.binding(Path::new("::debug::missing::leaf")).unwrap().key(),
+        "exec.leaf",
+    );
+    assert_eq!(debug[wrapper_source].asm_ops[0].location_idx.into_option(), None);
     assert!(debug.nodes().iter().all(|node| node.inline_calls.is_empty()));
     Ok(())
 }
 
 #[test]
-fn digest_only_exec_does_not_choose_an_ambiguous_alias() -> TestResult {
+fn literal_key_exec_does_not_choose_an_ambiguous_alias() -> TestResult {
     let context = TestContext::default();
-    let library = Assembler::new(context.source_manager()).assemble_library(
-        "dep",
-        "namespace dep::math\npub proc leaf push.42 end\npub proc wrapper exec.leaf end",
-        None::<String>,
+    let dependency_module = context.parse_module(
+        "namespace dep::math\npub proc leaf push.42 end\npub proc twin push.42 end",
     )?;
-    let digest = library
-        .manifest
-        .exports()
-        .find_map(|export| match export {
-            PackageExport::Procedure(procedure) => Some(procedure.digest),
-            _ => None,
-        })
-        .unwrap();
-    let package = Assembler::new(context.source_manager())
-        .with_package(Arc::from(library), Linkage::Dynamic)?
-        .assemble_program("test", format!("begin exec.{digest} end"))?;
+    let mut foreign = dependency_fixture_namespace();
+    let library = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut foreign,
+        &[&dependency_module],
+    )?
+    .assemble_library("dep", dependency_module, None::<Box<Module>>)?;
+    let library_debug = library.debug_info().into_diagnostic()?.unwrap();
+    let word = debug_function(&library_debug, "::dep::math::leaf").mast_root;
+    assert_eq!(word, debug_function(&library_debug, "::dep::math::twin").mast_root);
+    let key = ProcedureKey::new(word);
+    let leaf_key = foreign.binding(Path::new("::dep::math::leaf")).unwrap().key();
+    let twin_key = foreign.binding(Path::new("::dep::math::twin")).unwrap().key();
+    assert_ne!(leaf_key, twin_key);
+    assert_ne!(key, leaf_key);
+    assert_ne!(key, twin_key);
+    let library: Arc<Package> = Arc::from(library);
+    for linkage in [Linkage::Static, Linkage::Dynamic] {
+        // The independently retained named helper makes code at this D available without
+        // changing the literal word's meaning as K.
+        let module = context.parse_module(format!(
+            "use dep::math\nproc available exec.math::leaf end\nbegin exec.{word} end"
+        ))?;
+        let mut bindings = FixtureNamespace::assembly_tests();
+        add_debug_package_bindings(&mut bindings, &library, &foreign)?;
+        let assembler =
+            Assembler::new(context.source_manager()).with_package(Arc::clone(&library), linkage)?;
+        let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
+            .assemble_program("test", module)?;
+        let debug = package.debug_info().into_diagnostic()?.unwrap();
+        let root = package.entrypoint_source_node().unwrap();
+        let calls = runtime_exec_sources(&package, &debug, root);
+        assert_eq!(calls.len(), 1);
+        assert_runtime_exec_source(&package, &debug, calls[0], key, &format!("exec.{word}"));
+        let available =
+            assert_debug_definition(&package, &debug, debug_function(&debug, "::$exec::available"));
+        assert_runtime_exec_source(&package, &debug, available, leaf_key, "exec.math::leaf");
+        let leaf = debug_function(&debug, "::dep::math::leaf");
+        assert_eq!(leaf.mast_root, word);
+        if linkage == Linkage::Static {
+            let definition = assert_debug_definition(&package, &debug, leaf);
+            assert_definition_operation(&package, &debug, definition, "push.42");
+            assert_ne!(definition, root);
+        } else {
+            assert_eq!(leaf.source_node.into_option(), None);
+        }
+        assert!(debug.nodes().iter().all(|node| node.inline_calls.is_empty()));
+    }
+    Ok(())
+}
+
+#[test]
+fn runtime_exec_occurrences_keep_inline_annotations_on_the_control_only() -> TestResult {
+    let context = TestContext::default();
+    let mut module = context.parse_module(source_file!(
+        &context,
+        "proc callee add mul end\nbegin nop nop exec.callee nop exec.callee end"
+    ))?;
+    let entry = module.procedures_mut().find(|procedure| procedure.is_entrypoint()).unwrap();
+    replace_nops_with_named_inline_call_markers(
+        &context,
+        entry,
+        &[None, Some("source::decorated"), None],
+    )?;
+    let mut bindings = FixtureNamespace::assembly_tests();
+    let package = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut bindings,
+        &[&module],
+    )?
+    .assemble_program("test", module)?;
     let debug = package.debug_info().into_diagnostic()?.unwrap();
-    assert!(debug.nodes().iter().all(|node| node.inline_calls.is_empty()));
+    let root = package.entrypoint_source_node().unwrap();
+    let mut calls = runtime_exec_sources(&package, &debug, root);
+    assert_eq!(calls.len(), 2);
+    calls.sort_by_key(|source| {
+        let location = debug[*source].asm_ops[0].location_idx.into_option().unwrap();
+        debug.get_location(location).unwrap().start.to_u32()
+    });
+    assert_ne!(calls[0], calls[1]);
+    assert_eq!(debug[calls[0]].exec_node, debug[calls[1]].exec_node);
+    let key = bindings.binding(Path::new("::$exec::callee")).unwrap().key();
+    for (source, expected_annotations) in calls.into_iter().zip([1, 0]) {
+        assert_runtime_exec_source(&package, &debug, source, key, "exec.callee");
+        let rows = debug.inline_calls_for_operation(source, 0).collect::<Vec<_>>();
+        assert_eq!(rows.len(), expected_annotations);
+        for row in rows {
+            assert_eq!((row.op_idx, row.op_end), (0, 1));
+            let function = debug.get_function(row.callee_idx).unwrap();
+            assert_eq!(debug[function.name_idx].as_ref(), "source::decorated");
+        }
+    }
+    let definition =
+        assert_debug_definition(&package, &debug, debug_function(&debug, "::$exec::callee"));
+    assert_definition_operation(&package, &debug, definition, "add");
+    assert_definition_operation(&package, &debug, definition, "mul");
+    assert!(debug[definition].inline_calls.is_empty());
+    Ok(())
+}
+
+#[test]
+fn nested_runtime_exec_annotations_remain_in_their_defining_controls() -> TestResult {
+    let context = TestContext::default();
+    let mut module = context.parse_module(source_file!(
+        &context,
+        "proc inner add end\nproc outer_target nop nop exec.inner end\nbegin nop nop exec.outer_target end"
+    ))?;
+    for procedure in module.procedures_mut() {
+        if procedure.is_entrypoint() {
+            replace_nops_with_named_inline_call_markers(
+                &context,
+                procedure,
+                &[None, Some("source::outer")],
+            )?;
+        } else if procedure.name().as_str() == "outer_target" {
+            replace_nops_with_named_inline_call_markers(
+                &context,
+                procedure,
+                &[None, Some("source::inner")],
+            )?;
+        }
+    }
+    let mut bindings = FixtureNamespace::assembly_tests();
+    let package = configure_debug_fixture(
+        Assembler::new(context.source_manager()),
+        &mut bindings,
+        &[&module],
+    )?
+    .assemble_program("test", module)?;
+    let debug = package.debug_info().into_diagnostic()?.unwrap();
+    let entry = package.entrypoint_source_node().unwrap();
+    let outer =
+        assert_debug_definition(&package, &debug, debug_function(&debug, "::$exec::outer_target"));
+    let inner = assert_debug_definition(&package, &debug, debug_function(&debug, "::$exec::inner"));
+    assert_ne!(outer, inner);
+    for (root, path, operation, annotation) in [
+        (entry, "::$exec::outer_target", "exec.outer_target", "source::outer"),
+        (outer, "::$exec::inner", "exec.inner", "source::inner"),
+    ] {
+        let calls = runtime_exec_sources(&package, &debug, root);
+        assert_eq!(calls.len(), 1);
+        let call = calls[0];
+        assert_runtime_exec_source(
+            &package,
+            &debug,
+            call,
+            bindings.binding(Path::new(path)).unwrap().key(),
+            operation,
+        );
+        let rows = debug.inline_calls_for_operation(call, 0).collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        let function = debug.get_function(rows[0].callee_idx).unwrap();
+        assert_eq!(debug[function.name_idx].as_ref(), annotation);
+        assert_eq!((rows[0].op_idx, rows[0].op_end), (0, 1));
+    }
+    assert_definition_operation(&package, &debug, inner, "add");
+    assert!(debug[inner].inline_calls.is_empty());
     Ok(())
 }
