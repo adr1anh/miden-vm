@@ -254,10 +254,11 @@ pub struct ExecutionProofCompatibility {
 }
 
 impl ExecutionProofCompatibility {
-    /// Execution proof transport format carrying portable singleton witnesses.
-    pub const FORMAT_V2: u8 = 2;
+    /// Execution proof transport format for environment-bound claims and portable singleton
+    /// witnesses.
+    pub const FORMAT_V3: u8 = 3;
 
-    /// Creates a proof compatibility declaration for format `2`.
+    /// Creates a proof compatibility declaration for format `3`.
     ///
     /// # Errors
     ///
@@ -274,7 +275,7 @@ impl ExecutionProofCompatibility {
         }
 
         Ok(Self {
-            format: Self::FORMAT_V2,
+            format: Self::FORMAT_V3,
             vm_verifier_roots,
             pvm_verifier_roots,
         })
@@ -429,14 +430,14 @@ impl Serializable for ExecutionProof {
         target.write_u8(self.compatibility.format);
         self.compatibility.vm_verifier_roots.write_into(target);
         self.compatibility.pvm_verifier_roots.write_into(target);
-        self.write_into_v2(target);
+        self.write_into_v3(target);
     }
 }
 
 impl Deserializable for ExecutionProof {
     fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
         let format = source.read_u8()?;
-        if format != ExecutionProofCompatibility::FORMAT_V2 {
+        if format != ExecutionProofCompatibility::FORMAT_V3 {
             return Err(DeserializationError::InvalidValue(format!(
                 "unsupported execution proof format {format}"
             )));
@@ -447,19 +448,19 @@ impl Deserializable for ExecutionProof {
         let compatibility = ExecutionProofCompatibility::new(vm_verifier_roots, pvm_verifier_roots)
             .map_err(|error| DeserializationError::InvalidValue(error.to_string()))?;
 
-        Self::read_from_v2(source, compatibility)
+        Self::read_from_v3(source, compatibility)
     }
 
     fn min_serialized_size() -> usize {
         u8::min_serialized_size()
             + Vec::<Word>::min_serialized_size()
             + Vec::<Word>::min_serialized_size()
-            + ExecutionProof::min_serialized_size_v2()
+            + ExecutionProof::min_serialized_size_v3()
     }
 }
 
 impl ExecutionProof {
-    fn write_into_v2<W: ByteWriter>(&self, target: &mut W) {
+    fn write_into_v3<W: ByteWriter>(&self, target: &mut W) {
         match &self.precompile {
             PrecompileStatus::Deferred(precompile) => {
                 target.write_u8(DEFERRED_PROOF_DISCRIMINANT);
@@ -479,7 +480,7 @@ impl ExecutionProof {
         }
     }
 
-    fn read_from_v2<R: ByteReader>(
+    fn read_from_v3<R: ByteReader>(
         source: &mut R,
         compatibility: ExecutionProofCompatibility,
     ) -> Result<Self, DeserializationError> {
@@ -505,7 +506,7 @@ impl ExecutionProof {
         Ok(Self { compatibility, vm, precompile })
     }
 
-    fn min_serialized_size_v2() -> usize {
+    fn min_serialized_size_v3() -> usize {
         u8::min_serialized_size()
             + VmProof::min_serialized_size()
             + Option::<PrecompileProof>::min_serialized_size()
@@ -712,20 +713,43 @@ mod tests {
         let bytes = proof.to_bytes();
         let decoded = ExecutionProof::read_from_bytes(&bytes).unwrap();
 
-        assert_eq!(bytes[0], ExecutionProofCompatibility::FORMAT_V2);
+        assert_eq!(ExecutionProofCompatibility::FORMAT_V3, 3);
+        assert_eq!(bytes[0], 3);
         assert_eq!(decoded, proof);
-        assert_eq!(decoded.compatibility().format(), ExecutionProofCompatibility::FORMAT_V2);
+        assert_eq!(decoded.compatibility().format(), ExecutionProofCompatibility::FORMAT_V3);
         assert_eq!(decoded.compatibility().vm_verifier_roots(), &[root(11), root(12)]);
         assert_eq!(decoded.compatibility().pvm_verifier_roots(), &[root(21)]);
     }
 
     #[test]
-    fn versioned_proof_decoder_rejects_unknown_format_before_body() {
-        for version in [0, 1, ExecutionProofCompatibility::FORMAT_V2 + 1] {
+    fn versioned_proof_decoder_rejects_legacy_and_unknown_formats_before_body() {
+        for version in [0, 1, 2, 4, u8::MAX] {
             let error = ExecutionProof::read_from_bytes(&[version]).unwrap_err();
             assert!(matches!(error, DeserializationError::InvalidValue(message)
-                if message.contains("unsupported execution proof format")));
+                if message == format!("unsupported execution proof format {version}")));
+
+            // Neither root-list lengths nor proof/witness payloads may be read or allocated
+            // before the transport version is accepted, even if the body is hostile.
+            let mut bytes = vec![version];
+            bytes.write_usize(usize::MAX);
+            let mut reader = SliceReader::new(&bytes);
+            let error = ExecutionProof::read_from(&mut reader).unwrap_err();
+            assert!(matches!(error, DeserializationError::InvalidValue(message)
+                if message == format!("unsupported execution proof format {version}")));
+            assert_eq!(reader.read_usize().unwrap(), usize::MAX);
+            assert!(!reader.has_more_bytes());
         }
+    }
+
+    #[test]
+    fn execution_proof_constructors_advertise_only_format_3() {
+        let compatibility = ExecutionProofCompatibility::new(vec![], vec![]).unwrap();
+        assert_eq!(compatibility.format(), 3);
+        assert_eq!(ExecutionProofCompatibility::current().format(), 3);
+        assert_eq!(
+            ExecutionProof::new(vm_proof(TRUE_DIGEST), PrecompileStatus::Empty).to_bytes()[0],
+            3
+        );
     }
 
     #[test]
@@ -748,7 +772,7 @@ mod tests {
 
     #[test]
     fn versioned_proof_decoder_applies_the_input_budget_to_root_lists() {
-        let mut bytes = vec![ExecutionProofCompatibility::FORMAT_V2];
+        let mut bytes = vec![ExecutionProofCompatibility::FORMAT_V3];
         bytes.write_usize(usize::MAX);
 
         let error = ExecutionProof::read_from_bytes(&bytes).unwrap_err();
@@ -773,7 +797,7 @@ mod tests {
         let proof_bytes = proof.to_bytes();
         let body = &proof_bytes[version_prefix().len()..];
 
-        let mut duplicate_vm = vec![ExecutionProofCompatibility::FORMAT_V2];
+        let mut duplicate_vm = vec![ExecutionProofCompatibility::FORMAT_V3];
         vec![root(1), root(1)].write_into(&mut duplicate_vm);
         Vec::<Word>::new().write_into(&mut duplicate_vm);
         duplicate_vm.extend_from_slice(body);
@@ -782,7 +806,7 @@ mod tests {
             matches!(error, DeserializationError::InvalidValue(message) if message.contains("VM verifier roots must not contain duplicates"))
         );
 
-        let mut duplicate_pvm = vec![ExecutionProofCompatibility::FORMAT_V2];
+        let mut duplicate_pvm = vec![ExecutionProofCompatibility::FORMAT_V3];
         Vec::<Word>::new().write_into(&mut duplicate_pvm);
         vec![root(2), root(2)].write_into(&mut duplicate_pvm);
         duplicate_pvm.extend_from_slice(body);
