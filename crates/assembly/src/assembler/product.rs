@@ -1,11 +1,137 @@
-use miden_mast_package::{Dependency, debug_info::PackageDebugInfo};
+use miden_assembly_syntax::PathComponent;
+use miden_core::mast::MastForest;
+use miden_mast_package::{Dependency, PackageCallables, debug_info::PackageDebugInfo};
 
 use super::*;
 
+/// Assembled code with raw compiler-selected callable, source, home and entry metadata.
+///
+/// This is not an admitted package9 or execution environment. [`Self::into_artifact`] extracts the
+/// existing Package8 representation, which does not retain this raw metadata.
 pub struct AssemblyProduct {
     package: Box<Package>,
     kernel_package: Option<Arc<Package>>,
     debug_info: Box<PackageDebugInfo>,
+    callables: PackageCallables,
+    callable_sources: CallableSources,
+    namespace_plan: NamespacePlan,
+    kernel_namespace_plan: Option<NamespacePlan>,
+    entry_key: Option<ProcedureKey>,
+}
+
+/// Direct compiler selections, indexed by defining linker path rather than implementation digest.
+/// The source IDs refer to this product's existing debug information, without duplicating it.
+pub(super) type CallableSources =
+    BTreeMap<Arc<Path>, (ProcedureKey, Option<(MastNodeId, DebugSourceNodeId)>)>;
+
+/// Transient compiler references which must be resolved before the forest builder is consumed.
+pub(super) struct PendingCallables {
+    definitions: Vec<(Arc<Path>, CallableBinding, Option<MastNodeUse>, bool)>,
+    visible_paths: Vec<(CallableProcedurePath, ProcedureKey)>,
+}
+
+impl Assembler {
+    pub(super) fn pending_callables(
+        &self,
+        builder: &MastForestBuilder,
+        visible_paths: impl IntoIterator<Item = (Arc<Path>, ProcedureKey)>,
+    ) -> Result<PendingCallables, Report> {
+        let retained = self
+            .linker
+            .runtime_reachable_from(self.local_callable_roots())
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let mut definitions = Vec::new();
+        for (module_index, module) in self.linker.modules().iter().enumerate() {
+            for (item_index, symbol) in module.symbols().enumerate() {
+                let gid = ModuleIndex::new(module_index) + ItemIndex::new(item_index);
+                let procedure = builder.get_procedure(gid);
+                if !symbol.is_procedure() || (!retained.contains(&gid) && procedure.is_none()) {
+                    continue;
+                }
+                definitions.push((
+                    module.path().join(symbol.name()).into(),
+                    self.callable_binding(gid)?.clone(),
+                    procedure.map(Procedure::body_node_use),
+                    matches!(symbol.item(), SymbolItem::Procedure(_)),
+                ));
+            }
+        }
+
+        let visible_paths = visible_paths
+            .into_iter()
+            .map(|(path, key)| {
+                let components = path
+                    .components()
+                    .filter_map(|component| match component {
+                        Ok(PathComponent::Root) => None,
+                        component => {
+                            Some(component.map(|component| component.as_str().to_string()))
+                        },
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .into_diagnostic()?;
+                let path = CallableProcedurePath::from_semantic_components(components)
+                    .into_diagnostic()?;
+                Ok((path, key))
+            })
+            .collect::<Result<Vec<_>, Report>>()?;
+        Ok(PendingCallables { definitions, visible_paths })
+    }
+}
+
+impl PendingCallables {
+    pub(super) fn finish(
+        self,
+        mast: &MastForest,
+        node_id_by_ref: &BTreeMap<MastNodeRef, MastNodeId>,
+        source_id_by_ref: &BTreeMap<SourceNodeRef, DebugSourceNodeId>,
+    ) -> Result<(PackageCallables, CallableSources), Report> {
+        let mut bindings = BTreeMap::new();
+        let mut implementations = BTreeMap::new();
+        let mut source_definitions = BTreeSet::new();
+        let mut sources = BTreeMap::new();
+        for (path, binding, body, is_source_definition) in self.definitions {
+            let key = binding.key();
+            // Imported descriptors and declaration aliases may refer to one canonical callable.
+            // Distinct concrete source definitions, including prelinked ASTs, cannot share a key.
+            if is_source_definition && !source_definitions.insert(key) {
+                return Err(Report::msg(
+                    miden_mast_package::PackageCallablesError::DuplicateBinding { key }.to_string(),
+                ));
+            }
+            if let Some(previous) = bindings.insert(key, binding.clone())
+                && previous != binding
+            {
+                return Err(Report::msg(format!("conflicting callable bindings for key {key:?}")));
+            }
+            let source = if let Some(body) = body {
+                let node = node_id_by_ref.get(&body.node_ref()).copied().ok_or_else(|| {
+                    Report::msg(format!("callable definition '{path}' was not finalized"))
+                })?;
+                let source =
+                    source_id_by_ref.get(&body.source_ref()).copied().ok_or_else(|| {
+                        Report::msg(format!("callable source for '{path}' was not finalized"))
+                    })?;
+                let implementation = ImplementationRoot::new(mast[node].digest());
+                if let Some(previous) = implementations.insert(key, implementation)
+                    && previous != implementation
+                {
+                    return Err(Report::msg(format!(
+                        "conflicting selected implementations for callable key {key:?}"
+                    )));
+                }
+                Some((node, source))
+            } else {
+                None
+            };
+            sources.insert(path, (key, source));
+        }
+        let callables =
+            PackageCallables::new(bindings.into_values(), self.visible_paths, implementations)
+                .into_diagnostic()?;
+        Ok((callables, sources))
+    }
 }
 
 impl AssemblyProduct {
@@ -13,6 +139,11 @@ impl AssemblyProduct {
         package: Box<Package>,
         kernel: Option<Arc<Package>>,
         debug_info: Box<PackageDebugInfo>,
+        callables: PackageCallables,
+        callable_sources: CallableSources,
+        namespace_plan: NamespacePlan,
+        kernel_namespace_plan: Option<NamespacePlan>,
+        entry_key: Option<ProcedureKey>,
     ) -> Self {
         assert!(
             kernel.is_none() || !package.is_kernel(),
@@ -22,10 +153,51 @@ impl AssemblyProduct {
             package,
             kernel_package: kernel,
             debug_info,
+            callables,
+            callable_sources,
+            namespace_plan,
+            kernel_namespace_plan,
+            entry_key,
         }
     }
 
-    #[cfg_attr(not(feature = "std"), expect(unused))]
+    /// Returns the compiler's raw binding, visible-alias and selected-code relations.
+    ///
+    /// These inputs have not received package9, home/profile or environment admission.
+    pub fn callables(&self) -> &PackageCallables {
+        &self.callables
+    }
+
+    /// Returns the key attached to the exact defining linker path, including private definitions.
+    pub fn callable_key_for_definition(&self, path: &Path) -> Option<ProcedureKey> {
+        self.callable_sources.get(path).map(|(key, _)| *key)
+    }
+
+    /// Returns the selected node and exact source occurrence for a defining linker path.
+    ///
+    /// Declaration-only dependencies have a key but no selected node or source occurrence.
+    pub fn callable_source_for_definition(
+        &self,
+        path: &Path,
+    ) -> Option<(MastNodeId, DebugSourceNodeId)> {
+        self.callable_sources.get(path).and_then(|(_, source)| *source)
+    }
+
+    /// Returns the executable entry key retained before final node-ID assignment, if applicable.
+    pub fn entry_key(&self) -> Option<ProcedureKey> {
+        self.entry_key
+    }
+
+    /// Returns the explicit caller home supplied to this compilation, without admitting it.
+    pub fn namespace_plan(&self) -> &NamespacePlan {
+        &self.namespace_plan
+    }
+
+    /// Returns the configured kernel plan as a raw input, without selecting build/runtime policy.
+    pub fn kernel_namespace_plan(&self) -> Option<&NamespacePlan> {
+        self.kernel_namespace_plan.as_ref()
+    }
+
     pub fn extend_dependencies(
         &mut self,
         deps: impl IntoIterator<Item = Dependency>,
@@ -37,8 +209,14 @@ impl AssemblyProduct {
         Ok(())
     }
 
+    /// Extracts the existing Package8 artifact.
+    ///
+    /// Package8 does not encode this product's raw callable/home/entry metadata. The coordinated
+    /// package9 finalizer and admission boundary must carry it before namespaced publication.
     pub fn into_artifact(self, emit_debug_info: bool) -> Result<Box<Package>, Report> {
-        let Self { mut package, kernel_package, debug_info } = self;
+        let Self {
+            mut package, kernel_package, debug_info, ..
+        } = self;
         // Section: embedded kernel package
         if package.is_program()
             && let Some(kernel_package) = kernel_package

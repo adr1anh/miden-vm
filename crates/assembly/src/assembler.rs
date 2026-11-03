@@ -37,7 +37,8 @@ use miden_mast_package::{
 };
 use miden_project::{Linkage, TargetType};
 
-use self::{error::AssemblerError, product::AssemblyProduct};
+use self::error::AssemblerError;
+pub use self::product::AssemblyProduct;
 use crate::{
     CallableBinding, CallableDeclaration, GlobalItemIndex, ModuleIndex, Procedure,
     ProcedureContext,
@@ -60,13 +61,14 @@ pub(crate) const MAX_PROC_LOCALS: u16 = (u16::MAX / WORD_SIZE as u16) * WORD_SIZ
 
 #[derive(Debug)]
 enum PendingPackageExport {
-    Procedure(PendingProcedureExport),
+    Procedure(Box<PendingProcedureExport>),
     Constant(ConstantExport),
     Type(TypeExport),
 }
 
 #[derive(Debug)]
 struct PendingProcedureExport {
+    key: ProcedureKey,
     node_ref: MastNodeRef,
     source_ref: Option<SourceNodeRef>,
     digest: Word,
@@ -82,7 +84,9 @@ impl PendingPackageExport {
         source_id_by_ref: &BTreeMap<SourceNodeRef, DebugSourceNodeId>,
     ) -> Result<PackageExport, Report> {
         match self {
-            Self::Procedure(export) => export.into_package_export(node_id_by_ref, source_id_by_ref),
+            Self::Procedure(export) => {
+                (*export).into_package_export(node_id_by_ref, source_id_by_ref)
+            },
             Self::Constant(export) => Ok(PackageExport::Constant(export)),
             Self::Type(export) => Ok(PackageExport::Type(export)),
         }
@@ -714,8 +718,17 @@ impl Assembler {
             exports
         };
 
+        let callables = self.pending_callables(
+            &mast_forest_builder,
+            exports.values().filter_map(|export| match export {
+                PendingPackageExport::Procedure(export) => Some((export.path.clone(), export.key)),
+                _ => None,
+            }),
+        )?;
         let (mast_forest, node_id_by_ref, debug_info, source_id_by_ref) =
             mast_forest_builder.build()?.into_parts_with_debug_info();
+        let (callables, callable_sources) =
+            callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
         let exports = exports
             .into_iter()
             .map(|(path, export)| {
@@ -726,7 +739,16 @@ impl Assembler {
             .collect::<Result<BTreeMap<_, _>, _>>()?;
 
         let modules = self.package_modules(module_indices);
-        self.finish_library_product(name, mast_forest, debug_info, exports, modules, kind)
+        self.finish_library_product(
+            name,
+            mast_forest,
+            debug_info,
+            exports,
+            modules,
+            kind,
+            callables,
+            callable_sources,
+        )
     }
 
     fn package_modules(&self, module_indices: &[ModuleIndex]) -> Vec<PackageModule> {
@@ -838,14 +860,15 @@ impl Assembler {
                 let procedure = pctx.into_procedure(digest, node);
                 self.linker.register_procedure_root(gid, digest);
                 mast_forest_builder.insert_procedure(gid, procedure, &self.source_manager)?;
-                PendingPackageExport::Procedure(PendingProcedureExport {
+                PendingPackageExport::Procedure(Box::new(PendingProcedureExport {
+                    key: self.callable_binding(gid)?.key(),
                     digest,
                     path: symbol_path,
                     node_ref: node.node_ref(),
                     source_ref: Some(node.source_ref()),
                     signature: signature.map(|sig| (*sig).clone()),
                     attributes,
-                })
+                }))
             },
             SymbolItem::Compiled(ItemInfo::Constant(item)) => {
                 PendingPackageExport::Constant(ConstantExport {
@@ -864,14 +887,15 @@ impl Assembler {
                 let digest = proc.mast_root();
                 let signature = self.linker.resolve_signature(gid)?;
                 let attributes = self.linker.resolve_attributes(gid);
-                PendingPackageExport::Procedure(PendingProcedureExport {
+                PendingPackageExport::Procedure(Box::new(PendingProcedureExport {
+                    key: self.callable_binding(gid)?.key(),
                     digest,
                     path: symbol_path,
                     node_ref: proc.body_node_ref(),
                     source_ref: Some(proc.body_source_ref()),
                     signature: signature.map(Arc::unwrap_or_clone),
                     attributes,
-                })
+                }))
             },
             SymbolItem::Constant(item) => {
                 // Evaluate constant to a concrete value for export
@@ -947,13 +971,24 @@ impl Assembler {
             .into_artifact(emit_debug_info)
     }
 
-    pub(crate) fn assemble_library_modules(
+    /// Assembles a library-like module cohort and retains its raw callable metadata.
+    ///
+    /// `kind` must be library-like; kernel targets require a kernel root module. The returned
+    /// product has no package9, home/profile or environment admission. Extracting its existing
+    /// Package8 artifact with [`AssemblyProduct::into_artifact`] discards that raw metadata.
+    pub fn assemble_library_modules(
         mut self,
         name: PackageId,
         root: Box<ast::Module>,
         support: impl IntoIterator<Item = Box<ast::Module>>,
         kind: TargetType,
     ) -> Result<AssemblyProduct, Report> {
+        if kind.is_executable() {
+            return Err(Report::msg("executable targets require assemble_executable_modules"));
+        }
+        if root.is_executable() || root.kind().is_kernel() != (kind == TargetType::Kernel) {
+            return Err(Report::msg("root module kind does not match the library target"));
+        }
         let first_assembly_module = self.linker.modules().len();
         let module_indices = match kind {
             TargetType::Kernel => self.linker.link_kernel(root, support)?,
@@ -1166,12 +1201,20 @@ impl Assembler {
         }
     }
 
-    pub(crate) fn assemble_executable_modules(
+    /// Assembles an executable module cohort, retaining its entry key and raw callable metadata.
+    ///
+    /// The returned product has no package9, home/profile or environment admission. Extracting
+    /// its existing Package8 artifact with [`AssemblyProduct::into_artifact`] discards that raw
+    /// metadata. A configured kernel plan is retained as an input without choosing binding policy.
+    pub fn assemble_executable_modules(
         mut self,
         name: PackageId,
         program: Box<ast::Module>,
         support_modules: impl IntoIterator<Item = Box<ast::Module>>,
     ) -> Result<AssemblyProduct, Report> {
+        if !program.is_executable() {
+            return Err(Report::msg("executable assembly requires an executable root module"));
+        }
         // Recompute graph with executable module, and start compiling
         let namespace = Arc::<Path>::from(program.path());
         let first_assembly_module = self.linker.modules().len();
@@ -1201,9 +1244,17 @@ impl Assembler {
             .expect("compilation succeeded but root not found in cache");
         let entry_node_ref = entry_procedure.body_node_ref();
         let entry_source_ref = entry_procedure.body_source_ref();
+        let entry_key = entry_procedure
+            .callable_binding()
+            .expect("compiled entrypoint has a callable binding")
+            .key();
+        let entry_path = namespace.join(ast::ProcedureName::MAIN_PROC_NAME).into();
+        let callables = self.pending_callables(&mast_forest_builder, [(entry_path, entry_key)])?;
 
         let (mast_forest, node_id_by_ref, debug_info, source_id_by_ref) =
             mast_forest_builder.build()?.into_parts_with_debug_info();
+        let (callables, callable_sources) =
+            callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
         let entry_node_id = *node_id_by_ref.get(&entry_node_ref).ok_or_else(|| {
             Report::msg(format!("entrypoint ref {entry_node_ref} was not finalized"))
         })?;
@@ -1218,6 +1269,9 @@ impl Assembler {
             entry_node_id,
             entry_source_id,
             kernel_package,
+            callables,
+            callable_sources,
+            entry_key,
         )
     }
 
@@ -1229,6 +1283,8 @@ impl Assembler {
         exports: BTreeMap<Arc<Path>, PackageExport>,
         modules: Vec<PackageModule>,
         kind: TargetType,
+        callables: miden_mast_package::PackageCallables,
+        callable_sources: product::CallableSources,
     ) -> Result<AssemblyProduct, Report> {
         let mast = Arc::new(mast_forest);
         let package = Box::new(
@@ -1251,7 +1307,16 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
-        Ok(AssemblyProduct::new(package, None, debug_info))
+        Ok(AssemblyProduct::new(
+            package,
+            None,
+            debug_info,
+            callables,
+            callable_sources,
+            self.namespace_plan.expect("prebinding requires an explicit caller home"),
+            self.kernel_namespace_plan,
+            None,
+        ))
     }
 
     fn static_libraries_for_builder(&self) -> Result<Vec<StaticLibrary<'_>>, Report> {
@@ -1282,6 +1347,9 @@ impl Assembler {
         entrypoint: MastNodeId,
         entrypoint_source_id: Option<DebugSourceNodeId>,
         kernel: Option<Arc<Package>>,
+        callables: miden_mast_package::PackageCallables,
+        callable_sources: product::CallableSources,
+        entry_key: ProcedureKey,
     ) -> Result<AssemblyProduct, Report> {
         let mast = Arc::new(mast_forest);
         let entry: Arc<Path> = namespace.join(ast::ProcedureName::MAIN_PROC_NAME).into();
@@ -1306,7 +1374,16 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
-        Ok(AssemblyProduct::new(package, kernel, debug_info))
+        Ok(AssemblyProduct::new(
+            package,
+            kernel,
+            debug_info,
+            callables,
+            callable_sources,
+            self.namespace_plan.expect("prebinding requires an explicit caller home"),
+            self.kernel_namespace_plan,
+            Some(entry_key),
+        ))
     }
 
     #[cfg(feature = "std")]
