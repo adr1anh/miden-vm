@@ -497,7 +497,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 09 Assembly/packages | implemented-awaiting-validation | Final review `0ec317994`; CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | implemented-awaiting-validation | Native `82e671c01`; assembly `e151d65c5`; instances `116a2d736`; supply `049d9ea68`; prior SHAs below; base `0ec317994` | Independent reviews; project90, assembly598/six existing skips, supply379/one existing skip and native3 pass; mast-package/both registries/project/assembly all-target strict Clippy, native-target Clippy and four shared no_std checks pass | Inherited public-statement/proof/recursive/security and final qualification remain; selected publication-profile behavior is not claimed |
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; base `eefae17e7` | Independent reviews; 7/8 actual-loader tests pass, all 33 malformed cases pass independently; renderer/package transport tests and scoped strict Clippy pass | VM valid control embeds 7920 versus wrapper 6992; generation refuses stale pinned ACE digest. Coherent PR12/14 qualification and all inherited gates remain; optional profiles deferred |
-| 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
+| 12 Native statement | in-progress | Claim/proof `bb4a3c370`; base `10bc8a5f0`; remaining implementation uncommitted | Independent scoped reviews; core/AIR378, processor1891/one existing ignore, deterministic generation/check, fresh native-verified fixture; combined464/473 (details below) | Nine focused fixture/layout/snapshot failures; remaining lint/no_std, native/MASM/recursive/adversarial and inherited qualification gates |
 | 13 Core library | planned | — | — | Depends on 09–12 and supported ABI |
 | 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
@@ -2987,3 +2987,23 @@ because the pinned VM ACE digest is stale. No identity/proof constants were refr
 renderer and final transport tests pass; core-lib test-target and ACE/package all-target strict
 Clippy pass. Independent reviews/signatures pass. PR11 remains implemented-awaiting-validation;
 coherent PR12/14 generation/proof qualification and every inherited gate remain open.
+
+
+### PR12 statement and relation checkpoint, 3 November 2026
+
+`bb4a3c370` commits explicit descriptor claim40/domain2 and proof3 with version-first rejection;
+signature verified. Remaining processor/public projection/native/CLI/MASM/generator/fixture changes
+are uncommitted. Central guarded checks passed core/AIR378 and processor1891/one existing ignore.
+Authoritative regeneration plus `--check` passed: VM protocol5, 790 inputs, 7676 gates, 990 blocks,
+7920 felts. ACE/relation pins were accepted only after regeneration; all three unchanged preprocessing
+pins pass. The fresh Eidos fixture was generated from owner-selected descriptor/public I/O and
+native-verified before writing. Compatibility-root whitelists remain untouched.
+
+The combined test-dev run passed464/473: all40 native claim-coordinate mutations, claim/transcript
+and boundary MASM hooks, recursive advice packaging and all eight resource-loader controls, closing
+PR11's stale VM valid-control failure. Nine failures remain: four CLI fixture/oracle expectations,
+layout numeric-constant resolution, and four memory/security snapshots. Logs:
+`.scratch/librarytree/pr12-{generation-write,generation-check,fixture-generation,combined-checks}.log`.
+Independent scoped reviews pass. The default target cache disappeared; subsequent checks use one
+isolated scratch cache. Full lint/no_std, recursive/adversarial/security/guest/fuzz/performance and
+final gates remain open. No PR12/M1/overall completion is claimed.
