@@ -58,11 +58,11 @@ fn completed(result: ControlFlow<AssemblyInterrupted, ResolvedPackage>) -> Resol
 fn assemble_source(
     assembler: &mut ProjectAssembler<'_, TestRegistry>,
     role: InterruptedTargetRole,
-    cache: &mut BTreeMap<PackageId, ResolvedPackage>,
+    cache: &mut SourcePackageCache,
 ) -> Result<ResolvedPackage, Report> {
     let project = assembler.project.clone();
     let target = project.library_target().unwrap().inner().clone();
-    let id = assembler.dependency_graph.root().clone();
+    let id = *assembler.dependency_graph.root();
     assembler
         .assemble_source_package(
             id,
@@ -109,6 +109,7 @@ fn package_with_default_home(original: &ResolvedPackage, home: NamespacePlan) ->
         package: Arc::new(package),
         naming: Arc::new(naming),
         linked_kernel_package: original.linked_kernel_package.clone(),
+        dependency_packages: original.dependency_packages.clone(),
     }
 }
 
@@ -251,8 +252,9 @@ fn configured_home_keeps_provider_bound_overrides_and_rejects_mismatch_before_so
     );
     assert_eq!(calls.get(), 3);
 
-    // Clear only the memory cache: the source artifact remains registered in the same store.
+    // Clear both local caches: the source artifact remains registered in the same store.
     cache.clear();
+    assembler.source_candidates.clear();
     wrong_home.set(false);
     let reloaded =
         assemble_source(&mut assembler, InterruptedTargetRole::Dependency, &mut cache).unwrap();
@@ -260,6 +262,7 @@ fn configured_home_keeps_provider_bound_overrides_and_rejects_mismatch_before_so
     let loads = assembler.store.loaded_packages().len();
     assert!(loads > 0, "positive control must exercise the registered artifact path");
     cache.clear();
+    assembler.source_candidates.clear();
     wrong_home.set(true);
     let error = assemble_source(&mut assembler, InterruptedTargetRole::Dependency, &mut cache)
         .err()
@@ -280,8 +283,9 @@ fn configured_home_keeps_provider_bound_overrides_and_rejects_mismatch_before_so
     );
     assert_eq!(forged.naming.callables(), first.naming.callables());
     assert_eq!(forged.package.code_commitment(), first.package.code_commitment());
-    let id = assembler.dependency_graph.root().clone();
-    cache.insert(id, forged.clone());
+    let id = *assembler.dependency_graph.root();
+    let target = assembler.project.library_target().unwrap().inner();
+    cache.insert(SourcePackageCacheKey::new(id, target), forged.clone());
     let error = assemble_source(&mut assembler, InterruptedTargetRole::Dependency, &mut cache)
         .err()
         .expect("self-consistent memory metadata cannot replace the configured default home");
@@ -289,6 +293,7 @@ fn configured_home_keeps_provider_bound_overrides_and_rejects_mismatch_before_so
     assert_eq!(calls.get(), 6);
 
     cache.clear();
+    assembler.source_candidates.clear();
     assembler.store.replace_semver_package(forged.package);
     let error = assemble_source(&mut assembler, InterruptedTargetRole::Dependency, &mut cache)
         .err()
@@ -366,7 +371,18 @@ fn explicit_parent_source_selection_overrides_target_fallback_without_changing_s
             let mut cache = BTreeMap::new();
             let resolved =
                 assemble_source(&mut assembler, InterruptedTargetRole::Root, &mut cache).unwrap();
-            let dependency = cache.get(&PackageId::from("dep")).unwrap();
+            let root = assembler.dependency_graph.get(assembler.dependency_graph.root()).unwrap();
+            let instance = root
+                .dependencies
+                .iter()
+                .find(|edge| edge.alias.as_ref() == "dep")
+                .unwrap()
+                .dependency;
+            let dependency = cache
+                .iter()
+                .find(|(key, _)| key.instance == instance)
+                .map(|(_, dependency)| dependency)
+                .unwrap();
             assert_eq!(dependency.naming.namespace_plan(), &request.namespace_plan());
             assert_eq!(
                 dependency.naming.callables().key_for_visible_path(&path(&["dep", "alias"])),

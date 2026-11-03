@@ -48,10 +48,11 @@ pub use miden_project::PackageSourceMount;
 pub use self::linker::LinkerError;
 #[cfg(feature = "std")]
 pub use self::project::{
-    AssemblyInterrupted, DependencyNamingRequest, InterruptedTargetRole, MasmSourceProvider,
-    PackagePostProcessor, PostProcessContext, ProjectAssembler, ProjectSourceInputs,
-    ProjectSourceProvenanceInputs, ProjectSourceProvider, ProjectTargetSelector, ResolvedPackage,
-    SourceFileProvenance, SourceProviderRegistry, TargetAssemblyContext,
+    AssemblyInterrupted, CodePackage, DependencyNamingRequest, InterruptedTargetRole,
+    MasmSourceProvider, PackagePostProcessor, PostProcessContext, ProjectAssembler,
+    ProjectSourceInputs, ProjectSourceProvenanceInputs, ProjectSourceProvider,
+    ProjectTargetSelector, ResolvedPackage, SourceFileProvenance, SourcePackageCache,
+    SourcePackageCacheKey, SourceProviderRegistry, TargetAssemblyContext,
 };
 pub use self::{
     assembler::{Assembler, AssemblyProduct, NamespaceInputs},

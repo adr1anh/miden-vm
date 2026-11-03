@@ -367,7 +367,7 @@ fn invalid_artifact_expectations_never_promote_code_to_the_registry() {
                 configure_client(&mut assembler, owner.homes());
                 assembler
                     .assemble(ProjectTargetSelector::Library, "release")
-                        .expect_err("bad public map must reject")
+                    .expect_err("bad public map must reject")
             },
         };
         assert!(format!("{error:?}").contains(message), "{case}: {error:?}");
@@ -402,13 +402,13 @@ fn invalid_artifact_expectations_never_promote_code_to_the_registry() {
 
 fn assemble_source(
     assembler: &mut ProjectAssembler<'_, TestRegistry>,
-    cache: &mut BTreeMap<PackageId, ResolvedPackage>,
+    cache: &mut SourcePackageCache,
     expected: &ExpectedVisibleCallables,
 ) -> Result<ResolvedPackage, Report> {
     let project = assembler.project.clone();
     let target = project.library_target().unwrap().inner().clone();
     match assembler.assemble_source_package(
-        assembler.dependency_graph.root().clone(),
+        *assembler.dependency_graph.root(),
         project,
         &target,
         "release",
@@ -473,6 +473,7 @@ fn source_expectations_are_checked_before_cold_promotion_memory_and_registered_r
     ));
 
     cache.clear();
+    assembler.source_candidates.clear();
     let error = assemble_source(&mut assembler, &mut cache, &wrong)
         .err()
         .expect("current expectations constrain registered hits");

@@ -1,17 +1,16 @@
-use alloc::{
-    collections::BTreeSet,
-    format,
-    string::{String, ToString},
-    sync::Arc,
-    vec::Vec,
-};
+use alloc::{collections::BTreeSet, format, string::ToString, sync::Arc, vec::Vec};
 use std::path::Path as FsPath;
 
-use miden_assembly_syntax::diagnostics::Report;
-use miden_core::{Word, utils::hash_string_to_word};
-use miden_package_registry::{PackageId, PackageRegistry, PackageRegistryAndProvider};
+use miden_assembly_syntax::{
+    Path, PathComponent,
+    diagnostics::{IntoDiagnostic, Report},
+};
+use miden_core::{Word, chiplets::hasher, serde::Serializable, utils::hash_string_to_word};
+use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_package_registry::{PackageRegistry, PackageRegistryAndProvider, Version};
 use miden_project::{
-    Package as ProjectPackage, ProjectDependencyGraph, ProjectDependencyGraphBuilder,
+    DependencyBinding, DependencyInstanceId, Linkage, Package as ProjectPackage,
+    ProjectDependencyEdge, ProjectDependencyGraph, ProjectDependencyGraphBuilder,
     ProjectDependencyNode, ProjectDependencyNodeProvenance, ProjectSource, ProjectSourceOrigin,
     Target,
 };
@@ -28,6 +27,124 @@ use crate::SourceManager;
 pub(super) struct DependencyGraph {
     dependency_graph: ProjectDependencyGraph,
     source_manager: Arc<dyn SourceManager>,
+}
+
+/// Private build-cache material, independent of graph slot allocation and callable identity.
+///
+/// Sort complete logical records rather than slot IDs. Duplicate edges remain significant, and
+/// full typed homes and semantic path components retain their byte and component boundaries.
+fn hash_dependency_records(mut dependencies: Vec<Vec<u8>>) -> Result<Word, Report> {
+    if dependencies.is_empty() {
+        return Ok(PackageBuildProvenance::empty_dependency_hash());
+    }
+    dependencies.sort();
+    let mut material = b"miden.assembly.dependency-closure.v2".to_vec();
+    append_provenance_len(&mut material, dependencies.len())?;
+    for dependency in dependencies {
+        append_provenance_bytes(&mut material, &dependency)?;
+    }
+    Ok(hasher::hash(&material))
+}
+
+fn dependency_edge_hash_input(edge: &ProjectDependencyEdge) -> Result<Vec<u8>, Report> {
+    let mut material = Vec::new();
+    append_provenance_bytes(&mut material, edge.alias.as_bytes())?;
+    material.push(match edge.linkage {
+        Linkage::Static => 0,
+        Linkage::Dynamic => 1,
+    });
+    match &edge.binding {
+        None => material.push(0),
+        Some(binding) => {
+            material.push(match binding {
+                DependencyBinding::Standard(_) => 1,
+                DependencyBinding::Custom(_) => 2,
+            });
+            append_provenance_home(&mut material, &binding.namespace_plan())?;
+        },
+    }
+    match &edge.expected_callables {
+        None => material.push(0),
+        Some(expected) => {
+            material.push(1);
+            append_provenance_len(&mut material, expected.mappings().len())?;
+            for (visible, binding) in expected.mappings() {
+                append_provenance_callable_path(&mut material, visible)?;
+                append_provenance_home(&mut material, binding.namespace_plan())?;
+                append_provenance_callable_path(&mut material, binding.path())?;
+            }
+        },
+    }
+    match &edge.source_mount {
+        None => material.push(0),
+        Some(mount) => {
+            material.push(1);
+            append_provenance_source_path(&mut material, mount.package_base())?;
+            append_provenance_source_path(&mut material, mount.source_base())?;
+        },
+    }
+    Ok(material)
+}
+
+// Match the compiler cache's length/byte framing, without invoking an interchange profile or
+// revalidating externally admitted TypedId labels during this private cache calculation.
+fn append_provenance_len(material: &mut Vec<u8>, len: usize) -> Result<(), Report> {
+    let len =
+        u64::try_from(len).map_err(|_| Report::msg("dependency provenance length exceeds u64"))?;
+    material.extend_from_slice(&len.to_le_bytes());
+    Ok(())
+}
+
+fn append_provenance_bytes(material: &mut Vec<u8>, value: &[u8]) -> Result<(), Report> {
+    append_provenance_len(material, value.len())?;
+    material.extend_from_slice(value);
+    Ok(())
+}
+
+fn append_provenance_version(material: &mut Vec<u8>, version: &Version) -> Result<(), Report> {
+    append_provenance_bytes(material, version.version.to_string().as_bytes())?;
+    match version.digest {
+        Some(digest) => {
+            material.push(1);
+            material.extend_from_slice(&digest.as_bytes());
+        },
+        None => material.push(0),
+    }
+    Ok(())
+}
+
+fn append_provenance_home(material: &mut Vec<u8>, home: &NamespacePlan) -> Result<(), Report> {
+    append_provenance_len(material, home.home().len())?;
+    for label in home.home() {
+        append_provenance_bytes(material, label.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn append_provenance_callable_path(
+    material: &mut Vec<u8>,
+    path: &CallableProcedurePath,
+) -> Result<(), Report> {
+    append_provenance_len(material, path.components().len())?;
+    for component in path.components() {
+        append_provenance_bytes(material, component.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn append_provenance_source_path(material: &mut Vec<u8>, path: &Path) -> Result<(), Report> {
+    let components = path.components().collect::<Result<Vec<_>, _>>().into_diagnostic()?;
+    append_provenance_len(material, components.len())?;
+    for component in components {
+        match component {
+            PathComponent::Root => material.push(0),
+            PathComponent::Normal(_) => {
+                material.push(1);
+                append_provenance_bytes(material, component.as_str().as_bytes())?;
+            },
+        }
+    }
+    Ok(())
 }
 
 impl AsRef<ProjectDependencyGraph> for DependencyGraph {
@@ -72,14 +189,39 @@ impl DependencyGraph {
     // PUBLIC ACCESSORS
     // --------------------------------------------------------------------------------------------
 
-    pub fn root(&self) -> &PackageId {
+    pub fn root(&self) -> &DependencyInstanceId {
         self.dependency_graph.root()
     }
 
-    pub fn get(&self, package_id: &PackageId) -> Result<&ProjectDependencyNode, Report> {
+    pub fn get(&self, instance: &DependencyInstanceId) -> Result<&ProjectDependencyNode, Report> {
         self.dependency_graph
-            .get(package_id)
-            .ok_or_else(|| Report::msg(format!("missing dependency graph node for '{package_id}'")))
+            .get(instance)
+            .ok_or_else(|| Report::msg(format!("missing dependency graph node for '{instance}'")))
+    }
+
+    /// Whether another explicit source instance selects this home for the same publication slot.
+    /// This only separates local build candidates; it never approves or rebases an artifact.
+    pub fn has_other_source_home(
+        &self,
+        instance: DependencyInstanceId,
+        name: &miden_package_registry::PackageId,
+        version: &miden_project::SemVer,
+        home: &NamespacePlan,
+    ) -> bool {
+        self.dependency_graph.nodes().values().any(|parent| {
+            parent.dependencies.iter().any(|edge| {
+                edge.dependency != instance
+                    && edge
+                        .binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.namespace_plan() == *home)
+                    && self.dependency_graph.get(&edge.dependency).is_some_and(|node| {
+                        &node.name == name
+                            && &node.version == version
+                            && matches!(node.provenance, ProjectDependencyNodeProvenance::Source(_))
+                    })
+            })
+        })
     }
 
     // PROVENANCE BUILDERS
@@ -87,7 +229,7 @@ impl DependencyGraph {
 
     pub fn build_source_provenance(
         &self,
-        package_id: &PackageId,
+        instance: &DependencyInstanceId,
         project: Arc<ProjectPackage>,
         target: &Target,
         profile_name: &str,
@@ -95,7 +237,7 @@ impl DependencyGraph {
         package_registry: &dyn PackageRegistryAndProvider,
         source_provenance: Option<&ProjectSourceProvenanceInputs>,
     ) -> Result<Option<PackageBuildProvenance>, Report> {
-        let Some(node) = self.dependency_graph.get(package_id) else {
+        let Some(node) = self.dependency_graph.get(instance) else {
             return Ok(None);
         };
         let ProjectDependencyNodeProvenance::Source(source) = &node.provenance else {
@@ -106,7 +248,7 @@ impl DependencyGraph {
             ProjectSource::Virtual { .. } => Ok(None),
             ProjectSource::Real { origin, manifest_path, .. } => self
                 .expected_source_provenance(
-                    package_id,
+                    instance,
                     project,
                     target,
                     profile_name,
@@ -122,7 +264,7 @@ impl DependencyGraph {
 
     pub fn expected_source_provenance(
         &self,
-        package_id: &PackageId,
+        instance: &DependencyInstanceId,
         project: Arc<ProjectPackage>,
         target: &Target,
         profile_name: &str,
@@ -133,7 +275,7 @@ impl DependencyGraph {
         source_provenance: Option<&ProjectSourceProvenanceInputs>,
     ) -> Result<PackageBuildProvenance, Report> {
         self.expected_source_provenance_with_visited(
-            package_id,
+            instance,
             project,
             target,
             profile_name,
@@ -151,7 +293,7 @@ impl DependencyGraph {
 
     fn expected_source_provenance_with_visited(
         &self,
-        package_id: &PackageId,
+        instance: &DependencyInstanceId,
         project: Arc<ProjectPackage>,
         target: &Target,
         profile_name: &str,
@@ -160,10 +302,10 @@ impl DependencyGraph {
         source_provider: &SourceProviderRegistry,
         package_registry: &dyn PackageRegistryAndProvider,
         source_provenance: Option<&ProjectSourceProvenanceInputs>,
-        visiting: &mut BTreeSet<PackageId>,
+        visiting: &mut BTreeSet<DependencyInstanceId>,
     ) -> Result<PackageBuildProvenance, Report> {
         let dependency_hash = self.compute_dependency_closure_hash(
-            package_id,
+            instance,
             profile_name,
             source_provider,
             package_registry,
@@ -221,74 +363,72 @@ impl DependencyGraph {
 
     fn compute_dependency_closure_hash(
         &self,
-        package_id: &PackageId,
+        instance: &DependencyInstanceId,
         profile_name: &str,
         source_provider: &SourceProviderRegistry,
         package_registry: &dyn PackageRegistryAndProvider,
-        visiting: &mut BTreeSet<PackageId>,
+        visiting: &mut BTreeSet<DependencyInstanceId>,
     ) -> Result<Word, Report> {
-        if !visiting.insert(package_id.clone()) {
+        if !visiting.insert(*instance) {
             return Err(Report::msg(format!(
-                "dependency cycle detected while computing source provenance for '{package_id}'"
+                "dependency cycle detected while computing source provenance for '{instance}'"
             )));
         }
 
         let outcome = (|| {
-            let node = self.dependency_graph.get(package_id).ok_or_else(|| {
-                Report::msg(format!("missing dependency graph node for '{package_id}'"))
+            let node = self.dependency_graph.get(instance).ok_or_else(|| {
+                Report::msg(format!("missing dependency graph node for '{instance}'"))
             })?;
             if node.dependencies.is_empty() {
                 return Ok(PackageBuildProvenance::empty_dependency_hash());
             }
 
-            let mut dependencies = node.dependencies.clone();
-            dependencies.sort_by(|a, b| {
-                a.dependency
-                    .cmp(&b.dependency)
-                    .then_with(|| a.linkage.to_string().cmp(&b.linkage.to_string()))
-            });
-
-            let mut material = String::new();
-            for edge in dependencies {
-                material.push_str("dependency:");
-                material.push_str(edge.dependency.as_ref());
-                material.push(':');
-                material.push_str(edge.linkage.to_string().as_str());
-                material.push('\n');
-                material.push_str(&self.dependency_resolution_hash_input(
+            let mut dependencies = Vec::with_capacity(node.dependencies.len());
+            for edge in &node.dependencies {
+                let mut material = dependency_edge_hash_input(edge)?;
+                let resolution = self.dependency_resolution_hash_input(
                     &edge.dependency,
                     profile_name,
                     source_provider,
                     package_registry,
                     visiting,
-                )?);
+                )?;
+                append_provenance_bytes(&mut material, &resolution)?;
+                dependencies.push(material);
             }
 
-            Ok(hash_string_to_word(material.as_str()))
+            hash_dependency_records(dependencies)
         })();
 
-        visiting.remove(package_id);
+        visiting.remove(instance);
         outcome
     }
 
     fn dependency_resolution_hash_input(
         &self,
-        package_id: &PackageId,
+        instance: &DependencyInstanceId,
         profile_name: &str,
         source_provider: &SourceProviderRegistry,
         package_registry: &dyn PackageRegistryAndProvider,
-        visiting: &mut BTreeSet<PackageId>,
-    ) -> Result<String, Report> {
-        let node = self.dependency_graph.get(package_id).ok_or_else(|| {
-            Report::msg(format!("missing dependency graph node for '{package_id}'"))
+        visiting: &mut BTreeSet<DependencyInstanceId>,
+    ) -> Result<Vec<u8>, Report> {
+        let node = self.dependency_graph.get(instance).ok_or_else(|| {
+            Report::msg(format!("missing dependency graph node for '{instance}'"))
         })?;
 
+        let mut material = Vec::new();
+        // Graph-local slots only direct traversal. Persist actual package/provenance data, so
+        // allocating the same logical graph in a different order cannot change this hash.
+        append_provenance_bytes(&mut material, node.name.as_bytes())?;
+        append_provenance_bytes(&mut material, node.version.to_string().as_bytes())?;
         match &node.provenance {
             ProjectDependencyNodeProvenance::Registry { selected, .. } => {
-                Ok(format!("registry:{package_id}@{selected}\n"))
+                material.push(0);
+                append_provenance_version(&mut material, selected)?;
             },
             ProjectDependencyNodeProvenance::Preassembled { selected, .. } => {
-                Ok(format!("preassembled:{package_id}@{selected}\n"))
+                material.push(1);
+                append_provenance_version(&mut material, selected)?;
             },
             ProjectDependencyNodeProvenance::Source(ProjectSource::Real {
                 origin,
@@ -297,7 +437,7 @@ impl DependencyGraph {
                 ..
             }) => {
                 let project = miden_project::Project::load_project_reference(
-                    package_id,
+                    &node.name,
                     manifest_path,
                     &self.source_manager,
                 )
@@ -307,11 +447,12 @@ impl DependencyGraph {
                     .map(|target| target.inner().clone())
                     .ok_or_else(|| {
                         Report::msg(format!(
-                            "dependency '{package_id}' does not define a library target"
+                            "dependency '{}' does not define a library target",
+                            node.name
                         ))
                     })?;
                 let provenance = self.expected_source_provenance_with_visited(
-                    package_id,
+                    instance,
                     project,
                     &target,
                     profile_name,
@@ -322,12 +463,14 @@ impl DependencyGraph {
                     None,
                     visiting,
                 )?;
-                Ok(format!("source:{package_id}:{}\n", provenance.describe()))
+                material.push(2);
+                append_provenance_bytes(&mut material, &provenance.to_bytes())?;
             },
             ProjectDependencyNodeProvenance::Source(_) => {
-                Ok(format!("canonical:{package_id}@{}\n", node.version))
+                material.push(3);
             },
         }
+        Ok(material)
     }
 
     /// This function computes a hash for a project dependency in source form that is used in
@@ -419,5 +562,220 @@ impl DependencyGraph {
         }
 
         hash_string_to_word(material.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::{string::String, vec};
+
+    use miden_assembly_syntax::debuginfo::{DefaultSourceManager, Span, Uri};
+    use miden_core::{Felt, program::CanonicalLabel};
+    use miden_mast_package::CallableBinding;
+    use miden_package_registry::{PackageIndex, PackageRecord, VersionRequirement};
+    use miden_project::{
+        Dependency, DependencyVersionScheme, ExpectedVisibleCallables, LibraryImport,
+        LibrarySelection, PackageSourceMount, SemVer,
+    };
+
+    use super::*;
+    use crate::testing::TestRegistry;
+
+    fn home(labels: &[&str]) -> NamespacePlan {
+        NamespacePlan::new(
+            labels.iter().map(|label| CanonicalLabel::text(label).unwrap()).collect(),
+        )
+    }
+
+    fn path(components: &[&str]) -> CallableProcedurePath {
+        CallableProcedurePath::from_semantic_components(
+            components.iter().map(|component| String::from(*component)).collect(),
+        )
+        .unwrap()
+    }
+
+    fn version(major: u64, digest: u32) -> Version {
+        Version::new(SemVer::new(major, 0, 0), Word::new([Felt::from_u32(digest); 4]))
+    }
+
+    fn dependency(alias: &str, version: Version) -> Dependency {
+        Dependency::new(
+            Span::unknown(Arc::from(alias)),
+            DependencyVersionScheme::Registry(VersionRequirement::Exact(version)),
+            Linkage::Dynamic,
+        )
+        .with_package("dep")
+        .with_binding(DependencyBinding::Custom(home(&["chosen-home"])))
+    }
+
+    fn hash_dependencies(dependencies: Vec<Dependency>) -> (Word, DependencyGraph) {
+        let mut registry = TestRegistry::default();
+        let mut registered = BTreeSet::new();
+        for dependency in &dependencies {
+            let DependencyVersionScheme::Registry(VersionRequirement::Exact(version)) =
+                dependency.scheme()
+            else {
+                panic!("fixture requires an exact registry dependency");
+            };
+            if registered.insert((dependency.package().clone(), version.version.clone())) {
+                registry
+                    .register(dependency.package().clone(), PackageRecord::new(version.clone(), []))
+                    .unwrap();
+            }
+        }
+        let project = ProjectPackage::new(
+            "root",
+            Target::library(Arc::<Path>::from(Path::new("root")), Uri::new("lib.masm")),
+        )
+        .with_dependencies(dependencies);
+        let graph = DependencyGraph::from_project(
+            project.into(),
+            &registry,
+            Arc::new(DefaultSourceManager::default()),
+        )
+        .unwrap();
+        let hash = graph
+            .compute_dependency_closure_hash(
+                graph.root(),
+                "release",
+                &SourceProviderRegistry::default(),
+                &registry,
+                &mut BTreeSet::new(),
+            )
+            .unwrap();
+        (hash, graph)
+    }
+
+    #[test]
+    fn closure_hash_retains_instances_without_persisting_slot_allocation_order() {
+        let left = dependency("left", version(1, 11));
+        let right = dependency("right", version(2, 22));
+        let (forward_hash, forward) = hash_dependencies(vec![left.clone(), right.clone()]);
+        let (reverse_hash, reverse) = hash_dependencies(vec![right, left]);
+        let left_instance = |graph: &DependencyGraph| {
+            graph
+                .get(graph.root())
+                .unwrap()
+                .dependencies
+                .iter()
+                .find(|edge| edge.alias.as_ref() == "left")
+                .unwrap()
+                .dependency
+        };
+        assert_ne!(left_instance(&forward), left_instance(&reverse));
+        assert_eq!(forward_hash, reverse_hash);
+
+        let root = forward.get(forward.root()).unwrap();
+        assert_eq!(root.dependencies.len(), 2);
+        let instances = root
+            .dependencies
+            .iter()
+            .map(|edge| forward.get(&edge.dependency).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(instances[0].name, instances[1].name);
+        assert_ne!(instances[0].version, instances[1].version);
+        assert_ne!(forward_hash, hash_dependencies(vec![dependency("left", version(1, 11))]).0);
+    }
+
+    #[test]
+    fn closure_hash_tracks_alias_linkage_binding_expectations_mount_and_exact_artifact() {
+        let baseline = dependency("left", version(1, 11));
+        let baseline_hash = hash_dependencies(vec![baseline.clone()]).0;
+        let changed_linkage = Dependency::new(
+            Span::unknown(Arc::from("left")),
+            baseline.scheme().clone(),
+            Linkage::Static,
+        )
+        .with_package("dep")
+        .with_binding(baseline.binding().unwrap().clone());
+        let expected = ExpectedVisibleCallables::new([(
+            path(&["visible", "run"]),
+            CallableBinding::new(home(&["foreign-owner"]), path(&["original", "run"])).unwrap(),
+        )])
+        .unwrap();
+        let mount = PackageSourceMount::new(Path::new("::dep"), Path::new("::left")).unwrap();
+        for changed in [
+            dependency("renamed", version(1, 11)),
+            changed_linkage,
+            baseline.clone().with_binding(DependencyBinding::Custom(home(&["other-home"]))),
+            baseline
+                .clone()
+                .with_expected_callables(ExpectedVisibleCallables::new([]).unwrap()),
+            baseline.clone().with_expected_callables(expected),
+            baseline.with_source_mount(mount),
+            dependency("left", version(1, 12)),
+        ] {
+            assert_ne!(baseline_hash, hash_dependencies(vec![changed]).0);
+        }
+    }
+
+    #[test]
+    fn closure_hash_preserves_complete_typed_home_and_semantic_path_boundaries() {
+        let baseline = dependency("left", version(1, 11));
+        let hash_binding = |binding| {
+            hash_dependencies(vec![
+                baseline.clone().with_binding(DependencyBinding::Custom(binding)),
+            ])
+            .0
+        };
+        assert_ne!(hash_binding(home(&["a::b"])), hash_binding(home(&["a", "b"])));
+        let typed = NamespacePlan::new(vec![CanonicalLabel::library_id(Word::default())]);
+        let text = home(&[&Word::default().to_string()]);
+        assert_ne!(hash_binding(typed), hash_binding(text));
+        let typed_id = |payload: &[u8]| {
+            NamespacePlan::new(vec![CanonicalLabel::typed_id(77, payload, |_, _| Ok(())).unwrap()])
+        };
+        assert_ne!(hash_binding(typed_id(&[4, 0, 9])), hash_binding(typed_id(&[4, 0, 8])));
+        let standard =
+            LibraryImport::new(home(&["ancestor"]), Word::default(), LibrarySelection::Latest);
+        assert_ne!(
+            hash_binding(standard.namespace_plan()),
+            hash_dependencies(vec![
+                baseline.clone().with_binding(DependencyBinding::Standard(standard))
+            ])
+            .0
+        );
+
+        let expected_hash = |visible, defining| {
+            let expected = ExpectedVisibleCallables::new([(
+                visible,
+                CallableBinding::new(home(&["foreign"]), defining).unwrap(),
+            )])
+            .unwrap();
+            hash_dependencies(vec![baseline.clone().with_expected_callables(expected)]).0
+        };
+        assert_ne!(
+            expected_hash(path(&["a::b", "run"]), path(&["original", "run"])),
+            expected_hash(path(&["a", "b", "run"]), path(&["original", "run"]))
+        );
+        assert_ne!(
+            expected_hash(path(&["visible", "run"]), path(&["a::b", "run"])),
+            expected_hash(path(&["visible", "run"]), path(&["a", "b", "run"]))
+        );
+
+        let mount_hash = |base: &str| {
+            let mount = PackageSourceMount::new(Path::new("::dep"), Path::new(base)).unwrap();
+            hash_dependencies(vec![baseline.clone().with_source_mount(mount)]).0
+        };
+        assert_eq!(mount_hash("::left"), mount_hash("::\"left\""));
+        assert_ne!(mount_hash("::\"a::b\""), mount_hash("::a::b"));
+        assert_ne!(mount_hash("::"), mount_hash("::\"::\""));
+    }
+
+    #[test]
+    fn closure_hash_keeps_empty_sentinel_and_rejects_a_revisited_instance() {
+        let (hash, graph) = hash_dependencies(vec![]);
+        assert_eq!(hash, PackageBuildProvenance::empty_dependency_hash());
+        let mut visiting = BTreeSet::from([*graph.root()]);
+        let error = graph
+            .compute_dependency_closure_hash(
+                graph.root(),
+                "release",
+                &SourceProviderRegistry::default(),
+                &TestRegistry::default(),
+                &mut visiting,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("dependency cycle detected"));
     }
 }

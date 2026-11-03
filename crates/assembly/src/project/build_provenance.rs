@@ -37,9 +37,9 @@ use super::PackageBuildSettings;
 /// - Both origins optionally record the exact resolved compilation commitment. Legacy records omit
 ///   it and cannot compare equal to a record carrying current compiler inputs.
 ///
-/// Beyond direct reuse checks, [`Self::describe`] is also folded into dependency-closure hashing
-/// for parent packages and is used in semver-bump diagnostics to explain why an existing canonical
-/// artifact no longer matches the current sources.
+/// Parent dependency-closure hashing frames the exact serialized record. [`Self::describe`] is
+/// used in semver-bump diagnostics to explain why an existing canonical artifact no longer
+/// matches the current sources.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(
     all(feature = "arbitrary", test),
@@ -139,7 +139,7 @@ impl PackageBuildProvenance {
         Ok(Some(provenance))
     }
 
-    /// Render a stable human-readable summary for diagnostics and dependency-closure hashing.
+    /// Render a human-readable summary for diagnostics.
     pub fn describe(&self) -> String {
         match self {
             Self::Path {
