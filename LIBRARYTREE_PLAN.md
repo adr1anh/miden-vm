@@ -497,8 +497,8 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 09 Assembly/packages | implemented-awaiting-validation | Final review `0ec317994`; CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | implemented-awaiting-validation | Native `82e671c01`; assembly `e151d65c5`; instances `116a2d736`; supply `049d9ea68`; prior SHAs below; base `0ec317994` | Independent reviews; project90, assembly598/six existing skips, supply379/one existing skip and native3 pass; mast-package/both registries/project/assembly all-target strict Clippy, native-target Clippy and four shared no_std checks pass | Inherited public-statement/proof/recursive/security and final qualification remain; selected publication-profile behavior is not claimed |
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
-| 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Fifteen request K/D failures at PR14, three preserved cost gates at PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
-| 13 Core library | in-progress | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; base `56f44aa0f` | Independent reviews; focused18/18 including package/advice/private callback/changed-D, full security matrix and unchanged three cost caps; four-crate all-target strict Clippy; VM/PVM generation/check pass | Ordinary675-case baseline running; domain/AEAD diagnostics and exact crypto cost snapshots under focused follow-up; inherited PR14/qualification gates |
+| 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Fifteen request K/D failures at PR14; three cost gates closed at PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
+| 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Full PR14 typed identity/request/compatibility closure and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
@@ -3059,3 +3059,27 @@ zero-event and message oracles remain intact. Exact snapshots are measurement ch
 from the three unchanged upper cost gates. Their final new measurements and affected correctness
 checks remain pending. No general D-indexed diagnostic-variant fix or full PR13/M1/goal closure
 is claimed. PR14 typed identity/request and all inherited gates remain open.
+
+
+### PR13 ordinary-library follow-up, 4 November 2026
+
+The ordinary baseline finished665/675 in751s; all ten failures were triaged. `fb29f1455` inlines
+seven fixed local AEAD range calls, preserving original messages, FMP/range checks and zero-event
+oracles when equal-D standalone helpers otherwise select IES assertion metadata. `f89bd4612`
+replaces retired kernel-consumer parity with active execution-claim-domain2 parity, retaining the
+full IV and every live tag check. `d7d6e4a8b` inlines pure Eidos/ECDSA/u64 leaves, retaining all
+public local scopes and event/deferred helpers, and records measured keyed-runtime clock snapshots.
+The four snapshots remain exact equality checks; the three real upper caps are unchanged. Crypto
+wrappers still carry overhead versus legacy execution; final performance qualification remains.
+
+Guarded affected82-case run passes78 correctness/rejection/witness/property controls; only four
+old exact clock expectations fail. After recording those measured values, the four reruns pass.
+All five original AEAD error oracles and active domain parity pass unchanged in strength. Thus all
+ten baseline failures are resolved by focused follow-up; a new whole675 pass is not claimed.
+Final four-crate all-target strict custom Clippy passes. Both generator checks and committed
+VM/PVM artifact drift checks pass without recompilation; root-stability policy tests pass. Logs:
+`.scratch/librarytree/pr13-{ordinary-checks,crypto-checks,final-cycle-checks,final-clippy,vm-generation-final-check,pvm-generation-final-check,root-stability}.log`.
+All source is committed and signatures verify. PR13 remains implemented-awaiting-validation;
+global D-indexed diagnostic variants and inherited debug/security/counterfactual/guest/fuzz/performance/
+final gates stay open. PR14 owns the fifteen request identity failures and final verifier/configuration
+compatibility qualification. No M1/general-goal completion, PR or push.
