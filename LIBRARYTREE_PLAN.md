@@ -380,7 +380,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Earlier normal private attempt stopped at three assembly errors, now resolved by PR09; fresh normal private/relocation/sidecar checks remain unrun, as do complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates |
-| 09 Assembly/packages | in-progress | Builder `235287733`; frontend `95761edcd`; graph `f36982d5a`; fixture `ee32f0956`; private package `80a1933d8`; earlier refs below; base `82935d673` | Independent reviews; builder63/frontend12/linker35/nested1/runtime-cycle7 pass; package223/one manual seed ignored, strict package Clippy/no_std; syntax317/strict Clippy; assembly library/no_std pass | D4 inline expansion and whole-assembly lint/tests pending; package9/admission, generic consumer-coupling audit, fresh normal processor checks and all inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Inline syntax `ff5784032`; implementation `72218ae6e`; tests `319d291ae`; earlier refs below; base `82935d673` | Independent reviews; inline13/identity12/builder63/linker35/cycles7/nested1 pass within configured-stack full run; syntax319 and strict syntax/assembly library/test Clippy pass; assembly no_std pass; prior package223/one ignored and package Clippy/no_std pass | Full assembly252 pass/230 fail/6 ignored:228 missing explicit namespace metadata, one obsolete diagnostic, one masked panic fixture. Package9/admission, project inputs, fresh normal processor and all inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -1751,3 +1751,36 @@ normal processor/relocation/sidecar checks, Protocol production inputs and all i
 remain. The original three assembly compiler errors are resolved, not a current blocker. No
 whole-stack/proof acceptance or GitHub publication is claimed. Documentation correction `2cb3757fc`
 retains D3 and was committed separately from implementation.
+
+
+### PR 09 Explicit inline validation and legacy fixture boundary
+
+`ff5784032` adds distinct Inline AST/sema metadata without changing runtime EXEC. All319 syntax
+unit tests and strict library/test Clippy pass. Implementation `72218ae6e` requires current-artifact
+source ownership or an explicit expected-ImplementationRoot pin attached to the concrete defining
+callable. Separate structural ordering rejects inline cycles while retaining mixed runtime recursion.
+It reuses compiled callee bodies, local-frame wrappers and source occurrence machinery; inner K values
+remain bound in callee context. Generic pin selection grants no Protocol admission.
+
+Independent ownership/graph and source/expansion reviews are clean after correcting a P2 provenance
+finding: complete static inventory import could replace the selected root's latest source occurrence
+with a sibling wrapper's decorated occurrence. Materialization now returns the selected MastNodeUse
+explicitly across inventory retention. Tests `319d291ae` cover eligibility, aliases, wrong/missing pins,
+cycles/rollback, mixed recursion, local frames, definition/source separation, no-debug/missing callsite
+and the exact static provenance regression. All13 pass; strict assembly library/test Clippy and
+no-default-features pass without the former implicit-inline warnings.
+
+The first bare full libtest run aborted on its default thread stack; Makefile155–165 explicitly sets
+16MiB. The configured-stack rerun finishes252 pass/230 fail/6 ignored. It includes passing builder63,
+identity12, linker35, runtime-cycle7 and nested fixture1. Read-only failure audit identifies228 missing
+explicit caller NamespacePlan failures, one outdated MAST-root-versus-procedure-key diagnostic and
+one expected-panic fixture stopped earlier by missing metadata. These setup failures mask later
+assertions: no broad MASM or nesting-boundary acceptance is claimed. Standard test-dev/nextest coverage
+remains pending. Logs: `pr09-inline-syntax-*`, `pr09-inline-frontend-tests-fourth`,
+`pr09-inline-assembly-*` and `pr09-full-assembly-lib-configured-stack` under the separate log directory;
+all Rust commands passed AC/heavy guards.
+
+Next work supplies explicit test-fixture naming independently from production inputs and investigates
+per-target project metadata. Do not add production default homes, infer authority from source aliases,
+replace runtime exec with inline, or suppress failed gates. Package9, D3 production fixtures and all
+inherited processor/proof/recursive/security/qualification gates remain; PR09 stays in progress.
