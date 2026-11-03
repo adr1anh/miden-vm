@@ -257,6 +257,9 @@ pub fn proven_security_estimator_root() -> Word {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(feature = "std", not(target_family = "wasm")))]
+    use alloc::format;
+
     use miden_core::program::Namespace;
     use miden_mast_package::{CallableProcedurePath, NamespacePlan};
     use miden_verifier::Verifier;
@@ -297,6 +300,261 @@ mod tests {
         .with_library_and_naming(core.package(), core.naming().clone());
         let (output, _) = test.execute_for_output().expect("owned core import must execute");
         assert_eq!(output.stack.get_element(0), Some(miden_core::Felt::from_u32(5)));
+    }
+
+    #[cfg(all(feature = "std", not(target_family = "wasm")))]
+    struct ExportedPackageFile(std::path::PathBuf);
+
+    #[cfg(all(feature = "std", not(target_family = "wasm")))]
+    impl ExportedPackageFile {
+        fn new(bytes: &[u8]) -> Self {
+            use core::sync::atomic::{AtomicUsize, Ordering};
+
+            static NEXT_EXPORT: AtomicUsize = AtomicUsize::new(0);
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let directory = std::env::temp_dir().join(format!(
+                "miden-core-package-{}-{timestamp}-{}",
+                std::process::id(),
+                NEXT_EXPORT.fetch_add(1, Ordering::Relaxed),
+            ));
+            std::fs::create_dir(&directory).unwrap();
+            let exported = Self(directory.join("miden-core.masp"));
+            std::fs::write(&exported.0, bytes).unwrap();
+            exported
+        }
+
+        fn read(&self) -> Package {
+            Package::deserialize_from_file(&self.0)
+                .expect("exported package must pass safe decoding")
+        }
+    }
+
+    #[cfg(all(feature = "std", not(target_family = "wasm")))]
+    impl Drop for ExportedPackageFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+            let _ = std::fs::remove_dir(self.0.parent().unwrap());
+        }
+    }
+
+    #[cfg(all(feature = "std", not(target_family = "wasm")))]
+    #[test]
+    fn exported_core_package_matches_embedded_execution() {
+        let core = CoreLibrary::default();
+        // This is the same complete artifact written by generate-package.
+        let file = ExportedPackageFile::new(CoreLibrary::SERIALIZED);
+        let imported = Arc::new(file.read());
+        imported.check_naming(core.naming()).unwrap();
+        assert_eq!(
+            imported.naming_transport().as_bytes(),
+            core.package.naming_transport().as_bytes()
+        );
+        assert_eq!(imported.mast_forest_commitment(), core.package.mast_forest_commitment());
+        assert_eq!(imported.mast_forest().advice_map(), core.mast_forest().advice_map());
+
+        let source = "use miden::core::math::u64\nbegin push.0.2.0.3 exec.u64::wrapping_add swap drop swap drop end";
+        let execute = |package| {
+            miden_utils_testing::Test::new("exported_core_import", source, false)
+                .with_library_and_naming(package, core.naming().clone())
+                .execute_for_output()
+                .expect("embedded and exported core imports must execute")
+                .0
+                .stack
+        };
+        let embedded_stack = execute(core.package());
+        assert_eq!(embedded_stack.get_element(0), Some(miden_core::Felt::from_u32(5)));
+        assert_eq!(execute(imported), embedded_stack);
+    }
+
+    #[cfg(all(feature = "std", not(target_family = "wasm")))]
+    #[test]
+    fn exported_core_package_retains_arbitrary_advice_and_private_callback() {
+        use miden_core::{
+            Felt, advice::AdviceMap, chiplets::hasher::hash_elements, serde::Serializable,
+        };
+        use miden_processor::ContextId;
+
+        const CALLBACK_PTR: u32 = 100;
+        const ALPHA_PTR: u32 = 1_000;
+        const OUTPUT_PTR: u32 = 2_000;
+        const RESULT_PTR: u32 = 3_000;
+
+        let core = CoreLibrary::default();
+        let path = callable_path(&["miden", "core", "sys", "vm", "ood_frames", "pipe_2"]);
+        let key = NamespacePlan::new(vec![]).callable_procedure_key(&path).unwrap();
+        let implementation = core.naming().callables().selected_implementation(key).unwrap();
+        let key = key.into_word();
+        let advice_key = Word::from([91_u32, 92, 93, 94]);
+        let values: Vec<_> = (1..=16).map(Felt::from_u32).collect();
+        assert_ne!(advice_key, hash_elements(&values), "the sentinel is arbitrary-key advice");
+        let mut advice = AdviceMap::default();
+        assert!(!core.mast_forest().advice_map().contains_key(&advice_key));
+        advice.insert(advice_key, values.clone());
+        let package = core.package.as_ref().clone().with_advice_map(advice);
+        let file = ExportedPackageFile::new(&package.to_bytes());
+        let imported = Arc::new(file.read());
+        imported.check_naming(core.naming()).unwrap();
+        assert_eq!(imported.mast_forest().advice_map().get(&advice_key).unwrap().as_ref(), &values);
+        assert!(
+            imported
+                .mast_forest()
+                .local_procedure_digests()
+                .any(|root| root == implementation.into_word())
+        );
+
+        let source = format!(
+            "use miden::core::math::u64
+            begin
+                # Enter the imported forest before requesting its package-owned advice.
+                push.0.2.0.3 exec.u64::wrapping_add swap drop swap drop drop
+                push.{k3}.{k2}.{k1}.{k0} mem_storew_le.{CALLBACK_PTR} dropw
+                push.{a3}.{a2}.{a1}.{a0} adv.push_mapval dropw
+                push.0.0.5.3 mem_storew_le.{ALPHA_PTR} dropw
+                push.9.7.{ALPHA_PTR}.{OUTPUT_PTR}
+                push.22.21.20.19 padw padw
+                push.{CALLBACK_PTR} dynexec
+                dropw dropw dropw
+                mem_store.{RESULT_PTR} mem_store.{result_alpha_ptr} drop drop
+            end",
+            k0 = key[0].as_canonical_u64(),
+            k1 = key[1].as_canonical_u64(),
+            k2 = key[2].as_canonical_u64(),
+            k3 = key[3].as_canonical_u64(),
+            a0 = advice_key[0].as_canonical_u64(),
+            a1 = advice_key[1].as_canonical_u64(),
+            a2 = advice_key[2].as_canonical_u64(),
+            a3 = advice_key[3].as_canonical_u64(),
+            result_alpha_ptr = RESULT_PTR + 1,
+        );
+        let test = miden_utils_testing::Test::new("exported_core_callback", &source, false)
+            .with_library_and_naming(imported, core.naming().clone());
+        assert!(test.advice_inputs.stack().is_empty());
+        assert!(test.advice_inputs.map().is_empty(), "advice must come only from the package");
+        let (output, _) = test.execute_for_output().expect("exported private pipe_2 must execute");
+        for (offset, expected) in values.iter().enumerate() {
+            assert_eq!(
+                output
+                    .memory
+                    .read_element(ContextId::root(), Felt::from_u32(OUTPUT_PTR + offset as u32))
+                    .unwrap(),
+                *expected,
+                "private pipe_2 must retain advice lane {offset}",
+            );
+        }
+        assert_eq!(
+            output
+                .memory
+                .read_element(ContextId::root(), Felt::from_u32(RESULT_PTR))
+                .unwrap(),
+            Felt::from_u32(OUTPUT_PTR + 16),
+        );
+        assert_eq!(
+            output
+                .memory
+                .read_element(ContextId::root(), Felt::from_u32(RESULT_PTR + 1))
+                .unwrap(),
+            Felt::from_u32(ALPHA_PTR),
+        );
+        assert!(output.advice.stack().is_empty(), "pipe_2 must consume exactly sixteen felts");
+    }
+
+    #[cfg(all(feature = "std", not(target_family = "wasm")))]
+    #[test]
+    fn declaration_only_caller_accepts_independently_selected_exported_implementations() {
+        use miden_assembly::{
+            Assembler, CallableBinding, CallableDeclaration, NamespaceInputs, Path,
+            ast::{Ident, Module},
+            debuginfo::DefaultSourceManager,
+        };
+        use miden_core::{
+            Felt,
+            mast::MastNode,
+            program::{CanonicalLabel, StackInputs},
+            serde::Serializable,
+        };
+        use miden_mast_package::TargetType;
+        use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor, advice::AdviceInputs};
+        use miden_utils_testing::librarytree::{
+            FixtureEnvironment, assemble_fixture_program, trace_limits,
+        };
+
+        let binding = CallableBinding::new(
+            NamespacePlan::new(vec![CanonicalLabel::text("core-packaging-fixture").unwrap()]),
+            callable_path(&["service", "answer"]),
+        )
+        .unwrap();
+        let source_manager = Arc::new(DefaultSourceManager::default());
+        let mut assembler = Assembler::new(source_manager.clone());
+        assembler
+            .link_callable_declarations(
+                Arc::from(Path::new("::supplied")),
+                [CallableDeclaration::new(Ident::new("answer").unwrap(), binding.clone())],
+            )
+            .unwrap();
+        let caller = assemble_fixture_program(
+            assembler,
+            "declaration_only_supply",
+            "use supplied\nbegin exec.supplied::answer end",
+            &[],
+        );
+        assert!(caller.naming.callables().selected_implementation(binding.key()).is_none());
+        assert!(caller.program.mast_forest().nodes().iter().any(
+            |node| matches!(node, MastNode::Exec(exec) if exec.target() == binding.key()),
+        ));
+
+        let mut previous = None;
+        for value in [29, 31] {
+            let module = Module::parser(None)
+                .parse_str(
+                    Some(Path::new("::supplied")),
+                    format!("namespace supplied\npub proc answer push.{value} swap drop end"),
+                    source_manager.clone(),
+                )
+                .unwrap();
+            let inputs = NamespaceInputs::new()
+                .with_namespace_plan(binding.namespace_plan().clone())
+                .with_callable_binding(Arc::from(Path::new("::supplied::answer")), binding.clone())
+                .unwrap();
+            let product = Assembler::new(source_manager.clone())
+                .with_namespace_inputs(inputs)
+                .assemble_library_modules("selected-supply".into(), module, [], TargetType::Library)
+                .unwrap();
+            let naming = product.naming().clone();
+            let package = product.into_artifact(true).unwrap();
+            let file = ExportedPackageFile::new(&package.to_bytes());
+            let imported = Arc::new(file.read());
+            imported.check_naming(&naming).unwrap();
+            let environment = FixtureEnvironment::new(
+                caller.naming.entry_key().unwrap(),
+                [caller.naming.as_ref(), &naming],
+            )
+            .unwrap();
+            let implementation = naming.callables().selected_implementation(binding.key()).unwrap();
+            let descriptor = environment.execution().descriptor();
+            assert_eq!(descriptor.entry_key(), caller.naming.entry_key().unwrap());
+            if let Some((previous_implementation, previous_environment)) = previous {
+                assert_ne!(implementation, previous_implementation);
+                assert_ne!(descriptor.environment_root(), previous_environment);
+            }
+            previous = Some((implementation, descriptor.environment_root()));
+
+            let mut host = DefaultHost::default()
+                .with_environment_source(environment.source())
+                .with_library(imported)
+                .unwrap();
+            let output = FastProcessor::new_with_options(
+                StackInputs::default(),
+                AdviceInputs::default(),
+                ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+            )
+            .unwrap()
+            .execute_sync(&caller.program, environment.execution(), &mut host)
+            .expect("the unchanged declaration-only caller must use the authorized supply");
+            assert_eq!(output.stack.get_element(0), Some(Felt::from_u32(value)));
+        }
     }
 
     #[test]
