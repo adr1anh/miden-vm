@@ -185,6 +185,12 @@ Extend the existing versioned execution witness with immutable descriptor, entry
 
 Before freezing Package9, deliver the focused D6/D8 correction in small commits on the current integration branch: core descriptor/verifier configuration, processor session/replay/witness, Library AIR/public-value interfaces and assembler syscall lowering/placement. Kernel tooling places public executable exports at root and private helpers beneath Env, without an extra syscall-export list. Revalidate affected contracts without rewriting historical stack commits or undertaking PR15a cleanup. Then split identity resolution from body supply, runtime reachability/SCCs from acyclic inline dependencies, and retain all public/helper/address-taken roots. Emit K for every retained invocation/procref; explicit inline alone composes a body. Activate validated namespaced package9 metadata and MAST0.0.6 together across trusted/safe readers, commitments and strip-debug. Replace root-centric Program/kernel reconstruction, root-call lowering and hardcoded `$kernel` authority rather than wrap them.
 
+Kernel item reexports preserve the defining canonical K and receive the same construction checks
+as direct exports. Remove old parser/linker bans based solely on kernel source roles while retaining
+ordinary visibility, module/item validity, conflicts and import-cycle checks. Public submodule
+exports are part of the public kernel surface; their canonical bindings belong at N0 even when
+their source paths have several components. Source aliases never manufacture a second binding.
+
 D7 selects model C: generic Package9 carries complete naming/callable/code information without own_library_id or own_interface_commitment fields; a separate publication/release wrapper owns the library/revision and profile-specific associations. Wrapper and package may be distributed together. IDs are supplied opaque Words, not inferred from homes, D, package names or readable aliases. This grants no publication admission: any selected profile must enforce its required identity/interface, publisher/home, release and closure evidence under D3. Implement the generic package and publication boundary without inventing external ReleaseRecord bytes. Missing required naming/code metadata still rejects. Preserve independent callable-root retention and the in-flight builder/frontend/graph work. Exact required naming must affect artifact commitments and deduplication/cache matching: equal D or source provenance with changed home/canonical binding cannot reuse old symbols or artifacts.
 
 D5 selects a standard assembler/project Latest/Pinned naming convention over these generic bindings, with an explicit custom-home/binding escape hatch. Preserve selected homes and callable identities without making the VM recognize path names. D6/D7 resolve the former kernel-input and code-only-package applicability questions; the convention and manifest routing remain unimplemented.
@@ -2199,3 +2205,32 @@ Guarded exact-source opening/session harness52 and actual-processor public-sourc
 native/source22, execution22 and witness10 pass, including full arbitrary-stack generation and
 exact replay-v5 budgets. These avoid the existing prover dev-dependency compile break and do not
 establish a passing normal processor suite or proof-system qualification.
+
+### Fixed-root runtime and assembler correction
+
+Runtime `87ed5d1b4` consistently checks N0 in session miss/cache, fast resolution and native Library
+trace validation. Replay removes the kernel Word, reduces the environment header176→144 bytes and
+uses witness version5, rejecting4. Caller `(K_entry, R_E)` authority, exact wire budgets and
+reauthentication remain. Independent review found no actionable issue. The preceding harness
+checks pass; public execution22/witness10 also pass with `testing,concurrent`. Strict production
+processor Clippy, test-inclusive runtime harness Clippy and no-default-features library check pass.
+
+Assembler `1615fc816` removes configurable kernel inputs/product plumbing and checks known SYS
+parents against N0; literal K remains runtime-authenticated without a kernel configuration input.
+Independent review and scoped assembler47 pass. Full assembly466 pass/43 existing missing-caller-
+home project failures/6 ignored; routing remains required. Signatures on these source commits,
+core/AIR commits above and documentation `2d00843a8` verify against the configured signing public
+key using a scratch allowed-signers file, without changing Git configuration.
+
+The D8 placement slice is reviewed but uncommitted: resolved public export keys at N0, nonexported
+retained concrete helpers beneath Env, foreign root dependencies allowed, no extra persisted list.
+Focused construction tests4 pass/one fails at the legacy parser ban on kernel reexports. Remove
+that source-role ban and migrate the same source regressions to canonical-key assertions before
+claiming acceptance. This expands the frontend portion of the existing PR09 correction; it does
+not authorize SYS through an alias or weaken visibility/cycle/parent checks.
+
+Optional interface transport Rust documentation now reflects revised D3/D7: opaque supplied I and
+external identity policy, with unchanged mandatory selected-profile callbacks. Generic Package9
+must not acquire publication requirements. Its future reader/admission boundary must keep current
+profile validation explicit rather than preserving context-free readers with a permissive profile.
+No Package9/native/recursive/generated closure or M1 completion is claimed.

@@ -48,13 +48,12 @@ macro_rules! word_role {
 }
 
 word_role! {
-    /// An opaque interface identity whose Protocol value is
-    /// `H_LIBRARY(publisher_id, name, interface_version)`.
+    /// An externally supplied opaque library identity.
     ///
-    /// Identity is independent of implementation bodies, private helpers, release revision and
-    /// pinned dependency choices. Public API or declared dynamic-dependency changes require a new
-    /// interface version; retained Latest dependencies remain dynamic across release revisions.
-    /// Wrapping a word does not derive or authenticate this value.
+    /// Identity derivation and interface policy belong to the selected external publication
+    /// profile. The Page prototype's publisher/name/interface-version formula is one proposed
+    /// profile contract, not a generic VM requirement. Wrapping a word neither derives nor
+    /// authenticates it, and generic code packages do not require their own library identity.
     LibraryId
 }
 
@@ -63,22 +62,23 @@ word_role! {
     DeclarationCommitment
 }
 
-/// Required Protocol identity, publisher, registration and closure checks.
+/// Required external-profile checks for this optional declaration transport.
 ///
-/// A production profile must derive or verify the Page-defined LibraryId from the canonical
-/// publisher-qualified descriptor using Protocol-owner identity bytes and the H_LIBRARY domain.
-/// Receiving an opaque typed ID does not permit arbitrary assignment. That identity hash/domain is
-/// separate from this generic declaration transport's numbered-v1 FeltSequence construction.
+/// Identity derivation and interface policy remain external. A selected production profile must
+/// supply and validate its owner-approved identity, publisher, association and closure semantics;
+/// this trait provides no defaults. The Page prototype's identity formula and permanent interface
+/// registration are not requirements for generic code-package compilation. Identity hashing is
+/// separate from this declaration transport's numbered-v1 FeltSequence construction.
 ///
 /// The declaration domain must be externally allocated by the Protocol owner for this exact
 /// construction. The generic codec checks its namespace and version, not allocation ownership or
 /// registry membership. There is no default domain, descriptor codec or policy.
 ///
-/// The generic transport commitment has not been validated as the Page's CommitLibInterface.
-/// Production adoption requires owner-approved encoding/domain mapping and full-closure projection
-/// fixtures, plus descriptor, identity-domain, home, registration and closure fixtures. Publisher,
-/// home and typed-ID validation remain required; test-only synthetic profiles do not clear these
-/// gates.
+/// This transport commitment does not establish a production interface commitment. Adoption needs
+/// owner-approved encoding/domain mappings and every applicable descriptor, identity, home,
+/// registration and authenticated-closure fixture. Publisher, home and typed-ID validation remain
+/// required by this transport; test-only profiles do not establish production acceptance. Generic
+/// code packages remain independent of this optional artifact and its publication profile.
 pub trait InterfaceProfile: TypedIdProfile {
     type DeclarationDomain: EidosDomain<Encoding = FeltSequence>;
 
@@ -87,21 +87,21 @@ pub trait InterfaceProfile: TypedIdProfile {
 
     /// Recognizes and validates the exact canonical publisher-qualified descriptor Q0.
     ///
-    /// A production descriptor must supply the publisher_id, name and interface_version needed to
-    /// derive or verify the Page-defined I. Q0 must exclude I, the declaration commitment and
-    /// association proofs.
+    /// The selected profile defines the descriptor's identity inputs and validates their exact
+    /// canonical representation. Q0 must exclude I, the declaration commitment and association
+    /// proofs; this transport does not freeze the profile's identity derivation.
     fn validate_publisher_descriptor(
         &self,
         context: &Self::Context,
         descriptor: &[u8],
     ) -> Result<(), Self::Error>;
 
-    /// Derives or verifies the Page-defined I and authenticates its permanent registration binding.
+    /// Validates I and the declaration association required by the selected external profile.
     ///
-    /// A production profile must authenticate the association of Q0 and I with the Page's
-    /// CommitLibInterface, and validate the owner-approved mapping from computed generic Cdecl to
-    /// that commitment. Canonical identity bytes/domain and mapping/registration fixtures are
-    /// mandatory owner inputs, not defaults supplied by this transport.
+    /// A production profile must enforce its approved identity derivation/verification and every
+    /// required association or registration check, including the mapping from generic Cdecl to
+    /// its interface commitment. Exact identity bytes/domains and association fixtures are external
+    /// owner inputs, not defaults supplied by this transport.
     fn validate_association(
         &self,
         context: &Self::Context,
@@ -112,11 +112,12 @@ pub trait InterfaceProfile: TypedIdProfile {
 
     /// Establishes complete transitive requirements from authenticated contributing declarations.
     ///
-    /// Both ID slices are strictly ordered by canonical Word bytes and exclude I. Here `closure`
-    /// stores external(I) = L(I) minus {I}; the Page's full L(I) includes I. A production profile
-    /// must reconstruct {I} union closure, validate its projection into the owner commitment and
-    /// establish authenticated completeness. The generic codec checks self exclusion and direct
-    /// inclusion, but cannot establish transitive completeness. Cycles are not forbidden.
+    /// Both ID slices are strictly ordered by canonical Word bytes and exclude I. This v1
+    /// transport stores the external transitive set. For the Page prototype this equals
+    /// external(I) = L(I) minus {I}, while full L(I) includes I; that equivalence does not freeze a
+    /// future profile's closure policy. A selected profile must validate its approved projection
+    /// and authenticated completeness. The codec checks self exclusion and direct inclusion but
+    /// cannot establish transitive completeness. Cycles are not forbidden.
     /// Authenticated contributing declarations and completeness evidence belong in `context`.
     /// Uncommitted tooling signatures are deliberately absent from these authority inputs.
     fn validate_dependency_closure(
