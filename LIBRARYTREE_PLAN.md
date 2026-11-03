@@ -387,8 +387,10 @@ Pinned(I,r):  base / Text("pinned") / LibraryId(I) / Revision(r) / module... / e
 These are typed labels, not source path strings or VM namespace classes. Preserve an explicit
 custom-home/callable-binding path; the standard convention does not restrict the generic API to
 these layouts. Existing MASM `use`, `exec`, `call` and `procref` spelling remains; import/project
-configuration selects bindings. Exact manifest fields, helper API names and default-selection UX
-are not frozen by this approval. In particular, raw NamespaceInputs still has no implicit N0 home.
+configuration selects bindings. **User clarification, 3 November 2026:** project dependencies
+must explicitly select Latest or Pinned; an omitted selection is an error, not implicit Latest.
+Explicit custom-home/callable bindings remain supported. Exact manifest fields and helper API
+names remain implementation design. Raw NamespaceInputs still has no implicit N0 home.
 
 LibraryId is supplied as an opaque Word to generic assembly; this convention supplies no identity
 hash or mandatory publisher/interface/registration metadata. Selected implementation D and code
@@ -396,7 +398,8 @@ supply do not enter K derivation. Namespace spelling alone does not authenticate
 the caller's authorized environment/expected bindings establish it. Changing a complete home
 requires relinking or an explicitly supported runtime-base mechanism, not silent relocation.
 Keep D4's inner runtime keys and every VM/security acceptance gate. D6/D7 below resolve kernel-input timing
-and code-only package identity/interface applicability; exact configuration/default-selection UX remains open.
+and code-only package identity/interface applicability; exact configuration fields remain open,
+while the explicit-selection requirement above is settled.
 
 This records an approved implementation direction for PR09/10; it does not claim a completed
 Latest/Pinned enum, project configuration, package9 format or Protocol profile.
@@ -463,7 +466,7 @@ acceptance checks have been migrated.
 | --- | --- | --- |
 | Generic VM/toolchain interchange | D1 fixes VM node preimages. D3 takes externally supplied opaque Word IDs; derivation/interface policy remains external and open. Optional readable-name maps/catalogs resolve before assembly. Audit mandatory InterfaceArtifact/Profile consumer coupling without weakening canonical/budget/malformed-input/code-root checks. | 04, 09–10, public API closure |
 | Frontend syntax and eligibility | D2 preserves existing MASM name/path/word syntax; D4 approves optional inline.<target> for local fixed bodies or explicitly pinned imports, rejecting Latest and structural cycles. Implement source-alias versus published-alias/wrapper behavior and diagnostics without changing inner runtime keys. | 04, 09 |
-| Standard namespace convention implementation | D5 approves standard assembler/project Latest/Pinned naming plus explicit custom bindings. Implement configuration/routing, metadata persistence and cache matching; exact fields/default-selection UX remain unfrozen. No new MASM import syntax, VM path interpretation, implicit N0 or generic ID/registry/interface-commitment requirement. | 09–10, public API closure |
+| Standard namespace convention implementation | D5 approves standard assembler/project Latest/Pinned naming plus explicit custom bindings. Implement configuration/routing, metadata persistence and cache matching; exact fields remain implementation design; omitted Latest/Pinned selection rejects. No new MASM import syntax, VM path interpretation, implicit N0 or generic ID/registry/interface-commitment requirement. | 09–10, public API closure |
 | Fixed-root kernel migration | D6 resolves kernel input: fixed N0, descriptor `(K_entry,R_E)` and revised claim40/Core36/Chiplets4. D8 fixes kernel tooling placement: public executable exports at root, private helpers beneath Env, no extra export list. Migrate descriptors/runtime/replay/assembler/AIR/public/verifier contracts and revalidate; retain trusted R_E, local parent checks and all acceptance gates. | 01, 05–09, 12–15 source/format/validation follow-up |
 | Package9/publication boundary implementation | D7 selects C: generic code package without own I/interface fields, separate publication/release wrapper. Retain complete callable/code/entry metadata and mandatory selected-profile validation; do not invent external wrapper bytes. | Package9 constructors/readers/admission; 09–10 |
 | Private reusable-instance ABI (deferred extension) | If later adopted, specify authenticated runtime-base transport and relative-key/procref lowering before claiming immutable randomized-instance support. Current explicit absolute homes still require final linking; no implicit relocation or caller-derived namespace. | Future optional ABI adoption only |

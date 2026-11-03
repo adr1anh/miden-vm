@@ -2,7 +2,7 @@
 
 This brief owns current handoff. [LIBRARYTREE_PLAN.md](LIBRARYTREE_PLAN.md) alone owns scope, dependencies, acceptance and durable evidence. `PR_DESCRIPTION.md` describes final branch review scope, never discovery.
 
-Verified source checkpoint 3 November 2026: branch `adr1anh/librarytree-09-keyed-packages`, HEAD `bee88c1af2cc3ffbd6852322a880f26190910f9a`, base `82935d6733278d871ab1f3f5a7e94f88b6e468d9`; documentation follows separately. Recheck Git/status. Root owns integration/docs/checks; bounded authors/reviewer finished, no Rust checks remain active, scratch is untracked.
+Verified source checkpoint 3 November 2026: branch `adr1anh/librarytree-09-keyed-packages`, HEAD `bee88c1af2cc3ffbd6852322a880f26190910f9a`, base `82935d6733278d871ab1f3f5a7e94f88b6e468d9`; documentation follows separately. Recheck Git/status. Root owns uncommitted prover, shared fixture and processor-host integration; bounded authors finished, review/checks are pending, scratch is untracked.
 
 **D6/D8:** actual SYSCALL requires authenticated immediate parent equal fixed `N0 = Namespace::initial()`. Public kernel exports occupy root, private helpers/applications child Env; no extra syscall-export list. List/Merkle preserve N. Preserve unique root names, canonical alias keys, invocation/context/principal conventions and caller/verifier-authorized R_E. Statement target remains new claim40/Core36/Chiplets4/deferred4 with legacy rejection.
 
@@ -12,8 +12,8 @@ The overall goal covers the full plan and qualification. **M1:** D6–D8 alignme
 
 Package code conversion now requires exact canonical naming and explicit entry K; no main-path fallback or embedded-kernel authorization. Assembly tracks kernel code presence without D lists. Processor package preparation checks entry K against the caller descriptor. Per-target namespace/cache selection retains exact names and resolved inputs; manual/inherited ASTs without complete snapshots cannot justify reuse. No implicit home/profile.
 
-Open dependency-default UX: Latest or explicit Latest/Pinned (recommend explicit). External production-profile inputs gate their integration alone.
+D5 clarification: dependencies require explicit Latest or Pinned selection; omission rejects. Explicit custom bindings remain supported. External production-profile inputs gate their integration alone.
 
-Fresh guarded checks: package289 pass/one ignored; standard assembly Nextest540 pass/6 skips; strict package/assembly test/bench and processor-library Clippy; all three no_std libraries pass. Four exact-source public processor API tests pass through the existing isolated harness. Normal processor test target still stops at two prover calls missing ExecutionEnvironment; no normal tests ran. Native/recursive/generated/final gates remain.
+Committed checkpoint checks: package289 pass/one ignored; standard assembly Nextest540 pass/6 skips; strict package/assembly test/bench and processor-library Clippy; all three no_std libraries pass. Four exact-source public processor API tests pass through the existing isolated harness. Normal processor test target still stops at two prover calls missing ExecutionEnvironment; no normal tests ran. Native/recursive/generated/final gates remain.
 
 Read plan PR09/10 and relevant invariants/D3–D8. Scratch findings index sources; reference cache `.scratch/librarytree/reference-cache/` preserves Page/date/SHA-256. Archives/logs/shared /tmp stay outside routine input. Fresh bounded agents need explicit ownership/instructions. Root runs AC/heavy guards and16MiB test stacks. No pushes or GitHub PRs.
