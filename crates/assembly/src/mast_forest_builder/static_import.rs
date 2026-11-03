@@ -8,8 +8,8 @@ use core::fmt::Debug;
 use miden_core::{
     Word,
     mast::{
-        BasicBlockNode, ExecutableMastForest, MastForest, MastNode, MastNodeExt, MastNodeId,
-        SubtreeIterator,
+        BasicBlockNode, CallNodeBuilder, ExecNodeBuilder, ExecutableMastForest, MastForest,
+        MastNode, MastNodeExt, MastNodeId, SubtreeIterator,
     },
 };
 use miden_mast_package::debug_info::{
@@ -34,9 +34,16 @@ struct StaticSourceRoot {
     source_debug_root_id: Option<DebugSourceNodeId>,
 }
 
+#[derive(Clone, Copy)]
 struct StaticLinkedRoot {
     root_id: MastNodeId,
     source: Option<StaticSourceRoot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum StaticInventoryKind {
+    CodeOnly,
+    ExactSource,
 }
 
 #[derive(Default)]
@@ -129,11 +136,49 @@ impl MastForestBuilder {
         child_uses: Vec<MastNodeUse>,
         source_metadata: Option<StaticSourceMetadata>,
     ) -> Result<MastNodeUse, Report> {
+        let mut expected_children = 0;
+        source_node.for_each_child(|_| expected_children += 1);
+        if child_uses.len() != expected_children {
+            return Err(Report::msg(format!(
+                "statically linked execution node has {} children, expected {expected_children}",
+                child_uses.len(),
+            )));
+        }
+        let invocation_digest = match &source_node {
+            MastNode::Exec(node) => Some(ExecNodeBuilder::new(node.target()).build().digest()),
+            MastNode::Call(node) => {
+                let builder = if node.is_syscall() {
+                    CallNodeBuilder::new_syscall(node.target())
+                } else {
+                    CallNodeBuilder::new(node.target())
+                };
+                Some(builder.build().digest())
+            },
+            _ => None,
+        };
+        if invocation_digest.is_some_and(|digest| digest != source_node.digest()) {
+            return Err(Report::msg(
+                "statically linked keyed invocation has a noncanonical digest",
+            ));
+        }
         let child_refs = child_uses.iter().copied().map(MastNodeUse::node_ref).collect();
         let source_child_refs =
             child_uses.iter().copied().map(MastNodeUse::source_ref).collect::<Vec<_>>();
         let StaticPendingDraft { draft, source_op_range } = self
             .pending_draft_for_statically_linked_source(source_node, child_refs, source_metadata);
+        if draft.kind.is_external()
+            && let Some(node_ref) = self.available_external_code_ref(draft.digest)?
+        {
+            // Record this source occurrence against the selected code's full pending identity,
+            // preserving its own metadata rather than interning another D-only placeholder.
+            let source_ref = self.record_static_source_occurrence(
+                node_ref,
+                Vec::new(),
+                &draft,
+                source_op_range,
+            )?;
+            return Ok(MastNodeUse::new(node_ref, source_ref));
+        }
         let dedup_key = self.dedup_key_for_pending_data(&draft);
         let node_ref =
             if let Some(node_ref) = self.find_reusable_node_ref_by_key(&dedup_key, &draft) {
@@ -224,11 +269,34 @@ impl MastForestBuilder {
             return self.copy_statically_linked_subtree_ref(linked_root);
         }
 
-        self.intern_pending_node(PendingMastNodeDraft::new(
-            PendingMastNodeKind::External,
-            mast_root,
-            Vec::new(),
-        ))
+        let draft = PendingMastNodeDraft::new(PendingMastNodeKind::External, mast_root, Vec::new());
+        if let Some(node_ref) = self.available_external_code_ref(mast_root)? {
+            // Availability is independent of the richer full interning key. Normalize the
+            // boundary against this selected node's own source data, never a same-D variant's.
+            self.record_source_occurrence(node_ref, Vec::new(), &draft)?;
+            return Ok(node_ref);
+        }
+        self.intern_pending_node(draft)
+    }
+
+    /// Selects structural External(D) code independently of full-key interning and procedure keys.
+    /// A concrete merged-static provider takes precedence; otherwise reuse the first locally
+    /// materialized concrete node. Provider selection alone never chooses diagnostic provenance.
+    fn available_external_code_ref(
+        &mut self,
+        mast_root: Word,
+    ) -> Result<Option<MastNodeRef>, Report> {
+        if let Some(root_id) = self.statically_linked_mast.find_procedure_root(mast_root)
+            && !self.statically_linked_mast[root_id].is_external()
+        {
+            return self
+                .copy_statically_linked_subtree_contents_ref(StaticLinkedRoot {
+                    root_id,
+                    source: None,
+                })
+                .map(Some);
+        }
+        Ok(self.concrete_node_ref_by_digest.get(&mast_root).copied())
     }
 
     fn find_statically_linked_root(
@@ -303,8 +371,109 @@ impl MastForestBuilder {
         }
     }
 
-    /// Copies a subtree from the statically linked forest into the builder's forest.
+    /// Copies the selected subtree and retains the supplied independently callable code
+    /// inventories.
     fn copy_statically_linked_subtree_ref(
+        &mut self,
+        linked_root: StaticLinkedRoot,
+    ) -> Result<MastNodeRef, Report> {
+        let root_ref = self.copy_statically_linked_subtree_contents_ref(linked_root)?;
+        let root_use = self
+            .latest_node_use(root_ref)
+            .expect("an imported execution root must have a source occurrence");
+        self.record_procedure_root_use(root_use);
+        self.retain_statically_linked_inventory(linked_root, root_ref)?;
+        Ok(root_ref)
+    }
+
+    /// Retains all explicitly supplied static inventories, independently of structural or keyed
+    /// edges.
+    fn retain_statically_linked_inventory(
+        &mut self,
+        linked_root: StaticLinkedRoot,
+        imported_root: MastNodeRef,
+    ) -> Result<(), Report> {
+        // Merging can resolve a structural External(D) using any supplied static forest. Retain
+        // their complete callable inventories so a resolved implementation's private roots remain
+        // available, without inferring dependencies or bindings from immediate procedure keys.
+        for forest_idx in 0..self.statically_linked_source_forests.len() {
+            // Only an exact source hint selects diagnostic provenance. All other inventories are
+            // code supply, including those whose roots satisfy merged structural externals.
+            let kind = if linked_root.source.is_some_and(|source| source.forest_idx == forest_idx) {
+                StaticInventoryKind::ExactSource
+            } else {
+                StaticInventoryKind::CodeOnly
+            };
+            if self.retained_static_inventories.contains(&(forest_idx, kind))
+                || (kind == StaticInventoryKind::CodeOnly
+                    && self
+                        .retained_static_inventories
+                        .contains(&(forest_idx, StaticInventoryKind::ExactSource)))
+            {
+                continue;
+            }
+            let source_forest = Arc::clone(&self.statically_linked_source_forests[forest_idx]);
+            for &source_root_id in source_forest.procedure_roots() {
+                let root_id = self
+                    .statically_linked_root_map
+                    .map_root(forest_idx, &source_root_id)
+                    .expect("every source procedure root must have a merged root");
+                if root_id == linked_root.root_id
+                    && (!self.nodes[imported_root].kind.is_external()
+                        || source_forest[source_root_id].is_external())
+                {
+                    // Reuse a concrete requested occurrence. An exact-source External(D) still
+                    // needs its concrete provider imported through the interner, even when both
+                    // original roots map to this same merged ID.
+                    continue;
+                }
+                let source_roots = if kind == StaticInventoryKind::ExactSource {
+                    self.statically_linked_package_debug_info[forest_idx]
+                        .as_ref()
+                        .map(|debug| {
+                            debug
+                                .source_roots_for_exec_node(source_root_id)
+                                .map(|(source_id, _)| Some(source_id))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+                let source_roots = if source_roots.is_empty() {
+                    vec![None]
+                } else {
+                    source_roots
+                };
+                for source_debug_root_id in source_roots {
+                    let source =
+                        (kind == StaticInventoryKind::ExactSource).then_some(StaticSourceRoot {
+                            forest_idx,
+                            source_root_id,
+                            source_debug_root_id,
+                        });
+                    // Copying contents never starts another inventory import, so this loop is not
+                    // reentrant. Interning still reuses execution nodes shared by multiple roots.
+                    let root_ref =
+                        self.copy_statically_linked_subtree_contents_ref(StaticLinkedRoot {
+                            root_id,
+                            source,
+                        })?;
+                    let root_use = self
+                        .latest_node_use(root_ref)
+                        .expect("an imported execution root must have a source occurrence");
+                    self.record_procedure_root_use(root_use);
+                }
+            }
+            // Partial imports can leave interned nodes behind, but must remain retryable. Only a
+            // completed inventory is cached; a later exact import may still add its source data.
+            self.retained_static_inventories.insert((forest_idx, kind));
+        }
+        Ok(())
+    }
+
+    /// Copies one structural subtree without discovering or retaining other callable roots.
+    fn copy_statically_linked_subtree_contents_ref(
         &mut self,
         linked_root: StaticLinkedRoot,
     ) -> Result<MastNodeRef, Report> {

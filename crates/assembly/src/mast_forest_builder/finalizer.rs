@@ -1,18 +1,23 @@
-use alloc::{boxed::Box, collections::BTreeMap, format, vec::Vec};
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    format,
+    vec::Vec,
+};
 use core::fmt::Debug;
 
 use miden_core::{
     advice::AdviceMap,
     mast::{
-        BasicBlockNode, BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder,
+        BasicBlockNode, BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder, ExecNodeBuilder,
         ExternalNodeBuilder, JoinNodeBuilder, LoopNodeBuilder, MastForest, MastForestContributor,
         MastForestError, MastNode, MastNodeBuilder, MastNodeId, SplitNodeBuilder,
     },
     utils::IndexVec,
 };
 use miden_mast_package::debug_info::{
-    DebugFunctionIdx, DebugInfoBuilder, DebugSourceAsmOp, DebugSourceInlineCall, DebugSourceNodeId,
-    DebugSourceVar, PackageDebugInfo, PackageDebugInfoBuilder, SourceNode,
+    DebugFunctionIdx, DebugInfo, DebugInfoBuilder, DebugSourceAsmOp, DebugSourceInlineCall,
+    DebugSourceNodeId, DebugSourceVar, PackageDebugInfo, PackageDebugInfoBuilder, SourceNode,
 };
 
 use super::{
@@ -89,6 +94,8 @@ pub(super) enum MastForestBuilderError {
         source_ref: SourceNodeRef,
         child_ref: SourceNodeRef,
     },
+    #[error("source occurrence {source_ref} belongs to a cyclic source graph")]
+    CyclicSourceGraph { source_ref: SourceNodeRef },
     #[error(
         "source occurrence {source_ref} references execution node {exec_ref} before it was finalized"
     )]
@@ -96,6 +103,8 @@ pub(super) enum MastForestBuilderError {
         source_ref: SourceNodeRef,
         exec_ref: MastNodeRef,
     },
+    #[error("keyed invocation source occurrence {source_ref} has {actual} children, expected 0")]
+    InvalidInvocationSourceChildCount { source_ref: SourceNodeRef, actual: usize },
     #[error("failed to add source occurrence {source_ref}: {source}")]
     AddSourceNode {
         source_ref: SourceNodeRef,
@@ -219,16 +228,8 @@ impl MastForestFinalizer {
         let tables = source_debug_info
             .merge_tables_into(&mut debug_info)
             .map_err(|error| Report::msg(format!("{error}")))?;
-        let live_source_refs = source_debug_info
-            .nodes()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, source_node)| {
-                node_id_by_ref
-                    .contains_key(&source_node.exec_node)
-                    .then_some(SourceNodeRef::from(index as u32))
-            })
-            .collect::<Vec<_>>();
+        let live_source_refs = source_refs_in_child_first_order(&source_debug_info, node_id_by_ref)
+            .map_err(Report::new)?;
 
         let mut source_id_by_ref = BTreeMap::new();
         for &source_ref in &live_source_refs {
@@ -245,6 +246,17 @@ impl MastForestFinalizer {
                         exec_ref: pending_source_node.exec_node,
                     })
                 })?;
+            let node = &mast_forest[exec_node];
+            if matches!(node, MastNode::Exec(_) | MastNode::Call(_))
+                && !pending_source_node.children.is_empty()
+            {
+                return Err(Report::new(
+                    MastForestBuilderError::InvalidInvocationSourceChildCount {
+                        source_ref,
+                        actual: pending_source_node.children.len(),
+                    },
+                ));
+            }
             let children = pending_source_node
                 .children
                 .iter()
@@ -257,7 +269,6 @@ impl MastForestFinalizer {
                     })
                 })
                 .collect::<Result<Vec<_>, Report>>()?;
-            let node = &mast_forest[exec_node];
             let (_, asm_op_indices) = compute_operations_and_adjust_mappings(
                 node,
                 pending_source_node
@@ -403,6 +414,60 @@ impl MastForestFinalizer {
     }
 }
 
+/// External replacement can give an older source occurrence newly allocated children. Order the
+/// retained DAG explicitly instead of treating allocation order as structural order. Kahn's walk is
+/// stack-safe, with original source refs breaking ties deterministically.
+fn source_refs_in_child_first_order(
+    debug_info: &DebugInfo<MastNodeRef, SourceNodeRef>,
+    node_id_by_ref: &BTreeMap<MastNodeRef, MastNodeId>,
+) -> Result<Vec<SourceNodeRef>, MastForestBuilderError> {
+    let mut remaining_children = debug_info
+        .nodes()
+        .iter()
+        .enumerate()
+        .filter_map(|(index, source)| {
+            node_id_by_ref
+                .contains_key(&source.exec_node)
+                .then_some((SourceNodeRef::from(index as u32), source.children.len()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut parents = BTreeMap::<SourceNodeRef, Vec<SourceNodeRef>>::new();
+    let mut ready = BTreeSet::new();
+    for (&source_ref, &count) in &remaining_children {
+        if count == 0 {
+            ready.insert(source_ref);
+        }
+        for &child_ref in &debug_info[source_ref].children {
+            if !remaining_children.contains_key(&child_ref) {
+                return Err(MastForestBuilderError::MissingFinalSourceChild {
+                    source_ref,
+                    child_ref,
+                });
+            }
+            parents.entry(child_ref).or_default().push(source_ref);
+        }
+    }
+    let mut ordered = Vec::with_capacity(remaining_children.len());
+    while let Some(source_ref) = ready.pop_first() {
+        ordered.push(source_ref);
+        for parent in parents.get(&source_ref).into_iter().flatten() {
+            let count = remaining_children.get_mut(parent).expect("a parent must be retained");
+            *count -= 1;
+            if *count == 0 {
+                ready.insert(*parent);
+            }
+        }
+    }
+    if ordered.len() != remaining_children.len() {
+        let source_ref = remaining_children
+            .into_iter()
+            .find_map(|(source_ref, count)| (count != 0).then_some(source_ref))
+            .expect("a cyclic source graph must leave a blocked occurrence");
+        return Err(MastForestBuilderError::CyclicSourceGraph { source_ref });
+    }
+    Ok(ordered)
+}
+
 fn remapped<K, V>(mapped: Option<V>, index: K, table: &str) -> Result<V, Report>
 where
     K: Debug,
@@ -457,15 +522,18 @@ fn build_pending_node_with_final_ids(
             let [body] = final_child_ids::<1>(node_ref, pending_node, final_node_id_by_ref)?;
             MastNodeBuilder::Loop(LoopNodeBuilder::new(body).with_digest(pending_node.digest))
         },
-        PendingMastNodeKind::Call { is_syscall } => {
-            ensure_child_count(node_ref, pending_node, 1)?;
-            let [callee] = final_child_ids::<1>(node_ref, pending_node, final_node_id_by_ref)?;
+        PendingMastNodeKind::Exec { target } => {
+            ensure_child_count(node_ref, pending_node, 0)?;
+            MastNodeBuilder::Exec(ExecNodeBuilder::new(*target))
+        },
+        PendingMastNodeKind::Call { target, is_syscall } => {
+            ensure_child_count(node_ref, pending_node, 0)?;
             let builder = if *is_syscall {
-                CallNodeBuilder::new_syscall(callee)
+                CallNodeBuilder::new_syscall(*target)
             } else {
-                CallNodeBuilder::new(callee)
+                CallNodeBuilder::new(*target)
             };
-            MastNodeBuilder::Call(builder.with_digest(pending_node.digest))
+            MastNodeBuilder::Call(builder)
         },
         PendingMastNodeKind::Dyn { is_dyncall } => {
             ensure_child_count(node_ref, pending_node, 0)?;
