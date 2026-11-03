@@ -4,7 +4,10 @@ use alloc::collections::BTreeMap;
 
 use miden_core::program::{ImplementationRoot, ProcedureKey};
 
-use crate::{CallableBinding, CallableProcedurePath};
+use crate::{
+    CallableBinding, CallableProcedurePath,
+    interface::serialization::{Budget, CodecError, CodecLimits, HomeProfile, checked_add},
+};
 
 /// An in-memory inventory of named callables, independently of selected code and source aliases.
 ///
@@ -20,9 +23,9 @@ use crate::{CallableBinding, CallableProcedurePath};
 ///
 /// This detached inventory is not a serialized package, interface or release artifact. Library
 /// identity, executable entry selection and authorized full kernel paths remain requirements of
-/// their respective artifact/configuration containers. A future admission operation must use
-/// explicit caller-supplied profile, context and aggregate resource bounds; validating each home
-/// with a fresh budget does not bound the complete inventory.
+/// their respective artifact/configuration containers. [`Self::validate_homes`] checks explicit
+/// caller-supplied home policy and aggregate owned-data bounds. Full artifact admission, including
+/// future wire-format validation, remains a separate container operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageCallables {
     bindings: BTreeMap<ProcedureKey, CallableBinding>,
@@ -77,6 +80,85 @@ impl PackageCallables {
         })
     }
 
+    /// Revalidates every binding home and bounds this inventory's aggregate owned logical data.
+    ///
+    /// Every invocation uses the supplied profile and context afresh, including for empty N0
+    /// homes and bindings without visible aliases or selected implementations. The context owns
+    /// the evidence associating each complete home with the caller; no default policy is used.
+    /// Repeated owned homes are counted and checked separately.
+    ///
+    /// All three relations share the caller's finite [`CodecLimits`]:
+    /// - `max_bytes` counts one 32-byte K per binding and visible alias, 32-byte K plus 32-byte D
+    ///   per implementation selection, complete stored home-label envelopes, and exact UTF-8 bytes
+    ///   of every canonical and visible path component, including final procedure names.
+    /// - `max_records` counts bindings, visible aliases, implementation selections and home labels.
+    /// - `max_components` counts home labels and every canonical and visible path component.
+    /// - `max_blob_bytes` counts home-label payloads, including TypedId codec numbers, and the same
+    ///   path UTF-8 bytes. Each owned occurrence is charged once.
+    ///
+    /// This byte measure includes no hypothetical wire framing, cached derived keys/namespaces,
+    /// capacities or allocator overhead; it is not an allocator/RSS guarantee or a wire format.
+    /// All aggregate bounds are checked before any external profile callback.
+    ///
+    /// Success retains no validation state. It checks only TypedId/home policy and these resource
+    /// bounds, without admitting an artifact, establishing library/entry/kernel metadata,
+    /// authenticating a K-to-D binding, proving code availability or granting Protocol admission.
+    pub fn validate_homes<P: HomeProfile + ?Sized>(
+        &self,
+        profile: &P,
+        context: &P::Context,
+        limits: CodecLimits,
+    ) -> Result<(), CodecError<P::Error>> {
+        self.validate_homes_with_budget(profile, context, &mut Budget::new(limits))
+    }
+
+    /// Uses an enclosing operation's budget without resetting any resource consumption.
+    ///
+    /// This charges the same owned data as `validate_homes`; an enclosing wire codec must also
+    /// check its complete wire input/output and required container metadata. On error, callers
+    /// must abort their operation rather than treating partially checked data as validated.
+    pub(crate) fn validate_homes_with_budget<P: HomeProfile + ?Sized>(
+        &self,
+        profile: &P,
+        context: &P::Context,
+        budget: &mut Budget,
+    ) -> Result<(), CodecError<P::Error>> {
+        budget.records(self.bindings.len())?;
+        budget.records(self.visible_paths.len())?;
+        budget.records(self.selected_implementations.len())?;
+
+        let mut home_blob_bytes = 0;
+        for binding in self.bindings.values() {
+            budget.logical_bytes(32)?;
+            let home = binding.namespace_plan().home();
+            budget.records(home.len())?;
+            budget.components(home.len())?;
+            for label in home {
+                let bytes = label.as_bytes().len();
+                budget.logical_bytes(bytes)?;
+                home_blob_bytes = checked_add(home_blob_bytes, bytes - 6, "blob bytes")?;
+            }
+            charge_path_resources(binding.path(), budget)?;
+        }
+        for path in self.visible_paths.keys() {
+            budget.logical_bytes(32)?;
+            charge_path_resources(path, budget)?;
+        }
+        for _ in self.selected_implementations.values() {
+            budget.logical_bytes(64)?;
+        }
+        // Paths were charged above. Home payloads are only checked here, then charged exactly
+        // once by the shared HomeV1 contents validator while revalidating external policy.
+        budget.check_blob_bytes(home_blob_bytes)?;
+
+        for binding in self.bindings.values() {
+            binding
+                .namespace_plan()
+                .validate_home_contents_with_budget(profile, context, budget)?;
+        }
+        Ok(())
+    }
+
     /// Iterates over every declaration in key order, without defining a wire encoding.
     pub fn bindings(&self) -> impl ExactSizeIterator<Item = (&ProcedureKey, &CallableBinding)> {
         self.bindings.iter()
@@ -118,6 +200,18 @@ impl PackageCallables {
     }
 }
 
+fn charge_path_resources<E>(
+    path: &CallableProcedurePath,
+    budget: &mut Budget,
+) -> Result<(), CodecError<E>> {
+    budget.components(path.components().len())?;
+    for component in path.components() {
+        budget.logical_bytes(component.len())?;
+        budget.blob_bytes(component.len())?;
+    }
+    Ok(())
+}
+
 /// Duplicate inventory entries or references to undeclared callable keys.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PackageCallablesError {
@@ -135,6 +229,5 @@ pub enum PackageCallablesError {
     #[error("implementation selection refers to undeclared callable key {key:?}")]
     UnknownImplementationTarget { key: ProcedureKey },
 }
-
 #[cfg(test)]
 mod tests;

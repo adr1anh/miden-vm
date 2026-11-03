@@ -67,12 +67,7 @@ impl NamespacePlan {
             byte_len = checked_add(byte_len, label.as_bytes().len(), "HomeV1 bytes")?;
         }
         budget.wire_bytes(byte_len)?;
-        for label in self.home() {
-            validate_label(label, &mut budget, profile, context)?;
-        }
-        profile.validate_home(context, self.home()).map_err(|error| {
-            CodecError::ProfileRejected { operation: ProfileOperation::Home, error }
-        })?;
+        self.validate_home_contents_with_budget(profile, context, &mut budget)?;
         let mut writer = Writer::new(byte_len, &budget)?;
         writer.u8(1)?;
         writer.u32(count)?;
@@ -80,6 +75,27 @@ impl NamespacePlan {
             writer.bytes(label.as_bytes())?;
         }
         writer.finish()
+    }
+
+    /// Revalidates label payloads and the complete home using the caller's ongoing budget.
+    ///
+    /// The caller accounts for records, components and its operation's outer byte measure. Each
+    /// home-label payload is charged here exactly once, including a TypedId's codec number.
+    pub(crate) fn validate_home_contents_with_budget<P: HomeProfile + ?Sized>(
+        &self,
+        profile: &P,
+        context: &P::Context,
+        budget: &mut Budget,
+    ) -> Result<(), CodecError<P::Error>> {
+        for label in self.home() {
+            validate_label(label, budget, profile, context)?;
+        }
+        profile
+            .validate_home(context, self.home())
+            .map_err(|error| CodecError::ProfileRejected {
+                operation: ProfileOperation::Home,
+                error,
+            })
     }
 }
 

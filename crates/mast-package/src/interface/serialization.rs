@@ -8,14 +8,19 @@ use core::{alloc::Layout, fmt};
 
 use miden_core::{Felt, program::CanonicalLabel, serde::DeserializationError};
 
-/// Caller-selected finite logical resource bounds for one complete encode/decode operation.
+/// Caller-selected finite logical resource bounds for one complete profile-bound operation.
 ///
-/// `max_bytes` bounds the complete wire input/output, including framing. `max_records` bounds
-/// aggregate records (home labels, public declarations, and direct/closure IDs). `max_components`
-/// bounds aggregate canonical labels in homes and public paths. `max_blob_bytes` bounds aggregate
-/// label payload bytes, publisher descriptor bytes, and present ABI bytes; label headers and
-/// length prefixes are charged only to `max_bytes`. Thus a home label charges both a record and a
-/// component, and its complete payload (including a TypedId codec number) charges blob bytes.
+/// For interface/HomeV1 codecs, `max_bytes` bounds the complete wire input/output, including
+/// framing. `max_records` bounds aggregate records (home labels, public declarations, and
+/// direct/closure IDs). `max_components` bounds aggregate canonical labels in homes and public
+/// paths. `max_blob_bytes` bounds aggregate label payload bytes, publisher descriptor bytes, and
+/// present ABI bytes; label headers and length prefixes are charged only to `max_bytes`. Thus a
+/// home label charges both a record and a component, and its complete payload (including a
+/// TypedId codec number) charges blob bytes.
+///
+/// [`crate::PackageCallables::validate_homes`] instead bounds its documented aggregate owned
+/// logical data, including every binding, visible alias, and implementation selection. Its byte
+/// measure defines no inventory wire format and does not change the codecs' wire-byte bounds.
 ///
 /// All four limits are explicit finite u32 values. Zero is permitted and there is no unlimited
 /// sentinel or default. These are logical work/size bounds, not an allocator or RSS guarantee:
@@ -133,6 +138,7 @@ pub enum CodecError<E> {
 
 pub(crate) struct Budget {
     limits: CodecLimits,
+    logical_bytes: usize,
     records: usize,
     components: usize,
     blob_bytes: usize,
@@ -142,6 +148,7 @@ impl Budget {
     pub(crate) fn new(limits: CodecLimits) -> Self {
         Self {
             limits,
+            logical_bytes: 0,
             records: 0,
             components: 0,
             blob_bytes: 0,
@@ -150,6 +157,10 @@ impl Budget {
 
     pub(crate) fn wire_bytes<E>(&self, actual: usize) -> Result<(), CodecError<E>> {
         check_limit("wire bytes", actual, self.limits.max_bytes)
+    }
+
+    pub(crate) fn logical_bytes<E>(&mut self, count: usize) -> Result<(), CodecError<E>> {
+        charge("logical bytes", &mut self.logical_bytes, count, self.limits.max_bytes)
     }
 
     pub(crate) fn records<E>(&mut self, count: usize) -> Result<(), CodecError<E>> {
@@ -162,6 +173,10 @@ impl Budget {
 
     pub(crate) fn blob_bytes<E>(&mut self, count: usize) -> Result<(), CodecError<E>> {
         charge("blob bytes", &mut self.blob_bytes, count, self.limits.max_blob_bytes)
+    }
+
+    pub(crate) fn check_blob_bytes<E>(&self, count: usize) -> Result<(), CodecError<E>> {
+        check_charge("blob bytes", self.blob_bytes, count, self.limits.max_blob_bytes).map(|_| ())
     }
 }
 
@@ -179,10 +194,19 @@ fn charge<E>(
     count: usize,
     limit: u32,
 ) -> Result<(), CodecError<E>> {
+    *used = check_charge(resource, *used, count, limit)?;
+    Ok(())
+}
+
+fn check_charge<E>(
+    resource: &'static str,
+    used: usize,
+    count: usize,
+    limit: u32,
+) -> Result<usize, CodecError<E>> {
     let total = used.checked_add(count).ok_or(CodecError::LengthOverflow(resource))?;
     check_limit(resource, total, limit)?;
-    *used = total;
-    Ok(())
+    Ok(total)
 }
 
 pub(crate) fn wire_len<E>(len: usize, kind: &'static str) -> Result<u32, CodecError<E>> {
