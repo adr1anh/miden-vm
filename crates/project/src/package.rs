@@ -423,6 +423,9 @@ impl Package {
                                 .collect::<Result<Vec<_>, _>>().map(Span::unknown)
                         }).transpose()?;
                         let name = Span::unknown(dep.name().clone());
+                        let package = dep.explicit_package()
+                            .map(|package| Span::unknown(package.clone().into_inner()));
+                        let source_mount = dep.source_mount().map(|mount| Span::unknown(mount.into()));
                         let linkage = if matches!(dep.linkage(), Linkage::Dynamic) {
                             None
                         } else {
@@ -431,6 +434,8 @@ impl Package {
                         let spec = match dep.scheme() {
                             DependencyVersionScheme::Workspace { .. } => ast::DependencySpec {
                                 name: name.clone(),
+                                package: package.clone(),
+                                source_mount: source_mount.clone(),
                                 version_or_digest: None,
                                 workspace: true,
                                 path: None,
@@ -444,6 +449,8 @@ impl Package {
                             DependencyVersionScheme::WorkspacePath { path, version } => {
                                 ast::DependencySpec {
                                     name: name.clone(),
+                                    package: package.clone(),
+                                    source_mount: source_mount.clone(),
                                     version_or_digest: version.clone(),
                                     workspace: false,
                                     path: Some(path.clone()),
@@ -457,6 +464,8 @@ impl Package {
                             },
                             DependencyVersionScheme::Registry(req) => ast::DependencySpec {
                                 name: name.clone(),
+                                package: package.clone(),
+                                source_mount: source_mount.clone(),
                                 version_or_digest: Some(req.clone()),
                                 workspace: false,
                                 path: None,
@@ -470,6 +479,8 @@ impl Package {
                             DependencyVersionScheme::Path { path, version } => {
                                 ast::DependencySpec {
                                     name: name.clone(),
+                                    package: package.clone(),
+                                    source_mount: source_mount.clone(),
                                     version_or_digest: version.clone(),
                                     workspace: false,
                                     path: Some(path.clone()),
@@ -492,6 +503,8 @@ impl Package {
                                 };
                                 ast::DependencySpec {
                                     name: name.clone(),
+                                    package: package.clone(),
+                                    source_mount: source_mount.clone(),
                                     version_or_digest: version.as_ref().map(|spanned| {
                                         VersionRequirement::from(spanned.inner().clone())
                                     }),

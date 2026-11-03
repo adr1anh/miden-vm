@@ -5,6 +5,7 @@ use alloc::{format, sync::Arc, vec};
 use core::fmt;
 
 use miden_assembly_syntax::debuginfo::Spanned;
+use miden_mast_package::PackageId;
 pub use miden_package_registry::{SemVer, Version, VersionReq, VersionRequirement};
 
 #[cfg(all(feature = "std", feature = "serde"))]
@@ -35,8 +36,12 @@ impl DependencyBinding {
 /// Represents a project/package dependency declaration
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dependency {
-    /// The name of the dependency.
+    /// The source alias (the dependency table key), independent of package provenance.
     name: Span<Arc<str>>,
+    /// The package name requested from the selected source or registry.
+    package: PackageId,
+    /// Retains an explicit same-name override when serializing workspace inheritance.
+    package_explicit: bool,
     /// The version requirement and resolution scheme for this dependency.
     version: DependencyVersionScheme,
     /// The linkage for this dependency
@@ -45,22 +50,55 @@ pub struct Dependency {
     binding: Option<DependencyBinding>,
     /// Independently expected complete public mapping, separate from the default-home choice.
     expected_callables: Option<crate::ExpectedVisibleCallables>,
+    /// Explicit source lookup projection, independent of runtime binding and supply.
+    source_mount: Option<crate::PackageSourceMount>,
 }
 
 impl Dependency {
-    /// Construct a new [Dependency] with the given name and version scheme
-    pub const fn new(
-        name: Span<Arc<str>>,
-        version: DependencyVersionScheme,
-        linkage: Linkage,
-    ) -> Self {
+    /// Construct a dependency whose source alias also names the requested package.
+    pub fn new(name: Span<Arc<str>>, version: DependencyVersionScheme, linkage: Linkage) -> Self {
         Self {
+            package: PackageId::from(name.inner().clone()),
+            package_explicit: false,
             name,
             version,
             linkage,
             binding: None,
             expected_callables: None,
+            source_mount: None,
         }
+    }
+
+    /// Selects the requested package without changing its source alias or runtime naming.
+    pub fn with_package(mut self, package: impl Into<PackageId>) -> Self {
+        self.package = package.into();
+        self.package_explicit = true;
+        self
+    }
+
+    /// Returns the requested package name, used only for source and registry resolution.
+    pub fn package(&self) -> &PackageId {
+        &self.package
+    }
+
+    /// Returns whether the source alias differs from the requested package name.
+    pub fn is_aliased(&self) -> bool {
+        self.alias().as_ref() != &*self.package
+    }
+
+    #[cfg(feature = "serde")]
+    pub(crate) fn explicit_package(&self) -> Option<&PackageId> {
+        self.package_explicit.then_some(&self.package)
+    }
+
+    /// Selects an explicit source lookup projection without changing canonical callable keys.
+    pub fn with_source_mount(mut self, mount: crate::PackageSourceMount) -> Self {
+        self.source_mount = Some(mount);
+        self
+    }
+
+    pub fn source_mount(&self) -> Option<&crate::PackageSourceMount> {
+        self.source_mount.as_ref()
     }
 
     /// Sets an explicit standard or custom runtime home without changing source resolution.
@@ -83,9 +121,14 @@ impl Dependency {
         self.expected_callables.as_ref()
     }
 
-    /// Get the name of this dependency
-    pub fn name(&self) -> &Arc<str> {
+    /// Get the source alias of this dependency.
+    pub fn alias(&self) -> &Arc<str> {
         &self.name
+    }
+
+    /// Get the source alias of this dependency.
+    pub fn name(&self) -> &Arc<str> {
+        self.alias()
     }
 
     /// Get the versioning scheme/requirement for this dependency

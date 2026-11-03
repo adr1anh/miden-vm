@@ -420,10 +420,24 @@ impl ProjectFile {
                                     ExpectedCallableSpec::resolve_all_with_catalog(specs, catalog)
                                 })
                                 .transpose()?;
-                            let mut resolved = Dependency::new(dep.name.clone(), version, linkage)
-                                .with_binding(binding);
+                            let package = dependency.package.as_deref().or(dep.package.as_deref());
+                            let source_mount = dependency
+                                .source_mount
+                                .as_deref()
+                                .or(dep.source_mount.as_deref())
+                                .map(|mount| mount.resolve())
+                                .transpose()?;
+                            let mut resolved =
+                                Dependency::new(dependency.name.clone(), version, linkage)
+                                    .with_binding(binding);
+                            if let Some(package) = package {
+                                resolved = resolved.with_package(package.clone());
+                            }
                             if let Some(expected) = expected {
                                 resolved = resolved.with_expected_callables(expected);
+                            }
+                            if let Some(mount) = source_mount {
+                                resolved = resolved.with_source_mount(mount);
                             }
                             dependencies.push(resolved);
                         },
@@ -453,6 +467,12 @@ impl ProjectFile {
                     linkage,
                 ).with_binding(dependency.binding.as_ref().ok_or_else(|| Report::msg(format!(
                     "dependency '{}' requires an explicit Latest/Pinned binding or custom home", dependency.name)))?.resolve_with_catalog(catalog)?);
+                if let Some(package) = dependency.package.as_deref() {
+                    resolved = resolved.with_package(package.clone());
+                }
+                if let Some(mount) = dependency.source_mount.as_deref() {
+                    resolved = resolved.with_source_mount(mount.resolve()?);
+                }
                 if let Some(specs) = dependency.expected_callables.as_deref() {
                     resolved = resolved.with_expected_callables(
                         ExpectedCallableSpec::resolve_all_with_catalog(specs, catalog)?,

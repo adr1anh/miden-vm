@@ -28,72 +28,49 @@ use crate::{
     Dependency, DependencyVersionScheme, GitRevision, Linkage, Package, SemVer, VersionRequirement,
 };
 
-/// The [ProjectDependencyGraph] represents a materialized dependency graph rooted at a specific
-/// package.
-///
-/// Each node in the graph corresponds to a specific package version, and describes:
-///
-/// * What packages it depends on, and with what linkage
-/// * The provenance of the package, i.e. whether the package was sourced from a pre-assembled
-///   artifact on the local filesystem; assembled from source that is present on the local
-///   filesystem (and where those sources came from); or was fetched from the package registry.
-///
-/// The assembler uses this dependency graph both for validation, and to ensure that all
-/// dependencies of a package are properly linked.
-///
-/// See [ProjectDependencyGraphBuilder] for more details on constructing a [ProjectDependencyGraph].
+/// A graph-local resolution/build slot. This has no published or callable identity.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DependencyInstanceId(usize);
+
+impl core::fmt::Display for DependencyInstanceId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "instance-{}", self.0)
+    }
+}
+
+/// A materialized dependency graph, rooted at a graph-local package instance.
+/// Package provenance and public registry identities remain node data. Distinct aliases and
+/// explicit binding contexts can therefore retain separate selections of the same package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDependencyGraph {
-    root: PackageId,
-    nodes: BTreeMap<PackageId, ProjectDependencyNode>,
+    root: DependencyInstanceId,
+    nodes: BTreeMap<DependencyInstanceId, ProjectDependencyNode>,
 }
 
 impl ProjectDependencyGraph {
-    /// Get the package identifier of the root package
-    pub fn root(&self) -> &PackageId {
+    pub fn root(&self) -> &DependencyInstanceId {
         &self.root
     }
 
-    /// Get the nodes of the underlying graph
-    pub fn nodes(&self) -> &BTreeMap<PackageId, ProjectDependencyNode> {
+    pub fn nodes(&self) -> &BTreeMap<DependencyInstanceId, ProjectDependencyNode> {
         &self.nodes
     }
 
-    /// Get the node corresponding to `package`
-    pub fn get(&self, package: &PackageId) -> Option<&ProjectDependencyNode> {
-        self.nodes.get(package)
-    }
-
-    fn insert_node(&mut self, node: ProjectDependencyNode) -> Result<bool, Report> {
-        match self.nodes.get(&node.name) {
-            Some(existing) if existing.same_identity(&node) => Ok(false),
-            Some(existing) => Err(Report::msg(format!(
-                "dependency conflict for '{}': existing node {:?} conflicts with {:?}",
-                node.name, existing.provenance, node.provenance
-            ))),
-            None => {
-                self.nodes.insert(node.name.clone(), node);
-                Ok(true)
-            },
-        }
+    pub fn get(&self, instance: &DependencyInstanceId) -> Option<&ProjectDependencyNode> {
+        self.nodes.get(instance)
     }
 }
 
-/// Represents information about a single package in a [ProjectDependencyGraph]
+/// A single selected package instance in a [ProjectDependencyGraph].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDependencyNode {
-    /// The name of the package
     pub name: PackageId,
-    /// The semantic version of the package
     pub version: SemVer,
-    /// Known dependencies of this package, which are also found in the graph.
     pub dependencies: Vec<ProjectDependencyEdge>,
-    /// The provenance of this package
     pub provenance: ProjectDependencyNodeProvenance,
 }
 
 impl ProjectDependencyNode {
-    /// Evaluates equality for nodes without consideration for dependencies
     fn same_identity(&self, other: &Self) -> bool {
         self.name == other.name
             && self.version == other.version
@@ -101,47 +78,37 @@ impl ProjectDependencyNode {
     }
 }
 
-/// Represents a dependency edge in the [ProjectDependencyGraph]
+/// A source declaration's independent lookup, binding, expectation and code-supply choices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectDependencyEdge {
-    /// The package depended upon
-    pub dependency: PackageId,
-    /// The linkage requested by the dependent package
+    pub dependency: DependencyInstanceId,
+    /// The source dependency table key, independent of the target package's name.
+    pub alias: Arc<str>,
     pub linkage: Linkage,
-    /// Explicit requested home; absent only for low-level/raw or preassembled inputs.
     pub binding: Option<crate::DependencyBinding>,
-    /// Caller-supplied exact visible mapping, independent from default home and artifact supply.
     pub expected_callables: Option<crate::ExpectedVisibleCallables>,
+    pub source_mount: Option<crate::PackageSourceMount>,
 }
 
-/// Represents provenance of a package in the [ProjectDependencyGraph], i.e. how it was obtained.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectDependencyNodeProvenance {
-    /// We have the sources for the package in question, rather than an already-assembled artifact.
     Source(ProjectSource),
-    /// The package was resolved from the registry
     Registry {
-        /// The version requirement expressed by the dependent
         requirement: VersionRequirement,
-        /// The selected version information resolved from the registry
         selected: Version,
     },
-    /// The package is an already assembled artifact referenced by path, bypassing the registry.
     Preassembled {
-        /// The path to the artifact, i.e. `.masp` file
         path: PathBuf,
-        /// The version of the preassembled package
         selected: Version,
-        /// The target kind of the preassembled package
         kind: crate::TargetType,
-        /// The dependency requirements declared by the preassembled package manifest
-        requirements: BTreeMap<PackageId, PreassembledDependencyMetadata>,
+        /// Full exact supply records, including distinct records with the same package name.
+        requirements: Vec<PreassembledDependencyMetadata>,
     },
 }
 
-/// The manifest dependency metadata pinned for a preassembled package.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreassembledDependencyMetadata {
+    pub name: PackageId,
     pub version: Version,
     pub kind: crate::TargetType,
 }
@@ -192,77 +159,229 @@ pub enum ProjectSourceOrigin {
 }
 
 struct CollectedDependencyGraph {
-    root: PackageId,
-    nodes: BTreeMap<PackageId, CollectedDependencyNode>,
-    registry_requirements: BTreeMap<PackageId, VersionRequirement>,
+    root: DependencyInstanceId,
+    nodes: BTreeMap<DependencyInstanceId, CollectedDependencyNode>,
+    slots: Vec<ResolutionSlot>,
+    contexts: Vec<ResolutionContext>,
+    /// Names with distinct explicit bindings in one ordinary shared constraint scope.
+    isolated_bindings: BTreeSet<(usize, PackageId)>,
+    source_dependencies: BTreeMap<(PackageId, Option<PathBuf>), Vec<ResolvedDependencyNode>>,
+    next_scope: usize,
+    scope_domains: BTreeMap<usize, usize>,
+    exact_slots: Vec<(usize, PackageId, Version, Option<crate::TargetType>, DependencyInstanceId)>,
+    registry_edges: BTreeMap<(DependencyInstanceId, SemVer), Vec<DependencyInstanceId>>,
+}
+
+/// A private solver namespace. Alias spelling is used only for resolution and never enters K.
+struct ResolutionContext {
+    parent: usize,
+    declaration: Option<DependencyInstanceId>,
+    alias: Option<Arc<str>>,
+    package: PackageId,
+    binding: Option<crate::DependencyBinding>,
+    scope: usize,
+}
+
+struct ResolutionSlot {
+    name: PackageId,
+    scope: usize,
+    registry_requirement: Option<VersionRequirement>,
+}
+
+#[derive(Default)]
+struct BindingDiscovery {
+    active: Vec<(PackageId, Option<PathBuf>)>,
+    visited: BTreeSet<(DependencyInstanceId, PackageId, Option<PathBuf>)>,
+    choices: BTreeMap<(usize, PackageId), Vec<crate::DependencyBinding>>,
 }
 
 impl CollectedDependencyGraph {
-    fn insert_node(&mut self, node: CollectedDependencyNode) -> Result<bool, Report> {
-        match self.nodes.get(node.name()) {
-            Some(existing) if existing.same_identity(&node) => Ok(false),
+    fn allocate_slot(&mut self, scope: usize, name: PackageId) -> DependencyInstanceId {
+        let id = DependencyInstanceId(self.slots.len());
+        self.slots.push(ResolutionSlot { name, scope, registry_requirement: None });
+        id
+    }
+
+    fn slot_in_scope(&mut self, scope: usize, name: PackageId) -> DependencyInstanceId {
+        self.slots
+            .iter()
+            .position(|slot| slot.scope == scope && slot.name == name)
+            .map(DependencyInstanceId)
+            .unwrap_or_else(|| self.allocate_slot(scope, name))
+    }
+
+    fn allocate_scope(&mut self) -> usize {
+        let scope = self.next_scope;
+        self.next_scope += 1;
+        scope
+    }
+
+    fn exact_supply_slot(
+        &mut self,
+        scope: usize,
+        name: PackageId,
+        version: Version,
+        kind: Option<crate::TargetType>,
+    ) -> Result<DependencyInstanceId, Report> {
+        let domain = self.scope_domains.get(&scope).copied().unwrap_or(scope);
+        if let Some((_, _, _, _, id)) = self.exact_slots.iter().find(
+            |(candidate_domain, candidate_name, candidate_version, candidate_kind, _)| {
+                *candidate_domain == domain
+                    && candidate_name == &name
+                    && candidate_version == &version
+                    && candidate_kind == &kind
+            },
+        ) {
+            return Ok(*id);
+        }
+        // Exact artifacts already supplied by path are candidates independently of publication
+        // semver uniqueness. Matching uses the full commitment, never only the package name.
+        let candidates = self
+            .nodes
+            .iter()
+            .filter_map(|(&id, node)| {
+                if node.graph_node.name != name {
+                    return None;
+                }
+                match &node.graph_node.provenance {
+                    ProjectDependencyNodeProvenance::Preassembled {
+                        selected,
+                        kind: candidate_kind,
+                        ..
+                    } if selected == &version
+                        && kind.is_none_or(|kind| kind == *candidate_kind) =>
+                    {
+                        Some((id, *candidate_kind))
+                    },
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        if let Some(&(id, candidate_kind)) = candidates.first() {
+            if candidates.iter().any(|(_, kind)| *kind != candidate_kind) {
+                return Err(Report::msg(format!(
+                    "ambiguous exact supply kind for '{name}@{version}'"
+                )));
+            }
+            self.exact_slots.push((domain, name, version, kind, id));
+            return Ok(id);
+        }
+        let exact_scope = self.allocate_scope();
+        self.scope_domains.insert(exact_scope, domain);
+        let id = self.allocate_slot(exact_scope, name.clone());
+        self.exact_slots.push((domain, name, version, kind, id));
+        Ok(id)
+    }
+
+    fn context_scope(
+        &mut self,
+        parent: usize,
+        declaration: Option<DependencyInstanceId>,
+        alias: Option<Arc<str>>,
+        package: PackageId,
+        binding: Option<crate::DependencyBinding>,
+    ) -> usize {
+        if let Some(context) = self.contexts.iter().find(|context| {
+            context.parent == parent
+                && context.declaration == declaration
+                && context.alias == alias
+                && context.package == package
+                && context.binding == binding
+        }) {
+            return context.scope;
+        }
+        let scope = self.allocate_scope();
+        self.contexts.push(ResolutionContext {
+            parent,
+            declaration,
+            alias,
+            package,
+            binding,
+            scope,
+        });
+        scope
+    }
+
+    fn dependency_slot(
+        &mut self,
+        declaring: DependencyInstanceId,
+        dependency: &Dependency,
+    ) -> DependencyInstanceId {
+        let scope = self.slots[declaring.0].scope;
+        let name = dependency.package().clone();
+        let binding = dependency.binding().cloned();
+        let scope = if dependency.is_aliased() {
+            self.context_scope(
+                scope,
+                Some(declaring),
+                Some(dependency.alias().clone()),
+                name.clone(),
+                binding,
+            )
+        } else if self.isolated_bindings.contains(&(scope, name.clone())) {
+            self.context_scope(scope, None, None, name.clone(), binding)
+        } else {
+            scope
+        };
+        self.slot_in_scope(scope, name)
+    }
+
+    fn insert_node(
+        &mut self,
+        id: DependencyInstanceId,
+        node: CollectedDependencyNode,
+    ) -> Result<bool, Report> {
+        if self.slots[id.0].registry_requirement.is_some() {
+            return Err(Report::msg(format!(
+                "dependency conflict for '{}': local source or preassembled dependency conflicts with a registry dependency",
+                node.graph_node.name
+            )));
+        }
+        match self.nodes.get(&id) {
+            Some(existing) if existing.graph_node.same_identity(&node.graph_node) => Ok(false),
             Some(existing) => Err(Report::msg(format!(
                 "dependency conflict for '{}': existing node {:?} conflicts with {:?}",
-                node.name(),
-                existing.provenance(),
-                node.provenance()
+                node.graph_node.name, existing.graph_node.provenance, node.graph_node.provenance
             ))),
             None => {
-                self.nodes.insert(node.name().clone(), node);
+                self.nodes.insert(id, node);
                 Ok(true)
             },
         }
     }
 
-    fn set_dependencies(
+    fn record_registry_requirement(
         &mut self,
-        package: &PackageId,
-        dependencies: Vec<ProjectDependencyEdge>,
-        solver_dependencies: BTreeMap<PackageId, VersionRequirement>,
+        id: DependencyInstanceId,
+        requirement: VersionRequirement,
     ) -> Result<(), Report> {
-        let node = self
-            .nodes
-            .get_mut(package)
-            .ok_or_else(|| Report::msg(format!("missing dependency node '{package}'")))?;
-        node.graph_node.dependencies = dependencies;
-        node.solver_dependencies = solver_dependencies;
+        if self.nodes.contains_key(&id) {
+            return Err(Report::msg(format!(
+                "dependency conflict for '{}': local source or preassembled dependency conflicts with a registry dependency",
+                self.slots[id.0].name
+            )));
+        }
+        self.slots[id.0].registry_requirement.get_or_insert(requirement);
         Ok(())
     }
 
-    fn record_registry_requirement(&mut self, package: PackageId, requirement: VersionRequirement) {
-        self.registry_requirements.entry(package).or_insert(requirement);
+    fn root_version(&self) -> SemVer {
+        self.nodes[&self.root].graph_node.version.clone()
     }
 
-    fn root_version(&self) -> Result<SemVer, Report> {
-        self.nodes
-            .get(&self.root)
-            .map(|node| node.graph_node.version.clone())
-            .ok_or_else(|| Report::msg(format!("missing dependency node '{}'", self.root)))
-    }
-
-    fn local_packages(&self) -> BTreeSet<PackageId> {
-        self.nodes.keys().cloned().collect()
+    /// Names exist only inside the private resolution registry. They are never package identities.
+    fn solver_key(&self, id: DependencyInstanceId) -> PackageId {
+        PackageId::from(format!("{} (graph instance {})", self.slots[id.0].name, id.0))
     }
 }
 
+#[derive(Clone)]
 struct CollectedDependencyNode {
     graph_node: ProjectDependencyNode,
-    solver_dependencies: BTreeMap<PackageId, VersionRequirement>,
+    solver_dependencies: BTreeMap<DependencyInstanceId, VersionRequirement>,
 }
 
 impl CollectedDependencyNode {
-    fn name(&self) -> &PackageId {
-        &self.graph_node.name
-    }
-
-    fn provenance(&self) -> &ProjectDependencyNodeProvenance {
-        &self.graph_node.provenance
-    }
-
-    fn same_identity(&self, other: &Self) -> bool {
-        self.graph_node.same_identity(&other.graph_node)
-    }
-
     fn selected_version(&self) -> Version {
         match &self.graph_node.provenance {
             ProjectDependencyNodeProvenance::Source(_) => {
@@ -270,7 +389,7 @@ impl CollectedDependencyNode {
             },
             ProjectDependencyNodeProvenance::Preassembled { selected, .. } => selected.clone(),
             ProjectDependencyNodeProvenance::Registry { .. } => {
-                panic!("collected nodes do not store registry provenance")
+                unreachable!("registry nodes are materialized after solving")
             },
         }
     }
@@ -335,8 +454,8 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
         &self,
         loaded: LoadedSourcePackage,
     ) -> Result<ProjectDependencyGraph, Report> {
-        let graph = self.collect_dependency_graph(loaded)?;
-        let selected = self.solve_dependency_graph(&graph)?;
+        let mut graph = self.collect_dependency_graph(loaded)?;
+        let selected = self.solve_dependency_graph(&mut graph)?;
         self.materialize_dependency_graph(graph, &selected)
     }
 
@@ -344,36 +463,130 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
         &self,
         loaded: LoadedSourcePackage,
     ) -> Result<CollectedDependencyGraph, Report> {
-        let root = loaded.package.name().into_inner();
         let mut graph = CollectedDependencyGraph {
-            root,
+            root: DependencyInstanceId(0),
             nodes: BTreeMap::new(),
-            registry_requirements: BTreeMap::new(),
+            slots: Vec::new(),
+            contexts: Vec::new(),
+            isolated_bindings: BTreeSet::new(),
+            source_dependencies: BTreeMap::new(),
+            next_scope: 1,
+            scope_domains: BTreeMap::new(),
+            exact_slots: Vec::new(),
+            registry_edges: BTreeMap::new(),
         };
-        let mut visited = BTreeSet::new();
+        let root = graph.allocate_slot(0, loaded.package.name().into_inner());
+        // Discover every binding choice before committing shared nodes or solver constraints.
+        // Decisions are fixed within a pass. Splitting an ancestor moves its descendants into new
+        // scopes, so recompute until the source declarations stabilize. Some acyclic source graphs
+        // have competing isolation choices; reject a repeated state instead of choosing by order.
+        let mut seen_isolation_states = BTreeSet::new();
+        loop {
+            if !seen_isolation_states.insert(graph.isolated_bindings.clone()) {
+                return Err(Report::msg(
+                    "ambiguous dependency binding contexts; use explicit dependency aliases to select independent contexts",
+                ));
+            }
+            let mut discovery = BindingDiscovery::default();
+            self.discover_binding_contexts(&mut graph, root, &mut discovery, &loaded)?;
+            let isolated = discovery
+                .choices
+                .into_iter()
+                .filter(|(_, bindings)| bindings.len() > 1)
+                .map(|(key, _)| key)
+                .collect::<BTreeSet<_>>();
+            if isolated == graph.isolated_bindings {
+                break;
+            }
+            graph.isolated_bindings = isolated;
+        }
         self.collect_source_package(
             &mut graph,
-            &mut visited,
+            root,
+            &mut Vec::new(),
             loaded,
             ProjectSourceOrigin::Root,
             true,
         )?;
+        self.attach_preassembled_requirements(&mut graph)?;
         Ok(graph)
+    }
+
+    fn resolve_source_dependencies(
+        &self,
+        graph: &mut CollectedDependencyGraph,
+        package: &LoadedSourcePackage,
+    ) -> Result<Vec<ResolvedDependencyNode>, Report> {
+        let source = (package.package.name().into_inner(), package.manifest_path.clone());
+        if let Some(resolved) = graph.source_dependencies.get(&source) {
+            return Ok(resolved.clone());
+        }
+        let mut resolved = Vec::with_capacity(package.package.dependencies().len());
+        for dependency in package.package.dependencies() {
+            if dependency.binding().is_none() {
+                return Err(Report::msg(format!(
+                    "dependency '{}' requires an explicit Latest/Pinned binding or custom home",
+                    dependency.alias()
+                )));
+            }
+            resolved.push(self.resolve_dependency(dependency, package)?);
+        }
+        graph.source_dependencies.insert(source, resolved.clone());
+        Ok(resolved)
+    }
+
+    fn discover_binding_contexts(
+        &self,
+        graph: &mut CollectedDependencyGraph,
+        id: DependencyInstanceId,
+        discovery: &mut BindingDiscovery,
+        package: &LoadedSourcePackage,
+    ) -> Result<(), Report> {
+        let source = (package.package.name().into_inner(), package.manifest_path.clone());
+        if discovery.active.contains(&source) {
+            return Err(Report::msg(format!("cyclic source dependency involving '{}'", source.0)));
+        }
+        if !discovery.visited.insert((id, source.0.clone(), source.1.clone())) {
+            return Ok(());
+        }
+        discovery.active.push(source);
+        let resolved = self.resolve_source_dependencies(graph, package)?;
+        for (dependency, resolved) in package.package.dependencies().iter().zip(resolved) {
+            if !dependency.is_aliased() {
+                let key = (graph.slots[id.0].scope, dependency.package().clone());
+                let bindings = discovery.choices.entry(key).or_default();
+                let binding = dependency.binding().expect("source dependencies were validated");
+                if !bindings.contains(binding) {
+                    bindings.push(binding.clone());
+                }
+            }
+            let target = graph.dependency_slot(id, dependency);
+            if let ResolvedDependencyNode::Source { package, .. } = resolved {
+                self.discover_binding_contexts(graph, target, discovery, &package)?;
+            }
+        }
+        discovery.active.pop();
+        Ok(())
     }
 
     fn collect_source_package(
         &self,
         graph: &mut CollectedDependencyGraph,
-        visited: &mut BTreeSet<PackageId>,
+        id: DependencyInstanceId,
+        active: &mut Vec<(PackageId, Option<PathBuf>)>,
         package: LoadedSourcePackage,
         origin: ProjectSourceOrigin,
         allow_missing_library: bool,
-    ) -> Result<PackageId, Report> {
+    ) -> Result<(), Report> {
         let package_id = package.package.name().into_inner();
+        let source = (package_id.clone(), package.manifest_path.clone());
+        if active.contains(&source) {
+            return Err(Report::msg(format!("cyclic source dependency involving '{package_id}'")));
+        }
         let node = CollectedDependencyNode {
             graph_node: ProjectDependencyNode {
                 dependencies: Vec::new(),
-                name: package_id.clone(),
+                name: package_id,
                 provenance: ProjectDependencyNodeProvenance::Source(
                     match package.manifest_path.as_ref() {
                         Some(manifest_path) => ProjectSource::Real {
@@ -394,197 +607,240 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
             },
             solver_dependencies: BTreeMap::new(),
         };
-
-        let is_new = graph.insert_node(node)?;
-        if !is_new || !visited.insert(package_id.clone()) {
-            return Ok(package_id);
+        if !graph.insert_node(id, node)? {
+            return Ok(());
         }
-
+        active.push(source);
         let mut edges = Vec::new();
         let mut solver_dependencies = BTreeMap::new();
-        for dependency in package.package.dependencies() {
+        let resolved = self.resolve_source_dependencies(graph, &package)?;
+        for (dependency, resolved) in package.package.dependencies().iter().zip(resolved) {
             if dependency.binding().is_none() {
                 return Err(Report::msg(format!(
                     "dependency '{}' requires an explicit Latest/Pinned binding or custom home",
-                    dependency.name()
+                    dependency.alias()
                 )));
             }
-            let resolved = self.resolve_dependency(dependency, &package)?;
-            let dependency_name = resolved.name();
+            let target = graph.dependency_slot(id, dependency);
             edges.push(ProjectDependencyEdge {
-                dependency: dependency_name.clone(),
+                dependency: target,
+                alias: dependency.alias().clone(),
                 linkage: dependency.linkage(),
                 binding: dependency.binding().cloned(),
                 expected_callables: dependency.expected_callables().cloned(),
+                source_mount: dependency.source_mount().cloned(),
             });
-            solver_dependencies.insert(dependency_name, resolved.solver_requirement());
-
+            solver_dependencies.insert(target, resolved.solver_requirement());
             match resolved {
                 ResolvedDependencyNode::Source { package, origin } => {
-                    self.collect_source_package(graph, visited, package, origin, false)?;
+                    self.collect_source_package(graph, target, active, package, origin, false)?;
                 },
                 ResolvedDependencyNode::Local(node) => {
-                    graph.insert_node(node)?;
+                    graph.insert_node(target, node)?;
                 },
-                ResolvedDependencyNode::Registry { package, requirement } => {
-                    graph.record_registry_requirement(package, requirement);
+                ResolvedDependencyNode::Registry { requirement } => {
+                    graph.record_registry_requirement(target, requirement)?;
                 },
             }
         }
+        active.pop();
+        let node = graph.nodes.get_mut(&id).expect("inserted source node");
+        node.graph_node.dependencies = edges;
+        node.solver_dependencies = solver_dependencies;
+        Ok(())
+    }
 
-        graph.set_dependencies(&package_id, edges, solver_dependencies)?;
-        Ok(package_id)
+    fn attach_preassembled_requirements(
+        &self,
+        graph: &mut CollectedDependencyGraph,
+    ) -> Result<(), Report> {
+        let artifacts = graph
+            .nodes
+            .iter()
+            .filter_map(|(&id, node)| match &node.graph_node.provenance {
+                ProjectDependencyNodeProvenance::Preassembled { requirements, .. } => {
+                    Some((id, requirements.clone()))
+                },
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (id, requirements) in artifacts {
+            let scope = graph.slots[id.0].scope;
+            let mut edges = Vec::new();
+            let mut solver_dependencies = BTreeMap::new();
+            for requirement in requirements {
+                let target = graph.exact_supply_slot(
+                    scope,
+                    requirement.name.clone(),
+                    requirement.version.clone(),
+                    Some(requirement.kind),
+                )?;
+                let version = VersionRequirement::Exact(requirement.version);
+                if !graph.nodes.contains_key(&target) {
+                    graph.record_registry_requirement(target, version.clone())?;
+                }
+                solver_dependencies.insert(target, version);
+                edges.push(ProjectDependencyEdge {
+                    dependency: target,
+                    alias: requirement.name.into_inner(),
+                    linkage: Linkage::Dynamic,
+                    binding: None,
+                    expected_callables: None,
+                    source_mount: None,
+                });
+            }
+            let node = graph.nodes.get_mut(&id).expect("inserted artifact node");
+            node.graph_node.dependencies = edges;
+            node.solver_dependencies = solver_dependencies;
+        }
+        Ok(())
     }
 
     fn solve_dependency_graph(
         &self,
-        graph: &CollectedDependencyGraph,
-    ) -> Result<BTreeMap<PackageId, Version>, Report> {
+        graph: &mut CollectedDependencyGraph,
+    ) -> Result<BTreeMap<DependencyInstanceId, Version>, Report> {
         let registry = self.build_resolution_registry(graph)?;
-        let selected =
-            PackageResolver::for_package(graph.root.clone(), graph.root_version()?, &registry)
-                .resolve()
-                .map_err(|error| Report::msg(error.to_string()))?;
-        Ok(selected.into_iter().collect())
+        let selected = PackageResolver::for_package(
+            graph.solver_key(graph.root),
+            graph.root_version(),
+            &registry,
+        )
+        .resolve()
+        .map_err(|error| Report::msg(error.to_string()))?;
+        let selected: BTreeMap<_, _> = selected.into_iter().collect();
+        Ok((0..graph.slots.len())
+            .filter_map(|index| {
+                let id = DependencyInstanceId(index);
+                selected.get(&graph.solver_key(id)).cloned().map(|version| (id, version))
+            })
+            .collect())
     }
 
     fn build_resolution_registry(
         &self,
-        graph: &CollectedDependencyGraph,
+        graph: &mut CollectedDependencyGraph,
     ) -> Result<InMemoryPackageRegistry, Report> {
         let mut registry = InMemoryPackageRegistry::default();
-        let local_packages = graph.local_packages();
-
-        for node in graph.nodes.values() {
+        for (&id, node) in &graph.nodes {
             let record = PackageRecord::new(
                 node.selected_version(),
                 node.solver_dependencies
                     .iter()
-                    .map(|(package, requirement)| (package.clone(), requirement.clone())),
+                    .map(|(&target, requirement)| (graph.solver_key(target), requirement.clone())),
             );
             registry
-                .insert_record(node.name().clone(), record)
+                .insert_record(graph.solver_key(id), record)
                 .map_err(|error| Report::msg(error.to_string()))?;
         }
-
-        let mut pending = BTreeSet::new();
-        for node in graph.nodes.values() {
-            for dependency in node.solver_dependencies.keys() {
-                if !local_packages.contains(dependency) {
-                    pending.insert(dependency.clone());
-                }
-            }
-        }
-
-        self.populate_resolution_registry(&mut registry, &local_packages, pending)?;
-        Ok(registry)
-    }
-
-    fn populate_resolution_registry(
-        &self,
-        registry: &mut InMemoryPackageRegistry,
-        local_packages: &BTreeSet<PackageId>,
-        mut pending: BTreeSet<PackageId>,
-    ) -> Result<(), Report> {
+        let mut pending = graph
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                slot.registry_requirement.as_ref().map(|_| DependencyInstanceId(index))
+            })
+            .collect::<BTreeSet<_>>();
         let mut copied = BTreeSet::new();
-
-        while let Some(package) = pending.pop_first() {
-            if local_packages.contains(&package) {
-                return Err(Report::msg(format!(
-                    "dependency conflict for '{package}': local source or preassembled dependency conflicts with a registry dependency"
-                )));
-            }
-
-            if !copied.insert(package.clone()) {
+        while let Some(id) = pending.pop_first() {
+            if !copied.insert(id) {
                 continue;
             }
-
-            if let Some(versions) = registry.available_versions(&package) {
-                for dependency in versions.values().flat_map(|record| record.dependencies().keys())
-                {
-                    if local_packages.contains(dependency) {
-                        return Err(Report::msg(format!(
-                            "dependency conflict for '{dependency}': local source or preassembled dependency conflicts with a registry dependency"
-                        )));
-                    }
-                    if !copied.contains(dependency) {
-                        pending.insert(dependency.clone());
-                    }
-                }
-                continue;
-            }
-
-            if let Some(versions) = self.registry.available_versions(&package) {
+            let scope = graph.slots[id.0].scope;
+            let name = graph.slots[id.0].name.clone();
+            if let Some(versions) = self.registry.available_versions(&name) {
                 for record in versions.values() {
-                    registry
-                        .insert_record(package.clone(), record.clone())
-                        .map_err(|error| Report::msg(error.to_string()))?;
-
-                    for dependency in record.dependencies().keys() {
-                        if local_packages.contains(dependency) {
-                            return Err(Report::msg(format!(
-                                "dependency conflict for '{dependency}': local source or preassembled dependency conflicts with a registry dependency"
-                            )));
+                    let mut dependencies = Vec::new();
+                    let mut targets = Vec::new();
+                    for (name, requirement) in record.dependencies() {
+                        let target = match requirement {
+                            VersionRequirement::Exact(version) => graph.exact_supply_slot(
+                                scope,
+                                name.clone(),
+                                version.clone(),
+                                None,
+                            )?,
+                            _ => graph.slot_in_scope(scope, name.clone()),
+                        };
+                        if !graph.nodes.contains_key(&target) {
+                            graph.record_registry_requirement(target, requirement.clone())?;
+                            if !copied.contains(&target) {
+                                pending.insert(target);
+                            }
+                        } else if !matches!(requirement, VersionRequirement::Exact(version) if graph.nodes[&target].selected_version() == *version)
+                        {
+                            // A plain registry name cannot silently select a local source/artifact.
+                            graph.record_registry_requirement(target, requirement.clone())?;
                         }
-                        if !copied.contains(dependency) {
-                            pending.insert(dependency.clone());
-                        }
+                        targets.push(target);
+                        dependencies.push((graph.solver_key(target), requirement.clone()));
                     }
+                    graph.registry_edges.insert((id, record.semantic_version().clone()), targets);
+                    registry
+                        .insert_record(
+                            graph.solver_key(id),
+                            PackageRecord::new(record.version().clone(), dependencies),
+                        )
+                        .map_err(|error| Report::msg(error.to_string()))?;
                 }
             }
         }
-
-        Ok(())
+        Ok(registry)
     }
 
     fn materialize_dependency_graph(
         &self,
         collected: CollectedDependencyGraph,
-        selected: &BTreeMap<PackageId, Version>,
+        selected: &BTreeMap<DependencyInstanceId, Version>,
     ) -> Result<ProjectDependencyGraph, Report> {
-        let CollectedDependencyGraph { root, nodes, registry_requirements } = collected;
-        let local_packages = nodes.keys().cloned().collect::<BTreeSet<_>>();
-        let mut graph = ProjectDependencyGraph { root, nodes: BTreeMap::new() };
-
-        let direct_registry_dependencies = nodes
-            .values()
-            .flat_map(|node| {
-                node.graph_node.dependencies.iter().map(|edge| edge.dependency.clone())
-            })
-            .filter(|package| !local_packages.contains(package))
-            .collect::<BTreeSet<_>>();
-
-        for node in nodes.into_values() {
-            graph.insert_node(node.graph_node)?;
-        }
-
-        for package in direct_registry_dependencies {
-            let selected_version = selected.get(&package).ok_or_else(|| {
+        let mut nodes = collected
+            .nodes
+            .iter()
+            .map(|(&id, node)| (id, node.graph_node.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for (&id, version) in selected {
+            if nodes.contains_key(&id) {
+                continue;
+            }
+            let slot = &collected.slots[id.0];
+            let record = self.registry.get_by_version(&slot.name, version).ok_or_else(|| {
                 Report::msg(format!(
-                    "dependency resolution did not select a version for direct dependency '{package}'"
+                    "resolved registry dependency '{}@{version}' is not available",
+                    slot.name
                 ))
             })?;
-            let record = self.registry.get_by_version(&package, selected_version).ok_or_else(|| {
-                Report::msg(format!(
-                    "resolved registry dependency '{package}@{selected_version}' is not available"
-                ))
-            })?;
-            let requirement = registry_requirements
-                .get(&package)
-                .cloned()
-                .unwrap_or_else(|| VersionRequirement::from(record.version().clone()));
-            graph.insert_node(ProjectDependencyNode {
-                dependencies: Vec::new(),
-                name: package,
-                provenance: ProjectDependencyNodeProvenance::Registry {
-                    requirement,
-                    selected: record.version().clone(),
+            let mut dependencies = Vec::new();
+            let targets = collected
+                .registry_edges
+                .get(&(id, record.semantic_version().clone()))
+                .ok_or_else(|| Report::msg("missing registry dependency instance mapping"))?;
+            for ((name, _), &target) in record.dependencies().iter().zip(targets) {
+                dependencies.push(ProjectDependencyEdge {
+                    dependency: target,
+                    alias: name.clone().into_inner(),
+                    linkage: Linkage::Dynamic,
+                    binding: None,
+                    expected_callables: None,
+                    source_mount: None,
+                });
+            }
+            nodes.insert(
+                id,
+                ProjectDependencyNode {
+                    dependencies,
+                    name: slot.name.clone(),
+                    version: record.semantic_version().clone(),
+                    provenance: ProjectDependencyNodeProvenance::Registry {
+                        requirement: slot
+                            .registry_requirement
+                            .clone()
+                            .unwrap_or_else(|| VersionRequirement::from(version.clone())),
+                        selected: version.clone(),
+                    },
                 },
-                version: record.semantic_version().clone(),
-            })?;
+            );
         }
-
-        Ok(graph)
+        Ok(ProjectDependencyGraph { root: collected.root, nodes })
     }
 
     fn resolve_dependency(
@@ -594,21 +850,18 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
     ) -> Result<ResolvedDependencyNode, Report> {
         match dependency.scheme() {
             DependencyVersionScheme::Registry(requirement) => {
-                Ok(ResolvedDependencyNode::Registry {
-                    package: PackageId::from(dependency.name().clone()),
-                    requirement: requirement.clone(),
-                })
+                Ok(ResolvedDependencyNode::Registry { requirement: requirement.clone() })
             },
             DependencyVersionScheme::Workspace { member, .. } => {
                 let workspace_root = parent.workspace_root.as_ref().ok_or_else(|| {
                     Report::msg(format!(
                         "workspace dependency '{}' cannot be resolved outside of a workspace",
-                        dependency.name()
+                        dependency.package()
                     ))
                 })?;
                 let path = crate::absolutize_path(Path::new(member.path()), workspace_root)
                     .map_err(|error| Report::msg(error.to_string()))?;
-                let package = self.load_dependency_source(&path, dependency.name().as_ref())?;
+                let package = self.load_dependency_source(&path, dependency.package().as_ref())?;
                 self.validate_source_dependency(dependency, &package.package)?;
                 Ok(ResolvedDependencyNode::Source {
                     origin: ProjectSourceOrigin::Path,
@@ -619,7 +872,7 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
                 let workspace_root = parent.workspace_root.as_ref().ok_or_else(|| {
                     Report::msg(format!(
                         "workspace dependency '{}' cannot be resolved outside of a workspace",
-                        dependency.name()
+                        dependency.package()
                     ))
                 })?;
                 let resolved_path = crate::absolutize_path(Path::new(path.path()), workspace_root)
@@ -627,16 +880,16 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
                 if resolved_path.extension().is_some_and(|extension| extension == "masp") {
                     let node = self.load_preassembled_dependency(
                         &resolved_path,
-                        dependency.name().as_ref(),
+                        dependency.package().as_ref(),
                         version.as_ref(),
                     )?;
                     Ok(ResolvedDependencyNode::Local(node))
                 } else {
                     let package =
-                        self.load_dependency_source(&resolved_path, dependency.name().as_ref())?;
+                        self.load_dependency_source(&resolved_path, dependency.package().as_ref())?;
                     if let Some(requirement) = version.as_ref() {
                         self.ensure_version_satisfies(
-                            dependency.name(),
+                            dependency.package(),
                             requirement,
                             Version::from(package.package.version().into_inner().clone()),
                         )?;
@@ -658,16 +911,16 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
                 if resolved_path.extension().is_some_and(|extension| extension == "masp") {
                     let node = self.load_preassembled_dependency(
                         &resolved_path,
-                        dependency.name().as_ref(),
+                        dependency.package().as_ref(),
                         version.as_ref(),
                     )?;
                     Ok(ResolvedDependencyNode::Local(node))
                 } else {
                     let package =
-                        self.load_dependency_source(&resolved_path, dependency.name().as_ref())?;
+                        self.load_dependency_source(&resolved_path, dependency.package().as_ref())?;
                     if let Some(requirement) = version.as_ref() {
                         self.ensure_version_satisfies(
-                            dependency.name(),
+                            dependency.package(),
                             requirement,
                             Version::from(package.package.version().into_inner().clone()),
                         )?;
@@ -680,16 +933,18 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
             },
             DependencyVersionScheme::Git { repo, revision, version } => {
                 let checkout = self.checkout_git_dependency(repo.inner(), revision)?;
-                let package = self
-                    .load_dependency_source(&checkout.manifest_path, dependency.name().as_ref())?;
+                let package = self.load_dependency_source(
+                    &checkout.manifest_path,
+                    dependency.package().as_ref(),
+                )?;
                 self.ensure_dependency_name(
-                    dependency.name(),
+                    dependency.package(),
                     package.package.name().into_inner().as_ref(),
                     Some(&checkout.manifest_path),
                 )?;
                 if let Some(requirement) = version.as_ref() {
                     self.ensure_version_req_matches(
-                        dependency.name(),
+                        dependency.package(),
                         requirement.inner(),
                         package.package.version().into_inner(),
                     )?;
@@ -799,29 +1054,11 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
             self.ensure_version_satisfies(expected_name, requirement, selected.clone())?;
         }
 
-        let mut dependencies = Vec::with_capacity(package.manifest.num_dependencies());
         let requirements = package_requirements(&package);
-        let mut solver_dependencies = BTreeMap::new();
-        for dependency in package.manifest.dependencies() {
-            solver_dependencies.insert(
-                dependency.name.clone(),
-                VersionRequirement::Exact(Version::new(
-                    dependency.version.clone(),
-                    dependency.digest,
-                )),
-            );
-
-            dependencies.push(ProjectDependencyEdge {
-                dependency: dependency.name.clone(),
-                linkage: Linkage::Dynamic,
-                binding: None,
-                expected_callables: None,
-            });
-        }
 
         Ok(CollectedDependencyNode {
             graph_node: ProjectDependencyNode {
-                dependencies,
+                dependencies: Vec::new(),
                 name: PackageId::from(expected_name),
                 provenance: ProjectDependencyNodeProvenance::Preassembled {
                     path,
@@ -831,7 +1068,7 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
                 },
                 version: selected.version,
             },
-            solver_dependencies,
+            solver_dependencies: BTreeMap::new(),
         })
     }
 
@@ -943,7 +1180,7 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
     ) -> Result<(), Report> {
         let requirement = dependency.required_version();
         self.ensure_version_satisfies(
-            dependency.name(),
+            dependency.package(),
             &requirement,
             Version::from(package.version().into_inner().clone()),
         )?;
@@ -1046,6 +1283,7 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
     }
 }
 
+#[derive(Clone)]
 enum ResolvedDependencyNode {
     Source {
         package: LoadedSourcePackage,
@@ -1053,20 +1291,11 @@ enum ResolvedDependencyNode {
     },
     Local(CollectedDependencyNode),
     Registry {
-        package: PackageId,
         requirement: VersionRequirement,
     },
 }
 
 impl ResolvedDependencyNode {
-    fn name(&self) -> PackageId {
-        match self {
-            Self::Source { package, .. } => package.package.name().into_inner(),
-            Self::Local(node) => node.name().clone(),
-            Self::Registry { package, .. } => package.clone(),
-        }
-    }
-
     fn solver_requirement(&self) -> VersionRequirement {
         match self {
             Self::Source { package, .. } => VersionRequirement::from(Version::from(
@@ -1078,6 +1307,7 @@ impl ResolvedDependencyNode {
     }
 }
 
+#[derive(Clone)]
 struct LoadedSourcePackage {
     manifest_path: Option<PathBuf>,
     package: Arc<Package>,
@@ -1091,20 +1321,14 @@ struct GitCheckout {
     resolved_revision: Arc<str>,
 }
 
-fn package_requirements(
-    package: &MastPackage,
-) -> BTreeMap<PackageId, PreassembledDependencyMetadata> {
+fn package_requirements(package: &MastPackage) -> Vec<PreassembledDependencyMetadata> {
     package
         .manifest
         .dependencies()
-        .map(|dependency| {
-            (
-                dependency.name.clone(),
-                PreassembledDependencyMetadata {
-                    version: Version::new(dependency.version.clone(), dependency.digest),
-                    kind: dependency.kind,
-                },
-            )
+        .map(|dependency| PreassembledDependencyMetadata {
+            name: dependency.name.clone(),
+            version: Version::new(dependency.version.clone(), dependency.digest),
+            kind: dependency.kind,
         })
         .collect()
 }
@@ -1171,6 +1395,16 @@ mod tests {
         fn register(&mut self, name: PackageId, record: PackageRecord) -> Result<(), Self::Error> {
             self.insert_record(name, record)
         }
+    }
+
+    fn node_named<'a>(
+        graph: &'a ProjectDependencyGraph,
+        name: &str,
+    ) -> Option<&'a ProjectDependencyNode> {
+        let mut matches = graph.nodes().values().filter(|node| node.name == name);
+        let node = matches.next();
+        assert!(matches.next().is_none(), "fixture expected a unique package named '{name}'");
+        node
     }
 
     fn fixture_dependency(
@@ -1258,15 +1492,15 @@ mod tests {
             .build_from_path(&root_manifest)
             .unwrap();
 
-        assert!(graph.get(&PackageId::from("root")).is_some());
-        assert!(graph.get(&PackageId::from("dep")).is_some());
-        assert_eq!(graph.get(&PackageId::from("root")).unwrap().dependencies.len(), 1);
+        assert!(node_named(&graph, "root").is_some());
+        assert!(node_named(&graph, "dep").is_some());
+        assert_eq!(node_named(&graph, "root").unwrap().dependencies.len(), 1);
         assert_eq!(
-            graph.get(&PackageId::from("root")).unwrap().dependencies[0].expected_callables,
+            node_named(&graph, "root").unwrap().dependencies[0].expected_callables,
             Some(expected)
         );
         assert_eq!(
-            graph.get(&PackageId::from("root")).unwrap().dependencies[0].binding,
+            node_named(&graph, "root").unwrap().dependencies[0].binding,
             Some(crate::DependencyBinding::Custom(miden_mast_package::NamespacePlan::new(vec![
                 miden_core::program::CanonicalLabel::text("project-graph-fixtures").unwrap(),
             ])))
@@ -1299,7 +1533,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git"))
             .build_from_path(&root_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
 
         assert_eq!(dep.version, "9.9.9".parse().unwrap());
     }
@@ -1432,7 +1666,7 @@ mod tests {
             .build_from_path(&root_manifest)
             .unwrap();
 
-        assert!(graph.get(&PackageId::from("dep")).is_some());
+        assert!(node_named(&graph, "dep").is_some());
     }
 
     #[test]
@@ -1459,7 +1693,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git"))
             .build_from_path(&root_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
         assert_eq!(dep.version, "1.2.0".parse().unwrap());
         assert!(matches!(dep.provenance, ProjectDependencyNodeProvenance::Registry { .. }));
     }
@@ -1489,7 +1723,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git"))
             .build_from_path(&root_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
         assert_eq!(dep.version, "1.2.0".parse().unwrap());
     }
 
@@ -1559,7 +1793,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git"))
             .build_from_path(&root_manifest)
             .expect("compatible source dependency requirements should resolve");
-        let shared = graph.get(&PackageId::from("shared")).expect("shared dependency missing");
+        let shared = node_named(&graph, "shared").expect("shared dependency missing");
         assert_eq!(shared.version, "1.2.0".parse().unwrap());
         assert_matches!(
             shared.provenance,
@@ -1667,7 +1901,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git"))
             .build_from_path(&root_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
         assert!(dep.dependencies.is_empty());
         assert!(matches!(dep.provenance, ProjectDependencyNodeProvenance::Preassembled { .. }));
     }
@@ -1703,7 +1937,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git"))
             .build_from_path(&root_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
 
         assert_eq!(dep.version, "1.0.0".parse().unwrap());
         assert_matches!(
@@ -1764,13 +1998,15 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git"))
             .build_from_path(&root_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
-        let runtime = graph.get(&PackageId::from("runtime")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
+        let runtime = node_named(&graph, "runtime").unwrap();
 
         assert_eq!(
             dep.dependencies,
             vec![ProjectDependencyEdge {
-                dependency: PackageId::from("runtime"),
+                dependency: dep.dependencies[0].dependency,
+                alias: "runtime".into(),
+                source_mount: None,
                 linkage: Linkage::Dynamic,
                 binding: None,
                 expected_callables: None,
@@ -1814,21 +2050,20 @@ mod tests {
             .load_preassembled_dependency(&dep_package_path, "dep", None)
             .unwrap();
 
+        assert!(node.graph_node.dependencies.is_empty());
+        assert!(node.solver_dependencies.is_empty());
+        let ProjectDependencyNodeProvenance::Preassembled { requirements, .. } =
+            &node.graph_node.provenance
+        else {
+            panic!("expected artifact provenance");
+        };
         assert_eq!(
-            node.graph_node.dependencies,
-            vec![ProjectDependencyEdge {
-                dependency: PackageId::from("kernelpkg"),
-                linkage: Linkage::Dynamic,
-                binding: None,
-                expected_callables: None,
+            requirements,
+            &[PreassembledDependencyMetadata {
+                name: PackageId::from("kernelpkg"),
+                version: kernel_version,
+                kind: TargetType::Kernel,
             }]
-        );
-        assert_eq!(
-            node.solver_dependencies,
-            BTreeMap::from([(
-                PackageId::from("kernelpkg"),
-                VersionRequirement::Exact(kernel_version),
-            )])
         );
     }
 
@@ -1860,7 +2095,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git"))
             .build_from_path(&ok_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
         assert_eq!(dep.version, "1.0.0".parse().unwrap());
 
         let bad_root_dir = tempdir.path().join("root-bad");
@@ -1922,7 +2157,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git-cache"))
             .build_from_path(&root_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
         assert_matches!(
             dep.provenance,
             ProjectDependencyNodeProvenance::Source(ProjectSource::Real {
@@ -1971,7 +2206,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git-cache"))
             .build_from_path(&root_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
 
         assert_eq!(dep.version, "1.0.0".parse().unwrap());
         assert_matches!(
@@ -2022,7 +2257,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git-cache"))
             .build_from_path(&root_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
 
         assert_eq!(dep.version, "9.9.9".parse().unwrap());
     }
@@ -2096,7 +2331,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git-cache"))
             .build_from_path(&app_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
         assert_eq!(dep.version.to_string(), "0.2.0");
     }
 
@@ -2154,7 +2389,7 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git-cache"))
             .build_from_path(&app_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
 
         assert_eq!(dep.version.to_string(), "0.3.0");
         assert_matches!(
@@ -2193,13 +2428,692 @@ mod tests {
         let graph = builder(&registry, &tempdir.path().join("git-cache"))
             .build_from_path(&app_manifest)
             .unwrap();
-        let dep = graph.get(&PackageId::from("dep")).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
 
         assert_eq!(dep.version.to_string(), "1.0.0");
         assert_matches!(
             dep.provenance,
             ProjectDependencyNodeProvenance::Preassembled { ref path, .. }
                 if path == &dep_package_path.canonicalize().unwrap()
+        );
+    }
+
+    fn pinned_binding(revision: u32) -> crate::DependencyBinding {
+        crate::DependencyBinding::Standard(crate::LibraryImport::new(
+            miden_mast_package::NamespacePlan::new(vec![]),
+            hash_string_to_word("same-opaque-library-id"),
+            crate::LibrarySelection::Pinned(core::num::NonZeroU32::new(revision).unwrap()),
+        ))
+    }
+
+    fn dependency_at(alias: &str, package: &str, path: &str) -> Dependency {
+        fixture_dependency(
+            Span::unknown(Arc::from(alias)),
+            DependencyVersionScheme::Path {
+                path: Span::unknown(Uri::new(path)),
+                version: None,
+            },
+            Linkage::Dynamic,
+        )
+        .with_package(package)
+    }
+
+    fn registry_dependency(alias: &str, package: &str, version: &str) -> Dependency {
+        fixture_dependency(
+            Span::unknown(Arc::from(alias)),
+            DependencyVersionScheme::Registry(VersionRequirement::Semantic(Span::unknown(
+                version.parse().unwrap(),
+            ))),
+            Linkage::Dynamic,
+        )
+        .with_package(package)
+    }
+
+    #[test]
+    fn same_source_package_under_distinct_pinned_homes_and_mounts_has_distinct_instances() {
+        use miden_assembly_syntax::Path as MasmPath;
+        let temp = TempDir::new().unwrap();
+        write_package(
+            &temp.path().join("source"),
+            "dep",
+            "1.0.0",
+            "export.foo\n    push.7\nend\n",
+            [],
+        );
+        let left_mount =
+            crate::PackageSourceMount::new(MasmPath::new("::dep"), MasmPath::new("::left"))
+                .unwrap();
+        let right_mount =
+            crate::PackageSourceMount::new(MasmPath::new("::dep"), MasmPath::new("::right"))
+                .unwrap();
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [
+                dependency_at("left", "dep", "../source")
+                    .with_binding(pinned_binding(1))
+                    .with_source_mount(left_mount.clone()),
+                dependency_at("right", "dep", "../source")
+                    .with_binding(pinned_binding(2))
+                    .with_source_mount(right_mount.clone()),
+            ],
+        );
+        let registry = TestRegistry::default();
+        let graph = builder(&registry, &temp.path().join("git")).build_from_path(manifest).unwrap();
+        let root = graph.get(graph.root()).unwrap();
+        assert_eq!(graph.nodes().len(), 3);
+        let [left, right] = root.dependencies.as_slice() else {
+            panic!("expected two imports")
+        };
+        assert_ne!(left.dependency, right.dependency);
+        assert_eq!(left.alias.as_ref(), "left");
+        assert_eq!(right.alias.as_ref(), "right");
+        assert_eq!(left.source_mount, Some(left_mount));
+        assert_eq!(right.source_mount, Some(right_mount));
+        assert_eq!(left.binding, Some(pinned_binding(1)));
+        assert_eq!(right.binding, Some(pinned_binding(2)));
+        let left_node = graph.get(&left.dependency).unwrap();
+        let right_node = graph.get(&right.dependency).unwrap();
+        assert_eq!(left_node.name, PackageId::from("dep"));
+        assert_eq!(left_node.version, right_node.version);
+        assert_eq!(left_node.provenance, right_node.provenance);
+    }
+
+    #[test]
+    fn aliased_registry_selections_and_transitive_closures_resolve_independently() {
+        let temp = TempDir::new().unwrap();
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [
+                registry_dependency("left", "dep", "=1.0.0"),
+                registry_dependency("right", "dep", "=2.0.0"),
+            ],
+        );
+        let mut registry = TestRegistry::default();
+        for version in ["1.0.0", "2.0.0"] {
+            registry
+                .insert_record(
+                    PackageId::from("dep"),
+                    PackageRecord::new(
+                        version.parse::<Version>().unwrap(),
+                        [(
+                            PackageId::from("helper"),
+                            VersionRequirement::Semantic(Span::unknown(
+                                format!("={version}").parse().unwrap(),
+                            )),
+                        )],
+                    ),
+                )
+                .unwrap();
+            registry.insert("helper", version.parse().unwrap());
+        }
+        let graph = builder(&registry, &temp.path().join("git")).build_from_path(manifest).unwrap();
+        let root = graph.get(graph.root()).unwrap();
+        let left = graph.get(&root.dependencies[0].dependency).unwrap();
+        let right = graph.get(&root.dependencies[1].dependency).unwrap();
+        assert_eq!(left.version, "1.0.0".parse().unwrap());
+        assert_eq!(right.version, "2.0.0".parse().unwrap());
+        let left_helper = graph.get(&left.dependencies[0].dependency).unwrap();
+        let right_helper = graph.get(&right.dependencies[0].dependency).unwrap();
+        assert_eq!(left_helper.version, left.version);
+        assert_eq!(right_helper.version, right.version);
+        assert_ne!(left.dependencies[0].dependency, right.dependencies[0].dependency);
+    }
+
+    #[test]
+    fn distinct_unaliased_binding_contexts_can_select_incompatible_package_versions() {
+        let temp = TempDir::new().unwrap();
+        for (source, version, revision) in [("a", "=1.0.0", 1), ("b", "=2.0.0", 2)] {
+            write_package(
+                &temp.path().join(source),
+                source,
+                "1.0.0",
+                "export.entry\nend\n",
+                [registry_dependency("shared", "shared", version)
+                    .with_binding(pinned_binding(revision))],
+            );
+        }
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [dependency_at("a", "a", "../a"), dependency_at("b", "b", "../b")],
+        );
+        let mut registry = TestRegistry::default();
+        registry.insert("shared", "1.0.0".parse().unwrap());
+        registry.insert("shared", "2.0.0".parse().unwrap());
+        let graph = builder(&registry, &temp.path().join("git")).build_from_path(manifest).unwrap();
+        let a = node_named(&graph, "a").unwrap();
+        let b = node_named(&graph, "b").unwrap();
+        assert_ne!(a.dependencies[0].dependency, b.dependencies[0].dependency);
+        assert_eq!(
+            graph.get(&a.dependencies[0].dependency).unwrap().version,
+            "1.0.0".parse().unwrap()
+        );
+        assert_eq!(
+            graph.get(&b.dependencies[0].dependency).unwrap().version,
+            "2.0.0".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn wrapper_order_does_not_choose_which_explicit_binding_shares_parent_constraints() {
+        let temp = TempDir::new().unwrap();
+        let mut registry = TestRegistry::default();
+        for version in ["1.0.0", "2.0.0"] {
+            registry
+                .insert_record(
+                    "shared".into(),
+                    PackageRecord::new(
+                        version.parse::<Version>().unwrap(),
+                        [(
+                            "helper".into(),
+                            VersionRequirement::Semantic(Span::unknown(
+                                format!("={version}").parse().unwrap(),
+                            )),
+                        )],
+                    ),
+                )
+                .unwrap();
+            registry.insert("helper", version.parse().unwrap());
+        }
+        for same_binding in [false, true] {
+            // The manifest writer orders dependency table keys, so renaming the wrappers swaps
+            // which binding discovery encounters first without changing the requested supplies.
+            for (first_version, second_version) in [("1.0.0", "2.0.0"), ("2.0.0", "1.0.0")] {
+                for (wrapper, version) in [("a", first_version), ("b", second_version)] {
+                    let revision = if same_binding || version == "1.0.0" { 1 } else { 2 };
+                    write_package(
+                        &temp.path().join(wrapper),
+                        wrapper,
+                        "1.0.0",
+                        "export.entry\nend\n",
+                        [registry_dependency("shared", "shared", &format!("={version}"))
+                            .with_binding(pinned_binding(revision))],
+                    );
+                }
+                let manifest = write_package(
+                    &temp.path().join("app"),
+                    "root",
+                    "1.0.0",
+                    "export.entry\nend\n",
+                    [
+                        dependency_at("a", "a", "../a"),
+                        dependency_at("b", "b", "../b"),
+                        registry_dependency("helper", "helper", "=1.0.0"),
+                    ],
+                );
+                let result = builder(&registry, &temp.path().join("git")).build_from_path(manifest);
+                if same_binding {
+                    let error = result
+                        .expect_err("ordinary same-binding constraints must intersect")
+                        .to_string();
+                    assert!(error.contains("dependency resolution failed"));
+                    assert!(error.contains("shared"));
+                    assert!(error.contains("1.0.0"));
+                    assert!(error.contains("2.0.0"));
+                    continue;
+                }
+                let graph = result
+                    .expect("distinct explicit bindings must isolate every variant symmetrically");
+                let root = graph.get(graph.root()).unwrap();
+                let parent_helper = root
+                    .dependencies
+                    .iter()
+                    .find(|edge| edge.alias.as_ref() == "helper")
+                    .unwrap()
+                    .dependency;
+                assert_eq!(graph.get(&parent_helper).unwrap().version, "1.0.0".parse().unwrap());
+                for (wrapper, version) in [("a", first_version), ("b", second_version)] {
+                    let wrapper = node_named(&graph, wrapper).unwrap();
+                    let shared = graph.get(&wrapper.dependencies[0].dependency).unwrap();
+                    let helper = graph.get(&shared.dependencies[0].dependency).unwrap();
+                    assert_eq!(shared.version, version.parse().unwrap());
+                    assert_eq!(helper.version, shared.version);
+                    assert_ne!(shared.dependencies[0].dependency, parent_helper);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn splitting_source_parents_does_not_leave_obsolete_descendant_isolation() {
+        let temp = TempDir::new().unwrap();
+        for (path, binding) in [("one", pinned_binding(1)), ("two", pinned_binding(2))] {
+            write_package(
+                &temp.path().join(path),
+                "outer",
+                "1.0.0",
+                "export.entry\nend\n",
+                [registry_dependency("helper", "helper", "=1.0.0").with_binding(binding)],
+            );
+        }
+        write_package(
+            &temp.path().join("a"),
+            "a",
+            "1.0.0",
+            "export.entry\nend\n",
+            [dependency_at("outer", "outer", "../one").with_binding(pinned_binding(1))],
+        );
+        write_package(
+            &temp.path().join("b"),
+            "b",
+            "1.0.0",
+            "export.entry\nend\n",
+            [dependency_at("outer", "outer", "../two").with_binding(pinned_binding(2))],
+        );
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [
+                dependency_at("a", "a", "../a"),
+                dependency_at("b", "b", "../b"),
+                registry_dependency("helper", "helper", "=1.0.0"),
+                registry_dependency("peer", "peer", "=1.0.0"),
+            ],
+        );
+        let mut registry = TestRegistry::default();
+        registry.insert("helper", "1.0.0".parse().unwrap());
+        registry.insert("helper", "2.0.0".parse().unwrap());
+        registry
+            .insert_record(
+                "peer".into(),
+                PackageRecord::new(
+                    "1.0.0".parse::<Version>().unwrap(),
+                    [(
+                        "helper".into(),
+                        VersionRequirement::Semantic(Span::unknown("=2.0.0".parse().unwrap())),
+                    )],
+                ),
+            )
+            .unwrap();
+        let error = builder(&registry, &temp.path().join("git"))
+            .build_from_path(manifest)
+            .expect_err("root helper and peer's helper still share ordinary constraints")
+            .to_string();
+        assert!(error.contains("dependency resolution failed"));
+        assert!(error.contains("helper"));
+        assert!(error.contains("1.0.0"));
+        assert!(error.contains("2.0.0"));
+    }
+
+    fn assert_binding_context_ambiguity_rejects_and_explicit_aliases_resolve(names: &[&str]) {
+        let temp = TempDir::new().unwrap();
+        for (index, name) in names.iter().enumerate() {
+            let next = names[(index + 1) % names.len()];
+            write_package(
+                &temp.path().join(format!("{name}-leaf")),
+                name,
+                "1.0.0",
+                "export.entry\nend\n",
+                [],
+            );
+            write_package(
+                &temp.path().join(format!("{name}-parent")),
+                name,
+                "1.0.0",
+                "export.entry\nend\n",
+                [dependency_at(next, next, &format!("../{next}-leaf"))
+                    .with_binding(pinned_binding(2))],
+            );
+        }
+        let registry = TestRegistry::default();
+        let make_root = |aliased: bool| {
+            write_package(
+                &temp.path().join("app"),
+                "root",
+                "1.0.0",
+                "export.entry\nend\n",
+                names.iter().map(|name| {
+                    let alias = if aliased {
+                        format!("explicit_{name}")
+                    } else {
+                        (*name).into()
+                    };
+                    dependency_at(&alias, name, &format!("../{name}-parent"))
+                        .with_binding(pinned_binding(1))
+                }),
+            )
+        };
+        let manifest = make_root(false);
+        for _ in 0..2 {
+            let error = builder(&registry, &temp.path().join("git"))
+                .build_from_path(&manifest)
+                .expect_err("competing contexts must reject without unbounded discovery")
+                .to_string();
+            assert_eq!(
+                error,
+                "ambiguous dependency binding contexts; use explicit dependency aliases to select independent contexts"
+            );
+        }
+        let graph = builder(&registry, &temp.path().join("git"))
+            .build_from_path(make_root(true))
+            .expect("explicit source aliases select independent contexts");
+        assert_eq!(graph.nodes().len(), 1 + names.len() * 2);
+    }
+
+    #[test]
+    fn acyclic_diamond_binding_context_ambiguity_rejects_deterministically() {
+        assert_binding_context_ambiguity_rejects_and_explicit_aliases_resolve(&["a", "b"]);
+    }
+
+    #[test]
+    fn acyclic_three_name_binding_context_ambiguity_rejects_deterministically() {
+        assert_binding_context_ambiguity_rejects_and_explicit_aliases_resolve(&["x", "y", "z"]);
+    }
+
+    #[test]
+    fn aliases_belong_to_the_declaring_instance_instead_of_the_shared_resolution_scope() {
+        let temp = TempDir::new().unwrap();
+        for (source, version) in [("a", "=1.0.0"), ("b", "=2.0.0")] {
+            write_package(
+                &temp.path().join(source),
+                source,
+                "1.0.0",
+                "export.entry\nend\n",
+                [registry_dependency("local", "shared", version)],
+            );
+        }
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [dependency_at("a", "a", "../a"), dependency_at("b", "b", "../b")],
+        );
+        let mut registry = TestRegistry::default();
+        registry.insert("shared", "1.0.0".parse().unwrap());
+        registry.insert("shared", "2.0.0".parse().unwrap());
+        let graph = builder(&registry, &temp.path().join("git")).build_from_path(manifest).unwrap();
+        let a = node_named(&graph, "a").unwrap();
+        let b = node_named(&graph, "b").unwrap();
+        assert_ne!(a.dependencies[0].dependency, b.dependencies[0].dependency);
+        assert_eq!(
+            graph.get(&a.dependencies[0].dependency).unwrap().version,
+            "1.0.0".parse().unwrap()
+        );
+        assert_eq!(
+            graph.get(&b.dependencies[0].dependency).unwrap().version,
+            "2.0.0".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn unaliased_same_binding_conflicting_source_provenance_still_rejects() {
+        let temp = TempDir::new().unwrap();
+        write_package(&temp.path().join("one"), "shared", "1.0.0", "export.foo\nend\n", []);
+        write_package(&temp.path().join("two"), "shared", "1.0.0", "export.foo\nend\n", []);
+        for (source, target) in [("a", "../one"), ("b", "../two")] {
+            write_package(
+                &temp.path().join(source),
+                source,
+                "1.0.0",
+                "export.entry\nend\n",
+                [dependency_at("shared", "shared", target)],
+            );
+        }
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [dependency_at("a", "a", "../a"), dependency_at("b", "b", "../b")],
+        );
+        let registry = TestRegistry::default();
+        let error = builder(&registry, &temp.path().join("git"))
+            .build_from_path(manifest)
+            .unwrap_err();
+        assert!(error.to_string().contains("dependency conflict for 'shared'"));
+    }
+
+    #[test]
+    fn alias_and_binding_changing_source_cycle_rejects_before_context_expansion() {
+        let temp = TempDir::new().unwrap();
+        let manifest = write_package(
+            &temp.path().join("a"),
+            "a",
+            "1.0.0",
+            "export.entry\nend\n",
+            [dependency_at("other", "b", "../b").with_binding(pinned_binding(1))],
+        );
+        write_package(
+            &temp.path().join("b"),
+            "b",
+            "1.0.0",
+            "export.entry\nend\n",
+            [dependency_at("again", "a", "../a").with_binding(pinned_binding(2))],
+        );
+        let registry = TestRegistry::default();
+        let error = builder(&registry, &temp.path().join("git"))
+            .build_from_path(manifest)
+            .unwrap_err();
+        assert!(error.to_string().contains("cyclic source dependency"));
+    }
+
+    #[test]
+    fn registry_cycles_keep_a_finite_instance_context() {
+        let temp = TempDir::new().unwrap();
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [registry_dependency("alias", "dep", "=1.0.0")],
+        );
+        let mut registry = TestRegistry::default();
+        for (name, dependency) in [("dep", "helper"), ("helper", "dep")] {
+            registry
+                .insert_record(
+                    PackageId::from(name),
+                    PackageRecord::new(
+                        "1.0.0".parse::<Version>().unwrap(),
+                        [(
+                            PackageId::from(dependency),
+                            VersionRequirement::Semantic(Span::unknown("=1.0.0".parse().unwrap())),
+                        )],
+                    ),
+                )
+                .unwrap();
+        }
+        let graph = builder(&registry, &temp.path().join("git")).build_from_path(manifest).unwrap();
+        assert_eq!(graph.nodes().len(), 3);
+        let dep = graph.get(&graph.get(graph.root()).unwrap().dependencies[0].dependency).unwrap();
+        let helper = graph.get(&dep.dependencies[0].dependency).unwrap();
+        assert_eq!(graph.get(&helper.dependencies[0].dependency).unwrap(), dep);
+    }
+
+    #[test]
+    fn preassembled_duplicate_name_supplies_keep_exact_versions_and_independent_closures() {
+        let temp = TempDir::new().unwrap();
+        let supplies =
+            ["1.0.0", "2.0.0"].map(|version| build_registry_test_package("runtime", version));
+        let artifact = MastPackage::generate(
+            "dep".into(),
+            "1.0.0".parse().unwrap(),
+            TargetType::Library,
+            supplies.iter().map(|supply| miden_mast_package::Dependency {
+                name: supply.name.clone(),
+                version: supply.version.clone(),
+                kind: supply.kind,
+                digest: supply.dependency_commitment(),
+            }),
+        );
+        let artifact_path = temp.path().join("dep.masp");
+        fs::write(&artifact_path, artifact.to_bytes()).unwrap();
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [dependency_at("dep", "dep", artifact_path.to_str().unwrap())],
+        );
+        let mut registry = TestRegistry::default();
+        for supply in &supplies {
+            registry
+                .insert_record(
+                    "runtime".into(),
+                    PackageRecord::new(
+                        Version::new(supply.version.clone(), supply.dependency_commitment()),
+                        [(
+                            "helper".into(),
+                            VersionRequirement::Semantic(Span::unknown(
+                                format!("={}", supply.version).parse().unwrap(),
+                            )),
+                        )],
+                    ),
+                )
+                .unwrap();
+            registry.insert("helper", Version::from(supply.version.clone()));
+        }
+        let graph = builder(&registry, &temp.path().join("git")).build_from_path(manifest).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
+        let ProjectDependencyNodeProvenance::Preassembled { requirements, .. } = &dep.provenance
+        else {
+            panic!("expected artifact")
+        };
+        assert_eq!(requirements.len(), 2);
+        assert_eq!(requirements[0].name, requirements[1].name);
+        assert_ne!(requirements[0].version, requirements[1].version);
+        assert_eq!(dep.dependencies.len(), 2);
+        let first = graph.get(&dep.dependencies[0].dependency).unwrap();
+        let second = graph.get(&dep.dependencies[1].dependency).unwrap();
+        assert_ne!(first.version, second.version);
+        assert_eq!(graph.get(&first.dependencies[0].dependency).unwrap().version, first.version);
+        assert_eq!(graph.get(&second.dependencies[0].dependency).unwrap().version, second.version);
+    }
+
+    #[test]
+    fn exact_same_semver_supplies_use_full_local_commitments_instead_of_registry_name_lookup() {
+        let temp = TempDir::new().unwrap();
+        let leaf = build_registry_test_package("leaf", "1.0.0");
+        let first = build_registry_test_package("runtime", "1.0.0");
+        let second = MastPackage::generate(
+            "runtime".into(),
+            "1.0.0".parse().unwrap(),
+            TargetType::Library,
+            [miden_mast_package::Dependency {
+                name: "leaf".into(),
+                version: leaf.version.clone(),
+                kind: leaf.kind,
+                digest: leaf.dependency_commitment(),
+            }],
+        );
+        assert_eq!(first.mast_forest().commitment(), second.mast_forest().commitment());
+        assert_ne!(first.dependency_commitment(), second.dependency_commitment());
+        let artifact = MastPackage::generate(
+            "dep".into(),
+            "1.0.0".parse().unwrap(),
+            TargetType::Library,
+            [&first, &second].into_iter().map(|supply| miden_mast_package::Dependency {
+                name: supply.name.clone(),
+                version: supply.version.clone(),
+                kind: supply.kind,
+                digest: supply.dependency_commitment(),
+            }),
+        );
+        for (path, artifact) in
+            [("dep.masp", &artifact), ("one.masp", &first), ("two.masp", &second)]
+        {
+            fs::write(temp.path().join(path), artifact.to_bytes()).unwrap();
+        }
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [
+                dependency_at("dep", "dep", "../dep.masp"),
+                dependency_at("one", "runtime", "../one.masp"),
+                dependency_at("two", "runtime", "../two.masp"),
+            ],
+        );
+        let mut registry = TestRegistry::default();
+        registry.insert("leaf", Version::new(leaf.version.clone(), leaf.dependency_commitment()));
+        let graph = builder(&registry, &temp.path().join("git")).build_from_path(manifest).unwrap();
+        let root = graph.get(graph.root()).unwrap();
+        let dep = graph.get(&root.dependencies[0].dependency).unwrap();
+        let expected = [root.dependencies[1].dependency, root.dependencies[2].dependency]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            dep.dependencies.iter().map(|edge| edge.dependency).collect::<BTreeSet<_>>(),
+            expected
+        );
+        let ProjectDependencyNodeProvenance::Preassembled { requirements, .. } = &dep.provenance
+        else {
+            panic!("expected artifact")
+        };
+        assert_eq!(requirements.len(), 2);
+        assert_eq!(requirements[0].name, requirements[1].name);
+        assert_eq!(requirements[0].version.version, requirements[1].version.version);
+        assert_ne!(requirements[0].version.digest, requirements[1].version.digest);
+    }
+
+    #[test]
+    fn registry_records_preserve_same_name_exact_supply_instances() {
+        let temp = TempDir::new().unwrap();
+        let manifest = write_package(
+            &temp.path().join("app"),
+            "root",
+            "1.0.0",
+            "export.entry\nend\n",
+            [registry_dependency("dep", "dep", "=1.0.0")],
+        );
+        let mut registry = TestRegistry::default();
+        let first = Version::new("1.0.0".parse().unwrap(), hash_string_to_word("runtime one"));
+        let second = Version::new("2.0.0".parse().unwrap(), hash_string_to_word("runtime two"));
+        registry
+            .insert_record(
+                "dep".into(),
+                PackageRecord::new(
+                    "1.0.0".parse::<Version>().unwrap(),
+                    [
+                        ("runtime".into(), VersionRequirement::Exact(first.clone())),
+                        ("runtime".into(), VersionRequirement::Exact(second.clone())),
+                    ],
+                ),
+            )
+            .unwrap();
+        for version in [&first, &second] {
+            registry
+                .insert_record(
+                    "runtime".into(),
+                    PackageRecord::new(
+                        version.clone(),
+                        [(
+                            "helper".into(),
+                            VersionRequirement::Semantic(Span::unknown(
+                                format!("={}", version.version).parse().unwrap(),
+                            )),
+                        )],
+                    ),
+                )
+                .unwrap();
+            registry.insert("helper", Version::from(version.version.clone()));
+        }
+        let graph = builder(&registry, &temp.path().join("git")).build_from_path(manifest).unwrap();
+        let dep = node_named(&graph, "dep").unwrap();
+        assert_eq!(dep.dependencies.len(), 2);
+        assert_ne!(dep.dependencies[0].dependency, dep.dependencies[1].dependency);
+        let first_node = graph.get(&dep.dependencies[0].dependency).unwrap();
+        let second_node = graph.get(&dep.dependencies[1].dependency).unwrap();
+        assert_eq!(first_node.version, first.version);
+        assert_eq!(second_node.version, second.version);
+        assert_eq!(
+            graph.get(&first_node.dependencies[0].dependency).unwrap().version,
+            first.version
+        );
+        assert_eq!(
+            graph.get(&second_node.dependencies[0].dependency).unwrap().version,
+            second.version
         );
     }
 

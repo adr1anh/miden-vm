@@ -27,7 +27,7 @@ use alloc::{
 use serde::{Deserialize, Serialize};
 
 pub use self::{
-    dependency::DependencySpec,
+    dependency::{DependencySpec, SourceMountSpec},
     dependency_binding::{
         DependencyBindingSpec, ExpectedCallableSpec, HomeLabelSpec, LibraryIdSpec,
     },

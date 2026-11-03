@@ -266,7 +266,7 @@ mod tests {
             binding.namespace_plan(),
             &custom.resolve_with_catalog(&catalog).unwrap().namespace_plan()
         );
-        assert!(ExpectedCallableSpec::resolve_all(&[expected.clone()]).is_err());
+        assert!(ExpectedCallableSpec::resolve_all(core::slice::from_ref(&expected)).is_err());
         assert!(
             ExpectedCallableSpec::resolve_all_with_catalog(&[expected.clone(), expected], &catalog)
                 .unwrap_err()
