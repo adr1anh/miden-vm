@@ -381,7 +381,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Earlier normal private attempt stopped at three assembly errors, now resolved by PR09; fresh normal private/relocation/sidecar checks remain unrun, as do complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates |
-| 09 Assembly/packages | in-progress | Runtime debug `82d70c303`; artifact fixtures `3ab60c69c`/`e72fc3572`/`921dcb06e`; home/import refs below; base `82935d673` | Independent reviews; full assembly442 pass/49 fail/6 ignored; all migrated runtime-debug/artifact fixtures pass; fresh strict assembly library/test Clippy with testing passes. Prior full package240 pass/one manual seed ignored, unchanged HomeV1 tests, combined Clippy and no_std/testing pass remain applicable | Remaining43 project-input failures and six structural-inline fixtures. Required package9/wire/admission, pending executable kernel input decision, naming cache matching, final Program/kernel conversion, fresh normal processor and all inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Producer `82e5a30b8`/`b1e8ee052`; explicit-inline fixtures `3889b5734`; earlier refs below; base `82935d673` | Independent reviews; full assembly454 pass/43 fail/6 ignored; debug22/inline13 and final producer6 pass; fresh strict assembly library/test Clippy with testing and no_std/testing pass. Prior full package240 pass/one manual seed ignored and unchanged HomeV1 evidence remain applicable | All43 failures are project-input cases. Required package9/wire/admission, pending executable kernel input decision, naming cache matching, final Program/kernel conversion, fresh normal processor and all inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -1939,3 +1939,25 @@ with testing passes. Logs: `pr09-full-assembly-lib-runtime-debug-artifact-fixtur
 `pr09-runtime-debug-artifact-clippy-first`; both Rust commands passed AC/heavy guards. No fresh
 no_std or standard test-dev/nextest result is claimed. Package9 and all inherited gates remain open.
 The current brief owns subsequent assignments; this ledger owns these durable results.
+
+### PR 09 Explicit inline debug and source-owned emission checkpoint
+
+`3889b5734` migrates only the six structural debug fixtures to explicit inline, retaining runtime
+tests and nesting/range/stale-frame/201-or-256-operation padding coverage. Imported bodies require
+concrete typed-D pins; canonical definitions retain only their original compiler frames. Debug22
+and inline13 pass; independent review is clean. Full assembly then448 pass/43 fail/6 ignored.
+
+Producer `82e5a30b8` and tests `b1e8ee052` retain existing PackageCallables plus direct defining-path
+node/source selections, explicit caller/kernel inputs and entry K in public raw AssemblyProduct.
+Aliases retain defining K; distinct concrete AST definitions, including prelinked ones, reject
+duplicate K. Imported/declaration aliases may coalesce only identical bindings and consistent D,
+while preserving exact per-path sources. Public cohort methods reject mismatched target/root kinds.
+Package8 extraction still discards raw naming; package9 transport/admission remains unimplemented.
+
+Full assembly454 pass/43 project failures/6 ignored; final producer6, strict assembly library/test
+Clippy with testing and no_std/testing pass. Logs: `pr09-full-assembly-lib-emitted-callables`,
+`pr09-emitted-callables-final`, `pr09-emitted-callables-clippy-second` and
+`pr09-emitted-callables-no-std-testing-second`. After the full run, only reviewed boxing and removal
+of an obsolete unused-lint expectation changed; final focused checks cover that state. All Rust
+commands passed AC/heavy guards. Independent review resolved alias/concrete-definition coverage.
+Standard test-dev/nextest, package9, project/cache and every inherited/external gate remain open.
