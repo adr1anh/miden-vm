@@ -402,7 +402,15 @@ fn test_trace_generation_at_fragment_boundaries(
     // Verify stack outputs match.
     assert_eq!(trace_from_fragments.stack_outputs(), trace_from_single_fragment.stack_outputs(),);
 
-    // Verify program info and trace length summary match.
+    // Verify both trace paths preserve the authenticated descriptor supplied by the fixture.
+    assert_eq!(trace_from_fragments.execution_descriptor(), program.environment.descriptor());
+    assert_eq!(
+        trace_from_single_fragment.execution_descriptor(),
+        program.environment.descriptor(),
+    );
+    assert_eq!(trace_from_fragments.public_inputs(), trace_from_single_fragment.public_inputs());
+
+    // Verify code/debug metadata and trace length summary match.
     assert_eq!(trace_from_fragments.program_info(), trace_from_single_fragment.program_info(),);
     assert_eq!(
         trace_from_fragments.trace_len_summary(),

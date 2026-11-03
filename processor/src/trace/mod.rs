@@ -283,8 +283,8 @@ impl VmWitness {
 
     /// Returns the public claim associated with this witness.
     pub fn claim(&self) -> ExecutionClaim {
-        ExecutionClaim::from_program_info(
-            self.program_info.clone(),
+        ExecutionClaim::new(
+            self.trace.environment.descriptor(),
             self.stack_inputs,
             self.stack_outputs,
         )
@@ -389,7 +389,10 @@ impl ByteWriter for WitnessSize {
 
 #[cfg(test)]
 mod wire_tests {
-    use miden_core::deferred::TRUE_DIGEST;
+    use miden_core::{
+        deferred::TRUE_DIGEST,
+        program::{KernelDescriptor, ProgramInfo},
+    };
     use rstest::rstest;
 
     use super::{
@@ -407,6 +410,40 @@ mod wire_tests {
     use common::{
         WitnessFixture, aead_stream_witness, deferred_witness, read_limits, trace_limits,
     };
+
+    #[test]
+    fn witness_claim_retains_descriptor_independently_of_legacy_kernel_metadata() {
+        let WitnessFixture { mut witness, environment } = deferred_witness();
+        let claim = witness.claim();
+        let implementation = *witness.vm.program_info.program_hash();
+        assert_ne!(claim.entry_key().as_word(), &implementation);
+        assert_eq!(claim.execution_descriptor(), environment.descriptor());
+
+        // Kernel metadata is retained for code/debug transport, without granting authority to
+        // select the claim's entry key or environment root.
+        witness.vm.program_info =
+            ProgramInfo::new(implementation, KernelDescriptor::new(&[implementation]).unwrap());
+        assert_eq!(witness.claim(), claim);
+        let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+        let mut restored = ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &environment,
+            trace_limits(),
+            read_limits(),
+        )
+        .unwrap();
+        assert_eq!(restored.claim(), claim);
+        assert_eq!(restored.vm.program_info, witness.vm.program_info);
+
+        // The retained entry implementation still has to match the authenticated replay.
+        restored.vm.program_info =
+            ProgramInfo::new(claim.entry_key().into_word(), KernelDescriptor::default());
+        assert!(matches!(
+            restored.vm.require_validated(),
+            Err(ExecutionError::Internal("legacy ProgramInfo differs from authenticated entry"))
+        ));
+        assert!(restored.to_bytes_with_limits(trace_limits(), read_limits()).is_err());
+    }
 
     #[test]
     fn witness_wire_accepts_large_minimally_encoded_continuation_stack() {

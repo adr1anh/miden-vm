@@ -7,7 +7,7 @@ use core::ops::Range;
 use miden_core::{
     Felt, Word, ZERO,
     deferred::Digest,
-    program::{MIN_STACK_DEPTH, ProgramInfo, StackInputs, StackOutputs},
+    program::{ExecutionDescriptor, MIN_STACK_DEPTH, ProgramInfo, StackInputs, StackOutputs},
     utils::RowMajorMatrix,
 };
 
@@ -25,13 +25,14 @@ use super::{
 ///
 /// The trace consists of the following components:
 /// - Per-AIR main traces for Core, Chiplets, Eidos compression, and byte-pair lookup.
-/// - Information about the program (program hash and the kernel).
+/// - The authenticated execution descriptor and code/debug metadata about the program.
 /// - Information about the initial and final stack states and authenticated precompile root.
 /// - Summary of trace lengths of the main trace components.
 #[derive(Debug)]
 pub struct VmTrace {
     main_trace: MainTrace,
     program_info: ProgramInfo,
+    execution_descriptor: ExecutionDescriptor,
     stack_inputs: StackInputs,
     stack_outputs: StackOutputs,
     precompile_root: Digest,
@@ -49,6 +50,7 @@ impl VmTrace {
     /// Construction does not evaluate the AIR constraints.
     pub fn new_from_parts(
         program_info: ProgramInfo,
+        execution_descriptor: ExecutionDescriptor,
         stack_inputs: StackInputs,
         stack_outputs: StackOutputs,
         precompile_root: Digest,
@@ -58,6 +60,7 @@ impl VmTrace {
         Self {
             main_trace,
             program_info,
+            execution_descriptor,
             stack_inputs,
             stack_outputs,
             precompile_root,
@@ -68,12 +71,17 @@ impl VmTrace {
     // PUBLIC ACCESSORS
     // --------------------------------------------------------------------------------------------
 
-    /// Returns the program info of this execution trace.
+    /// Returns non-authoritative code/debug metadata for this execution trace.
     pub fn program_info(&self) -> &ProgramInfo {
         &self.program_info
     }
 
-    /// Returns hash of the program execution of which resulted in this execution trace.
+    /// Returns the authenticated descriptor of this execution trace.
+    pub fn execution_descriptor(&self) -> ExecutionDescriptor {
+        self.execution_descriptor
+    }
+
+    /// Returns the entry implementation hash retained as code/debug metadata.
     pub fn program_hash(&self) -> &Word {
         self.program_info.program_hash()
     }
@@ -86,7 +94,7 @@ impl VmTrace {
     /// Returns the public inputs for this execution trace.
     pub fn public_inputs(&self) -> PublicInputs {
         PublicInputs::new(
-            self.program_info.clone(),
+            self.execution_descriptor,
             self.stack_inputs,
             self.stack_outputs,
             self.precompile_root,

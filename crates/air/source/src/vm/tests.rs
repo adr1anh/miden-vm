@@ -1,17 +1,18 @@
-//! VM shape, statement-binding, and kernel-boundary regression tests.
+//! VM shape, complete statement binding and external-boundary regressions.
 
 use alloc::{string::ToString, vec::Vec};
 
 use miden_core::{
     WORD_SIZE, Word,
     field::{PrimeCharacteristicRing, QuadFelt},
-    program::{KernelDescriptor, MIN_STACK_DEPTH, ProgramInfo, StackInputs, StackOutputs},
+    program::{EnvironmentRoot, ExecutionDescriptor, ProcedureKey, StackInputs, StackOutputs},
+    serde::{Deserializable, Serializable},
 };
 use miden_stark::lookup::Challenges;
 use p3_challenger::CanObserve;
 
 use super::{
-    inputs::AUX_KERNEL_DIGESTS,
+    inputs::NUM_AUX_INPUTS,
     logup::{BusId, MIDEN_MAX_MESSAGE_WIDTH},
     *,
 };
@@ -78,7 +79,7 @@ fn and8_lookup_shape_and_degree_match_design() {
 #[test]
 fn packed_statement_rejects_missing_and_malformed_air_public_inputs() {
     let challenges = [QuadFelt::from_u32(7), QuadFelt::from_u32(11)];
-    let aux = vec![Felt::ZERO; AUX_KERNEL_DIGESTS];
+    let aux = vec![Felt::ZERO; NUM_AUX_INPUTS];
     let sum = [QuadFelt::ZERO];
     let sums = [sum.as_slice(); MIDEN_AIR_COUNT];
     let valid = vec![
@@ -87,9 +88,16 @@ fn packed_statement_rejects_missing_and_malformed_air_public_inputs() {
         vec![],
         vec![],
     ];
-    for count in [0, 1, 3, 5] {
+    for count in [0, 1, 2, 3, 5] {
         let mut public = valid.clone();
         public.resize(count, vec![]);
+        assert!(
+            statement::eval_external(&challenges, &public, &aux, &sums, &[6, 6, 6, 16]).is_err()
+        );
+    }
+    for count in [0, 4, 8, 32, 35, 37, 40, 44] {
+        let mut public = valid.clone();
+        public[0].resize(count, Felt::ZERO);
         assert!(
             statement::eval_external(&challenges, &public, &aux, &sums, &[6, 6, 6, 16]).is_err()
         );
@@ -137,7 +145,7 @@ fn eval_external_weights_normalized_sums_by_trace_length() {
         vec![],
         vec![],
     ];
-    let aux_inputs = vec![Felt::ZERO; AUX_KERNEL_DIGESTS];
+    let aux_inputs = vec![Felt::ZERO; NUM_AUX_INPUTS];
     let normalized_sums = [
         QuadFelt::from_u32(13),
         QuadFelt::from_u32(17),
@@ -182,191 +190,131 @@ fn eval_external_weights_normalized_sums_by_trace_length() {
 }
 
 #[test]
-fn eval_external_rejects_partial_kernel_digest() {
-    let challenges =
-        [QuadFelt::from(Felt::new_unchecked(3)), QuadFelt::from(Felt::new_unchecked(5))];
-    let air_inputs = [
-        vec![Felt::ZERO; NUM_PUBLIC_VALUES],
-        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
-        vec![],
-        vec![],
-    ];
-    let mut aux_inputs = vec![Felt::ZERO; AUX_KERNEL_DIGESTS];
-    aux_inputs.push(Felt::ONE);
-    let zero = QuadFelt::from(Felt::ZERO);
-    let core_aux = [zero];
-    let chiplets_aux = [zero];
-    let eidos_compression_aux = [zero];
-    let and8_aux = [zero];
-    let aux_values = [
-        core_aux.as_slice(),
-        chiplets_aux.as_slice(),
-        eidos_compression_aux.as_slice(),
-        and8_aux.as_slice(),
-    ];
+fn eval_external_accepts_only_deferred_aux4_and_rejects_legacy_shapes() {
+    let challenges = [QuadFelt::from_u32(3), QuadFelt::from_u32(5)];
+    let (public, _) = statement_fixture().to_air_inputs();
+    let zero = [QuadFelt::ZERO];
+    let sums = [zero.as_slice(); MIDEN_AIR_COUNT];
+    assert_eq!(statement::max_aux_inputs(), WORD_SIZE);
+    for count in [0, 1, 2, 3, 5, 7, 8, 9, 12, 16, 36, 44, 1032] {
+        let aux = vec![Felt::ZERO; count];
+        let error = statement::eval_external(&challenges, &public, &aux, &sums, &[8, 8, 8, 16])
+            .unwrap_err();
+        assert!(error.to_string().contains("expected exactly 4 deferred-root inputs"));
+    }
+}
 
-    let err = statement::eval_external(
-        &challenges,
-        &air_inputs,
-        &aux_inputs,
-        &aux_values,
-        &[8, 8, 8, 16],
+fn statement_fixture() -> PublicInputs {
+    let word = |start: u32| Word::new(core::array::from_fn(|i| Felt::from_u32(start + i as u32)));
+    PublicInputs::new(
+        ExecutionDescriptor::new(ProcedureKey::new(word(101)), EnvironmentRoot::new(word(201))),
+        StackInputs::new(&[Felt::from_u32(5), Felt::from_u32(6)]).unwrap(),
+        StackOutputs::new(&[Felt::from_u32(7)]).unwrap(),
+        word(301),
     )
-    .unwrap_err();
-
-    assert!(err.to_string().contains("legacy kernel digest inputs must contain whole words"));
 }
 
 #[test]
-fn eval_external_rejects_too_many_kernel_digests() {
-    let challenges =
-        [QuadFelt::from(Felt::new_unchecked(3)), QuadFelt::from(Felt::new_unchecked(5))];
-    let air_inputs = [
-        vec![Felt::ZERO; NUM_PUBLIC_VALUES],
-        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
-        vec![],
-        vec![],
-    ];
-    let max_aux_inputs = AUX_KERNEL_DIGESTS + KernelDescriptor::MAX_NUM_PROCEDURES * WORD_SIZE;
-    let actual_aux_inputs = max_aux_inputs + WORD_SIZE;
-    let aux_inputs = vec![Felt::ZERO; actual_aux_inputs];
-    let zero = QuadFelt::from(Felt::ZERO);
-    let core_aux = [zero];
-    let chiplets_aux = [zero];
-    let eidos_compression_aux = [zero];
-    let and8_aux = [zero];
-    let aux_values = [
-        core_aux.as_slice(),
-        chiplets_aux.as_slice(),
-        eidos_compression_aux.as_slice(),
-        and8_aux.as_slice(),
-    ];
-
-    let err = statement::eval_external(
-        &challenges,
-        &air_inputs,
-        &aux_inputs,
-        &aux_values,
-        &[8, 8, 8, 16],
-    )
-    .unwrap_err();
-
-    assert!(err.to_string().contains(&format!(
-        "aux_inputs length {actual_aux_inputs} exceeds maximum {max_aux_inputs}"
-    )));
+fn complete_public_projection_retains_descriptor_and_exact_group_order() {
+    let inputs = statement_fixture();
+    let claim = inputs.claim();
+    let (groups, aux) = inputs.to_air_inputs();
+    assert_eq!(groups.len(), 4);
+    assert_eq!(groups.iter().map(Vec::len).collect::<Vec<_>>(), vec![36, 4, 0, 0]);
+    assert_eq!(&groups[0][..16], claim.stack_inputs().as_ref());
+    assert_eq!(&groups[0][16..32], claim.stack_outputs().as_ref());
+    assert_eq!(&groups[0][32..], claim.entry_key().as_word().as_elements());
+    assert_eq!(groups[1], claim.environment_root().as_word().as_elements());
+    assert_eq!(aux, inputs.deferred_root().as_elements());
+    assert_eq!(inputs.to_elements().len(), 44);
+    assert_eq!(&inputs.to_elements()[..40], claim.to_elements());
+    assert_eq!(&inputs.to_elements()[40..], aux);
 }
 
 #[test]
-fn hash_kernel_digests_matches_kernel_descriptor_commitment() {
-    // The transcript-side helper and `KernelDescriptor::commitment` are two computations of
-    // the same normative value; this pins them together (including the empty kernel).
-    use miden_core::Word;
-
-    let word = |a: u64| -> Word {
-        [Felt::new_unchecked(a), Felt::new_unchecked(a + 1), Felt::ZERO, Felt::ONE].into()
-    };
-    for procs in [vec![], vec![word(10)], vec![word(10), word(20), word(30)]] {
-        let descriptor = KernelDescriptor::from_hashes(procs).unwrap();
-        let flattened: Vec<Felt> =
-            descriptor.proc_hashes().iter().flat_map(|w| w.as_elements().to_vec()).collect();
-        assert_eq!(
-            Word::new(hash_kernel_digests(&flattened)),
-            descriptor.commitment(),
-            "hash_kernel_digests diverged from KernelDescriptor::commitment"
-        );
-    }
-}
-
-#[test]
-#[should_panic(expected = "kernel digest felts exceed KernelDescriptor::MAX_NUM_PROCEDURES")]
-fn hash_kernel_digests_rejects_too_many_digest_felts() {
-    let kernel_felts = vec![Felt::ZERO; (KernelDescriptor::MAX_NUM_PROCEDURES + 1) * WORD_SIZE];
-
-    let _ = hash_kernel_digests(&kernel_felts);
-}
-
-#[test]
-fn observe_matches_execution_claim_commitment() {
-    // The transcript's statement block must open with exactly
-    // `ExecutionClaim::commitment()` for the same statement, followed by the deferred
-    // root — pinning `observe`'s inline claim encoding to the canonical one.
-    use miden_core::program::ExecutionClaim;
-
-    #[derive(Default)]
-    struct FeltSink {
-        observed: Vec<Felt>,
-    }
-    impl CanObserve<Felt> for FeltSink {
-        fn observe(&mut self, value: Felt) {
-            self.observed.push(value);
-        }
-    }
-
-    let word = |a: u64| -> Word {
-        [
-            Felt::new_unchecked(a),
-            Felt::new_unchecked(a + 1),
-            Felt::new_unchecked(a + 2),
-            Felt::new_unchecked(a + 3),
-        ]
-        .into()
-    };
-    let kernel = KernelDescriptor::from_hashes(vec![word(50), word(60)]).unwrap();
-    let program_hash = word(1);
-    let stack_inputs = StackInputs::new(&[Felt::new_unchecked(5), Felt::new_unchecked(6)]).unwrap();
-    let stack_outputs = StackOutputs::new(&[Felt::new_unchecked(7)]).unwrap();
-    let deferred_root = word(90);
-
-    let claim = ExecutionClaim::from_program_info(
-        ProgramInfo::new(program_hash, kernel.clone()),
-        stack_inputs,
-        stack_outputs,
+fn versioned_public_inputs_roundtrip_complete_claim_and_reject_legacy_or_extra_bytes() {
+    let expected = statement_fixture();
+    let bytes = expected.to_bytes();
+    assert_eq!(bytes[0], 2);
+    assert_eq!(PublicInputs::read_from_bytes(&bytes).unwrap(), expected);
+    let smallest = PublicInputs::new(
+        expected.execution_descriptor(),
+        StackInputs::default(),
+        StackOutputs::default(),
+        expected.deferred_root(),
     );
+    assert_eq!(PublicInputs::min_serialized_size(), smallest.to_bytes().len());
+    assert_eq!(
+        PublicInputs::read_from_bytes_with_budget(&bytes, bytes.len()).unwrap(),
+        expected
+    );
+    assert!(PublicInputs::read_from_bytes_with_budget(&bytes, bytes.len() - 1).is_err());
+    for end in 0..bytes.len() {
+        assert!(PublicInputs::read_from_bytes(&bytes[..end]).is_err());
+    }
+    let mut oversized_stack = bytes[..65].to_vec();
+    oversized_stack.push(17);
+    for _ in 0..17 {
+        Felt::ZERO.write_into(&mut oversized_stack);
+    }
+    assert!(PublicInputs::read_from_bytes(&oversized_stack).is_err());
+    for version in [0, 1, 3, 255] {
+        let mut wrong = bytes.clone();
+        wrong[0] = version;
+        assert!(PublicInputs::read_from_bytes(&wrong).is_err());
+    }
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(PublicInputs::read_from_bytes(&trailing).is_err());
+}
 
-    // air_inputs = I ‖ O; aux_inputs = P ‖ D ‖ kernel digest felts.
-    let mut air_inputs = [Felt::ZERO; NUM_PUBLIC_VALUES];
-    air_inputs[0..MIN_STACK_DEPTH].copy_from_slice(&stack_inputs[..]);
-    air_inputs[MIN_STACK_DEPTH..2 * MIN_STACK_DEPTH].copy_from_slice(&stack_outputs[..]);
-    let air_inputs = [
-        air_inputs.to_vec(),
-        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
-        vec![],
-        vec![],
-    ];
-    let mut aux_inputs: Vec<Felt> = Vec::new();
-    aux_inputs.extend(program_hash.as_elements());
-    aux_inputs.extend(deferred_root.as_elements());
-    aux_inputs.extend(Word::words_as_elements(kernel.proc_hashes()));
-
-    let mut sink = FeltSink::default();
-    statement::observe(&mut sink, &air_inputs, &aux_inputs, &[10, 10, 10, 16]);
-
-    let mut expected: Vec<Felt> = claim.commitment().as_elements().to_vec();
-    expected.extend(deferred_root.as_elements());
-    assert_eq!(sink.observed, expected, "observe must emit [CLAIM_HASH | D]");
+#[derive(Default)]
+struct FeltSink {
+    observed: Vec<Felt>,
+}
+impl CanObserve<Felt> for FeltSink {
+    fn observe(&mut self, value: Felt) {
+        self.observed.push(value);
+    }
 }
 
 #[test]
-#[should_panic(expected = "aux inputs shorter than the fixed program-hash + deferred-root prefix")]
-fn observe_rejects_short_aux_inputs() {
-    #[derive(Default)]
-    struct FeltSink {
-        observed: Vec<Felt>,
-    }
-
-    impl CanObserve<Felt> for FeltSink {
-        fn observe(&mut self, value: Felt) {
-            self.observed.push(value);
+fn observe_matches_execution_claim_commitment_and_binds_each_public_coordinate() {
+    let inputs = statement_fixture();
+    let (public, aux) = inputs.to_air_inputs();
+    let mut sink = FeltSink::default();
+    statement::observe(&mut sink, &public, &aux, &[10, 10, 10, 16]);
+    let mut expected = inputs.claim().commitment().as_elements().to_vec();
+    expected.extend_from_slice(inputs.deferred_root().as_elements());
+    assert_eq!(sink.observed, expected, "observe must emit claim_hash4 || deferred4");
+    for (group, count) in [(0, 36), (1, 4)] {
+        for index in 0..count {
+            let mut mutated = public.clone();
+            mutated[group][index] += Felt::ONE;
+            let mut changed = FeltSink::default();
+            statement::observe(&mut changed, &mutated, &aux, &[10, 10, 10, 16]);
+            assert_ne!(
+                changed.observed[..4],
+                sink.observed[..4],
+                "group {group} coordinate {index}"
+            );
+            assert_eq!(changed.observed[4..], sink.observed[4..]);
         }
     }
+    for index in 0..4 {
+        let mut changed_aux = aux.clone();
+        changed_aux[index] += Felt::ONE;
+        let mut changed = FeltSink::default();
+        statement::observe(&mut changed, &public, &changed_aux, &[10, 10, 10, 16]);
+        assert_eq!(changed.observed[..4], sink.observed[..4]);
+        assert_ne!(changed.observed[4..], sink.observed[4..]);
+    }
+}
 
+#[test]
+#[should_panic(expected = "expected exactly four deferred-root inputs")]
+fn observe_rejects_short_aux_inputs() {
     let mut challenger = FeltSink::default();
-    let air_inputs = [
-        vec![Felt::ZERO; NUM_PUBLIC_VALUES],
-        vec![Felt::ZERO; NUM_CHIPLETS_PUBLIC_VALUES],
-        vec![],
-        vec![],
-    ];
-
-    statement::observe(&mut challenger, &air_inputs, &[], &[8, 8, 8, 16]);
+    let (public, _) = statement_fixture().to_air_inputs();
+    statement::observe(&mut challenger, &public, &[], &[8, 8, 8, 16]);
 }

@@ -153,9 +153,10 @@ fn build_trace_inner(
         fragment_size,
         max_stack_depth,
     } = trace;
+    let execution_descriptor = environment.descriptor();
 
     if core_trace_contexts.first().is_none_or(|context| {
-        context.state.system.fn_hash != environment.descriptor().entry_key().into_word()
+        context.state.system.fn_hash != execution_descriptor.entry_key().into_word()
     }) {
         return Err(ExecutionError::InvalidExecutionState);
     }
@@ -287,6 +288,7 @@ fn build_trace_inner(
 
     Ok(VmTrace::new_from_parts(
         program_info,
+        execution_descriptor,
         stack_inputs,
         stack_outputs,
         precompile_root,

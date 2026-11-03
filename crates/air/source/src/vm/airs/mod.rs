@@ -16,9 +16,7 @@ use crate::vm::{
             main_air::MainLookupBuilder,
         },
     },
-    inputs::{
-        AUX_DEFERRED_ROOT, AUX_KERNEL_DIGESTS, NUM_CHIPLETS_PUBLIC_VALUES, NUM_PUBLIC_VALUES,
-    },
+    inputs::{NUM_AUX_INPUTS, NUM_CHIPLETS_PUBLIC_VALUES, NUM_PUBLIC_VALUES},
     trace,
 };
 
@@ -130,17 +128,14 @@ impl MidenAir {
         }
         match self {
             Self::Core => {
-                if aux_inputs.len() < AUX_KERNEL_DIGESTS {
+                if aux_inputs.len() != NUM_AUX_INPUTS {
                     return Err(format!(
-                        "aux_inputs length {} is shorter than the fixed prefix {AUX_KERNEL_DIGESTS}",
+                        "expected exactly {NUM_AUX_INPUTS} deferred-root inputs, got {}",
                         aux_inputs.len()
                     )
                     .into());
                 }
-                CoreAir.boundary_correction(
-                    challenges,
-                    &[&aux_inputs[AUX_DEFERRED_ROOT..AUX_KERNEL_DIGESTS]],
-                )
+                CoreAir.boundary_correction(challenges, &[aux_inputs])
             },
             Self::Chiplets => ChipletsAir.boundary_correction(challenges, &[public_inputs]),
             Self::EidosCompression => EidosCompressionAir.boundary_correction(challenges, &[]),
