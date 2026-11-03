@@ -495,7 +495,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; fresh processor/parallel/decoder/lookup migration evidence is at PR09, including 24 public-statement failures. Full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate now compiles and runs: 1,866 pass/24 legacy-public-statement failures/one existing ignore; 49 integrations and 69 concurrent replay tests pass. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
 | 09 Assembly/packages | implemented-awaiting-validation | Final review `0ec317994`; CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
-| 10 Projects/imports | in-progress | Branch `adr1anh/librarytree-10-project-imports`, base `0ec317994` | Bounded source analysis identified independent artifact expectations, declaration naming, alias/instance graph and cache/routing seams; no PR10 checks yet | Implement explicit expected visible-callable mappings and source declaration helper first; then complete configured target naming, aliases/distinct instances, routing/cache/runtime multiplicity and required project/static/dynamic gates. Preserve all inherited qualification/security gates |
+| 10 Projects/imports | in-progress | Expected maps `61bb29a3d`; explicit source naming `a60981e41`; admission/cache integration `a6b4e3f25`; base `0ec317994` | Independent reviews; standard project 56 pass; standard assembly 556 pass/six existing skips, including62 project and both packaging tests; both crates pass all-target strict Clippy and no_std checks | Complete configured root/target naming, readable catalog resolution, dependency aliases/distinct graph instances, source routing and instance-aware caches/runtime supply metadata. Then qualify equivalent authorized execution and all inherited proof/security/final gates |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
 | 13 Core library | planned | — | — | Depends on 09–12 and supported ABI |
@@ -2849,3 +2849,35 @@ pushes or GitHub PRs. PR09/M1/overall completion is not claimed.
 
 
 PR09 branch audit at `a97397cf1` found no additional PR09-owned source blocker; final review scope is committed separately as `0ec317994`. PR09 remains implemented-awaiting-validation for its preserved downstream gates. PR10 starts at that exact local stack base; the first owned slice is independent artifact callable expectations and opt-in source declaration naming. No branch/publication or validation claim changes the overall goal or M1.
+
+
+### PR10 independent artifact expectations and explicit source naming, 3 November 2026
+
+`61bb29a3d` adds caller-owned ExpectedVisibleCallables, independent dependency/manifest/graph-edge
+propagation, exact visible-path/full-binding comparison and workspace overrides including explicit
+empty maps. Semantic components and complete typed homes preserve reexports and private/mixed
+inventories; external TypedId serialization still requires its owning writer. No admission or body
+selection follows from this structural expectation.
+
+`a60981e41` adds explicitly invoked NamespaceInputs::with_default_callable_paths, requiring a chosen
+home, preserving Bound/local overrides, enumerating concrete private/entry procedures and skipping
+aliases. Cohort duplicates and kernel modules reject; D8 placement remains explicit. Ordinary test
+fixtures reuse its path lowering.
+
+`a6b4e3f25` checks current source expectations on fresh/memory/registered candidates before reuse or
+promotion. All source-project artifact dependencies, including Custom selections, require independent
+public maps; comparison follows current profile admission and exact package naming checks. Default-home metadata remains
+separate. DependencyNamingRequest groups those independent caller inputs. Existing attack fixtures
+now state owner-declared maps; deterministic public surfaces replace four random attack constructors
+without changing their mutations/rejection assertions. Four integration regressions exercise mixed
+homes/reexports/private keys, Latest/Pinned body and linkage matrices, malformed expectations/profile
+failures before promotion and real memory/registered reuse. They distinguish selected D from body
+availability by checking concrete versus External nodes, while preserving K and real EXEC.
+
+Central AC/heavy-guarded checks: `make test-project EXTRA=--locked NEXTEST_PROFILE=ci` passes56;
+`make test-assembly EXTRA=--locked NEXTEST_PROFILE=ci` passes556/six existing skips, including62
+project tests and both packaging tests. Both crates pass `cargo clippy --locked -p <crate>
+--all-targets -- -D warnings` (assembly additionally `--features testing`) and `cargo check --locked
+-p <crate> --no-default-features`. Source signatures and independent reviews pass. Configured targets,
+readable catalogs, aliases/instances/routing/cache multiplicity, authorized execution and all prior
+PR12/PR14/final qualification remain open; this is not PR10/M1/goal completion. No PRs or pushes.
