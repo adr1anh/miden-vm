@@ -8,7 +8,10 @@ use miden_core::{
 use miden_mast_package::{CallableProcedurePath, NamespacePlan};
 
 use super::*;
-use crate::{CallableBinding, testing::FixtureNamespace};
+use crate::{
+    CallableBinding,
+    testing::{FixtureNamespace, admit_fixture_package},
+};
 
 #[test]
 fn nested_blocks() -> Result<(), Report> {
@@ -70,25 +73,32 @@ fn nested_blocks() -> Result<(), Report> {
             .assemble_library("dummy", dummy_module, None::<Box<Module>>)
             .unwrap();
 
-        let mut assembler = Assembler::with_kernel(context.source_manager(), kernel_lib)?
-            .with_namespace_plan(program_home)
-            .with_callable_path(Path::exec_path().join("$main").into(), entry_path)
-            .unwrap()
-            .with_callable_path(Path::exec_path().join("foo").into(), foo_path)
-            .unwrap()
-            .with_callable_path(Path::exec_path().join("bar").into(), bar_path)
-            .unwrap()
-            .with_callable_binding(
-                Path::kernel_path().join("foo").into(),
-                CallableBinding::new(kernel_home, kernel_foo_path).unwrap(),
-            )
-            .unwrap()
-            .with_callable_binding(
-                Arc::from(Path::new("::libs::helpers::help")),
-                CallableBinding::new(helper_home, helper_path).unwrap(),
-            )
+        let kernel_naming =
+            admit_fixture_package(&kernel_lib, core::slice::from_ref(&kernel_home))?;
+        let helper_naming =
+            admit_fixture_package(&dummy_library, core::slice::from_ref(&helper_home))?;
+        let mut assembler =
+            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)?
+                .with_namespace_plan(program_home)
+                .with_callable_path(Path::exec_path().join("$main").into(), entry_path)
+                .unwrap()
+                .with_callable_path(Path::exec_path().join("foo").into(), foo_path)
+                .unwrap()
+                .with_callable_path(Path::exec_path().join("bar").into(), bar_path)
+                .unwrap()
+                .with_callable_binding(
+                    Path::kernel_path().join("foo").into(),
+                    CallableBinding::new(kernel_home, kernel_foo_path).unwrap(),
+                )
+                .unwrap()
+                .with_callable_binding(
+                    Arc::from(Path::new("::libs::helpers::help")),
+                    CallableBinding::new(helper_home, helper_path).unwrap(),
+                )
+                .unwrap();
+        assembler
+            .link_package(Arc::from(dummy_library), Linkage::Dynamic, helper_naming)
             .unwrap();
-        assembler.link_package(Arc::from(dummy_library), Linkage::Dynamic).unwrap();
 
         assembler
     };
@@ -622,8 +632,9 @@ fn explicit_fully_qualified_procedure_references() -> Result<(), Report> {
     let (library, mut naming) =
         context.assemble_library_with_fixture("foo", None, root, [bar, baz])?;
 
+    let library_naming = naming.admit_package(&library)?;
     let assembler = Assembler::new(context.source_manager())
-        .with_package(library.into(), Linkage::Dynamic)
+        .with_package(library.into(), Linkage::Dynamic, library_naming)
         .unwrap();
 
     let program = context.parse_module(
@@ -664,8 +675,9 @@ fn re_exports() -> Result<(), Report> {
     let baz_binding = naming.binding(Path::new("::foo::bar::baz")).unwrap().clone();
     naming.add_binding(Arc::from(Path::new("::foo::baz::baz")), baz_binding)?;
 
+    let library_naming = naming.admit_package(&library)?;
     let assembler = Assembler::new(context.source_manager())
-        .with_package(library.into(), Linkage::Dynamic)
+        .with_package(library.into(), Linkage::Dynamic, library_naming)
         .unwrap();
 
     let program = context.parse_module(

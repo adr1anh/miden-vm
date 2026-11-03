@@ -68,7 +68,7 @@ use miden_assembly_syntax::{
     module::{ItemInfo, ModuleDescriptor},
 };
 use miden_core::{Word, advice::AdviceMap, program::KernelDescriptor};
-use miden_mast_package::Package as MastPackage;
+use miden_mast_package::{CallableProcedurePath, Package as MastPackage, PackageNaming};
 use smallvec::{SmallVec, smallvec};
 
 pub use self::{
@@ -84,7 +84,7 @@ use self::{
     namespaces::ResolvedImports,
     resolver::*,
 };
-use crate::CallableDeclaration;
+use crate::{CallableBinding, CallableDeclaration};
 
 /// The resolved public modules available for analysis after linking.
 ///
@@ -146,9 +146,8 @@ pub struct Linker {
     libraries: BTreeMap<Word, LinkLibrary>,
     /// The statically linked libraries to pass to MAST forest construction.
     ///
-    /// This index is keyed by full MAST forest commitment, not package commitment, so static
-    /// libraries with the same exported procedure roots but different stored advice are
-    /// retained.
+    /// Like `libraries`, this is keyed by the name-aware v2 dependency commitment, retaining
+    /// distinct canonical names, private code, and stored advice.
     static_libraries: BTreeMap<Word, LinkLibrary>,
     /// The global set of items known to the linker
     modules: Vec<LinkModule>,
@@ -166,7 +165,7 @@ pub struct Linker {
     ///
     /// This is always provided, with an empty kernel being the default.
     kernel: KernelDescriptor,
-    kernel_package: Option<Arc<MastPackage>>,
+    kernel_library: Option<LinkLibrary>,
     /// The source manager to use when emitting diagnostics.
     source_manager: Arc<dyn SourceManager>,
 }
@@ -185,62 +184,151 @@ impl Linker {
             procedures_by_mast_root: Default::default(),
             kernel_index: None,
             kernel: Default::default(),
-            kernel_package: None,
+            kernel_library: None,
             source_manager,
         }
     }
 
     /// Registers `library` and all of its modules with the linker, according to its linkage
     pub fn link_library(&mut self, library: LinkLibrary) -> Result<(), LinkerError> {
-        use alloc::collections::btree_map::Entry;
-
+        library.package.check_naming(library.naming()).map_err(|err| {
+            LinkerError::InvalidPackageModuleSurface {
+                package: library.package.name.to_string(),
+                reason: err.to_string(),
+            }
+        })?;
         let module_descriptors = library.module_descriptors().map_err(|err| {
             LinkerError::InvalidPackageModuleSurface {
                 package: library.package.name.to_string(),
                 reason: err.to_string(),
             }
         })?;
-        let library_interface_digest = library.interface_commitment().map_err(|err| {
-            LinkerError::InvalidPackageModuleSurface {
-                package: library.package.name.to_string(),
-                reason: err.to_string(),
+        let commitment = library.commitment();
+        if let Some(previous) = self.libraries.get_mut(&commitment) {
+            // The exact same dependency may be supplied with either linkage. Prefer static.
+            if matches!(library.linkage, Linkage::Static) {
+                previous.linkage = Linkage::Static;
+                self.static_libraries.entry(commitment).or_insert(library);
             }
-        })?;
-
-        let static_library = matches!(library.linkage, Linkage::Static).then(|| library.clone());
-        let result = match self.libraries.entry(library_interface_digest) {
-            Entry::Vacant(entry) => {
-                let remaining_capacity =
-                    ModuleIndex::MAX_MODULES.saturating_sub(self.modules.len());
-                if module_descriptors.len() > remaining_capacity {
-                    return Err(LinkerError::TooManyModules);
-                }
-
-                entry.insert(library);
-                self.link_assembled_modules(module_descriptors)
-            },
-            Entry::Occupied(mut entry) => {
-                let prev = entry.get_mut();
-
-                // If the same library is linked both dynamically and statically, prefer static
-                // linking always.
-                if matches!(prev.linkage, Linkage::Dynamic) {
-                    prev.linkage = library.linkage;
-                }
-
-                Ok(())
-            },
-        };
-
-        if result.is_ok()
-            && let Some(static_library) = static_library
-        {
-            self.static_libraries
-                .entry(static_library.commitment())
-                .or_insert(static_library);
+            return Ok(());
         }
 
-        result
+        let bindings = Self::library_export_bindings(&library);
+        let modules = self.preflight_library_modules(module_descriptors, &bindings)?;
+        self.insert_library_modules(modules, &bindings);
+        if matches!(library.linkage, Linkage::Static) {
+            self.static_libraries.insert(commitment, library.clone());
+        }
+        self.libraries.insert(commitment, library);
+        Ok(())
+    }
+
+    /// Projects source-visible exports onto their existing canonical declarations. Source paths
+    /// only locate aliases; their spelling never supplies a callable home or canonical name.
+    fn library_export_bindings(library: &LinkLibrary) -> BTreeMap<Arc<Path>, CallableBinding> {
+        library
+            .package
+            .manifest
+            .exports()
+            .filter_map(|export| {
+                let export = export.as_procedure()?;
+                let components = export
+                    .path
+                    .components()
+                    .filter_map(|component| {
+                        let component = component.expect("validated manifest path");
+                        (component != ast::PathComponent::Root).then(|| component.as_str().into())
+                    })
+                    .collect::<Vec<_>>();
+                let path = CallableProcedurePath::from_semantic_components(components)
+                    .expect("validated callable export path");
+                let key = library
+                    .naming()
+                    .callables()
+                    .key_for_visible_path(&path)
+                    .expect("checked naming contains every procedure export");
+                let binding = library
+                    .naming()
+                    .callables()
+                    .binding(key)
+                    .expect("visible callable keys are declared")
+                    .clone();
+                Some((export.path.clone(), binding))
+            })
+            .collect()
+    }
+
+    /// Checks every conflict and the aggregate module capacity before modifying linker state.
+    fn preflight_library_modules(
+        &self,
+        modules: Vec<ModuleDescriptor>,
+        bindings: &BTreeMap<Arc<Path>, CallableBinding>,
+    ) -> Result<Vec<ModuleDescriptor>, LinkerError> {
+        let mut pending = Vec::new();
+        for descriptor in modules {
+            if let Some(existing) = self.find_module(descriptor.path()) {
+                let same_surface = existing.is_mast()
+                    && existing.submodules().eq(descriptor.submodules().iter())
+                    && existing.num_symbols() == descriptor.items().len()
+                    && descriptor.items().all(|(_, item)| {
+                        let Some(symbol) = existing.get(item.name()) else {
+                            return false;
+                        };
+                        let SymbolItem::Compiled(previous) = symbol.item() else {
+                            return false;
+                        };
+                        // Provenance points to the exact package input; it is not source-name
+                        // authority. Advice-only variants may share one identical module surface.
+                        let mut previous = previous.clone();
+                        let mut item = item.clone();
+                        if let ItemInfo::Procedure(info) = &mut previous {
+                            info.source_library_commitment = None;
+                        }
+                        if let ItemInfo::Procedure(info) = &mut item {
+                            info.source_library_commitment = None;
+                        }
+                        previous == item
+                            && (!symbol.is_procedure()
+                                || symbol.callable_binding()
+                                    == bindings
+                                        .get::<Path>(existing.path().join(symbol.name()).as_ref()))
+                    });
+                if !same_surface {
+                    return Err(LinkerError::ConflictingImportedModule {
+                        path: descriptor.path().into(),
+                    });
+                }
+            } else {
+                pending.push(descriptor);
+            }
+        }
+        let remaining_capacity = ModuleIndex::MAX_MODULES.saturating_sub(self.modules.len());
+        if pending.len() > remaining_capacity {
+            return Err(LinkerError::TooManyModules);
+        }
+        Ok(pending)
+    }
+
+    fn insert_library_modules(
+        &mut self,
+        modules: Vec<ModuleDescriptor>,
+        bindings: &BTreeMap<Arc<Path>, CallableBinding>,
+    ) {
+        for descriptor in modules {
+            let index = self
+                .link_assembled_module(descriptor)
+                .expect("module conflicts and capacity were checked before insertion");
+            let module = &self[index];
+            for symbol in module.symbols().filter(|symbol| symbol.is_procedure()) {
+                let path = module.path().join(symbol.name());
+                let binding = bindings
+                    .get::<Path>(path.as_ref())
+                    .expect("checked naming contains every imported procedure");
+                symbol
+                    .bind_callable(binding.clone())
+                    .expect("new imported symbols have no prior binding");
+            }
+        }
     }
 
     /// Registers a set of MAST modules with the linker.
@@ -465,17 +553,16 @@ impl Linker {
 // ------------------------------------------------------------------------------------------------
 /// Kernels
 impl Linker {
-    /// Returns a new [Linker] instantiated from the provided kernel and kernel info module.
-    ///
-    /// Note: it is assumed that kernel and kernel_module are consistent, but this is not checked.
+    /// Returns a new [Linker] using a kernel and its explicitly retained canonical naming.
     pub fn with_kernel(
         source_manager: Arc<dyn SourceManager>,
         kernel_package: Arc<MastPackage>,
+        naming: impl Into<Arc<PackageNaming>>,
     ) -> Result<Self, Report> {
         log::debug!(target: "linker", "instantiating linker with kernel package {}@{}", kernel_package.name, kernel_package.version);
 
         let mut linker = Self::new(source_manager);
-        linker.link_with_kernel(kernel_package)?;
+        linker.link_with_kernel(kernel_package, naming)?;
 
         Ok(linker)
     }
@@ -485,9 +572,14 @@ impl Linker {
     /// This cannot cause any issues with modules already added to the linker (if any), as they
     /// cannot have directly depended on the kernel, or an error would have been raised.
     ///
-    /// This will panic if the kernel is empty, or the provided kernel module info is not valid for
-    /// a kernel.
-    pub fn link_with_kernel(&mut self, kernel_package: Arc<MastPackage>) -> Result<(), Report> {
+    /// Naming must come from compilation or explicit selected-profile admission of raw transport.
+    pub fn link_with_kernel(
+        &mut self,
+        kernel_package: Arc<MastPackage>,
+        naming: impl Into<Arc<PackageNaming>>,
+    ) -> Result<(), Report> {
+        let library =
+            LinkLibrary::from_package(kernel_package.clone(), naming).map_err(Report::msg)?;
         if !kernel_package.is_kernel() {
             return Err(Report::msg("invalid kernel package: not a kernel"));
         }
@@ -496,34 +588,29 @@ impl Linker {
             return Err(Report::msg("invalid kernel package: kernel cannot be empty"));
         }
         assert!(self.kernel.is_empty());
-        assert!(self.kernel_package.is_none());
+        assert!(self.kernel_library.is_none());
 
         log::debug!(target: "linker", "modifying linker with kernel package {}@{}", kernel_package.name, kernel_package.version);
 
-        let mut kernel_index = None;
-        let module_descriptors = kernel_package.try_module_descriptors().map_err(|err| {
+        let module_descriptors = library.module_descriptors().map_err(|err| {
             LinkerError::InvalidPackageModuleSurface {
                 package: kernel_package.name.to_string(),
                 reason: err.to_string(),
             }
         })?;
-        let remaining_capacity = ModuleIndex::MAX_MODULES.saturating_sub(self.modules.len());
-        if module_descriptors.len() > remaining_capacity {
-            return Err(LinkerError::TooManyModules.into());
-        }
-
-        for module_descriptor in module_descriptors {
-            let is_kernel_module = module_descriptor.path().is_kernel_path();
-            let module_index = self.link_assembled_module(module_descriptor)?;
-            if is_kernel_module {
-                kernel_index = Some(module_index);
-            }
-        }
+        let bindings = Self::library_export_bindings(&library);
+        let modules = self.preflight_library_modules(module_descriptors, &bindings)?;
+        self.insert_library_modules(modules, &bindings);
+        let kernel_index = self
+            .modules
+            .iter()
+            .find(|module| module.path().is_kernel_path())
+            .map(LinkModule::id);
         assert!(kernel_index.is_some());
 
         self.kernel_index = kernel_index;
         self.kernel = kernel;
-        self.kernel_package = Some(kernel_package);
+        self.kernel_library = Some(library);
 
         Ok(())
     }
@@ -533,7 +620,11 @@ impl Linker {
     }
 
     pub fn kernel_package(&self) -> Option<Arc<MastPackage>> {
-        self.kernel_package.clone()
+        self.kernel_library.as_ref().map(|library| library.package.clone())
+    }
+
+    pub fn kernel_naming(&self) -> Option<Arc<PackageNaming>> {
+        self.kernel_library.as_ref().map(|library| library.naming().clone())
     }
 
     pub fn has_nonempty_kernel(&self) -> bool {
@@ -815,7 +906,7 @@ impl Linker {
         self.libraries.values()
     }
 
-    /// Returns the library whose exported interface supplied a compiled procedure.
+    /// Returns the exact name-aware package input which supplied a compiled procedure.
     pub(crate) fn library_by_commitment(&self, commitment: Word) -> Option<&LinkLibrary> {
         self.libraries.get(&commitment)
     }
@@ -1236,7 +1327,7 @@ mod tests {
                 "#
             ))
             .expect("library module should parse");
-        let package: Arc<MastPackage> = Assembler::new(context.source_manager())
+        let product = Assembler::new(context.source_manager())
             .with_namespace_plan(NamespacePlan::new(vec![
                 CanonicalLabel::text("lib-fixture-home").unwrap(),
             ]))
@@ -1245,9 +1336,15 @@ mod tests {
                 CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
             )
             .unwrap()
-            .assemble_library("lib", module, None::<Box<Module>>)
-            .expect("library should assemble")
-            .into();
+            .assemble_library_modules(
+                "lib".into(),
+                module,
+                [],
+                miden_mast_package::TargetType::Library,
+            )
+            .expect("library should assemble");
+        let naming = product.naming().clone();
+        let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
         let with_advice = Arc::new(package.as_ref().clone().with_advice_map(AdviceMap::from_iter(
             [(Word::from([1_u32, 2, 3, 4]), vec![Felt::from_u32(5)])],
         )));
@@ -1261,14 +1358,232 @@ mod tests {
 
         let mut linker = Linker::new(context.source_manager());
         linker
-            .link_library(LinkLibrary::from_package(package).with_linkage(Linkage::Static))
+            .link_library(
+                LinkLibrary::from_package(package, naming.clone())
+                    .unwrap()
+                    .with_linkage(Linkage::Static),
+            )
             .expect("first library should link");
         linker
-            .link_library(LinkLibrary::from_package(with_advice).with_linkage(Linkage::Static))
+            .link_library(
+                LinkLibrary::from_package(with_advice, naming)
+                    .unwrap()
+                    .with_linkage(Linkage::Static),
+            )
             .expect("same public interface with distinct forest commitment should link");
 
-        assert_eq!(linker.libraries().count(), 1);
+        assert_eq!(linker.libraries().count(), 2);
         assert_eq!(linker.static_libraries().count(), 2);
+    }
+
+    fn named_import_fixture(context: &TestContext, home: &str) -> LinkLibrary {
+        let module = context
+            .parse_module(source_file!(
+                &context,
+                r#"
+            namespace lib
+            pub proc foo push.1 end
+        "#
+            ))
+            .unwrap();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(NamespacePlan::new(vec![
+                CanonicalLabel::text("compilation-home").unwrap(),
+            ]))
+            .with_callable_binding(
+                Arc::from(Path::new("::lib::foo")),
+                CallableBinding::new(
+                    NamespacePlan::new(vec![CanonicalLabel::text(home).unwrap()]),
+                    CallableProcedurePath::from_semantic_components(vec!["definition".into()])
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "lib".into(),
+                module,
+                [],
+                miden_mast_package::TargetType::Library,
+            )
+            .unwrap();
+        let naming = product.naming().clone();
+        LinkLibrary::from_package(product.into_artifact(false).unwrap().into(), naming).unwrap()
+    }
+
+    #[test]
+    fn imported_source_alias_preserves_canonical_binding_and_exact_naming() {
+        let context = TestContext::default();
+        let library = named_import_fixture(&context, "foreign-home");
+        let expected = library.naming().callables().bindings().next().unwrap().1.clone();
+        let mut linker = Linker::new(context.source_manager());
+        linker.link_library(library.clone()).unwrap();
+        let imported = linker.find_module(Path::new("::lib")).unwrap().get("foo").unwrap();
+        assert_eq!(imported.callable_binding(), Some(&expected));
+        assert_eq!(expected.path().components(), &["definition"]);
+        assert_eq!(linker.libraries().next().unwrap().naming(), library.naming());
+        assert_eq!(library.commitment(), library.package.dependency_commitment());
+
+        let other = named_import_fixture(&context, "other-home");
+        assert!(matches!(
+            LinkLibrary::from_package(library.package.clone(), other.naming().as_ref().clone()),
+            Err(miden_mast_package::ManifestValidationError::MismatchedNamingTransport)
+        ));
+    }
+
+    #[test]
+    fn same_module_path_with_distinct_canonical_names_is_atomic_conflict() {
+        let context = TestContext::default();
+        let first = named_import_fixture(&context, "first-home");
+        let second = named_import_fixture(&context, "second-home").with_linkage(Linkage::Static);
+        assert_eq!(first.interface_commitment().unwrap(), second.interface_commitment().unwrap());
+        assert_eq!(first.mast().commitment(), second.mast().commitment());
+        assert_ne!(first.commitment(), second.commitment());
+        let mut linker = Linker::new(context.source_manager());
+        linker.link_library(first.clone()).unwrap();
+        assert!(matches!(
+            linker.link_library(second.clone()),
+            Err(LinkerError::ConflictingImportedModule { .. })
+        ));
+        assert_eq!(linker.modules().len(), 1);
+        assert_eq!(linker.libraries().count(), 1);
+        assert_eq!(linker.static_libraries().count(), 0);
+        assert!(linker.library_by_commitment(first.commitment()).is_some());
+        assert!(linker.library_by_commitment(second.commitment()).is_none());
+        assert!(matches!(
+            linker.link_library(second),
+            Err(LinkerError::ConflictingImportedModule { .. })
+        ));
+    }
+
+    #[test]
+    fn exact_named_import_prefers_static_linkage_in_either_order() {
+        let context = TestContext::default();
+        let library = named_import_fixture(&context, "canonical-home");
+        for first in [Linkage::Dynamic, Linkage::Static] {
+            let mut linker = Linker::new(context.source_manager());
+            linker.link_library(library.clone().with_linkage(first)).unwrap();
+            linker.link_library(library.clone().with_linkage(Linkage::Static)).unwrap();
+            linker.link_library(library.clone().with_linkage(Linkage::Dynamic)).unwrap();
+            assert_eq!(linker.modules().len(), 1);
+            assert_eq!(linker.libraries().count(), 1);
+            assert_eq!(linker.static_libraries().count(), 1);
+            assert!(matches!(linker.libraries().next().unwrap().linkage, Linkage::Static));
+        }
+    }
+
+    #[test]
+    fn later_imported_module_conflict_does_not_insert_earlier_modules() {
+        let context = TestContext::default();
+        let root = context
+            .parse_module(source_file!(
+                &context,
+                r#"
+            namespace lib
+            pub mod extra
+            pub proc foo push.1 end
+        "#
+            ))
+            .unwrap();
+        let extra = context
+            .parse_module(source_file!(
+                &context,
+                r#"
+            namespace lib::extra
+            pub proc bar push.2 end
+        "#
+            ))
+            .unwrap();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(NamespacePlan::new(vec![
+                CanonicalLabel::text("compilation-home").unwrap(),
+            ]))
+            .with_callable_path(
+                Arc::from(Path::new("::lib::foo")),
+                CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
+            )
+            .unwrap()
+            .with_callable_path(
+                Arc::from(Path::new("::lib::extra::bar")),
+                CallableProcedurePath::from_semantic_components(vec!["bar".into()]).unwrap(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "lib".into(),
+                root,
+                [extra],
+                miden_mast_package::TargetType::Library,
+            )
+            .unwrap();
+        let naming = product.naming().clone();
+        let library =
+            LinkLibrary::from_package(product.into_artifact(false).unwrap().into(), naming)
+                .unwrap()
+                .with_linkage(Linkage::Static);
+        let mut linker = Linker::new(context.source_manager());
+        linker
+            .link_assembled_module(ModuleDescriptor::new(Path::new("::lib::extra").into(), None))
+            .unwrap();
+        assert!(matches!(
+            linker.link_library(library.clone()),
+            Err(LinkerError::ConflictingImportedModule { .. })
+        ));
+        assert!(linker.find_module(Path::new("::lib")).is_none());
+        assert_eq!(linker.modules().len(), 1);
+        assert_eq!(linker.libraries().count(), 0);
+        assert_eq!(linker.static_libraries().count(), 0);
+        assert!(matches!(
+            linker.link_library(library),
+            Err(LinkerError::ConflictingImportedModule { .. })
+        ));
+    }
+
+    #[test]
+    fn imported_kernel_keeps_canonical_exports_and_private_naming_together() {
+        let context = TestContext::default();
+        let kernel = context
+            .parse_kernel(source_file!(
+                &context,
+                r#"
+            pub proc foo exec.helper end
+            proc helper push.1 end
+        "#
+            ))
+            .unwrap();
+        let export = CallableBinding::new(
+            NamespacePlan::new(vec![]),
+            CallableProcedurePath::from_semantic_components(vec!["canonical_export".into()])
+                .unwrap(),
+        )
+        .unwrap();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(NamespacePlan::new(vec![
+                CanonicalLabel::text("private-kernel-home").unwrap(),
+            ]))
+            .with_callable_binding(Arc::from(Path::new("::$kernel::foo")), export.clone())
+            .unwrap()
+            .with_callable_path(
+                Arc::from(Path::new("::$kernel::helper")),
+                CallableProcedurePath::from_semantic_components(vec!["helper".into()]).unwrap(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "kernel".into(),
+                kernel,
+                [],
+                miden_mast_package::TargetType::Kernel,
+            )
+            .unwrap();
+        let naming = product.naming().clone();
+        let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
+        let linker =
+            Linker::with_kernel(context.source_manager(), package.clone(), naming.clone()).unwrap();
+        assert_eq!(linker.kernel_package().as_ref(), Some(&package));
+        assert_eq!(linker.kernel_naming().unwrap().as_ref(), &naming);
+        let module = linker.find_module(Path::kernel_path()).unwrap();
+        assert_eq!(module.get("foo").unwrap().callable_binding(), Some(&export));
+        assert!(module.get("helper").is_none());
+        assert_eq!(linker.kernel_naming().unwrap().callables().bindings().len(), 2);
     }
 
     fn linker_at_module_capacity(context: &TestContext) -> Linker {
@@ -1310,7 +1625,7 @@ mod tests {
                 "#
             ))
             .expect("library module should parse");
-        let package: Arc<MastPackage> = Assembler::new(context.source_manager())
+        let product = Assembler::new(context.source_manager())
             .with_namespace_plan(NamespacePlan::new(vec![
                 CanonicalLabel::text("overflow-fixture-home").unwrap(),
             ]))
@@ -1319,10 +1634,18 @@ mod tests {
                 CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
             )
             .unwrap()
-            .assemble_library("overflow", module, None::<Box<Module>>)
-            .expect("library should assemble")
-            .into();
-        let library = LinkLibrary::from_package(package).with_linkage(Linkage::Static);
+            .assemble_library_modules(
+                "overflow".into(),
+                module,
+                [],
+                miden_mast_package::TargetType::Library,
+            )
+            .expect("library should assemble");
+        let naming = product.naming().clone();
+        let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
+        let library = LinkLibrary::from_package(package, naming)
+            .unwrap()
+            .with_linkage(Linkage::Static);
         let mut linker = linker_at_module_capacity(&context);
 
         assert!(matches!(linker.link_library(library.clone()), Err(LinkerError::TooManyModules)));
@@ -1360,7 +1683,7 @@ mod tests {
                 "#
             ))
             .expect("kernel module should parse");
-        let kernel_package: Arc<MastPackage> = Assembler::new(context.source_manager())
+        let product = Assembler::new(context.source_manager())
             .with_namespace_plan(NamespacePlan::new(vec![]))
             .with_callable_path(
                 Arc::from(Path::new("::$kernel::foo")),
@@ -1372,15 +1695,21 @@ mod tests {
                 CallableProcedurePath::from_semantic_components(vec!["helper".into()]).unwrap(),
             )
             .unwrap()
-            .assemble_kernel("kernel", kernel, [helpers])
-            .expect("two-module kernel should assemble")
-            .into();
+            .assemble_library_modules(
+                "kernel".into(),
+                kernel,
+                [helpers],
+                miden_mast_package::TargetType::Kernel,
+            )
+            .expect("two-module kernel should assemble");
+        let naming = product.naming().clone();
+        let kernel_package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
         let mut linker = linker_at_module_capacity(&context);
         linker.modules.pop();
         let modules_before = linker.modules.len();
 
         let err = linker
-            .link_with_kernel(kernel_package.clone())
+            .link_with_kernel(kernel_package.clone(), naming.clone())
             .expect_err("two-module kernel should exceed the single remaining slot");
 
         assert!(err.to_string().contains("too many modules"));
@@ -1393,7 +1722,7 @@ mod tests {
         assert!(linker.kernel_package().is_none());
 
         let retry_err = linker
-            .link_with_kernel(kernel_package)
+            .link_with_kernel(kernel_package, naming)
             .expect_err("retry should fail with the same capacity error");
         assert!(retry_err.to_string().contains("too many modules"));
         assert_eq!(linker.modules.len(), modules_before);

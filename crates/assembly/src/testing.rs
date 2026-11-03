@@ -26,13 +26,71 @@ pub use miden_assembly_syntax::{
 #[cfg(feature = "testing")]
 use miden_assembly_syntax::{ast::Form, debuginfo::SourceFile};
 use miden_core::program::{CanonicalLabel, Program};
-use miden_mast_package::{CallableProcedurePath, NamespacePlan, Package, PackageId};
+use miden_mast_package::{CallableProcedurePath, NamespacePlan, Package, PackageId, PackageNaming};
 #[cfg(feature = "std")]
 use miden_project::TargetType;
 
 #[cfg(feature = "std")]
 use crate::diagnostics::reporting::set_panic_hook;
 use crate::{CallableBinding, assembler::Assembler};
+
+/// Admits fixture naming only under the complete homes explicitly chosen by its owner.
+/// Unknown TypedIds reject unless their exact codec/bytes occur in those expected homes.
+/// This test utility supplies no production publisher, registration or home policy.
+pub fn admit_fixture_package(
+    package: &Package,
+    homes: &[NamespacePlan],
+) -> Result<PackageNaming, Report> {
+    use miden_mast_package::interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile};
+
+    struct ExpectedHomes;
+
+    impl TypedIdProfile for ExpectedHomes {
+        type Context = [NamespacePlan];
+        type Error = &'static str;
+
+        fn validate_typed_id(
+            &self,
+            context: &Self::Context,
+            codec: u32,
+            canonical_bytes: &[u8],
+        ) -> Result<(), Self::Error> {
+            let expected = context.iter().flat_map(NamespacePlan::home).any(|label| {
+                let bytes = label.as_bytes();
+                bytes[1] == 3
+                    && u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) == codec
+                    && &bytes[10..] == canonical_bytes
+            });
+            if expected {
+                Ok(())
+            } else {
+                Err("unexpected fixture TypedId")
+            }
+        }
+    }
+
+    impl HomeProfile for ExpectedHomes {
+        fn validate_home(
+            &self,
+            context: &Self::Context,
+            home: &[CanonicalLabel],
+        ) -> Result<(), Self::Error> {
+            if context.iter().any(|expected| expected.home() == home) {
+                Ok(())
+            } else {
+                Err("unexpected fixture home")
+            }
+        }
+    }
+
+    package
+        .admit_naming(
+            &ExpectedHomes,
+            homes,
+            CodecLimits::new(4 * 1024 * 1024, 100_000, 100_000, 4 * 1024 * 1024),
+        )
+        .map_err(Report::msg)
+}
 
 /// Explicit naming metadata for assembly test fixtures.
 ///
@@ -68,6 +126,17 @@ impl FixtureNamespace {
 
     pub fn namespace_plan(&self) -> &NamespacePlan {
         &self.namespace_plan
+    }
+
+    /// Revalidates a package against this fixture's caller home and explicitly configured bindings.
+    pub fn admit_package(&self, package: &Package) -> Result<PackageNaming, Report> {
+        let mut homes = vec![self.namespace_plan.clone()];
+        for binding in self.bindings.values() {
+            if !homes.contains(binding.namespace_plan()) {
+                homes.push(binding.namespace_plan().clone());
+            }
+        }
+        admit_fixture_package(package, &homes)
     }
 
     /// Names every concrete procedure, including private helpers and executable entrypoints.
@@ -336,7 +405,8 @@ impl TestContext {
     /// Add the modules of `library` to the [Assembler] constructed by this context.
     #[track_caller]
     pub fn add_library(&mut self, package: Arc<miden_mast_package::Package>) -> Result<(), Report> {
-        self.assembler.link_package(package, miden_project::Linkage::Dynamic)
+        let naming = self.fixture_namespace.admit_package(&package)?;
+        self.assembler.link_package(package, miden_project::Linkage::Dynamic, naming)
     }
 
     /// Adds a foreign fixture package using explicitly supplied binding metadata.
@@ -359,7 +429,8 @@ impl TestContext {
             })?;
             fixture_namespace.add_binding(export.path.clone(), binding.clone())?;
         }
-        self.assembler.link_package(package, miden_project::Linkage::Dynamic)?;
+        let naming = bindings.admit_package(&package)?;
+        self.assembler.link_package(package, miden_project::Linkage::Dynamic, naming)?;
         self.fixture_namespace = fixture_namespace;
         Ok(())
     }

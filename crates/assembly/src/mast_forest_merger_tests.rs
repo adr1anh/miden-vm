@@ -28,7 +28,8 @@ fn merge_programs(
         .map(Arc::from)?;
 
     let mut assembler = Assembler::new(context.source_manager());
-    assembler.link_package(Arc::clone(&lib_a), Linkage::Dynamic)?;
+    let lib_naming = naming.admit_package(&lib_a)?;
+    assembler.link_package(Arc::clone(&lib_a), Linkage::Dynamic, lib_naming)?;
     let module = context.parse_module(program_b)?;
     naming.add_module(&module)?;
     let lib_b = naming

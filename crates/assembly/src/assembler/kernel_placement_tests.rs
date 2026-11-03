@@ -183,16 +183,16 @@ fn kernel_validates_compiled_exports_without_restricting_foreign_helpers() {
     let context = TestContext::default();
     for at_root in [false, true] {
         let foreign = binding(if at_root { &[] } else { &["child"] }, &["foreign"]);
-        let package = assembler(&context, &[("::dep::run", foreign.clone())])
+        let product = assembler(&context, &[("::dep::run", foreign.clone())])
             .assemble_library_modules(
                 "dependency".into(),
                 context.parse_module("namespace dep\npub proc run push.1 end").unwrap(),
                 [],
                 TargetType::Library,
             )
-            .unwrap()
-            .into_artifact(false)
             .unwrap();
+        let naming = product.naming().clone();
+        let package = product.into_artifact(false).unwrap();
         for exported in [false, true] {
             let source = if exported {
                 "use dep\npub use {run as published} from ::dep\npub proc service exec.dep::run end"
@@ -206,7 +206,7 @@ fn kernel_validates_compiled_exports_without_restricting_foreign_helpers() {
                     ("::dep::run", foreign.clone()),
                 ],
             )
-            .with_package(package.clone().into(), Linkage::Static)
+            .with_package(package.clone().into(), Linkage::Static, naming.clone())
             .unwrap()
             .assemble_library_modules(
                 "kernel".into(),

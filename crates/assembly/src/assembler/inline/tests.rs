@@ -6,7 +6,7 @@ use miden_core::{
     operations::Operation,
     program::CanonicalLabel,
 };
-use miden_mast_package::{CallableProcedurePath, NamespacePlan, Package};
+use miden_mast_package::{CallableProcedurePath, NamespacePlan, Package, PackageNaming};
 use miden_project::Linkage;
 
 use super::*;
@@ -15,7 +15,7 @@ use crate::{
     ast::{Ident, Instruction, ItemIndex, Op},
     debuginfo::Span,
     linker::{Linker, LinkerError},
-    testing::TestContext,
+    testing::{TestContext, admit_fixture_package},
 };
 
 fn home(name: &str) -> NamespacePlan {
@@ -52,6 +52,10 @@ fn dependency(context: &TestContext) -> Arc<Package> {
         .assemble_library("dep", module, no_support())
         .unwrap()
         .into()
+}
+
+fn dependency_naming(package: &Package) -> PackageNaming {
+    admit_fixture_package(package, &[home("inline-tests"), home("foreign-canonical-home")]).unwrap()
 }
 
 fn implementation(package: &Package, path: &str) -> ImplementationRoot {
@@ -213,7 +217,7 @@ fn latest_imports_reject_even_with_source_or_static_code_supply() {
     for linkage in [Linkage::Dynamic, Linkage::Static] {
         let package = dependency(&context);
         let error = assembler(&context, &[("::$exec::$main", "entry"), ("::dep::run", "run")])
-            .with_package(package, linkage)
+            .with_package(package.clone(), linkage, dependency_naming(&package))
             .unwrap()
             .assemble_program("caller", source)
             .unwrap_err();
@@ -268,7 +272,7 @@ fn explicit_import_pins_match_selected_code_and_survive_aliases() {
         let expected = implementation(&dependency, "dep::run");
         let mut assembler =
             assembler(&context, &[("::$exec::$main", "entry"), ("::dep::run", "run")])
-                .with_package(dependency, linkage)
+                .with_package(dependency.clone(), linkage, dependency_naming(&dependency))
                 .unwrap()
                 .with_pinned_callable(Arc::from(Path::new("::dep::run")), expected)
                 .unwrap();
@@ -304,8 +308,9 @@ fn pins_reject_wrong_roots_alias_names_and_duplicate_configuration() {
     let context = TestContext::default();
     let declaration: Arc<Path> = Arc::from(Path::new("::dep::run"));
     let wrong = ImplementationRoot::new(Word::default());
+    let dependency = dependency(&context);
     let error = assembler(&context, &[("::$exec::$main", "entry"), ("::dep::run", "run")])
-        .with_package(dependency(&context), Linkage::Static)
+        .with_package(dependency.clone(), Linkage::Static, dependency_naming(&dependency))
         .unwrap()
         .with_pinned_callable(declaration.clone(), wrong)
         .unwrap()
@@ -313,7 +318,7 @@ fn pins_reject_wrong_roots_alias_names_and_duplicate_configuration() {
         .unwrap_err();
     assert!(error.to_string().contains("selected body has"));
     let error = assembler(&context, &[("::$exec::$main", "entry"), ("::dep::run", "run")])
-        .with_package(dependency(&context), Linkage::Static)
+        .with_package(dependency.clone(), Linkage::Static, dependency_naming(&dependency))
         .unwrap()
         .with_pinned_callable(Arc::from(Path::new("::$exec::chosen")), wrong)
         .unwrap()
@@ -340,7 +345,7 @@ fn inline_key_literals_never_reverse_resolve_to_a_body() {
     let known_body = implementation(&dependency, "dep::run");
     let source = format!("begin inline.{} end", known_body.as_word().to_hex());
     let error = assembler(&context, &[("::$exec::$main", "entry")])
-        .with_package(dependency, Linkage::Static)
+        .with_package(dependency.clone(), Linkage::Static, dependency_naming(&dependency))
         .unwrap()
         .with_pinned_callable(Arc::from(Path::new("::dep::run")), known_body)
         .unwrap()
@@ -533,7 +538,7 @@ fn pinned_static_inline_keeps_selected_export_source_after_inventory_retention()
         .unwrap();
     let expected_location = context.source_manager().location(call_site).unwrap();
     let package = assembler(&context, &[("::$exec::$main", "entry"), ("::dep::leaf", "leaf")])
-        .with_package(dependency, Linkage::Static)
+        .with_package(dependency.clone(), Linkage::Static, dependency_naming(&dependency))
         .unwrap()
         .with_pinned_callable(Arc::from(Path::new("::dep::leaf")), expected)
         .unwrap()
@@ -554,6 +559,11 @@ fn pinned_static_inline_keeps_selected_export_source_after_inventory_retention()
         }),
         "private runtime callback code remains available"
     );
+    let naming = dependency_naming(&package);
+    let callback = binding("callback");
+    assert_eq!(naming.callables().binding(callback.key()), Some(&callback));
+    let callback_root = naming.callables().selected_implementation(callback.key()).unwrap();
+    assert!(package.mast_forest().find_procedure_root(callback_root.into_word()).is_some());
     let debug = package.debug_info().unwrap().unwrap();
     let leaf = debug
         .functions()
@@ -578,5 +588,9 @@ fn pinned_static_inline_keeps_selected_export_source_after_inventory_retention()
     let callee = debug.get_function(calls[0].callee_idx).unwrap();
     let name = callee.linkage_name_idx.into_option().unwrap_or(callee.name_idx);
     assert_eq!(debug[name].as_ref(), "::dep::leaf");
+    assert_eq!(
+        callee.source_node, leaf.source_node,
+        "the static call frame must reuse the retained definition, not a source-less duplicate",
+    );
     assert_eq!(debug.get_location(calls[0].loc_idx).unwrap(), expected_location);
 }

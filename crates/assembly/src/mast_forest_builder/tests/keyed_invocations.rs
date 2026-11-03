@@ -317,19 +317,26 @@ fn static_package_import_retains_private_helper_and_callback_roots() {
     for include_debug in [false, true] {
         let path = PathBuf::new("keyed_inventory::entry").unwrap();
         let path = path.as_path().to_absolute().unwrap().into_owned();
-        let export = PackageExport::Procedure(ProcedureExport::new(
+        let exports = [PackageExport::Procedure(ProcedureExport::new(
             Arc::from(path.into_boxed_path()),
             Some(fixture.export),
             fixture.forest[fixture.export].digest(),
             None,
-        ));
+        ))];
+        let naming = fixture_naming(
+            FixtureNamespace::assembly_tests().namespace_plan().clone(),
+            TargetType::Library,
+            &fixture.forest,
+            &exports,
+        );
         let mut package = Package::create(
             PackageId::from("keyed-inventory"),
             Version::new(0, 0, 0),
             TargetType::Library,
             Arc::new(fixture.forest.clone()),
-            [export],
+            exports,
             [],
+            &naming,
         )
         .unwrap();
         if include_debug {
@@ -337,7 +344,7 @@ fn static_package_import_retains_private_helper_and_callback_roots() {
                 .sections
                 .push(Section::new(SectionId::DEBUG_INFO, fixture.debug.to_bytes()));
         }
-        let library = crate::linker::LinkLibrary::from_package(Arc::new(package));
+        let library = crate::linker::LinkLibrary::from_package(Arc::new(package), naming).unwrap();
         for exact_source in [false, true] {
             let mut builder = MastForestBuilder::new_with_static_libraries([
                 StaticLibrary::from_link_library(&library, library.package.debug_info().unwrap())

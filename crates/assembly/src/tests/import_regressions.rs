@@ -310,8 +310,9 @@ end"
         .expect("library assembly must succeed");
 
     let mut assembler = Assembler::new(context.source_manager());
+    let library_naming = bindings.admit_package(&library).expect("fixture naming should admit");
     assembler
-        .link_package(Arc::from(library), Linkage::Dynamic)
+        .link_package(Arc::from(library), Linkage::Dynamic, library_naming)
         .expect("library linking must succeed");
 
     let program = context

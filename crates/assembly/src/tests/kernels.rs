@@ -146,8 +146,12 @@ fn can_assemble_a_multi_module_kernel() -> Result<(), Report> {
 
     let program = context.parse_program(source_file!(&context, PROGRAM))?;
     bindings.add_module(&program)?;
+    let kernel_naming = bindings.admit_package(&kernel_lib)?;
     bindings
-        .configure(Assembler::with_kernel(context.source_manager(), kernel_lib)?, [&*program])?
+        .configure(
+            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)?,
+            [&*program],
+        )?
         .assemble_program("program", program)?;
 
     Ok(())
@@ -177,8 +181,9 @@ fn kernel_candidate_with_private_submodule_code_cannot_become_a_runnable_kernel(
     let submodule_masm = "namespace $kernel::sub\n\npub proc foo push.1 end\n";
     let kernel_module = context.parse_kernel(source_file!(&context, kernel_masm)).unwrap();
     let submodule = context.parse_module(source_file!(&context, submodule_masm)).unwrap();
-    let (candidate, ..) = assemble_kernel_fixture(&context, kernel_module, vec![submodule])
-        .expect("real submodule code is a valid code candidate");
+    let (candidate, bindings, _) =
+        assemble_kernel_fixture(&context, kernel_module, vec![submodule])
+            .expect("real submodule code is a valid code candidate");
     let forest = candidate.mast_forest();
     assert_eq!(forest.procedure_roots().len(), 1);
     let root = forest.procedure_roots()[0];
@@ -195,7 +200,8 @@ fn kernel_candidate_with_private_submodule_code_cannot_become_a_runnable_kernel(
         .to_kernel_descriptor()
         .expect_err("private code cannot manufacture a runnable root kernel surface");
     assert_diagnostic!(error, "invalid kernel package: does not export any kernel procedures");
-    let error = Assembler::with_kernel(context.source_manager(), candidate)
+    let naming = bindings.admit_package(&candidate).expect("fixture naming must be valid");
+    let error = Assembler::with_kernel(context.source_manager(), candidate, naming)
         .err()
         .expect("a code candidate with no root kernel exports cannot be attached as a kernel");
     assert_diagnostic!(error, "invalid kernel package: does not export any kernel procedures");
@@ -342,8 +348,12 @@ fn syscall_of_public_kernel_submodule_export_uses_its_root_binding() {
         .parse_module(source_file!(&context, program_masm))
         .expect("source spelling does not determine syscall authority");
     bindings.add_module(&program).unwrap();
+    let kernel_naming = bindings.admit_package(&kernel).unwrap();
     let assembler = bindings
-        .configure(Assembler::with_kernel(context.source_manager(), kernel).unwrap(), [&*program])
+        .configure(
+            Assembler::with_kernel(context.source_manager(), kernel, kernel_naming).unwrap(),
+            [&*program],
+        )
         .unwrap();
     let program = assembler
         .assemble_program("program", program)
@@ -469,7 +479,8 @@ fn test_syscall_resolution_uses_kernel_module() -> TestResult {
     bindings.add_module(&lib)?;
     bindings.add_module(&program)?;
 
-    let mut assembler = Assembler::with_kernel(context.source_manager(), kernel)?;
+    let kernel_naming = bindings.admit_package(&kernel)?;
+    let mut assembler = Assembler::with_kernel(context.source_manager(), kernel, kernel_naming)?;
     assembler.compile_and_statically_link(lib)?;
     let assembler = bindings.configure(assembler, [&*program])?;
     let program = assembler.assemble_program("program", program)?.unwrap_program();
@@ -561,8 +572,16 @@ fn test_syscall_resolution_to_non_kernel_path_is_checked() -> TestResult {
             let mut bindings = kernel_bindings.clone();
             bindings.add_module(&program)?;
             bindings.add_binding(Arc::from(Path::new("::userspace::bar")), target.clone())?;
-            let assembler = Assembler::with_kernel(context.source_manager(), kernel.clone())?
-                .with_package(package.clone(), Linkage::Static)?;
+            let assembler = Assembler::with_kernel(
+                context.source_manager(),
+                kernel.clone(),
+                kernel_bindings.admit_package(&kernel)?,
+            )?
+            .with_package(
+                package.clone(),
+                Linkage::Static,
+                lib_bindings.admit_package(&package)?,
+            )?;
             let result =
                 bindings.configure(assembler, [&*program])?.assemble_program("program", program);
 
@@ -650,9 +669,10 @@ end
     bindings.add_module(&program).unwrap();
     let duplicate_key = bindings.binding(&program.path().join("dup")).unwrap().key();
     assert_ne!(duplicate_key, kernel_key, "equal bodies do not merge callable identities");
+    let kernel_naming = bindings.admit_package(&kernel_lib).unwrap();
     let assembler = bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel_lib)
+            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)
                 .expect("test package should be valid"),
             [&*program],
         )
@@ -703,9 +723,10 @@ end
 
     let program = context.parse_program(source_file!(&context, program_src)).unwrap();
     bindings.add_module(&program).unwrap();
+    let kernel_naming = bindings.admit_package(&kernel_lib).unwrap();
     let assembler = bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel_lib)
+            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)
                 .expect("test kernel should be valid"),
             [&*program],
         )
@@ -804,8 +825,12 @@ end
         // Ordinary invocation needs the callable binding, without any SYS authorization plan.
         let assembler = bindings
             .configure(
-                Assembler::with_kernel(context.source_manager(), Arc::clone(&kernel))
-                    .expect("test kernel should be valid"),
+                Assembler::with_kernel(
+                    context.source_manager(),
+                    Arc::clone(&kernel),
+                    kernel_bindings.admit_package(&kernel).unwrap(),
+                )
+                .expect("test kernel should be valid"),
                 [&*program],
             )
             .unwrap();

@@ -1,7 +1,10 @@
 // PACKAGE MODULE SURFACE
 // ================================================================================================
 
+use miden_mast_package::arbitrary::fixture_naming;
+
 use super::*;
+use crate::testing::FixtureNamespace;
 
 #[test]
 fn package_module_surface_allows_downstream_import_of_root_module() -> TestResult {
@@ -46,7 +49,9 @@ fn package_module_surface_allows_downstream_import_of_root_module() -> TestResul
     ))?;
 
     naming.add_module(&consumer)?;
-    let assembler = Assembler::new(context.source_manager()).with_package(dep, Linkage::Static)?;
+    let dep_naming = naming.admit_package(&dep)?;
+    let assembler =
+        Assembler::new(context.source_manager()).with_package(dep, Linkage::Static, dep_naming)?;
     let package = naming.configure(assembler, [&*consumer])?.assemble_library(
         "consumer",
         consumer,
@@ -124,7 +129,9 @@ fn package_module_surface_omits_private_submodules() -> TestResult {
     ))?;
 
     naming.add_module(&consumer)?;
-    let assembler = Assembler::new(context.source_manager()).with_package(dep, Linkage::Static)?;
+    let dep_naming = naming.admit_package(&dep)?;
+    let assembler =
+        Assembler::new(context.source_manager()).with_package(dep, Linkage::Static, dep_naming)?;
     naming.configure(assembler, [&*consumer])?.assemble_library(
         "consumer",
         consumer,
@@ -156,21 +163,28 @@ fn package_with_single_proc_export(
         .find_map(|export| export.as_procedure())
         .map(|export| (export.node, export.digest))
         .expect("seed package should export one procedure");
-    let export = PackageExport::Procedure(ProcedureExport::new(
+    let exports = [PackageExport::Procedure(ProcedureExport::new(
         Arc::from(Path::new(export_path)),
         node,
         digest,
         None,
-    ));
+    ))];
+    let naming = fixture_naming(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        TargetType::Library,
+        seed.mast_forest(),
+        &exports,
+    );
 
     Package::create_with_modules(
         "dep".into(),
         "0.0.0".parse().unwrap(),
         TargetType::Library,
         Arc::clone(seed.mast_forest()),
-        [export],
+        exports,
         modules,
         None,
+        &naming,
     )
     .map(Arc::new)
     .map_err(Report::msg)
@@ -181,10 +195,12 @@ fn package_link_rejects_missing_module_surface_metadata() -> TestResult {
     let context = TestContext::new();
     let dep = package_with_single_proc_export(&context, "::dep::foo", [])?;
 
-    let err = match Assembler::new(context.source_manager()).with_package(dep, Linkage::Static) {
-        Ok(_) => panic!("compiled packages without module surfaces should be rejected"),
-        Err(err) => err,
-    };
+    let naming = FixtureNamespace::assembly_tests().admit_package(&dep)?;
+    let err =
+        match Assembler::new(context.source_manager()).with_package(dep, Linkage::Static, naming) {
+            Ok(_) => panic!("compiled packages without module surfaces should be rejected"),
+            Err(err) => err,
+        };
 
     assert_diagnostic!(&err, "invalid module surface metadata for package 'dep'");
     assert_diagnostic!(&err, "package manifest declares export '::dep::foo' in module '::dep'");
@@ -205,10 +221,12 @@ fn package_link_rejects_incomplete_declared_submodule_surface_metadata() -> Test
         )],
     )?;
 
-    let err = match Assembler::new(context.source_manager()).with_package(dep, Linkage::Static) {
-        Ok(_) => panic!("compiled packages with incomplete module surfaces should be rejected"),
-        Err(err) => err,
-    };
+    let naming = FixtureNamespace::assembly_tests().admit_package(&dep)?;
+    let err =
+        match Assembler::new(context.source_manager()).with_package(dep, Linkage::Static, naming) {
+            Ok(_) => panic!("compiled packages with incomplete module surfaces should be rejected"),
+            Err(err) => err,
+        };
 
     assert_diagnostic!(&err, "invalid module surface metadata for package 'dep'");
     assert_diagnostic!(

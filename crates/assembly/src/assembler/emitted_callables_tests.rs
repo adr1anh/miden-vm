@@ -157,9 +157,9 @@ fn emitted_inventory_coalesces_imported_compiled_reexport_aliases() {
         .configure(Assembler::new(context.source_manager()), [&*root, &*implementation])
         .unwrap()
         .assemble_library_modules("published".into(), root, [implementation], TargetType::Library)
-        .unwrap()
-        .into_artifact(true)
         .unwrap();
+    let naming = package.naming().clone();
+    let package = package.into_artifact(true).unwrap();
     let caller = context
         .parse_module(
             "namespace client\nuse api\npub proc caller exec.api::first exec.api::second end",
@@ -169,7 +169,7 @@ fn emitted_inventory_coalesces_imported_compiled_reexport_aliases() {
         .with_namespace_plan(home("caller-home"))
         .with_callable_path(Arc::from(Path::new("::client::caller")), canonical(&["caller"]))
         .unwrap()
-        .with_package(package.into(), Linkage::Static)
+        .with_package(package.into(), Linkage::Static, naming)
         .unwrap()
         .with_callable_binding(Arc::from(Path::new("::api::first")), target.clone())
         .unwrap()

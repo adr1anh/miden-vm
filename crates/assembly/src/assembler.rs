@@ -32,8 +32,8 @@ use miden_core::{
 };
 use miden_mast_package::{
     CallableProcedurePath, ConstantExport, NamespacePlan, Package, PackageDebugInfoError,
-    PackageExport, PackageId, PackageModule, PackageSubmodule, ProcedureExport, Section, SectionId,
-    TypeExport,
+    PackageExport, PackageId, PackageModule, PackageNaming, PackageSubmodule, ProcedureExport,
+    Section, SectionId, TypeExport,
     debug_info::{DebugSourceNodeId, PackageDebugInfo},
 };
 use miden_project::{Linkage, TargetType};
@@ -210,11 +210,14 @@ impl Assembler {
     }
 
     /// Start building an [`Assembler`] with a kernel defined by the provided kernel package.
+    ///
+    /// `naming` must be retained from compilation or admitted with an explicit selected profile.
     pub fn with_kernel(
         source_manager: Arc<dyn SourceManager>,
         kernel: Arc<Package>,
+        naming: impl Into<Arc<PackageNaming>>,
     ) -> Result<Self, Report> {
-        let linker = Box::new(Linker::with_kernel(source_manager.clone(), kernel)?);
+        let linker = Box::new(Linker::with_kernel(source_manager.clone(), kernel, naming)?);
         Ok(Self {
             source_manager,
             linker,
@@ -409,13 +412,29 @@ impl Assembler {
     }
 
     /// Link against `package` with the specified linkage mode during assembly.
-    pub fn with_package(mut self, package: Arc<Package>, linkage: Linkage) -> Result<Self, Report> {
-        self.link_package(package, linkage)?;
+    ///
+    /// `naming` must match the package's required metadata exactly and come from compilation or
+    /// explicit selected-profile admission of its raw transport.
+    pub fn with_package(
+        mut self,
+        package: Arc<Package>,
+        linkage: Linkage,
+        naming: impl Into<Arc<PackageNaming>>,
+    ) -> Result<Self, Report> {
+        self.link_package(package, linkage, naming)?;
         Ok(self)
     }
 
     /// Link against `package` with the specified linkage mode during assembly.
-    pub fn link_package(&mut self, package: Arc<Package>, linkage: Linkage) -> Result<(), Report> {
+    ///
+    /// `naming` must match the package's required metadata exactly and come from compilation or
+    /// explicit selected-profile admission of its raw transport.
+    pub fn link_package(
+        &mut self,
+        package: Arc<Package>,
+        linkage: Linkage,
+        naming: impl Into<Arc<PackageNaming>>,
+    ) -> Result<(), Report> {
         match package.kind {
             TargetType::Kernel => {
                 if !self.kernel().is_empty() {
@@ -425,15 +444,18 @@ impl Assembler {
                     )));
                 }
 
-                self.linker.link_with_kernel(package)?;
+                self.linker.link_with_kernel(package, naming)?;
                 Ok(())
             },
             TargetType::Executable => {
                 Err(Report::msg("cannot add executable packages to an assembler"))
             },
             _ => {
-                self.linker
-                    .link_library(LinkLibrary::from_package(package).with_linkage(linkage))?;
+                self.linker.link_library(
+                    LinkLibrary::from_package(package, naming)
+                        .map_err(Report::msg)?
+                        .with_linkage(linkage),
+                )?;
                 Ok(())
             },
         }
@@ -918,8 +940,9 @@ impl Assembler {
     /// Assembles a library-like module cohort and retains its raw callable metadata.
     ///
     /// `kind` must be library-like; kernel targets require a kernel root module. The returned
-    /// product has no package9, home/profile or environment admission. Extracting its existing
-    /// Package8 artifact with [`AssemblyProduct::into_artifact`] discards that raw metadata.
+    /// product has structurally checked naming without home/profile or environment admission.
+    /// [`AssemblyProduct::into_artifact`] retains required naming metadata in the Package9
+    /// artifact.
     pub fn assemble_library_modules(
         mut self,
         name: PackageId,
@@ -1147,9 +1170,8 @@ impl Assembler {
 
     /// Assembles an executable module cohort, retaining its entry key and raw callable metadata.
     ///
-    /// The returned product has no package9, home/profile or environment admission. Extracting
-    /// its existing Package8 artifact with [`AssemblyProduct::into_artifact`] discards that raw
-    /// metadata.
+    /// The returned product has structurally checked naming without home/profile or environment
+    /// admission. [`AssemblyProduct::into_artifact`] retains required naming metadata.
     pub fn assemble_executable_modules(
         mut self,
         name: PackageId,
@@ -1230,20 +1252,6 @@ impl Assembler {
         callables: miden_mast_package::PackageCallables,
         callable_sources: product::CallableSources,
     ) -> Result<AssemblyProduct, Report> {
-        let mast = Arc::new(mast_forest);
-        let package = Box::new(
-            Package::create_with_modules(
-                name,
-                miden_mast_package::Version::new(0, 0, 0),
-                kind,
-                mast,
-                exports.into_values(),
-                modules,
-                None,
-            )
-            .map_err(Report::msg)?,
-        );
-
         #[cfg(feature = "std")]
         if self.emit_debug_info
             && let Some(trimmer) = self.source_path_trimmer()
@@ -1251,16 +1259,28 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
-        let namespace_plan = self.namespace_inputs.into_namespace_plan();
-        Ok(AssemblyProduct::new(
-            package,
-            None,
-            debug_info,
+        let naming = PackageNaming::new(
+            self.namespace_inputs
+                .into_namespace_plan()
+                .expect("prebinding requires an explicit caller home"),
             callables,
-            callable_sources,
-            namespace_plan.expect("prebinding requires an explicit caller home"),
             None,
-        ))
+        )
+        .into_diagnostic()?;
+        let package = Box::new(
+            Package::create_with_modules(
+                name,
+                miden_mast_package::Version::new(0, 0, 0),
+                kind,
+                Arc::new(mast_forest),
+                exports.into_values(),
+                modules,
+                None,
+                &naming,
+            )
+            .map_err(Report::msg)?,
+        );
+        Ok(AssemblyProduct::new(package, None, debug_info, naming, callable_sources))
     }
 
     fn static_libraries_for_builder(&self) -> Result<Vec<StaticLibrary<'_>>, Report> {
@@ -1295,6 +1315,19 @@ impl Assembler {
         callable_sources: product::CallableSources,
         entry_key: ProcedureKey,
     ) -> Result<AssemblyProduct, Report> {
+        #[cfg(feature = "std")]
+        if let Some(trimmer) = self.source_path_trimmer() {
+            debuginfo::trim_paths(&mut debug_info, &trimmer);
+        }
+
+        let naming = PackageNaming::new(
+            self.namespace_inputs
+                .into_namespace_plan()
+                .expect("prebinding requires an explicit caller home"),
+            callables,
+            Some(entry_key),
+        )
+        .into_diagnostic()?;
         let mast = Arc::new(mast_forest);
         let entry: Arc<Path> = namespace.join(ast::ProcedureName::MAIN_PROC_NAME).into();
         let entry_digest = mast[entrypoint].digest();
@@ -1309,25 +1342,12 @@ impl Assembler {
                         .with_source_node(entrypoint_source_id),
                 )],
                 None,
+                &naming,
             )
             .map_err(Report::msg)?,
         );
 
-        #[cfg(feature = "std")]
-        if let Some(trimmer) = self.source_path_trimmer() {
-            debuginfo::trim_paths(&mut debug_info, &trimmer);
-        }
-
-        let namespace_plan = self.namespace_inputs.into_namespace_plan();
-        Ok(AssemblyProduct::new(
-            package,
-            kernel,
-            debug_info,
-            callables,
-            callable_sources,
-            namespace_plan.expect("prebinding requires an explicit caller home"),
-            Some(entry_key),
-        ))
+        Ok(AssemblyProduct::new(package, kernel, debug_info, naming, callable_sources))
     }
 
     #[cfg(feature = "std")]

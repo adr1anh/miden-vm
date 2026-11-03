@@ -154,11 +154,14 @@ fn imported_fixtures_require_explicit_metadata_and_preserve_equal_body_keys() ->
         fixture.binding(Path::new("::imported::second")).unwrap().key(),
     );
     let mut missing_bindings = TestContext::new();
-    missing_bindings.add_library(package.clone())?;
+    let error = missing_bindings
+        .add_library(package.clone())
+        .expect_err("raw code availability must not admit an unconfigured foreign home");
+    assert!(error.to_string().contains("unexpected fixture home"));
     let error = missing_bindings
         .assemble("use imported begin exec.imported::first end")
-        .expect_err("code availability must not supply foreign callable metadata");
-    assert!(error.to_string().contains("missing canonical callable binding"));
+        .expect_err("failed naming admission must not install the foreign module");
+    assert!(error.to_string().contains("imported"), "{error:?}");
 
     let mut context = TestContext::new();
     assert!(

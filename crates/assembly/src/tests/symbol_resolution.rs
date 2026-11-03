@@ -1,6 +1,8 @@
 // SYMBOL RESOLUTION
 // ================================================================================================
 
+use miden_mast_package::arbitrary::fixture_naming;
+
 use super::*;
 use crate::testing::FixtureNamespace;
 
@@ -68,7 +70,8 @@ end
 
         let mut assembler = Assembler::default();
         for lib in libs {
-            assembler.link_package(lib.clone(), Linkage::Static)?;
+            let naming = FixtureNamespace::assembly_tests().admit_package(lib)?;
+            assembler.link_package(lib.clone(), Linkage::Static, naming)?;
         }
 
         assembler.assemble_program("program", program_source).map(|_| ())
@@ -169,6 +172,12 @@ end
         PackageExport::Procedure(ProcedureExport::new(quoted, node, digest, None)),
         PackageExport::Procedure(ProcedureExport::new(unquoted, node, digest, None)),
     ];
+    let naming = fixture_naming(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        TargetType::Library,
+        base.mast_forest(),
+        &exports,
+    );
 
     Package::create(
         "test".into(),
@@ -177,6 +186,7 @@ end
         Arc::clone(base.mast_forest()),
         exports,
         None,
+        &naming,
     )
     .expect_err("duplicate export paths must be rejected");
 }
@@ -205,8 +215,12 @@ fn executable_package_main_export_points_to_entrypoint_source_root() -> TestResu
             "#,
     )?;
     naming.add_module(&program)?;
-    let assembler =
-        Assembler::new(context.source_manager()).with_package(Arc::from(lib), Linkage::Static)?;
+    let lib_naming = naming.admit_package(&lib)?;
+    let assembler = Assembler::new(context.source_manager()).with_package(
+        Arc::from(lib),
+        Linkage::Static,
+        lib_naming,
+    )?;
     let package = naming.configure(assembler, [&*program])?.assemble_program("program", program)?;
 
     let main_path = Path::exec_path().join(ProcedureName::MAIN_PROC_NAME);
@@ -255,6 +269,12 @@ end
     let bad = Arc::<Path>::from(Path::validate(r#"::foo::"bad name""#).unwrap());
 
     let exports = vec![PackageExport::Procedure(ProcedureExport::new(bad, node, digest, None))];
+    let naming = fixture_naming(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        TargetType::Library,
+        base.mast_forest(),
+        &exports,
+    );
 
     Package::create(
         "test".into(),
@@ -263,6 +283,7 @@ end
         Arc::clone(base.mast_forest()),
         exports,
         None,
+        &naming,
     )
     .expect_err("expected malformed procedure export leaf names to be rejected");
 }

@@ -53,6 +53,13 @@ pub enum LinkerError {
     #[error("duplicate definition found for module '{path}'")]
     #[diagnostic()]
     DuplicateModule { path: Arc<Path> },
+    #[error(
+        "duplicate definition found for module '{path}': conflicting canonical names or module surface"
+    )]
+    #[diagnostic(help(
+        "distinct package instances at the same module path require explicit routing"
+    ))]
+    ConflictingImportedModule { path: Arc<Path> },
     #[error("too many modules in the graph (maximum: {})", ModuleIndex::MAX_MODULES)]
     #[diagnostic()]
     TooManyModules,

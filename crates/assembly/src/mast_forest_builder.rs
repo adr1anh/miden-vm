@@ -174,7 +174,6 @@ pub(crate) struct StaticLibrary<'a> {
     /// cause panics during assembly.
     debug_info: Option<PackageDebugInfo>,
     source_library_commitment: Word,
-    alternate_source_library_commitment: Option<Word>,
 }
 
 impl<'a> StaticLibrary<'a> {
@@ -187,7 +186,6 @@ impl<'a> StaticLibrary<'a> {
             // hints scoped to the same roots, external dependencies, and advice as
             // package-backed static libraries.
             source_library_commitment: mast.commitment(),
-            alternate_source_library_commitment: None,
         }
     }
 
@@ -195,18 +193,13 @@ impl<'a> StaticLibrary<'a> {
         library: &'a LinkLibrary,
         debug_info: Option<PackageDebugInfo>,
     ) -> Result<Self, ManifestValidationError> {
+        library.package.check_naming(library.naming())?;
         Ok(Self::from_mast_forest(library.mast().as_ref(), debug_info)
-            .with_source_library_commitment(library.commitment())
-            .with_alternate_source_library_commitment(library.interface_commitment()?))
+            .with_source_library_commitment(library.commitment()))
     }
 
     fn with_source_library_commitment(mut self, source_library_commitment: Word) -> Self {
         self.source_library_commitment = source_library_commitment;
-        self
-    }
-
-    fn with_alternate_source_library_commitment(mut self, source_library_commitment: Word) -> Self {
-        self.alternate_source_library_commitment = Some(source_library_commitment);
         self
     }
 }
@@ -263,14 +256,6 @@ impl MastForestBuilder {
                 .entry(library.source_library_commitment)
                 .or_insert_with(Vec::new)
                 .push(idx);
-            if let Some(source_library_commitment) = library.alternate_source_library_commitment
-                && source_library_commitment != library.source_library_commitment
-            {
-                statically_linked_forest_indices_by_commitment
-                    .entry(source_library_commitment)
-                    .or_insert_with(Vec::new)
-                    .push(idx);
-            }
         }
         let (statically_linked_mast, statically_linked_root_map) =
             MastForest::merge(forests.iter().copied()).into_diagnostic()?;
@@ -1831,6 +1816,7 @@ mod tests {
     use miden_mast_package::{
         Package, PackageExport, PackageId, PathBuf, ProcedureExport, Section, SectionId,
         TargetType, Version,
+        arbitrary::fixture_naming,
         debug_info::{
             DebugFieldInfo, DebugPrimitiveType, DebugSourceAsmOp, DebugSourceInlineCall,
             DebugSourceNode, DebugSourceVar, DebugTypeIdx, DebugTypeInfo, FunctionInfo,
@@ -1840,6 +1826,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::testing::FixtureNamespace;
 
     mod keyed_invocations;
 
@@ -3067,19 +3054,26 @@ mod tests {
         let export_path = export_path.as_path().to_absolute().unwrap().into_owned();
         let export_path = Arc::from(export_path.into_boxed_path());
         let final_loop = remapping[&loop_ref];
-        let export = PackageExport::Procedure(ProcedureExport::new(
+        let exports = [PackageExport::Procedure(ProcedureExport::new(
             export_path,
             Some(final_loop),
             forest[final_loop].digest(),
             None,
-        ));
+        ))];
+        let naming = fixture_naming(
+            FixtureNamespace::assembly_tests().namespace_plan().clone(),
+            TargetType::Library,
+            &forest,
+            &exports,
+        );
         let mut package = Package::create(
             PackageId::from("source-layout-test"),
             Version::new(0, 0, 0),
             TargetType::Library,
             Arc::new(forest),
-            [export],
+            exports,
             [],
+            &naming,
         )
         .unwrap();
         package

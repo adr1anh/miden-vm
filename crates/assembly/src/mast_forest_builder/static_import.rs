@@ -572,15 +572,14 @@ impl MastForestBuilder {
         if !self.imported_debug_tables.contains_key(&library_id) {
             let imported = if let Some(debug) = library.package.debug_info().into_diagnostic()? {
                 let static_index = self
-                    .statically_linked_package_debug_info
-                    .iter()
-                    .enumerate()
-                    .find(|(index, info)| {
-                        info.as_ref() == Some(&debug)
-                            && self.statically_linked_source_forests[*index].commitment()
-                                == library.commitment()
-                    })
-                    .map(|(index, _)| index);
+                    .statically_linked_forest_indices_by_commitment
+                    .get(&library_id)
+                    .and_then(|indices| {
+                        indices.iter().copied().find(|&index| {
+                            self.statically_linked_package_debug_info[index].as_ref()
+                                == Some(&debug)
+                        })
+                    });
                 let tables = if let Some(index) = static_index {
                     self.import_static_debug_tables(index, &debug)?
                 } else {
