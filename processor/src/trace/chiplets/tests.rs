@@ -11,13 +11,15 @@ use miden_air_definitions::vm::trace::{
 };
 use miden_core::{
     Felt, ONE, Word, ZERO,
-    mast::{BasicBlockNodeBuilder, CallNodeBuilder, MastForest},
-    program::{Program, StackInputs},
+    mast::{BasicBlockNodeBuilder, CallNodeBuilder, MastForest, MastNodeExt},
+    program::{ImplementationRoot, Program, StackInputs},
 };
 
 use crate::{
     AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor, KernelDescriptor,
     operation::Operation,
+    test_utils::native_trace_limits,
+    trace::tests::{trace_binding, trace_named_program},
 };
 
 type ChipletsTrace = [Vec<Felt>; CHIPLETS_WIDTH];
@@ -127,8 +129,12 @@ fn stacked_chiplet_trace() {
 
 #[test]
 fn regression_trace_build_does_not_panic_when_first_memory_access_clk_is_zero() {
-    let processor = FastProcessor::new(StackInputs::default());
-    let mut host = DefaultHost::default();
+    let processor = FastProcessor::new_with_options(
+        StackInputs::default(),
+        AdviceInputs::default(),
+        ExecutionOptions::default().with_environment_trace_limits(native_trace_limits()),
+    )
+    .unwrap();
 
     // A CALL entrypoint records the callee frame pointer write before the processor clock is
     // incremented, so the first memory access is captured at clk = 0.
@@ -140,13 +146,18 @@ fn regression_trace_build_does_not_panic_when_first_memory_access_clk_is_zero() 
             .unwrap();
         forest.make_root(callee);
 
-        let entry = CallNodeBuilder::new(callee).add_to_forest(&mut forest).unwrap();
+        let callee_binding = trace_binding("call-target");
+        let implementation = ImplementationRoot::new(forest[callee].digest());
+        let entry = CallNodeBuilder::new(callee_binding.key()).add_to_forest(&mut forest).unwrap();
         forest.make_root(entry);
 
-        Program::with_kernel(forest.into(), entry, KernelDescriptor::default())
+        trace_named_program(Program::new(forest.into(), entry), [(callee_binding, implementation)])
     };
 
-    let execution_witness = processor.execute_for_proving_sync(&program, &mut host).unwrap();
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    let execution_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
 
     let _trace =
@@ -171,11 +182,13 @@ fn build_trace(
     let processor = FastProcessor::new_with_options(
         StackInputs::new(&stack_inputs).unwrap(),
         AdviceInputs::default(),
-        ExecutionOptions::default().with_core_trace_fragment_size(1 << 10).unwrap(),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
+            .with_core_trace_fragment_size(1 << 10)
+            .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
 
-    let mut host = DefaultHost::default();
     let program = {
         let mut mast_forest = MastForest::new();
         let basic_block_id =
@@ -184,7 +197,11 @@ fn build_trace(
         Program::with_kernel(mast_forest.into(), basic_block_id, kernel)
     };
 
-    let execution_witness = processor.execute_for_proving_sync(&program, &mut host).unwrap();
+    let fixture = trace_named_program(program, []);
+    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let execution_witness = processor
+        .execute_for_proving_sync(&fixture.program, fixture.environment, &mut host)
+        .unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
     let trace =
         crate::trace::build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap();

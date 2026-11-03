@@ -1,4 +1,4 @@
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{string::ToString, sync::Arc, vec::Vec};
 
 use miden_air_definitions::vm::trace::{
     chiplets::hasher::CONTROLLER_ROWS_PER_HASHER_OP_FELT,
@@ -30,13 +30,15 @@ use miden_core::{
         MastForest, MastNodeExt, OP_BATCH_SIZE, SplitNodeBuilder,
     },
     operations::{Operation, opcodes},
-    program::{KernelDescriptor, Program, StackInputs},
+    program::{CanonicalLabel, ImplementationRoot, Program, StackInputs},
 };
+use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
 
 use crate::{
     AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor, ProcessorState,
     event::{NoopEventHandler, TraceError},
-    trace::{VmTrace, build_trace},
+    test_utils::{NamedFixture, named_program, native_trace_limits},
+    trace::{VmTrace, build_trace, chiplets::LibraryTrace},
 };
 
 // CONSTANTS
@@ -47,7 +49,6 @@ const EIGHT: Felt = Felt::new_unchecked(8);
 const NINE: Felt = Felt::new_unchecked(9);
 const FOURTEEN: Felt = Felt::new_unchecked(14);
 
-const INIT_ADDR: Felt = ONE;
 const EMIT_EVENT: EventName = EventName::new("test::emit::event");
 const TRACE_EVENT: EventName = EventName::new("test::emit::trace");
 
@@ -55,7 +56,26 @@ const TRACE_EVENT: EventName = EventName::new("test::emit::trace");
 // ================================================================================================
 
 type SystemTrace = Vec<Vec<Felt>>;
-type DecoderTrace = Vec<Vec<Felt>>;
+struct DecoderTrace {
+    columns: Vec<Vec<Felt>>,
+    library_prefix: usize,
+}
+
+impl DecoderTrace {
+    /// Convert logical Controller row zero to its one-based physical address.
+    /// The prefix comes from the completed authenticated session, independently of core rows.
+    fn initial_address(&self) -> Felt {
+        Felt::from_u32(u32::try_from(self.library_prefix).unwrap()) + ONE
+    }
+}
+
+impl core::ops::Deref for DecoderTrace {
+    type Target = [Vec<Felt>];
+
+    fn deref(&self) -> &Self::Target {
+        &self.columns
+    }
+}
 
 // BASIC BLOCK TESTS
 // ================================================================================================
@@ -71,21 +91,24 @@ fn test_basic_block_one_group_decoding() {
         let basic_block = mast_forest[basic_block_id].unwrap_basic_block().clone();
         mast_forest.make_root(basic_block_id);
 
-        (basic_block, Program::new(mast_forest.into(), basic_block_id))
+        (
+            basic_block,
+            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+        )
     };
 
     let (trace, trace_len) = build_trace_helper(&[], &program);
 
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
     check_op_decoding(&trace, 0, ZERO, opcodes::SPAN, 1, 0, 0);
-    check_op_decoding(&trace, 1, INIT_ADDR, opcodes::PAD, 0, 0, 1);
-    check_op_decoding(&trace, 2, INIT_ADDR, opcodes::ADD, 0, 1, 1);
-    check_op_decoding(&trace, 3, INIT_ADDR, opcodes::MUL, 0, 2, 1);
-    check_op_decoding(&trace, 4, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 1, trace.initial_address(), opcodes::PAD, 0, 0, 1);
+    check_op_decoding(&trace, 2, trace.initial_address(), opcodes::ADD, 0, 1, 1);
+    check_op_decoding(&trace, 3, trace.initial_address(), opcodes::MUL, 0, 2, 1);
+    check_op_decoding(&trace, 4, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 5, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
     check_hasher_state(
         &trace,
         vec![
@@ -93,7 +116,7 @@ fn test_basic_block_one_group_decoding() {
             vec![build_op_group(&ops[1..])],
             vec![build_op_group(&ops[2..])],
             vec![],
-            program_hash.to_vec(), // last row should contain program hash
+            root_end_hasher_state(program_hash), // authenticated root END, including h7
         ],
     );
 
@@ -124,27 +147,30 @@ fn test_basic_block_small_decoding() {
         let basic_block = mast_forest[basic_block_id].unwrap_basic_block().clone();
         mast_forest.make_root(basic_block_id);
 
-        (basic_block, Program::new(mast_forest.into(), basic_block_id))
+        (
+            basic_block,
+            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+        )
     };
 
     let (trace, trace_len) = build_trace_helper(&[], &program);
 
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
     check_op_decoding(&trace, 0, ZERO, opcodes::SPAN, 4, 0, 0);
-    check_op_decoding_with_imm(&trace, 1, INIT_ADDR, ONE, 1, 3, 0, 1);
-    check_op_decoding_with_imm(&trace, 2, INIT_ADDR, TWO, 2, 2, 1, 1);
-    check_op_decoding(&trace, 3, INIT_ADDR, opcodes::ADD, 1, 2, 1);
-    check_op_decoding(&trace, 4, INIT_ADDR, opcodes::SWAP, 1, 3, 1);
-    check_op_decoding(&trace, 5, INIT_ADDR, opcodes::DROP, 1, 4, 1);
+    check_op_decoding_with_imm(&trace, 1, trace.initial_address(), ONE, 1, 3, 0, 1);
+    check_op_decoding_with_imm(&trace, 2, trace.initial_address(), TWO, 2, 2, 1, 1);
+    check_op_decoding(&trace, 3, trace.initial_address(), opcodes::ADD, 1, 2, 1);
+    check_op_decoding(&trace, 4, trace.initial_address(), opcodes::SWAP, 1, 3, 1);
+    check_op_decoding(&trace, 5, trace.initial_address(), opcodes::DROP, 1, 4, 1);
 
     // starting new group: NOOP group is inserted by the processor to make sure number of groups
     // is a power of two
-    check_op_decoding(&trace, 6, INIT_ADDR, opcodes::NOOP, 0, 0, 1);
-    check_op_decoding(&trace, 7, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 6, trace.initial_address(), opcodes::NOOP, 0, 0, 1);
+    check_op_decoding(&trace, 7, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 8, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
 
     check_hasher_state(
         &trace,
@@ -156,7 +182,7 @@ fn test_basic_block_small_decoding() {
             vec![build_op_group(&ops[4..])],
             vec![],
             vec![],
-            program_hash.to_vec(), // last row should contain program hash
+            root_end_hasher_state(program_hash), // authenticated root END, including h7
         ],
     );
 
@@ -187,26 +213,29 @@ fn test_basic_block_small_with_emit_decoding() {
         let basic_block = mast_forest[basic_block_id].unwrap_basic_block().clone();
         mast_forest.make_root(basic_block_id);
 
-        (basic_block, Program::new(mast_forest.into(), basic_block_id))
+        (
+            basic_block,
+            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+        )
     };
 
     let (trace, trace_len) = build_trace_helper(&[], &program);
 
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
     check_op_decoding(&trace, 0, ZERO, opcodes::SPAN, 4, 0, 0);
-    check_op_decoding_with_imm(&trace, 1, INIT_ADDR, ONE, 1, 3, 0, 1);
-    check_op_decoding_with_imm(&trace, 2, INIT_ADDR, emit_event_felt, 2, 2, 1, 1);
-    check_op_decoding(&trace, 3, INIT_ADDR, opcodes::EMIT, 1, 2, 1);
-    check_op_decoding(&trace, 4, INIT_ADDR, opcodes::DROP, 1, 3, 1);
-    check_op_decoding(&trace, 5, INIT_ADDR, opcodes::ADD, 1, 4, 1);
+    check_op_decoding_with_imm(&trace, 1, trace.initial_address(), ONE, 1, 3, 0, 1);
+    check_op_decoding_with_imm(&trace, 2, trace.initial_address(), emit_event_felt, 2, 2, 1, 1);
+    check_op_decoding(&trace, 3, trace.initial_address(), opcodes::EMIT, 1, 2, 1);
+    check_op_decoding(&trace, 4, trace.initial_address(), opcodes::DROP, 1, 3, 1);
+    check_op_decoding(&trace, 5, trace.initial_address(), opcodes::ADD, 1, 4, 1);
     // starting new group: NOOP group is inserted by the processor to make sure number of groups
     // is a power of two
-    check_op_decoding(&trace, 6, INIT_ADDR, opcodes::NOOP, 0, 0, 1);
-    check_op_decoding(&trace, 7, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 6, trace.initial_address(), opcodes::NOOP, 0, 0, 1);
+    check_op_decoding(&trace, 7, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 8, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
     check_hasher_state(
         &trace,
         vec![
@@ -217,7 +246,7 @@ fn test_basic_block_small_with_emit_decoding() {
             vec![build_op_group(&ops[4..])],
             vec![],
             vec![],
-            program_hash.to_vec(), // last row should contain program hash
+            root_end_hasher_state(program_hash), // authenticated root END, including h7
         ],
     );
 
@@ -251,25 +280,28 @@ fn test_basic_block_small_with_emit_trace_decoding() {
         let basic_block = mast_forest[basic_block_id].unwrap_basic_block().clone();
         mast_forest.make_root(basic_block_id);
 
-        (basic_block, Program::new(mast_forest.into(), basic_block_id))
+        (
+            basic_block,
+            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+        )
     };
 
     let (trace, trace_len) = build_trace_helper(&[], &program);
 
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
     check_op_decoding(&trace, 0, ZERO, opcodes::SPAN, 4, 0, 0);
-    check_op_decoding_with_imm(&trace, 1, INIT_ADDR, ONE, 1, 3, 0, 1);
-    check_op_decoding_with_imm(&trace, 2, INIT_ADDR, trace_id_felt, 2, 2, 1, 1);
-    check_op_decoding_with_imm(&trace, 3, INIT_ADDR, trace_sys_event_id, 3, 1, 2, 1);
-    check_op_decoding(&trace, 4, INIT_ADDR, opcodes::EMIT, 0, 3, 1);
-    check_op_decoding(&trace, 5, INIT_ADDR, opcodes::DROP, 0, 4, 1);
-    check_op_decoding(&trace, 6, INIT_ADDR, opcodes::DROP, 0, 5, 1);
-    check_op_decoding(&trace, 7, INIT_ADDR, opcodes::ADD, 0, 6, 1);
-    check_op_decoding(&trace, 8, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding_with_imm(&trace, 1, trace.initial_address(), ONE, 1, 3, 0, 1);
+    check_op_decoding_with_imm(&trace, 2, trace.initial_address(), trace_id_felt, 2, 2, 1, 1);
+    check_op_decoding_with_imm(&trace, 3, trace.initial_address(), trace_sys_event_id, 3, 1, 2, 1);
+    check_op_decoding(&trace, 4, trace.initial_address(), opcodes::EMIT, 0, 3, 1);
+    check_op_decoding(&trace, 5, trace.initial_address(), opcodes::DROP, 0, 4, 1);
+    check_op_decoding(&trace, 6, trace.initial_address(), opcodes::DROP, 0, 5, 1);
+    check_op_decoding(&trace, 7, trace.initial_address(), opcodes::ADD, 0, 6, 1);
+    check_op_decoding(&trace, 8, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 9, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
     check_hasher_state(
         &trace,
         vec![
@@ -281,7 +313,7 @@ fn test_basic_block_small_with_emit_trace_decoding() {
             vec![build_op_group(&ops[5..])],
             vec![build_op_group(&ops[6..])],
             vec![build_op_group(&ops[7..])],
-            program_hash.to_vec(), // last row should contain program hash
+            root_end_hasher_state(program_hash), // authenticated root END, including h7
         ],
     );
 
@@ -321,37 +353,40 @@ fn test_basic_block_decoding() {
         let basic_block = mast_forest[basic_block_id].unwrap_basic_block().clone();
         mast_forest.make_root(basic_block_id);
 
-        (basic_block, Program::new(mast_forest.into(), basic_block_id))
+        (
+            basic_block,
+            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+        )
     };
     let (trace, trace_len) = build_trace_helper(&[], &program);
 
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
     check_op_decoding(&trace, 0, ZERO, opcodes::SPAN, 8, 0, 0);
-    check_op_decoding_with_imm(&trace, 1, INIT_ADDR, iv[0], 1, 7, 0, 1);
-    check_op_decoding_with_imm(&trace, 2, INIT_ADDR, iv[1], 2, 6, 1, 1);
-    check_op_decoding_with_imm(&trace, 3, INIT_ADDR, iv[2], 3, 5, 2, 1);
-    check_op_decoding(&trace, 4, INIT_ADDR, opcodes::PAD, 4, 3, 1);
-    check_op_decoding(&trace, 5, INIT_ADDR, opcodes::MUL, 4, 4, 1);
-    check_op_decoding(&trace, 6, INIT_ADDR, opcodes::ADD, 4, 5, 1);
-    check_op_decoding(&trace, 7, INIT_ADDR, opcodes::DROP, 4, 6, 1);
-    check_op_decoding_with_imm(&trace, 8, INIT_ADDR, iv[3], 4, 4, 7, 1);
+    check_op_decoding_with_imm(&trace, 1, trace.initial_address(), iv[0], 1, 7, 0, 1);
+    check_op_decoding_with_imm(&trace, 2, trace.initial_address(), iv[1], 2, 6, 1, 1);
+    check_op_decoding_with_imm(&trace, 3, trace.initial_address(), iv[2], 3, 5, 2, 1);
+    check_op_decoding(&trace, 4, trace.initial_address(), opcodes::PAD, 4, 3, 1);
+    check_op_decoding(&trace, 5, trace.initial_address(), opcodes::MUL, 4, 4, 1);
+    check_op_decoding(&trace, 6, trace.initial_address(), opcodes::ADD, 4, 5, 1);
+    check_op_decoding(&trace, 7, trace.initial_address(), opcodes::DROP, 4, 6, 1);
+    check_op_decoding_with_imm(&trace, 8, trace.initial_address(), iv[3], 4, 4, 7, 1);
     // NOOP inserted by the processor to make sure the group doesn't end with a PUSH
-    check_op_decoding(&trace, 9, INIT_ADDR, opcodes::NOOP, 3, 8, 1);
+    check_op_decoding(&trace, 9, trace.initial_address(), opcodes::NOOP, 3, 8, 1);
     // starting new operation group
-    check_op_decoding_with_imm(&trace, 10, INIT_ADDR, iv[4], 6, 2, 0, 1);
-    check_op_decoding(&trace, 11, INIT_ADDR, opcodes::MUL, 1, 1, 1);
-    check_op_decoding(&trace, 12, INIT_ADDR, opcodes::ADD, 1, 2, 1);
-    check_op_decoding(&trace, 13, INIT_ADDR, opcodes::INV, 1, 3, 1);
-    check_op_decoding(&trace, 14, INIT_ADDR, opcodes::SWAP, 1, 4, 1);
-    check_op_decoding(&trace, 15, INIT_ADDR, opcodes::DROP, 1, 5, 1);
+    check_op_decoding_with_imm(&trace, 10, trace.initial_address(), iv[4], 6, 2, 0, 1);
+    check_op_decoding(&trace, 11, trace.initial_address(), opcodes::MUL, 1, 1, 1);
+    check_op_decoding(&trace, 12, trace.initial_address(), opcodes::ADD, 1, 2, 1);
+    check_op_decoding(&trace, 13, trace.initial_address(), opcodes::INV, 1, 3, 1);
+    check_op_decoding(&trace, 14, trace.initial_address(), opcodes::SWAP, 1, 4, 1);
+    check_op_decoding(&trace, 15, trace.initial_address(), opcodes::DROP, 1, 5, 1);
 
     // NOOP inserted by the processor to make sure the number of groups is a power of two
-    check_op_decoding(&trace, 16, INIT_ADDR, opcodes::NOOP, 0, 0, 1);
-    check_op_decoding(&trace, 17, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 16, trace.initial_address(), opcodes::NOOP, 0, 0, 1);
+    check_op_decoding(&trace, 17, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 18, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
     check_hasher_state(
         &trace,
         vec![
@@ -371,8 +406,8 @@ fn test_basic_block_decoding() {
             vec![build_op_group(&ops[12..])],
             vec![build_op_group(&ops[13..])],
             vec![],
-            vec![],                // a group with single NOOP added at the end
-            program_hash.to_vec(), // last row should contain program hash
+            vec![],                              // a group with single NOOP added at the end
+            root_end_hasher_state(program_hash), // authenticated root END, including h7
         ],
     );
 
@@ -428,24 +463,27 @@ fn test_basic_block_with_respan_decoding() {
         let basic_block = mast_forest[basic_block_id].unwrap_basic_block().clone();
         mast_forest.make_root(basic_block_id);
 
-        (basic_block, Program::new(mast_forest.into(), basic_block_id))
+        (
+            basic_block,
+            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+        )
     };
     let (trace, trace_len) = build_trace_helper(&[], &program);
 
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
     check_op_decoding(&trace, 0, ZERO, opcodes::SPAN, 12, 0, 0);
-    check_op_decoding_with_imm(&trace, 1, INIT_ADDR, iv[0], 1, 11, 0, 1);
-    check_op_decoding_with_imm(&trace, 2, INIT_ADDR, iv[1], 2, 10, 1, 1);
-    check_op_decoding_with_imm(&trace, 3, INIT_ADDR, iv[2], 3, 9, 2, 1);
-    check_op_decoding_with_imm(&trace, 4, INIT_ADDR, iv[3], 4, 8, 3, 1);
-    check_op_decoding_with_imm(&trace, 5, INIT_ADDR, iv[4], 5, 7, 4, 1);
-    check_op_decoding_with_imm(&trace, 6, INIT_ADDR, iv[5], 6, 6, 5, 1);
-    check_op_decoding_with_imm(&trace, 7, INIT_ADDR, iv[6], 7, 5, 6, 1);
+    check_op_decoding_with_imm(&trace, 1, trace.initial_address(), iv[0], 1, 11, 0, 1);
+    check_op_decoding_with_imm(&trace, 2, trace.initial_address(), iv[1], 2, 10, 1, 1);
+    check_op_decoding_with_imm(&trace, 3, trace.initial_address(), iv[2], 3, 9, 2, 1);
+    check_op_decoding_with_imm(&trace, 4, trace.initial_address(), iv[3], 4, 8, 3, 1);
+    check_op_decoding_with_imm(&trace, 5, trace.initial_address(), iv[4], 5, 7, 4, 1);
+    check_op_decoding_with_imm(&trace, 6, trace.initial_address(), iv[5], 6, 6, 5, 1);
+    check_op_decoding_with_imm(&trace, 7, trace.initial_address(), iv[6], 7, 5, 6, 1);
     // NOOP inserted by the processor to make sure the group doesn't end with a PUSH
-    check_op_decoding(&trace, 8, INIT_ADDR, opcodes::NOOP, 4, 7, 1);
+    check_op_decoding(&trace, 8, trace.initial_address(), opcodes::NOOP, 4, 7, 1);
     // RESPAN since the previous batch is full
-    let batch1_addr = INIT_ADDR + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
-    check_op_decoding(&trace, 9, INIT_ADDR, opcodes::RESPAN, 4, 0, 0);
+    let batch1_addr = trace.initial_address() + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+    check_op_decoding(&trace, 9, trace.initial_address(), opcodes::RESPAN, 4, 0, 0);
     check_op_decoding_with_imm(&trace, 10, batch1_addr, iv[7], 1, 3, 0, 1);
     check_op_decoding(&trace, 11, batch1_addr, opcodes::ADD, 2, 1, 1);
     check_op_decoding_with_imm(&trace, 12, batch1_addr, iv[8], 2, 2, 2, 1);
@@ -464,7 +502,7 @@ fn test_basic_block_with_respan_decoding() {
     check_op_decoding(&trace, 23, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
 
     check_hasher_state(
         &trace,
@@ -491,7 +529,7 @@ fn test_basic_block_with_respan_decoding() {
             vec![build_op_group(&ops[17..])],
             vec![build_op_group(&ops[18..])],
             vec![],
-            program_hash.to_vec(), // last row should contain program hash
+            root_end_hasher_state(program_hash), // authenticated root END, including h7
         ],
     );
 
@@ -526,7 +564,11 @@ fn test_join_node_decoding() {
             .unwrap();
         mast_forest.make_root(join_node_id);
 
-        (basic_block1, basic_block2, Program::new(mast_forest.into(), join_node_id))
+        (
+            basic_block1,
+            basic_block2,
+            synthetic_fixture(Program::new(mast_forest.into(), join_node_id), []),
+        )
     };
 
     let (trace, trace_len) = build_trace_helper(&[], &program);
@@ -534,16 +576,16 @@ fn test_join_node_decoding() {
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
     check_op_decoding(&trace, 0, ZERO, opcodes::JOIN, 0, 0, 0);
     // starting first span
-    let span1_addr = INIT_ADDR + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
-    check_op_decoding(&trace, 1, INIT_ADDR, opcodes::SPAN, 1, 0, 0);
+    let span1_addr = trace.initial_address() + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+    check_op_decoding(&trace, 1, trace.initial_address(), opcodes::SPAN, 1, 0, 0);
     check_op_decoding(&trace, 2, span1_addr, opcodes::MUL, 0, 0, 1);
     check_op_decoding(&trace, 3, span1_addr, opcodes::END, 0, 0, 0);
     // starting second span
     let span2_addr = span1_addr + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
-    check_op_decoding(&trace, 4, INIT_ADDR, opcodes::SPAN, 1, 0, 0);
+    check_op_decoding(&trace, 4, trace.initial_address(), opcodes::SPAN, 1, 0, 0);
     check_op_decoding(&trace, 5, span2_addr, opcodes::ADD, 0, 0, 1);
     check_op_decoding(&trace, 6, span2_addr, opcodes::END, 0, 0, 0);
-    check_op_decoding(&trace, 7, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 7, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 8, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
@@ -563,9 +605,9 @@ fn test_join_node_decoding() {
     assert_eq!(EMPTY_WORD, get_hasher_state2(&trace, 6));
 
     // at the end of the program, the hasher state is set to the hash of the entire program
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
     assert_eq!(program_hash, get_hasher_state1(&trace, 7));
-    assert_eq!(EMPTY_WORD, get_hasher_state2(&trace, 7));
+    assert_eq!(Word::from([ZERO, ZERO, ZERO, ONE]), get_hasher_state2(&trace, 7));
 
     // HALT opcode and program hash gets propagated to the last row
     for i in 9..trace_len {
@@ -598,18 +640,22 @@ fn test_split_node_true_decoding() {
             .unwrap();
         mast_forest.make_root(split_node_id);
 
-        (basic_block1, basic_block2, Program::new(mast_forest.into(), split_node_id))
+        (
+            basic_block1,
+            basic_block2,
+            synthetic_fixture(Program::new(mast_forest.into(), split_node_id), []),
+        )
     };
 
     let (trace, trace_len) = build_trace_helper(&[1], &program);
 
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
-    let basic_block_addr = INIT_ADDR + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+    let basic_block_addr = trace.initial_address() + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
     check_op_decoding(&trace, 0, ZERO, opcodes::SPLIT, 0, 0, 0);
-    check_op_decoding(&trace, 1, INIT_ADDR, opcodes::SPAN, 1, 0, 0);
+    check_op_decoding(&trace, 1, trace.initial_address(), opcodes::SPAN, 1, 0, 0);
     check_op_decoding(&trace, 2, basic_block_addr, opcodes::MUL, 0, 0, 1);
     check_op_decoding(&trace, 3, basic_block_addr, opcodes::END, 0, 0, 0);
-    check_op_decoding(&trace, 4, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 4, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 5, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
@@ -625,9 +671,9 @@ fn test_split_node_true_decoding() {
     assert_eq!(EMPTY_WORD, get_hasher_state2(&trace, 3));
 
     // at the end of the program, the hasher state is set to the hash of the entire program
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
     assert_eq!(program_hash, get_hasher_state1(&trace, 4));
-    assert_eq!(EMPTY_WORD, get_hasher_state2(&trace, 4));
+    assert_eq!(Word::from([ZERO, ZERO, ZERO, ONE]), get_hasher_state2(&trace, 4));
 
     // HALT opcode and program hash gets propagated to the last row
     for i in 6..trace_len {
@@ -657,18 +703,22 @@ fn test_split_node_false_decoding() {
             .unwrap();
         mast_forest.make_root(split_node_id);
 
-        (basic_block1, basic_block2, Program::new(mast_forest.into(), split_node_id))
+        (
+            basic_block1,
+            basic_block2,
+            synthetic_fixture(Program::new(mast_forest.into(), split_node_id), []),
+        )
     };
 
     let (trace, trace_len) = build_trace_helper(&[0], &program);
 
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
-    let basic_block_addr = INIT_ADDR + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+    let basic_block_addr = trace.initial_address() + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
     check_op_decoding(&trace, 0, ZERO, opcodes::SPLIT, 0, 0, 0);
-    check_op_decoding(&trace, 1, INIT_ADDR, opcodes::SPAN, 1, 0, 0);
+    check_op_decoding(&trace, 1, trace.initial_address(), opcodes::SPAN, 1, 0, 0);
     check_op_decoding(&trace, 2, basic_block_addr, opcodes::ADD, 0, 0, 1);
     check_op_decoding(&trace, 3, basic_block_addr, opcodes::END, 0, 0, 0);
-    check_op_decoding(&trace, 4, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 4, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 5, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
@@ -684,9 +734,9 @@ fn test_split_node_false_decoding() {
     assert_eq!(EMPTY_WORD, get_hasher_state2(&trace, 3));
 
     // at the end of the program, the hasher state is set to the hash of the entire program
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
     assert_eq!(program_hash, get_hasher_state1(&trace, 4));
-    assert_eq!(EMPTY_WORD, get_hasher_state2(&trace, 4));
+    assert_eq!(Word::from([ZERO, ZERO, ZERO, ONE]), get_hasher_state2(&trace, 4));
 
     // HALT opcode and program hash gets propagated to the last row
     for i in 6..trace_len {
@@ -713,7 +763,7 @@ fn test_loop_node_decoding() {
             LoopNodeBuilder::new(loop_body_id).add_to_forest(&mut mast_forest).unwrap();
         mast_forest.make_root(loop_node_id);
 
-        (loop_body, Program::new(mast_forest.into(), loop_node_id))
+        (loop_body, synthetic_fixture(Program::new(mast_forest.into(), loop_node_id), []))
     };
 
     // Input [0]: do-while LOOP enters the body unconditionally; after the Pad+Drop net-zero body,
@@ -723,13 +773,13 @@ fn test_loop_node_decoding() {
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
     // On the LOOP row, `group_count` carries the number of body ENDs returning to this loop
     // address, which the block-hash lookup uses as the body digest's multiplicity.
-    let body_addr = INIT_ADDR + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+    let body_addr = trace.initial_address() + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
     check_op_decoding(&trace, 0, ZERO, opcodes::LOOP, 1, 0, 0);
-    check_op_decoding(&trace, 1, INIT_ADDR, opcodes::SPAN, 1, 0, 0);
+    check_op_decoding(&trace, 1, trace.initial_address(), opcodes::SPAN, 1, 0, 0);
     check_op_decoding(&trace, 2, body_addr, opcodes::PAD, 0, 0, 1);
     check_op_decoding(&trace, 3, body_addr, opcodes::DROP, 0, 1, 1);
     check_op_decoding(&trace, 4, body_addr, opcodes::END, 0, 0, 0);
-    check_op_decoding(&trace, 5, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 5, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 6, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
@@ -746,9 +796,9 @@ fn test_loop_node_decoding() {
 
     // the hash of the program is located in the last END row; this row should also have is_loop
     // flag set to ONE
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
     assert_eq!(program_hash, get_hasher_state1(&trace, 5));
-    assert_eq!(Word::from([ZERO, ONE, ZERO, ZERO]), get_hasher_state2(&trace, 5));
+    assert_eq!(Word::from([ZERO, ONE, ZERO, ONE]), get_hasher_state2(&trace, 5));
 
     // HALT opcode and program hash gets propagated to the last row
     for i in 7..trace_len {
@@ -772,7 +822,7 @@ fn test_loop_node_repeat_decoding() {
             LoopNodeBuilder::new(loop_body_id).add_to_forest(&mut mast_forest).unwrap();
         mast_forest.make_root(loop_node_id);
 
-        (loop_body, Program::new(mast_forest.into(), loop_node_id))
+        (loop_body, synthetic_fixture(Program::new(mast_forest.into(), loop_node_id), []))
     };
 
     // Input [1, 0]: do-while LOOP enters the body unconditionally; Pad+Drop is net-zero, so the
@@ -781,22 +831,22 @@ fn test_loop_node_repeat_decoding() {
     let (trace, trace_len) = build_trace_helper(&[1, 0], &program);
 
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
-    let iter1_addr = INIT_ADDR + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+    let iter1_addr = trace.initial_address() + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
     let iter2_addr = iter1_addr + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
 
     // The LOOP row's `group_count` covers both body executions; the REPEAT row adds nothing.
     check_op_decoding(&trace, 0, ZERO, opcodes::LOOP, 2, 0, 0);
-    check_op_decoding(&trace, 1, INIT_ADDR, opcodes::SPAN, 1, 0, 0);
+    check_op_decoding(&trace, 1, trace.initial_address(), opcodes::SPAN, 1, 0, 0);
     check_op_decoding(&trace, 2, iter1_addr, opcodes::PAD, 0, 0, 1);
     check_op_decoding(&trace, 3, iter1_addr, opcodes::DROP, 0, 1, 1);
     check_op_decoding(&trace, 4, iter1_addr, opcodes::END, 0, 0, 0);
     // start second iteration
-    check_op_decoding(&trace, 5, INIT_ADDR, opcodes::REPEAT, 0, 0, 0);
-    check_op_decoding(&trace, 6, INIT_ADDR, opcodes::SPAN, 1, 0, 0);
+    check_op_decoding(&trace, 5, trace.initial_address(), opcodes::REPEAT, 0, 0, 0);
+    check_op_decoding(&trace, 6, trace.initial_address(), opcodes::SPAN, 1, 0, 0);
     check_op_decoding(&trace, 7, iter2_addr, opcodes::PAD, 0, 0, 1);
     check_op_decoding(&trace, 8, iter2_addr, opcodes::DROP, 0, 1, 1);
     check_op_decoding(&trace, 9, iter2_addr, opcodes::END, 0, 0, 0);
-    check_op_decoding(&trace, 10, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 10, trace.initial_address(), opcodes::END, 0, 0, 0);
     check_op_decoding(&trace, 11, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
@@ -822,9 +872,9 @@ fn test_loop_node_repeat_decoding() {
 
     // the hash of the program is located in the last END row; this row should also have is_loop
     // flag set to ONE
-    let program_hash = program.hash();
+    let program_hash = program.program.hash();
     assert_eq!(program_hash, get_hasher_state1(&trace, 10));
-    assert_eq!(Word::from([ZERO, ONE, ZERO, ZERO]), get_hasher_state2(&trace, 10));
+    assert_eq!(Word::from([ZERO, ONE, ZERO, ONE]), get_hasher_state2(&trace, 10));
 
     // HALT opcode and program hash gets propagated to the last row
     for i in 12..trace_len {
@@ -868,7 +918,7 @@ fn test_call_decoding() {
         .unwrap();
     let foo_root = mast_forest[foo_root_id].clone();
     mast_forest.make_root(foo_root_id);
-    let kernel = KernelDescriptor::new(&[foo_root.digest()]).unwrap();
+
 
     // build bar procedure body
     let bar_basic_block_id = BasicBlockNodeBuilder::new(vec![Operation::Mul])
@@ -876,7 +926,7 @@ fn test_call_decoding() {
         .unwrap();
     let bar_basic_block = mast_forest[bar_basic_block_id].clone();
 
-    let foo_call_node_id = CallNodeBuilder::new(foo_root_id)
+    let foo_call_node_id = CallNodeBuilder::new(fixture_binding("foo", false).key())
         .add_to_forest(&mut mast_forest)
         .unwrap();
     let foo_call_node = mast_forest[foo_call_node_id].clone();
@@ -897,7 +947,7 @@ fn test_call_decoding() {
         .unwrap();
     let last_basic_block = mast_forest[last_basic_block_id].clone();
 
-    let bar_call_node_id = CallNodeBuilder::new(bar_root_node_id)
+    let bar_call_node_id = CallNodeBuilder::new(fixture_binding("bar", false).key())
         .add_to_forest(&mut mast_forest)
         .unwrap();
     let bar_call_node = mast_forest[bar_call_node_id].clone();
@@ -909,7 +959,13 @@ fn test_call_decoding() {
     let program_root_node = mast_forest[program_root_node_id].clone();
     mast_forest.make_root(program_root_node_id);
 
-    let program = Program::with_kernel(mast_forest.into(), program_root_node_id, kernel);
+    let program = synthetic_fixture(
+        Program::new(mast_forest.into(), program_root_node_id),
+        [
+            (fixture_binding("foo", false), ImplementationRoot::new(foo_root.digest())),
+            (fixture_binding("bar", false), ImplementationRoot::new(bar_root_node.digest())),
+        ],
+    );
 
     let (sys_trace, dec_trace, trace_len) =
         build_call_trace_helper(&program);
@@ -919,8 +975,8 @@ fn test_call_decoding() {
     check_op_decoding(&dec_trace, row_idx, ZERO, opcodes::JOIN, 0, 0, 0);
     row_idx += 1;
     // starting the internal JOIN block
-    let inner_join_addr = INIT_ADDR + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
-    check_op_decoding(&dec_trace, row_idx, INIT_ADDR, opcodes::JOIN, 0, 0, 0);
+    let inner_join_addr = dec_trace.initial_address() + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+    check_op_decoding(&dec_trace, row_idx, dec_trace.initial_address(), opcodes::JOIN, 0, 0, 0);
     row_idx += 1;
     // starting first SPAN block
     let first_basic_block_addr = inner_join_addr + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
@@ -982,7 +1038,7 @@ fn test_call_decoding() {
 
     // starting the last SPAN block
     let last_basic_block_addr = syscall_basic_block_addr + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
-    check_op_decoding(&dec_trace, row_idx, INIT_ADDR, opcodes::SPAN, 1, 0, 0);
+    check_op_decoding(&dec_trace, row_idx, dec_trace.initial_address(), opcodes::SPAN, 1, 0, 0);
     row_idx += 1;
     check_op_decoding(&dec_trace, row_idx, last_basic_block_addr, opcodes::DROP, 0, 0, 1);
     row_idx += 1;
@@ -992,7 +1048,7 @@ fn test_call_decoding() {
     row_idx += 1;
 
     // ending the program
-    check_op_decoding(&dec_trace, row_idx, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&dec_trace, row_idx, dec_trace.initial_address(), opcodes::END, 0, 0, 0);
     row_idx += 1;
     check_op_decoding(&dec_trace, row_idx, ZERO, opcodes::HALT, 0, 0, 0);
 
@@ -1013,9 +1069,9 @@ fn test_call_decoding() {
     assert_eq!(first_basic_block_hash, get_hasher_state1(&dec_trace, 7));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 7));
 
-    // in the 8th row, we start the CALL block which has bar_join as its only child
+    // in the 8th row, CALL commits the independently named bar key
     let bar_root_hash = bar_root_node.digest();
-    assert_eq!(bar_root_hash, get_hasher_state1(&dec_trace, 8));
+    assert_eq!(fixture_binding("bar", false).key().into_word(), get_hasher_state1(&dec_trace, 8));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 8));
 
     // in the 9th row, the hasher state for JOIN is set to hashes of (bar_span, foo_call)
@@ -1028,9 +1084,9 @@ fn test_call_decoding() {
     assert_eq!(bar_basic_block_hash, get_hasher_state1(&dec_trace, 12));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 12));
 
-    // in the 13th row, we start the CALL block which has foo_span as its only child
+    // in the 13th row, CALL commits the independently named foo key
     let foo_root_hash = foo_root.digest();
-    assert_eq!(foo_root_hash, get_hasher_state1(&dec_trace, 13));
+    assert_eq!(fixture_binding("foo", false).key().into_word(), get_hasher_state1(&dec_trace, 13));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 13));
 
     // at the end of the foo block, the hasher state is set to the hash of the first child
@@ -1062,7 +1118,7 @@ fn test_call_decoding() {
     // the program ends in the 25th row
     let program_hash = program_root_node.digest();
     assert_eq!(program_hash, get_hasher_state1(&dec_trace, 25));
-    assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 25));
+    assert_eq!(Word::from([ZERO, ZERO, ZERO, ONE]), get_hasher_state2(&dec_trace, 25));
 
     // HALT opcode and program hash gets propagated to the last row
     for i in 26..trace_len {
@@ -1102,29 +1158,29 @@ fn test_call_decoding() {
 
     // --- check fn hash columns ------------------------------------------------------------------
 
-    // before the CALL operation is executed, we are in a root context and thus fn_hash is ZEROs.
+    // before the CALL, the principal is the authenticated entry key.
     for i in 0..9 {
-        assert_eq!(get_fn_hash(&sys_trace, i), EMPTY_WORD);
+        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("entry", false).key().into_word());
     }
 
-    // inside the first CALL, fn hash is set to bar's root hash
+    // inside the first CALL, the principal is bar's key
     for i in 9..14 {
-        assert_eq!(get_fn_hash(&sys_trace, i), bar_root_hash);
+        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("bar", false).key().into_word());
     }
 
     // fn_hash set to foo inside the second CALL
     for i in 14..18 {
-        assert_eq!(get_fn_hash(&sys_trace, i), foo_root_hash);
+        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("foo", false).key().into_word());
     }
 
     // return from the first call
     for i in 18..20 {
-        assert_eq!(get_fn_hash(&sys_trace, i), bar_root_hash);
+        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("bar", false).key().into_word());
     }
 
     // after the CALL block is ended, we are back in the root context
     for i in 20..trace_len {
-        assert_eq!(get_fn_hash(&sys_trace, i), EMPTY_WORD);
+        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("entry", false).key().into_word());
     }
 }
 
@@ -1163,7 +1219,7 @@ fn test_syscall_decoding() {
         .unwrap();
     let foo_root = mast_forest[foo_root_id].clone();
     mast_forest.make_root(foo_root_id);
-    let kernel = KernelDescriptor::new(&[foo_root.digest()]).unwrap();
+
 
     // build bar procedure body
     let bar_basic_block_id = BasicBlockNodeBuilder::new(vec![Operation::Mul])
@@ -1171,7 +1227,7 @@ fn test_syscall_decoding() {
         .unwrap();
     let bar_basic_block = mast_forest[bar_basic_block_id].clone();
 
-    let foo_call_node_id = CallNodeBuilder::new_syscall(foo_root_id)
+    let foo_call_node_id = CallNodeBuilder::new_syscall(fixture_binding("foo", true).key())
         .add_to_forest(&mut mast_forest)
         .unwrap();
     let foo_call_node = mast_forest[foo_call_node_id].clone();
@@ -1194,7 +1250,7 @@ fn test_syscall_decoding() {
         .unwrap();
     let last_basic_block = mast_forest[last_basic_block_id].clone();
 
-    let bar_call_node_id = CallNodeBuilder::new(bar_root_node_id)
+    let bar_call_node_id = CallNodeBuilder::new(fixture_binding("bar", false).key())
         .add_to_forest(&mut mast_forest)
         .unwrap();
     let bar_call_node = mast_forest[bar_call_node_id].clone();
@@ -1210,7 +1266,13 @@ fn test_syscall_decoding() {
     let program_root_node = mast_forest[program_root_node_id].clone();
     mast_forest.make_root(program_root_node_id);
 
-    let program = Program::with_kernel(mast_forest.into(), program_root_node_id, kernel);
+    let program = synthetic_fixture(
+        Program::new(mast_forest.into(), program_root_node_id),
+        [
+            (fixture_binding("foo", true), ImplementationRoot::new(foo_root.digest())),
+            (fixture_binding("bar", false), ImplementationRoot::new(bar_root_node.digest())),
+        ],
+    );
 
     let (sys_trace, dec_trace, trace_len) =
         build_call_trace_helper(&program);
@@ -1220,8 +1282,8 @@ fn test_syscall_decoding() {
     check_op_decoding(&dec_trace, row_idx, ZERO, opcodes::JOIN, 0, 0, 0);
     row_idx += 1;
     // starting the internal JOIN block
-    let inner_join_addr = INIT_ADDR + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
-    check_op_decoding(&dec_trace, row_idx, INIT_ADDR, opcodes::JOIN, 0, 0, 0);
+    let inner_join_addr = dec_trace.initial_address() + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+    check_op_decoding(&dec_trace, row_idx, dec_trace.initial_address(), opcodes::JOIN, 0, 0, 0);
     row_idx += 1;
     // starting first SPAN block
     let first_basic_block_addr = inner_join_addr + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
@@ -1283,7 +1345,7 @@ fn test_syscall_decoding() {
 
     // starting the last SPAN block
     let last_basic_block_addr = syscall_basic_block_addr + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
-    check_op_decoding(&dec_trace, row_idx, INIT_ADDR, opcodes::SPAN, 1, 0, 0);
+    check_op_decoding(&dec_trace, row_idx, dec_trace.initial_address(), opcodes::SPAN, 1, 0, 0);
     row_idx += 1;
     check_op_decoding(&dec_trace, row_idx, last_basic_block_addr, opcodes::DROP, 0, 0, 1);
     row_idx += 1;
@@ -1293,7 +1355,7 @@ fn test_syscall_decoding() {
     row_idx += 1;
 
     // ending the program
-    check_op_decoding(&dec_trace, row_idx, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&dec_trace, row_idx, dec_trace.initial_address(), opcodes::END, 0, 0, 0);
     row_idx += 1;
     check_op_decoding(&dec_trace, row_idx, ZERO, opcodes::HALT, 0, 0, 0);
 
@@ -1314,9 +1376,9 @@ fn test_syscall_decoding() {
     assert_eq!(first_basic_block_hash, get_hasher_state1(&dec_trace, 7));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 7));
 
-    // in the 8th row, we start the CALL block which has bar_join as its only child
+    // in the 8th row, CALL commits the independently named bar key
     let bar_root_hash = bar_root_node.digest();
-    assert_eq!(bar_root_hash, get_hasher_state1(&dec_trace, 8));
+    assert_eq!(fixture_binding("bar", false).key().into_word(), get_hasher_state1(&dec_trace, 8));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 8));
 
     // in the 9th row, the hasher state for JOIN is set to hashes of (bar_span, foo_call)
@@ -1329,9 +1391,9 @@ fn test_syscall_decoding() {
     assert_eq!(bar_basic_block_hash, get_hasher_state1(&dec_trace, 12));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 12));
 
-    // in the 13th row, we start the SYSCALL block which has foo_span as its only child
+    // in the 13th row, SYSCALL commits the independently named N0 foo key
     let foo_root_hash = foo_root.digest();
-    assert_eq!(foo_root_hash, get_hasher_state1(&dec_trace, 13));
+    assert_eq!(fixture_binding("foo", true).key().into_word(), get_hasher_state1(&dec_trace, 13));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 13));
 
     // at the end of the foo block, the hasher state is set to the hash of the first child
@@ -1361,7 +1423,7 @@ fn test_syscall_decoding() {
     // the program ends in the 25th row
     let program_hash = program_root_node.digest();
     assert_eq!(program_hash, get_hasher_state1(&dec_trace, 25));
-    assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 25));
+    assert_eq!(Word::from([ZERO, ZERO, ZERO, ONE]), get_hasher_state2(&dec_trace, 25));
 
     // HALT opcode and program hash gets propagated to the last row
     for i in 26..trace_len {
@@ -1401,20 +1463,20 @@ fn test_syscall_decoding() {
 
     // --- check fn hash columns ------------------------------------------------------------------
 
-    // before the CALL operation is executed, we are in a root context and thus fn_hash is ZEROs.
+    // before the CALL, the principal is the authenticated entry key.
     for i in 0..9 {
-        assert_eq!(get_fn_hash(&sys_trace, i), EMPTY_WORD);
+        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("entry", false).key().into_word());
     }
 
-    // inside the CALL block (and the invoked from it SYSCALL block), fn hash is set to the hash
+    // inside the CALL block (and the invoked from it SYSCALL block), the principal remains the key
     // of the bar procedure
     for i in 9..20 {
-        assert_eq!(get_fn_hash(&sys_trace, i), bar_root_hash);
+        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("bar", false).key().into_word());
     }
 
     // after the CALL block is ended, we are back in the root context
     for i in 20..trace_len {
-        assert_eq!(get_fn_hash(&sys_trace, i), EMPTY_WORD);
+        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("entry", false).key().into_word());
     }
 }
 
@@ -1472,15 +1534,18 @@ fn test_dyn_node_decoding() {
     let program_root_node = mast_forest[program_root_node_id].clone();
     mast_forest.make_root(program_root_node_id);
 
-    let program = Program::new(mast_forest.into(), program_root_node_id);
+    let program = synthetic_fixture(
+        Program::new(mast_forest.into(), program_root_node_id),
+        [(fixture_binding("foo", false), ImplementationRoot::new(foo_root_node.digest()))],
+    );
 
     let (trace, trace_len) = build_dyn_trace_helper(
         &[
             FOO_ROOT_NODE_ADDR,
-            foo_root_node.digest()[0].as_canonical_u64(),
-            foo_root_node.digest()[1].as_canonical_u64(),
-            foo_root_node.digest()[2].as_canonical_u64(),
-            foo_root_node.digest()[3].as_canonical_u64(),
+            fixture_binding("foo", false).key().as_word()[0].as_canonical_u64(),
+            fixture_binding("foo", false).key().as_word()[1].as_canonical_u64(),
+            fixture_binding("foo", false).key().as_word()[2].as_canonical_u64(),
+            fixture_binding("foo", false).key().as_word()[3].as_canonical_u64(),
         ],
         &program,
     );
@@ -1488,8 +1553,8 @@ fn test_dyn_node_decoding() {
     // --- check block address, op_bits, group count, op_index, and in_span columns ---------------
     check_op_decoding(&trace, 0, ZERO, opcodes::JOIN, 0, 0, 0);
     // starting inner join
-    let join_addr = INIT_ADDR + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
-    check_op_decoding(&trace, 1, INIT_ADDR, opcodes::JOIN, 0, 0, 0);
+    let join_addr = trace.initial_address() + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+    check_op_decoding(&trace, 1, trace.initial_address(), opcodes::JOIN, 0, 0, 0);
     // starting first span
     let mstorew_basic_block_addr = join_addr + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
     check_op_decoding(&trace, 2, join_addr, opcodes::SPAN, 1, 0, 0);
@@ -1504,7 +1569,7 @@ fn test_dyn_node_decoding() {
     // end inner join
     check_op_decoding(&trace, 9, join_addr, opcodes::END, 0, 0, 0);
     // dyn
-    check_op_decoding(&trace, 10, INIT_ADDR, opcodes::DYN, 0, 0, 0);
+    check_op_decoding(&trace, 10, trace.initial_address(), opcodes::DYN, 0, 0, 0);
     // starting foo span
     let dyn_addr = push_basic_block_addr + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
     let add_basic_block_addr = dyn_addr + CONTROLLER_ROWS_PER_HASHER_OP_FELT;
@@ -1515,7 +1580,7 @@ fn test_dyn_node_decoding() {
     // end dyn
     check_op_decoding(&trace, 15, dyn_addr, opcodes::END, 0, 0, 0);
     // end outer join
-    check_op_decoding(&trace, 16, INIT_ADDR, opcodes::END, 0, 0, 0);
+    check_op_decoding(&trace, 16, trace.initial_address(), opcodes::END, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
 
@@ -1543,9 +1608,9 @@ fn test_dyn_node_decoding() {
     assert_eq!(join_hash, get_hasher_state1(&trace, 9));
     assert_eq!(Word::from([ZERO, ZERO, ZERO, ZERO]), get_hasher_state2(&trace, 9));
 
-    // at the start of the DYN block, the hasher state is set to foo digest
+    // at the start of the DYN block, the hasher state commits the foo key
     let foo_hash = foo_root_node.digest();
-    assert_eq!(foo_hash, get_hasher_state1(&trace, 10));
+    assert_eq!(fixture_binding("foo", false).key().into_word(), get_hasher_state1(&trace, 10));
 
     // at the end of the DYN SPAN, the hasher state is set to the hash of the foo span
     assert_eq!(foo_hash, get_hasher_state1(&trace, 14));
@@ -1557,7 +1622,7 @@ fn test_dyn_node_decoding() {
     // at the end of the program, the hasher state is set to the hash of the entire program
     let program_hash = program_root_node.digest();
     assert_eq!(program_hash, get_hasher_state1(&trace, 16));
-    assert_eq!(Word::from([ZERO, ZERO, ZERO, ZERO]), get_hasher_state2(&trace, 16));
+    assert_eq!(Word::from([ZERO, ZERO, ZERO, ONE]), get_hasher_state2(&trace, 16));
 
     // the HALT opcode and program hash get propagated to the last row
     for i in 17..trace_len {
@@ -1582,7 +1647,7 @@ fn u32div_sets_all_user_op_helpers() {
             .unwrap();
         mast_forest.make_root(basic_block_id);
 
-        Program::new(mast_forest.into(), basic_block_id)
+        synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), [])
     };
     let dividend = u32::MAX - 1;
     let divisor = 1_000_003;
@@ -1617,17 +1682,18 @@ const MAX_FRAGMENT_SIZE: usize = 1 << 20;
 
 /// Builds the trace using FastProcessor and parallel::build_trace, returning the decoder trace
 /// portion.
-fn build_trace_helper(stack_inputs: &[u64], program: &Program) -> (DecoderTrace, usize) {
+fn build_trace_helper(stack_inputs: &[u64], program: &NamedFixture) -> (DecoderTrace, usize) {
     let stack_inputs: Vec<Felt> = stack_inputs.iter().map(|&v| Felt::new_unchecked(v)).collect();
     let processor = FastProcessor::new_with_options(
         StackInputs::new(&stack_inputs).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
     host.register_handler(EMIT_EVENT, Arc::new(NoopEventHandler)).unwrap();
     host.register_trace_handler(
         TRACE_EVENT,
@@ -1635,59 +1701,73 @@ fn build_trace_helper(stack_inputs: &[u64], program: &Program) -> (DecoderTrace,
     )
     .unwrap();
 
-    let execution_witness = processor.execute_for_proving_sync(program, &mut host).unwrap();
+    let execution_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
+    let library_prefix = LibraryTrace::new(&vm_witness.trace_replay().resolution_session)
+        .unwrap()
+        .prefix_len();
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap();
 
     // `core_rows()` is the actual program row count before padding.
     let trace_len = trace.trace_len_summary().core_rows();
 
     // Extract decoder trace columns
-    let decoder_trace = extract_decoder_trace(&trace);
+    let decoder_trace = extract_decoder_trace(&trace, library_prefix);
 
     (decoder_trace, trace_len)
 }
 
 /// Builds the trace for DYN operations using FastProcessor and parallel::build_trace.
-fn build_dyn_trace_helper(stack_inputs: &[u64], program: &Program) -> (DecoderTrace, usize) {
+fn build_dyn_trace_helper(stack_inputs: &[u64], program: &NamedFixture) -> (DecoderTrace, usize) {
     // DYN trace uses the same infrastructure
     build_trace_helper(stack_inputs, program)
 }
 
 /// Builds both system and decoder traces for CALL/SYSCALL operations.
-fn build_call_trace_helper(program: &Program) -> (SystemTrace, DecoderTrace, usize) {
+fn build_call_trace_helper(program: &NamedFixture) -> (SystemTrace, DecoderTrace, usize) {
     let processor = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
 
-    let execution_witness = processor.execute_for_proving_sync(program, &mut host).unwrap();
+    let execution_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
+    let library_prefix = LibraryTrace::new(&vm_witness.trace_replay().resolution_session)
+        .unwrap()
+        .prefix_len();
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap();
 
     // `core_rows()` is the actual program row count before padding.
     let trace_len = trace.trace_len_summary().core_rows();
 
     let sys_trace = extract_system_trace(&trace);
-    let decoder_trace = extract_decoder_trace(&trace);
+    let decoder_trace = extract_decoder_trace(&trace, library_prefix);
 
     (sys_trace, decoder_trace, trace_len)
 }
 
 /// Extracts the decoder trace columns from the execution trace.
-fn extract_decoder_trace(trace: &VmTrace) -> DecoderTrace {
+fn extract_decoder_trace(trace: &VmTrace, library_prefix: usize) -> DecoderTrace {
     use miden_air_definitions::vm::trace::{DECODER_TRACE_WIDTH, SYS_TRACE_WIDTH};
 
     let main_segment = trace.main_trace();
     let start = SYS_TRACE_WIDTH;
-    (start..start + DECODER_TRACE_WIDTH)
-        .map(|i| main_segment.get_column(i).to_vec())
-        .collect()
+    DecoderTrace {
+        columns: (start..start + DECODER_TRACE_WIDTH)
+            .map(|i| main_segment.get_column(i).to_vec())
+            .collect(),
+        library_prefix,
+    }
 }
 
 /// Extracts the system trace columns from the execution trace.
@@ -1830,6 +1910,13 @@ fn get_fn_hash(trace: &SystemTrace, row_idx: usize) -> Word {
 // HASHER STATE
 // ------------------------------------------------------------------------------------------------
 
+/// The final root END authenticates entry completion in h7; body-END flags remain separate.
+fn root_end_hasher_state(program_hash: Word) -> Vec<Felt> {
+    let mut state = program_hash.to_vec();
+    state.extend([ZERO, ZERO, ZERO, ONE]);
+    state
+}
+
 fn check_hasher_state(trace: &DecoderTrace, expected: Vec<Vec<Felt>>) {
     for (i, expected) in expected.iter().enumerate() {
         let expected = build_expected_hasher_state(expected);
@@ -1885,4 +1972,24 @@ fn build_op_group(ops: &[Operation]) -> Felt {
     }
     assert!(i <= OP_GROUP_SIZE, "too many ops");
     Felt::new_unchecked(group)
+}
+
+fn fixture_binding(name: &str, kernel: bool) -> CallableBinding {
+    let home = NamespacePlan::new(if kernel {
+        vec![]
+    } else {
+        vec![CanonicalLabel::text("processor-core-decoder-fixtures").unwrap()]
+    });
+    CallableBinding::new(
+        home,
+        CallableProcedurePath::from_semantic_components(vec![name.to_string()]).unwrap(),
+    )
+    .unwrap()
+}
+
+fn synthetic_fixture(
+    program: Program,
+    targets: impl IntoIterator<Item = (CallableBinding, ImplementationRoot)>,
+) -> NamedFixture {
+    named_program(program, fixture_binding("entry", false), targets).unwrap()
 }

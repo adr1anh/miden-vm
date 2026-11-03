@@ -844,8 +844,8 @@ mod physical_helper_tests {
             },
             OperationHelperRegisters::LogDeferred { addr: Felt::from_u8(3), state_prev },
         ];
-        for prefix in [0, 17] {
-            let layout = ChipletsLayout::new(prefix, 3, 0, 0, 0, 0).unwrap();
+        for prefix in [0, 16] {
+            let layout = ChipletsLayout::new(prefix, 8, 0, 0, 0, 0).unwrap();
             for helper in &helpers {
                 let logical = helper.to_user_op_helpers();
                 let physical = helper.to_physical_user_op_helpers(layout).unwrap();
@@ -880,8 +880,8 @@ mod physical_helper_tests {
 
     #[test]
     fn physical_helpers_reject_addresses_outside_the_controller_band() {
-        let layout = ChipletsLayout::new(11, 1, 0, 0, 0, 0).unwrap();
-        for addr in [Felt::from_u8(2), Felt::from_u64(u64::MAX - (1 << 32))] {
+        let layout = ChipletsLayout::new(16, 8, 0, 0, 0, 0).unwrap();
+        for addr in [Felt::from_u8(9), Felt::from_u64(u64::MAX - (1 << 32))] {
             assert!(
                 OperationHelperRegisters::Compress { addr }
                     .to_physical_user_op_helpers(layout)

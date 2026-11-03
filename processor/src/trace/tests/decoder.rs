@@ -30,13 +30,15 @@ use miden_core::{
         MastNodeExt, SplitNodeBuilder,
     },
     operations::{Operation, opcodes},
-    program::{KernelDescriptor, Program},
+    program::{ImplementationRoot, Program},
     utils::{Matrix, RowMajorMatrix},
 };
 
 use super::{
-    VmTrace, build_trace_from_ops, build_trace_from_program, build_trace_from_program_with_stack,
+    VmTrace, build_trace_from_fixture, build_trace_from_fixture_with_stack, build_trace_from_ops,
+    build_trace_from_program,
     lookup_harness::{Expectations, InteractionLog},
+    trace_binding, trace_named_program,
 };
 use crate::{RowIndex, StackInputs};
 
@@ -166,11 +168,14 @@ fn block_stack_call_frame_push_pop() {
         let callee = BasicBlockNodeBuilder::new(vec![Operation::Noop])
             .add_to_forest(&mut forest)
             .unwrap();
-        let call_id = CallNodeBuilder::new(callee).add_to_forest(&mut forest).unwrap();
+        let binding = trace_binding("callee");
+        forest.make_root(callee);
+        let implementation = ImplementationRoot::new(forest[callee].digest());
+        let call_id = CallNodeBuilder::new(binding.key()).add_to_forest(&mut forest).unwrap();
         forest.make_root(call_id);
-        Program::new(forest.into(), call_id)
+        trace_named_program(Program::new(forest.into(), call_id), [(binding, implementation)])
     };
-    let trace = build_trace_from_program(&program, &[]);
+    let trace = build_trace_from_fixture(&program, &[]);
     let log = InteractionLog::new(&trace);
     let main = trace.main_trace();
 
@@ -505,7 +510,7 @@ fn block_hash_join_enqueue_dequeue() {
             exp.add(row, &BlockHashMsg::Child { parent: addr_next, child_hash: h1 });
         }
 
-        if op == Felt::from_u8(opcodes::END) {
+        if op == Felt::from_u8(opcodes::END) && main.is_root_end(idx) == ZERO {
             let is_first_child = next_op_first_child_flag(main, next);
             let is_loop_body = main.is_loop_body_flag(idx);
             exp.remove(
@@ -520,9 +525,9 @@ fn block_hash_join_enqueue_dequeue() {
         }
     });
 
-    // JOIN enqueues 2 children; ENDs fire for bb1, bb2, and the JOIN itself (3 total).
+    // JOIN enqueues 2 children. The entry root END closes the singleton root interaction.
     assert_eq!(exp.count_adds(), 2, "expected JOIN to enqueue FirstChild + Child");
-    assert_eq!(exp.count_removes(), 3, "expected an END dequeue for bb1, bb2, and JOIN");
+    assert_eq!(exp.count_removes(), 2, "expected an END dequeue for each JOIN child");
     log.assert_contains(&exp);
 }
 
@@ -747,7 +752,7 @@ fn block_hash_split_enqueue_dequeue(#[case] cond: u64) {
             split_rows += 1;
         }
 
-        if op == Felt::from_u8(opcodes::END) {
+        if op == Felt::from_u8(opcodes::END) && main.is_root_end(idx) == ZERO {
             let is_loop_body = main.is_loop_body_flag(idx);
             let h0: [Felt; 4] = [first[0], first[1], first[2], first[3]];
             let is_first_child = next_op_first_child_flag(main, next);
@@ -764,8 +769,8 @@ fn block_hash_split_enqueue_dequeue(#[case] cond: u64) {
     });
 
     assert_eq!(split_rows, 1, "expected exactly one SPLIT enqueue");
-    // END fires for: taken branch's child, the SPLIT itself. Two removes total.
-    assert_eq!(exp.count_removes(), 2, "expected END pops for child + SPLIT: cond={cond}");
+    // Only the taken child dequeues here; the entry root END closes its singleton.
+    assert_eq!(exp.count_removes(), 1, "expected one child END pop: cond={cond}");
     log.assert_contains(&exp);
 }
 
@@ -1140,14 +1145,18 @@ fn decoder_dyncall_at_min_stack_depth_records_post_drop_ctx_info() {
         .unwrap();
     forest.make_root(target);
 
-    // 3. Derive the stack inputs from the target's digest (4 Felts, top-of-stack first).
-    let target_hash: Vec<Felt> =
-        forest.get_node_by_id(target).unwrap().digest().iter().copied().collect();
+    // 3. Supply the independently named target key as stack input (4 Felts, top-of-stack first).
+    let target_binding = trace_binding("dynamic-target");
+    let implementation = ImplementationRoot::new(forest[target].digest());
+    let target_hash: Vec<Felt> = target_binding.key().as_word().as_elements().to_vec();
 
-    let program = Program::new(Arc::new(forest), root);
+    let program = trace_named_program(
+        Program::new(Arc::new(forest), root),
+        [(target_binding, implementation)],
+    );
 
     let trace =
-        build_trace_from_program_with_stack(&program, StackInputs::new(&target_hash).unwrap());
+        build_trace_from_fixture_with_stack(&program, StackInputs::new(&target_hash).unwrap());
     let main = trace.main_trace();
 
     // Locate the DYNCALL row.
@@ -1194,8 +1203,9 @@ fn decoder_dyncall_with_multiple_overflow_entries_records_correct_overflow_addr(
         .unwrap();
     forest.make_root(target);
 
-    let target_hash: Vec<Felt> =
-        forest.get_node_by_id(target).unwrap().digest().iter().copied().collect();
+    let target_binding = trace_binding("dynamic-target");
+    let implementation = ImplementationRoot::new(forest[target].digest());
+    let target_hash: Vec<Felt> = target_binding.key().as_word().as_elements().to_vec();
 
     // 2. Build the main program.
     let root = {
@@ -1224,10 +1234,13 @@ fn decoder_dyncall_with_multiple_overflow_entries_records_correct_overflow_addr(
     };
     forest.make_root(root);
 
-    let program = Program::new(Arc::new(forest), root);
+    let program = trace_named_program(
+        Program::new(Arc::new(forest), root),
+        [(target_binding, implementation)],
+    );
 
     let trace =
-        build_trace_from_program_with_stack(&program, StackInputs::new(&target_hash).unwrap());
+        build_trace_from_fixture_with_stack(&program, StackInputs::new(&target_hash).unwrap());
     let main = trace.main_trace();
 
     // Locate the DYNCALL row.
@@ -1352,11 +1365,8 @@ fn system_state_changes_across_end_imply_a_caller_frame_flag() {
     // enter, 1 to repeat, then 0 to exit -- giving LOOP, REPEAT and a loop END. The others push
     // their own conditions.
     let run_assembled = |source: &str, inputs: &[u64], expected_opcodes: &[(u8, usize)]| {
-        let program = miden_assembly::Assembler::default()
-            .assemble_program("program", source)
-            .unwrap()
-            .unwrap_program();
-        let trace = build_trace_from_program(&program, inputs);
+        let fixture = crate::test_utils::named_source(source).unwrap();
+        let trace = build_trace_from_fixture(&fixture, inputs);
         for &(opcode, expected_count) in expected_opcodes {
             assert_eq!(
                 count_opcode(&trace, opcode),
@@ -1391,30 +1401,30 @@ fn system_state_changes_across_end_imply_a_caller_frame_flag() {
     );
     assert_eq!(call.caller_frame, 1, "CALL fixture executed the wrong frame ENDs");
 
-    // DYN and DYNCALL: both reach a target by digest read from memory, and only DYNCALL creates a
-    // caller frame. Assembled separately because the target digest must be
+    // DYN and DYNCALL: both reach a target by canonical key read from memory, and only DYNCALL
+    // creates a caller frame. Assembled separately because the target key must be
     // supplied as a `Felt` stack input rather than through `u64`.
     let run_dynamic = |op: &str, expected_opcode: u8| {
         let source = format!(
             "proc target nop end\n begin call.target mem_storew_le.40 dropw push.40 {op} end"
         );
-        let program = miden_assembly::Assembler::default()
-            .assemble_program("program", source.as_str())
-            .unwrap()
-            .unwrap_program();
-        let root = program.hash();
-        let target_digest = program
-            .mast_forest()
-            .procedure_digests()
-            .find(|d| *d != root)
-            .expect("the dynamic target must survive as its own procedure");
+        let fixture = crate::test_utils::named_source(source.as_str()).unwrap();
+        let target_key = fixture
+            .naming
+            .callables()
+            .bindings()
+            .find_map(|(&key, binding)| {
+                (binding.path().components().last().is_some_and(|part| part.as_str() == "target"))
+                    .then_some(key)
+            })
+            .expect("explicit source target binding must be retained");
 
         let mut stack_values = vec![Felt::ZERO; 16];
-        for (i, limb) in target_digest.as_elements().iter().enumerate() {
+        for (i, limb) in target_key.as_word().as_elements().iter().enumerate() {
             stack_values[i] = *limb;
         }
         let stack_inputs = StackInputs::new(&stack_values).unwrap();
-        let trace = build_trace_from_program_with_stack(&program, stack_inputs);
+        let trace = build_trace_from_fixture_with_stack(&fixture, stack_inputs);
         assert_eq!(
             count_opcode(&trace, expected_opcode),
             1,
@@ -1435,19 +1445,29 @@ fn system_state_changes_across_end_imply_a_caller_frame_flag() {
             .unwrap();
         forest.make_root(kernel_proc_id);
         let kernel_digest = forest[kernel_proc_id].digest();
-        let kernel = KernelDescriptor::new(&[kernel_digest]).unwrap();
+        let kernel_binding = miden_mast_package::CallableBinding::new(
+            miden_mast_package::NamespacePlan::new(vec![]),
+            miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
+                "syscall-target".into(),
+            ])
+            .unwrap(),
+        )
+        .unwrap();
 
-        let syscall_id =
-            CallNodeBuilder::new_syscall(kernel_proc_id).add_to_forest(&mut forest).unwrap();
+        let syscall_id = CallNodeBuilder::new_syscall(kernel_binding.key())
+            .add_to_forest(&mut forest)
+            .unwrap();
         let body_id = BasicBlockNodeBuilder::new(vec![Operation::Noop])
             .add_to_forest(&mut forest)
             .unwrap();
         let root_id =
             JoinNodeBuilder::new([body_id, syscall_id]).add_to_forest(&mut forest).unwrap();
         forest.make_root(root_id);
-        let program = Program::with_kernel(forest.into(), root_id, kernel);
-
-        let trace = build_trace_from_program(&program, &[]);
+        let fixture = trace_named_program(
+            Program::new(forest.into(), root_id),
+            [(kernel_binding, ImplementationRoot::new(kernel_digest))],
+        );
+        let trace = build_trace_from_fixture(&fixture, &[]);
         assert_eq!(
             count_opcode(&trace, opcodes::SYSCALL),
             1,

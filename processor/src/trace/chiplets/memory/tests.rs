@@ -4,7 +4,7 @@ use core::{assert_matches, ops::Range};
 use miden_air_definitions::vm::{
     ChipletCols,
     trace::{
-        CHIPLETS_DATA_WIDTH, RowIndex,
+        RowIndex,
         chiplets::memory::{
             MEMORY_ACCESS_ELEMENT, MEMORY_ACCESS_WORD, MEMORY_READ, MEMORY_WRITE,
             TRACE_WIDTH as MEMORY_TRACE_WIDTH,
@@ -64,17 +64,16 @@ fn memory_row_helpers_complete_materialized_payload_without_changing_other_cells
     let num_rows = mem.trace_len();
     let trace = build_trace(mem, num_rows);
     assert_eq!(MEMORY_TRACE_WIDTH, 17, "helpers must not widen the compact payload");
-    let mut row = ChipletCols {
-        chip_clk: Felt::new_unchecked(123),
-        chiplets: [Felt::new_unchecked(7); CHIPLETS_DATA_WIDTH],
-    };
+    let mut cells = [Felt::new_unchecked(7); miden_air_definitions::vm::trace::CHIPLETS_WIDTH];
+    cells[miden_air_definitions::vm::trace::CHIPLETS_CLK_COL] = Felt::new_unchecked(123);
     for step in 0..num_rows {
         for (column, values) in trace.iter().enumerate() {
-            row.chiplets[3 + column] = values[step];
+            cells[4 + column] = values[step];
         }
         // Stale helpers from a different payload must be replaced on every completed row.
-        *row.memory_write_helpers_mut() = [Felt::new_unchecked(8), Felt::new_unchecked(9)];
-        let mut expected = row.clone();
+        cells[21] = Felt::new_unchecked(8);
+        cells[22] = Felt::new_unchecked(9);
+        let mut expected = cells;
         let helpers = if trace[IS_READ_COL_IDX][step] == MEMORY_READ
             || trace[IS_WORD_ACCESS_COL_IDX][step] == MEMORY_ACCESS_WORD
         {
@@ -84,12 +83,11 @@ fn memory_row_helpers_complete_materialized_payload_without_changing_other_cells
         } else {
             [ZERO, ONE]
         };
-        *expected.memory_write_helpers_mut() = helpers;
-
-        Memory::fill_row_helpers(&mut row);
+        expected[21..23].copy_from_slice(&helpers);
+        let row: &mut ChipletCols<Felt> = core::borrow::BorrowMut::borrow_mut(cells.as_mut_slice());
+        Memory::fill_row_helpers(row);
         assert_eq!(row.memory_write_helpers(), helpers, "memory row {step}");
-        assert_eq!(row.chip_clk, expected.chip_clk);
-        assert_eq!(row.chiplets, expected.chiplets, "memory row {step}");
+        assert_eq!(cells, expected, "memory row {step}, payload and clock");
     }
 }
 

@@ -1,4 +1,7 @@
-use alloc::{string::String, sync::Arc};
+use alloc::{
+    string::{String, ToString},
+    sync::Arc,
+};
 
 use miden_air_definitions::vm::{
     MidenAir,
@@ -13,9 +16,10 @@ use miden_core::{
         SplitNodeBuilder,
     },
     operations::{Operation, opcodes},
-    program::{KernelDescriptor, Program, StackInputs},
+    program::{CanonicalLabel, ImplementationRoot, Program, StackInputs},
     utils::RowMajorMatrix,
 };
+use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
 use miden_stark::lookup::build_logup_aux_trace;
 use miden_utils_testing::get_column_name;
 use pretty_assertions::assert_eq;
@@ -25,6 +29,7 @@ use super::*;
 use crate as processor;
 use crate::{
     AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor, HostLibrary,
+    test_utils::{NamedFixture, named_package, named_program, native_trace_limits},
     trace::trace_state::MemoryReadsReplay,
 };
 
@@ -36,20 +41,13 @@ const DEFAULT_STACK: &[Felt] =
 /// sentinel value makes it obvious when an unexpected ZERO is dropped.
 const SENTINEL_VALUE: Felt = Felt::new_unchecked(9999);
 
-/// Returns the procedure hash that DYN and DYNCALL will call.
-/// The digest is computed dynamically from the target basic block (single SWAP operation).
-fn dyn_target_proc_hash() -> &'static [Felt] {
+/// The dynamic key is selected independently of the target body.
+fn dyn_target_proc_key() -> &'static [Felt] {
     use std::sync::LazyLock;
-    static HASH: LazyLock<Vec<Felt>> = LazyLock::new(|| {
-        // Build the same target basic block as in dyn_program/dyncall_program
-        let mut forest = MastForest::new();
-        let target = BasicBlockNodeBuilder::new(vec![Operation::Swap])
-            .add_to_forest(&mut forest)
-            .unwrap();
-        // Stack inputs are top-first for FastProcessor::new.
-        forest.get_node_by_id(target).unwrap().digest().iter().copied().collect()
+    static KEY: LazyLock<Vec<Felt>> = LazyLock::new(|| {
+        fixture_binding("dynamic", false).key().as_word().iter().copied().collect()
     });
-    HASH.as_slice()
+    KEY.as_slice()
 }
 
 /// Returns the digest of the external library procedure (double SWAP), computed dynamically.
@@ -66,12 +64,12 @@ fn external_lib_proc_digest() -> Word {
     *DIGEST
 }
 
-/// Returns the external library procedure digest elements for stack inputs.
-/// Returns the digest in top-first stack-input order.
-fn external_lib_proc_hash_for_stack() -> &'static [Felt] {
+/// Returns the independently named external key in top-first stack-input order.
+fn external_lib_proc_key_for_stack() -> &'static [Felt] {
     use std::sync::LazyLock;
-    static HASH: LazyLock<Vec<Felt>> =
-        LazyLock::new(|| external_lib_proc_digest().iter().copied().collect());
+    static HASH: LazyLock<Vec<Felt>> = LazyLock::new(|| {
+        fixture_binding("external", false).key().as_word().iter().copied().collect()
+    });
     HASH.as_slice()
 }
 
@@ -260,7 +258,7 @@ fn external_lib_proc_hash_for_stack() -> &'static [Felt] {
 // 16:   END
 // 17: END
 // 18: HALT
-#[case(dyn_program(), 12, dyn_target_proc_hash())]
+#[case(dyn_program(), 12, dyn_target_proc_key())]
 // Case 23: DYN END
 //  0: JOIN
 //  1:   BLOCK
@@ -271,7 +269,7 @@ fn external_lib_proc_hash_for_stack() -> &'static [Felt] {
 // 16:   END
 // 17: END
 // 18: HALT
-#[case(dyn_program(), 16, dyn_target_proc_hash())]
+#[case(dyn_program(), 16, dyn_target_proc_key())]
 // Case 24: DYNCALL START
 //  0: JOIN
 //  1:   BLOCK
@@ -282,7 +280,7 @@ fn external_lib_proc_hash_for_stack() -> &'static [Felt] {
 // 16:   END
 // 17: END
 // 18: HALT
-#[case(dyncall_program(), 12, dyn_target_proc_hash())]
+#[case(dyncall_program(), 12, dyn_target_proc_key())]
 // Case 25: DYNCALL END
 //  0: JOIN
 //  1:   BLOCK
@@ -293,7 +291,7 @@ fn external_lib_proc_hash_for_stack() -> &'static [Felt] {
 // 16:   END
 // 17: END
 // 18: HALT
-#[case(dyncall_program(), 16, dyn_target_proc_hash())]
+#[case(dyncall_program(), 16, dyn_target_proc_key())]
 // Case 26: EXTERNAL NODE
 //  0: JOIN
 //  1:   BLOCK PAD DROP END
@@ -313,10 +311,10 @@ fn external_lib_proc_hash_for_stack() -> &'static [Felt] {
 // 17:   END
 // 18: END
 // 19: HALT
-#[case(dyn_program(), 12, external_lib_proc_hash_for_stack())]
+#[case(dyn_program(), 12, external_lib_proc_key_for_stack())]
 fn test_trace_generation_at_fragment_boundaries(
     testname: String,
-    #[case] program: Program,
+    #[case] program: NamedFixture,
     #[case] fragment_size: usize,
     #[case] stack_inputs: &[Felt],
 ) {
@@ -329,14 +327,18 @@ fn test_trace_generation_at_fragment_boundaries(
             StackInputs::new(stack_inputs).unwrap(),
             AdviceInputs::default(),
             ExecutionOptions::default()
+                .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(fragment_size)
                 .unwrap(),
         )
         .expect("processor advice inputs should fit advice map limits");
-        let mut host = DefaultHost::default();
+        let mut host = DefaultHost::default().with_environment_source(program.source.clone());
         host.load_library(create_simple_library()).unwrap();
-        let vm_witness =
-            processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+        let vm_witness = processor
+            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .unwrap()
+            .into_parts()
+            .0;
         build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap()
     };
 
@@ -345,14 +347,18 @@ fn test_trace_generation_at_fragment_boundaries(
             StackInputs::new(stack_inputs).unwrap(),
             AdviceInputs::default(),
             ExecutionOptions::default()
+                .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
                 .unwrap(),
         )
         .expect("processor advice inputs should fit advice map limits");
-        let mut host = DefaultHost::default();
+        let mut host = DefaultHost::default().with_environment_source(program.source.clone());
         host.load_library(create_simple_library()).unwrap();
-        let vm_witness =
-            processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+        let vm_witness = processor
+            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .unwrap()
+            .into_parts()
+            .0;
         assert!(vm_witness.trace_replay().core_trace_contexts.len() == 1);
 
         build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap()
@@ -526,8 +532,8 @@ fn test_nested_loop_end_flags_stable_across_fragmentation() {
         "expected an END row for inner loop node (is_loop_body=1, loop_entered=1)"
     );
     assert!(
-        end_flags.contains(&[ZERO, ONE, ZERO, ZERO].into()),
-        "expected an END row for outer loop node (is_loop_body=0, loop_entered=1)"
+        end_flags.contains(&[ZERO, ONE, ZERO, ONE].into()),
+        "expected the outer root END (is_loop_body=0, loop_entered=1, is_root_end=1)"
     );
 }
 
@@ -541,15 +547,19 @@ fn test_partial_last_fragment_exists_for_h0_inversion_path() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
     host.load_library(create_simple_library()).unwrap();
 
-    let vm_witness =
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+    let vm_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap()
+        .into_parts()
+        .0;
 
     assert!(
         vm_witness.trace_replay().core_trace_contexts.len() > 1,
@@ -578,14 +588,18 @@ fn miri_repro_uninitialized_tail_read_during_h0_inversion() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
     host.load_library(create_simple_library()).unwrap();
-    let vm_witness =
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+    let vm_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap()
+        .into_parts()
+        .0;
 
     assert!(vm_witness.trace_replay().core_trace_contexts.len() > 1);
 
@@ -606,7 +620,7 @@ fn create_simple_library() -> HostLibrary {
 ///     (block mul)
 ///     (join (block add) (block swap))
 /// )
-fn join_program() -> Program {
+fn join_program() -> NamedFixture {
     let mut program = MastForest::new();
 
     let basic_block_mul = BasicBlockNodeBuilder::new(vec![Operation::Mul])
@@ -628,14 +642,14 @@ fn join_program() -> Program {
         .unwrap();
     program.make_root(root_join_node);
 
-    Program::new(Arc::new(program), root_join_node)
+    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
 }
 
 /// (join (
 ///     (block swap swap)
 ///     (split (block add) (block swap))
 /// )
-fn split_program() -> Program {
+fn split_program() -> NamedFixture {
     let mut program = MastForest::new();
 
     let root_join_node = {
@@ -663,14 +677,14 @@ fn split_program() -> Program {
     };
 
     program.make_root(root_join_node);
-    Program::new(Arc::new(program), root_join_node)
+    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
 }
 
 /// (join (
 ///     (block swap swap)
 ///     (loop (block pad drop))
 /// )
-fn loop_program() -> Program {
+fn loop_program() -> NamedFixture {
     let mut program = MastForest::new();
 
     let root_join_node = {
@@ -694,11 +708,11 @@ fn loop_program() -> Program {
     };
 
     program.make_root(root_join_node);
-    Program::new(Arc::new(program), root_join_node)
+    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
 }
 
 /// (loop (loop (block pad drop)))
-fn nested_loop_program() -> Program {
+fn nested_loop_program() -> NamedFixture {
     let mut program = MastForest::new();
 
     let inner_loop = {
@@ -713,49 +727,56 @@ fn nested_loop_program() -> Program {
     let outer_loop = LoopNodeBuilder::new(inner_loop).add_to_forest(&mut program).unwrap();
 
     program.make_root(outer_loop);
-    Program::new(Arc::new(program), outer_loop)
+    synthetic_fixture(Program::new(Arc::new(program), outer_loop), [])
 }
 
 /// (join (
 ///     (block swap swap)
 ///     (call (<previous block>))
 /// )
-fn call_program() -> Program {
+fn call_program() -> NamedFixture {
     let mut program = MastForest::new();
 
-    let root_join_node = {
+    let (root_join_node, target) = {
         let basic_block_swap_swap =
             BasicBlockNodeBuilder::new(vec![Operation::Swap, Operation::Swap])
                 .add_to_forest(&mut program)
                 .unwrap();
 
-        let target_call_node =
-            CallNodeBuilder::new(basic_block_swap_swap).add_to_forest(&mut program).unwrap();
-
-        JoinNodeBuilder::new([basic_block_swap_swap, target_call_node])
+        let target_call_node = CallNodeBuilder::new(fixture_binding("call", false).key())
             .add_to_forest(&mut program)
-            .unwrap()
+            .unwrap();
+
+        let root = JoinNodeBuilder::new([basic_block_swap_swap, target_call_node])
+            .add_to_forest(&mut program)
+            .unwrap();
+        (root, basic_block_swap_swap)
     };
 
     program.make_root(root_join_node);
-    Program::new(Arc::new(program), root_join_node)
+    program.make_root(target);
+    let target_root = ImplementationRoot::new(program[target].digest());
+    synthetic_fixture(
+        Program::new(Arc::new(program), root_join_node),
+        [(fixture_binding("call", false), target_root)],
+    )
 }
 
 /// (join (
 ///     (block swap swap)
 ///     (syscall (<previous block>))
 /// )
-fn syscall_program() -> Program {
+fn syscall_program() -> NamedFixture {
     let mut program = MastForest::new();
 
-    let (root_join_node, kernel_proc_digest) = {
-        // In this test, we also include this procedure in the kernel so that it can be syscall'ed.
+    let (root_join_node, kernel_proc_root) = {
+        // Select the syscall target under the fixed root namespace N0.
         let basic_block_swap_swap =
             BasicBlockNodeBuilder::new(vec![Operation::Swap, Operation::Swap])
                 .add_to_forest(&mut program)
                 .unwrap();
 
-        let target_call_node = CallNodeBuilder::new_syscall(basic_block_swap_swap)
+        let target_call_node = CallNodeBuilder::new_syscall(fixture_binding("syscall", true).key())
             .add_to_forest(&mut program)
             .unwrap();
 
@@ -763,15 +784,15 @@ fn syscall_program() -> Program {
             .add_to_forest(&mut program)
             .unwrap();
 
-        (root_join_node, program[basic_block_swap_swap].digest())
+        program.make_root(basic_block_swap_swap);
+        (root_join_node, ImplementationRoot::new(program[basic_block_swap_swap].digest()))
     };
 
     program.make_root(root_join_node);
 
-    Program::with_kernel(
-        Arc::new(program),
-        root_join_node,
-        KernelDescriptor::new(&[kernel_proc_digest]).unwrap(),
+    synthetic_fixture(
+        Program::new(Arc::new(program), root_join_node),
+        [(fixture_binding("syscall", true), kernel_proc_root)],
     )
 }
 
@@ -779,7 +800,7 @@ fn syscall_program() -> Program {
 ///     (block swap push(42) noop)
 ///     (block drop)
 /// )
-fn basic_block_program_small() -> Program {
+fn basic_block_program_small() -> NamedFixture {
     let mut program = MastForest::new();
 
     let root_join_node = {
@@ -797,14 +818,14 @@ fn basic_block_program_small() -> Program {
     };
 
     program.make_root(root_join_node);
-    Program::new(Arc::new(program), root_join_node)
+    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
 }
 
 /// (join (
 ///     (block <80 swaps>)
 ///     (block drop)
 /// )
-fn basic_block_program_multiple_batches() -> Program {
+fn basic_block_program_multiple_batches() -> NamedFixture {
     /// Number of swaps should be greater than the max number of operations per batch (72), to
     /// ensure that we have at least one RESPAN.
     const NUM_SWAPS: usize = 80;
@@ -824,14 +845,14 @@ fn basic_block_program_multiple_batches() -> Program {
     };
 
     program.make_root(root_join_node);
-    Program::new(Arc::new(program), root_join_node)
+    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
 }
 
 /// (join (
 ///     (block push(40) mem_storew_le drop drop drop drop push(40) noop noop)
 ///     (dyn)
 /// )
-fn dyn_program() -> Program {
+fn dyn_program() -> NamedFixture {
     const HASH_ADDR: Felt = Felt::new_unchecked(40);
 
     let mut program = MastForest::new();
@@ -857,20 +878,24 @@ fn dyn_program() -> Program {
     };
     program.make_root(root_join_node);
 
-    // Add the procedure that DYN will call. Its digest is computed by dyn_target_proc_hash().
+    // Retain the body selected by the independently named DYN key.
     let target = BasicBlockNodeBuilder::new(vec![Operation::Swap])
         .add_to_forest(&mut program)
         .unwrap();
     program.make_root(target);
 
-    Program::new(Arc::new(program), root_join_node)
+    let target_root = ImplementationRoot::new(program[target].digest());
+    synthetic_fixture(
+        Program::new(Arc::new(program), root_join_node),
+        [(fixture_binding("dynamic", false), target_root)],
+    )
 }
 
 /// (join (
 ///     (block push(40) mem_storew_le drop drop drop drop push(40) noop noop)
 ///     (dyncall)
 /// )
-fn dyncall_program() -> Program {
+fn dyncall_program() -> NamedFixture {
     const HASH_ADDR: Felt = Felt::new_unchecked(40);
 
     let mut program = MastForest::new();
@@ -896,13 +921,17 @@ fn dyncall_program() -> Program {
     };
     program.make_root(root_join_node);
 
-    // Add the procedure that DYNCALL will call. Its digest is computed by dyn_target_proc_hash().
+    // Retain the body selected by the independently named DYNCALL key.
     let target = BasicBlockNodeBuilder::new(vec![Operation::Swap])
         .add_to_forest(&mut program)
         .unwrap();
     program.make_root(target);
 
-    Program::new(Arc::new(program), root_join_node)
+    let target_root = ImplementationRoot::new(program[target].digest());
+    synthetic_fixture(
+        Program::new(Arc::new(program), root_join_node),
+        [(fixture_binding("dynamic", false), target_root)],
+    )
 }
 
 /// (join (
@@ -911,7 +940,7 @@ fn dyncall_program() -> Program {
 /// )
 ///
 /// external procedure: (block swap swap)
-fn external_program() -> Program {
+fn external_program() -> NamedFixture {
     let mut program = MastForest::new();
 
     let root_join_node = {
@@ -930,7 +959,7 @@ fn external_program() -> Program {
     };
 
     program.make_root(root_join_node);
-    Program::new(Arc::new(program), root_join_node)
+    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
 }
 
 /// Verifies that `build_trace` returns `Err` (instead of panicking) when a
@@ -941,19 +970,23 @@ fn test_build_trace_returns_err_on_empty_memory_reads_replay() {
     const MAX_FRAGMENT_SIZE: usize = 1 << 20;
 
     let program = dyn_program();
-    let stack_inputs = dyn_target_proc_hash();
+    let stack_inputs = dyn_target_proc_key();
 
     let processor = FastProcessor::new_with_options(
         StackInputs::new(stack_inputs).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
-    let mut vm_witness =
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    let mut vm_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap()
+        .into_parts()
+        .0;
 
     // Clear the memory reads replay so the replay processor will fail when the DYN node tries to
     // read the callee hash from memory.
@@ -981,13 +1014,17 @@ fn test_build_trace_returns_err_on_bad_node_id_in_hasher_replay() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
-    let mut vm_witness =
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    let mut vm_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap()
+        .into_parts()
+        .0;
 
     // Inject a HashBasicBlock entry that references the executed program's forest (id 0 in the
     // store, which the tracer always populates with the entrypoint's forest) with a node ID that
@@ -1014,8 +1051,9 @@ fn test_build_trace_returns_err_on_bad_node_id_in_hasher_replay() {
 enum BadForestIdLocation {
     /// Replace the first fragment's `initial_mast_forest_id`.
     InitialForestId,
-    /// Replace the forest id of the first entry in the first fragment's `mast_forest_resolution`
-    /// replay (DYN/External resolution path).
+    /// Replace a DYN invocation's selected forest in the authenticated keyed replay.
+    KeyedResolutionReplay,
+    /// Replace a structural External node's code-availability resolution forest.
     ResolutionReplay,
 }
 
@@ -1025,9 +1063,8 @@ enum BadForestIdLocation {
 /// `CoreTraceFragmentContext` can come from outside this process (e.g. when serialized and
 /// rebuilt), and so its [`miden_core::mast::MastForestId`]s must be treated as
 /// untrusted/attacker-controlled. Both the up-front ids (`initial_mast_forest_id`, continuation
-/// stack) and the per-resolution ids in `mast_forest_resolution` (the DYN/External path that is
-/// most likely to be hit when libraries are involved) must be validated rather than indexed
-/// into, and the error must propagate up through `build_trace`.
+/// stack), keyed invocation selections, and structural External code-resolution ids must be
+/// validated rather than indexed into, with the error propagating through `build_trace`.
 #[rstest]
 #[case::initial_forest_id(
     basic_block_program_small(),
@@ -1037,9 +1074,9 @@ enum BadForestIdLocation {
 )]
 #[case::dyn_resolution(
     dyn_program(),
-    external_lib_proc_hash_for_stack(),
+    external_lib_proc_key_for_stack(),
     true,
-    BadForestIdLocation::ResolutionReplay
+    BadForestIdLocation::KeyedResolutionReplay
 )]
 #[case::external_resolution(
     external_program(),
@@ -1048,7 +1085,7 @@ enum BadForestIdLocation {
     BadForestIdLocation::ResolutionReplay
 )]
 fn test_build_trace_returns_err_on_invalid_mast_forest_id(
-    #[case] program: Program,
+    #[case] program: NamedFixture,
     #[case] stack_inputs: &[Felt],
     #[case] load_library: bool,
     #[case] tamper_at: BadForestIdLocation,
@@ -1059,23 +1096,63 @@ fn test_build_trace_returns_err_on_invalid_mast_forest_id(
         StackInputs::new(stack_inputs).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
     if load_library {
         host.load_library(create_simple_library()).unwrap();
     }
-    let mut vm_witness =
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+    let mut vm_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap()
+        .into_parts()
+        .0;
 
     let store_len = vm_witness.trace_replay().mast_forest_store.len();
     let bogus_forest_id = MastForestId::from(store_len as u32);
+    let native_retained_bytes =
+        vm_witness.trace_replay().resolution_session.counters().retained_bytes;
     let ctx = &mut vm_witness.trace_replay_mut().core_trace_contexts[0];
     match tamper_at {
         BadForestIdLocation::InitialForestId => {
             ctx.initial_mast_forest_id = bogus_forest_id;
+        },
+        BadForestIdLocation::KeyedResolutionReplay => {
+            let mut records = Vec::new();
+            while !ctx.replay.keyed.is_empty() {
+                records.push(ctx.replay.keyed.pop_front().unwrap());
+            }
+            let mut replacement = crate::trace::keyed::KeyedReplay::default();
+            let mut tampered = false;
+            for record in records {
+                let event = record.event().unwrap();
+                let forest = if !tampered
+                    && matches!(
+                        event.kind,
+                        crate::tracer::KeyedEventKind::Invoke(crate::tracer::KeyedMode::Dyn)
+                    ) {
+                    tampered = true;
+                    bogus_forest_id
+                } else {
+                    record.target_forest()
+                };
+                replacement
+                    .prepare_record(
+                        event,
+                        forest,
+                        record.target_root(),
+                        native_trace_limits(),
+                        replacement.len(),
+                        (replacement.retained_bytes().unwrap(), native_retained_bytes),
+                    )
+                    .unwrap()
+                    .commit(&mut replacement);
+            }
+            assert!(tampered, "expected a keyed DYN resolution to tamper with");
+            ctx.replay.keyed = replacement;
         },
         BadForestIdLocation::ResolutionReplay => {
             let resolution = &mut ctx.replay.mast_forest_resolution;
@@ -1134,13 +1211,6 @@ fn chiplet_preflight_caps_combined_trace_len() {
 /// execution. The selected prefixes are writer/serde evidence, not proof-acceptance evidence.
 #[test]
 fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments() {
-    use miden_core::serde::{Deserializable, Serializable};
-
-    #[allow(dead_code)]
-    mod common {
-        include!("../../../tests/common/keyed_witness.rs");
-    }
-
     fn core(prefix: u8, fragment_size: usize, root_block: bool) -> Vec<Felt> {
         let program = if root_block {
             let mut forest = MastForest::new();
@@ -1148,37 +1218,53 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
                 .add_to_forest(&mut forest)
                 .unwrap();
             forest.make_root(root);
-            Program::new(Arc::new(forest), root)
+            synthetic_fixture(Program::new(Arc::new(forest), root), [])
         } else {
             join_program()
         };
-        let common::ExecutionFixture { program, environment, mut host } =
-            common::execution_fixture_for_program(program);
+        let environment = program.environment;
+        let mut host = DefaultHost::default().with_environment_source(program.source.clone());
         let processor = FastProcessor::new_with_options(
             StackInputs::new(DEFAULT_STACK).unwrap(),
             AdviceInputs::default(),
             ExecutionOptions::default()
-                .with_environment_trace_limits(common::trace_limits())
+                .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(fragment_size)
                 .unwrap(),
         )
         .unwrap();
         let VmWitness { trace, .. } = processor
-            .execute_for_proving_sync(&program, environment, &mut host)
+            .execute_for_proving_sync(&program.program, environment, &mut host)
             .unwrap()
             .into_parts()
             .0;
+        let read_limits = crate::trace::ReplayReadLimits {
+            max_wire_bytes: 16 * 1024 * 1024,
+            max_validation_peak_bytes: 1536 * 1024 * 1024,
+        };
+        trace.validate_export(native_trace_limits(), read_limits).unwrap();
+        let mut payload = Vec::new();
+        trace.write_payload(&mut payload);
+        assert!(payload.len() <= read_limits.max_wire_bytes);
+        let mut reader = miden_core::serde::BudgetedReader::new(
+            miden_core::serde::SliceReader::new(&payload),
+            payload.len(),
+        );
+        let restored = TraceReplay::read_with_limits(
+            &mut reader,
+            &environment,
+            native_trace_limits(),
+            read_limits,
+        )
+        .unwrap();
+        restored.require_validated().unwrap();
         let TraceReplay {
-            core_trace_contexts,
+            core_trace_contexts: contexts,
             mast_forest_store,
             hasher_for_chiplet,
             max_stack_depth,
             ..
-        } = trace;
-        let contexts = core_trace_contexts
-            .into_iter()
-            .map(|context| CoreTraceFragmentContext::read_from_bytes(&context.to_bytes()).unwrap())
-            .collect();
+        } = restored;
         let hasher = build_hasher_chiplet(
             hasher_for_chiplet.into_resolved_ops(&mast_forest_store),
             MAX_TRACE_LEN,
@@ -1370,12 +1456,17 @@ fn test_build_trace_corner_cases(
             // precheck (based on `fragment_size`, not the actual padded height) from dominating
             // the exact byte-budget boundary this test targets.
             ExecutionOptions::default()
+                .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(MIN_TRACE_LEN)
                 .unwrap(),
         )
         .expect("processor advice inputs should fit advice map limits");
-        let mut host = DefaultHost::default();
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0
+        let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+        processor
+            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .unwrap()
+            .into_parts()
+            .0
     }
 
     // Measure the actual padded per-AIR heights under the default (generous) budget, then derive
@@ -1426,11 +1517,15 @@ fn test_build_trace_accepts_small_program_at_default_fragment_size() {
         let processor = FastProcessor::new_with_options(
             StackInputs::new(DEFAULT_STACK).unwrap(),
             AdviceInputs::default(),
-            ExecutionOptions::default(),
+            ExecutionOptions::default().with_environment_trace_limits(native_trace_limits()),
         )
         .expect("processor advice inputs should fit advice map limits");
-        let mut host = DefaultHost::default();
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0
+        let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+        processor
+            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .unwrap()
+            .into_parts()
+            .0
     }
 
     // Measure the exact modelled peak for the program's real (small) padded heights under the
@@ -1468,13 +1563,17 @@ fn test_build_trace_returns_err_on_fragment_size_overflow() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
-    let mut vm_witness =
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    let mut vm_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap()
+        .into_parts()
+        .0;
 
     // Set fragment_size to usize::MAX so that `len() * fragment_size` overflows.
     vm_witness.trace_replay_mut().fragment_size = usize::MAX;
@@ -1494,19 +1593,24 @@ fn test_build_trace_returns_err_on_fragment_size_overflow() {
 fn test_build_trace_returns_err_when_eidos_compression_trace_exceeds_budget() {
     // Use the DYN program because it exercises both hasher and memory chiplets.
     let program = dyn_program();
-    let stack_inputs = dyn_target_proc_hash();
+    let stack_inputs = dyn_target_proc_key();
 
-    fn build_witness(program: &Program, stack_inputs: &[Felt]) -> VmWitness {
+    fn build_witness(program: &NamedFixture, stack_inputs: &[Felt]) -> VmWitness {
         let processor = FastProcessor::new_with_options(
             StackInputs::new(stack_inputs).unwrap(),
             AdviceInputs::default(),
             ExecutionOptions::default()
+                .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(MIN_TRACE_LEN)
                 .unwrap(),
         )
         .expect("processor advice inputs should fit advice map limits");
-        let mut host = DefaultHost::default();
-        processor.execute_for_proving_sync(program, &mut host).unwrap().into_parts().0
+        let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+        processor
+            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .unwrap()
+            .into_parts()
+            .0
     }
 
     // Inject enough unique compression requests that the padded Eidos compression trace is strictly
@@ -1574,12 +1678,18 @@ fn test_build_trace_returns_err_on_inconsistent_continuation(
     let processor = FastProcessor::new_with_options(
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
-        ExecutionOptions::default().with_core_trace_fragment_size(4).unwrap(),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
+            .with_core_trace_fragment_size(4)
+            .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
-    let mut vm_witness =
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    let mut vm_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap()
+        .into_parts()
+        .0;
 
     let ctx = vm_witness.trace_replay_mut().core_trace_contexts.last_mut().unwrap();
     let mut stack = ContinuationStack::default();
@@ -1593,8 +1703,7 @@ fn test_build_trace_returns_err_on_inconsistent_continuation(
     );
 }
 
-/// Verifies that `build_trace` returns `ExecutionError::Internal` when `core_trace_contexts` is
-/// empty, since `push_halt_opcode_row` expects at least one fragment to have been processed.
+/// An empty fragment list rejects as an invalid execution state before row generation.
 #[test]
 fn test_build_trace_returns_err_on_empty_core_trace_contexts() {
     const MAX_FRAGMENT_SIZE: usize = 1 << 20;
@@ -1605,13 +1714,17 @@ fn test_build_trace_returns_err_on_empty_core_trace_contexts() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
-    let mut vm_witness =
-        processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    let mut vm_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap()
+        .into_parts()
+        .0;
 
     // Clear core_trace_contexts to simulate an empty trace.
     vm_witness.trace_replay_mut().core_trace_contexts.clear();
@@ -1619,8 +1732,8 @@ fn test_build_trace_returns_err_on_empty_core_trace_contexts() {
     let result = build_trace(vm_witness, &miden_vm_stark::memory::default_budget());
 
     assert!(
-        matches!(result, Err(ExecutionError::Internal(_))),
-        "expected ExecutionError::Internal, got: {result:?}"
+        matches!(result, Err(ExecutionError::InvalidExecutionState)),
+        "expected ExecutionError::InvalidExecutionState, got: {result:?}"
     );
 }
 
@@ -1634,7 +1747,7 @@ fn testname() -> String {
 }
 
 fn build_trace_for_program(
-    program: &Program,
+    program: &NamedFixture,
     stack_inputs: &[Felt],
     fragment_size: usize,
 ) -> VmTrace {
@@ -1642,13 +1755,18 @@ fn build_trace_for_program(
         StackInputs::new(stack_inputs).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(fragment_size)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(program.source.clone());
     host.load_library(create_simple_library()).unwrap();
-    let vm_witness = processor.execute_for_proving_sync(program, &mut host).unwrap().into_parts().0;
+    let vm_witness = processor
+        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .unwrap()
+        .into_parts()
+        .0;
 
     build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap()
 }
@@ -1765,4 +1883,33 @@ impl core::fmt::Debug for DeterministicTrace<'_> {
             .field("trace_len_summary", trace.trace_len_summary())
             .finish()
     }
+}
+
+fn fixture_binding(name: &str, kernel: bool) -> CallableBinding {
+    let home = NamespacePlan::new(if kernel {
+        vec![]
+    } else {
+        vec![CanonicalLabel::text("processor-parallel-fixtures").unwrap()]
+    });
+    CallableBinding::new(
+        home,
+        CallableProcedurePath::from_semantic_components(vec![name.to_string()]).unwrap(),
+    )
+    .unwrap()
+}
+
+fn synthetic_fixture(
+    program: Program,
+    targets: impl IntoIterator<Item = (CallableBinding, ImplementationRoot)>,
+) -> NamedFixture {
+    let fixture = named_program(program, fixture_binding("entry", false), targets).unwrap();
+    let mut forest = MastForest::new();
+    let root = BasicBlockNodeBuilder::new(vec![Operation::Swap, Operation::Swap])
+        .add_to_forest(&mut forest)
+        .unwrap();
+    forest.make_root(root);
+    let external =
+        named_program(Program::new(Arc::new(forest), root), fixture_binding("external", false), [])
+            .unwrap();
+    named_package(fixture.package, fixture.naming, &[&external.naming]).unwrap()
 }
