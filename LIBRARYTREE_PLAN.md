@@ -380,7 +380,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | Earlier normal private attempt stopped at three assembly errors, now resolved by PR09; fresh normal private/relocation/sidecar checks remain unrun, as do complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates |
-| 09 Assembly/packages | in-progress | Callable inventory `15d543940`/`a206ab680`; constant/library fixtures `6fa2541f8`; kernel fixtures `eb84810b9`/`b8ab72a92`; earlier refs below; base `82935d673` | Independent reviews; inventory9/full package232 pass/one manual seed ignored; strict package and combined assembly/test Clippy with testing pass; package no_std pass; full assembly379 pass/110 fail/6 ignored; kernel14 pass after helper lint fix | Full run still107 missing-home failures plus three invocation snapshots; later assertions remain masked. Aggregate home-validation and import/link fixture edits are in flight; package9/admission, project inputs/naming cache matching, fresh normal processor and all inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Home validation `d7f19ec91`/`68a2f8839`; import/link fixtures `a79c7f83d`/`3387d4226`; earlier refs below; base `82935d673` | Independent reviews; home8/full package240 pass/one manual seed ignored including unchanged HomeV1 tests; strict combined package/assembly library/test Clippy with assembly/testing and no_std/testing pass; full assembly407 pass/82 fail/6 ignored; all migrated import/link groups and post-snapshot negatives pass | Full run still79 missing-home failures plus three invocation snapshots; later assertions remain masked. Required package9/wire/admission, project inputs/naming cache matching, final Program/kernel conversion, fresh normal processor and all inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -1884,3 +1884,39 @@ all owned inventory relations, retain existing HomeV1 bytes/checks, and store no
 Current implementation and import/link fixtures are uncommitted and untested at this checkpoint.
 Actual wire9 admission, artifact-kind identity/entry/full-kernel requirements, source/cache naming
 matching and all D3/native/proof/recursive/security gates remain required; PR09 stays in progress.
+
+
+### PR 09 Aggregate home validation and import/link fixture checkpoint
+
+`d7f19ec91` adds stateless validate_homes with explicit HomeProfile/context and logical bounds over
+all three owned inventory relations. It charges cumulative logical bytes in the same Budget,
+checks records/components/path and home payload totals before any policy callback, and revalidates
+every home, including repeated/private/unaliased/N0 homes. Shared HomeV1 contents validation charges
+home payloads once; its encoder/decoder bytes, exact input, layout and wire-limit behavior remain
+unchanged. Success stores no checked/admitted bit and grants no identity, registration, binding,
+kernel or code-availability authority. Logical owned-data accounting defines no inventory wire format.
+
+Tests `68a2f8839` all8 pass, including exact and one-less limits, prior/shared budget consumption,
+UTF-8/final path components, changed contexts, unknown TypedIds and N0/empty distinctions. Full
+package240 pass/one manual seed ignored, including unchanged HomeV1 tests; strict package Clippy
+and no-default-features pass. A four-byte Unicode-letter fixture replaced an invalid emoji without
+relaxing character rules or changing golden resource counts. Independent source review is clean.
+
+`a79c7f83d` supplies exact import/link cohorts and explicit producer/re-export sidecars, retaining
+source text, visibility/type/cycle negatives, concrete definition identity, body D/root, K/mode and
+equal-D/different-K assertions. `3387d4226` updates only five inspected snapshots: eight External(D)
+to EXEC(K) substitutions and one CALL(D) to CALL(K); operations/joins are unchanged. Independent
+source and generated-snapshot delta reviews are clean. All owned groups now pass, including
+previously masked post-snapshot export-leak and invalid-quoted-alias negatives.
+
+Configured16MiB full assembly407 pass/82 fail/6 ignored. Remaining failures are79 missing explicit
+caller homes (project43, debug20 and other raw fixtures16) and three invocation snapshots; their
+later assertions remain unknown. Strict combined package/assembly library/test Clippy with
+assembly/testing and no-default-features/testing checks pass. Logs: `pr09-callable-home-validation-*`,
+`pr09-full-assembly-lib-home-import-fixtures-second`, `pr09-home-import-fixtures-clippy-first`,
+`pr09-home-import-fixtures-no-std-testing`. All Rust commands passed AC/heavy guards.
+
+All implementation/test slices are committed separately from this documentation checkpoint. Only
+scratch and the three unaccepted .snap.new artifacts remain untracked. Required package9 metadata
+transport/commitments/readers/admission, source/project cache comparison, final Program/kernel
+conversion and all D3/native/proof/recursive/security/qualification gates remain; PR09 stays in progress.
