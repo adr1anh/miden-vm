@@ -1990,3 +1990,5 @@ pub(super) struct ResolvedProcedure {
 
 #[cfg(test)]
 mod callable_identity_tests;
+#[cfg(test)]
+mod emitted_callables_tests;
