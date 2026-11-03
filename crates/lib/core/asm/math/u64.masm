@@ -571,7 +571,7 @@ pub proc shl(n: u32, a: u64) -> u64
     movup.2         # [a_lo, pow_lo, pow_hi, a_hi]
     movup.3         # [a_hi, a_lo, pow_lo, pow_hi]
     swap            # [a_lo, a_hi, pow_lo, pow_hi]
-    exec.wrapping_mul
+    inline.wrapping_mul
 end
 
 #! Performs right shift of one unsigned 64-bit integer.

@@ -2129,8 +2129,9 @@ fn rotr_out_of_range_errors() {
 //
 // The measurement stores the first `clk` value in memory (address 1000) to
 // keep the operand stack layout clean for the procedure call. The measured
-// delta includes the `exec` call overhead and memory instrumentation, which
-// is consistent across runs for the same procedure signature.
+// delta includes keyed procedure ENTRY/END execution, runtime `exec` dispatch, and
+// memory instrumentation. These strict measured snapshots retain overhead
+// relative to legacy execution and are not performance caps.
 // ============================================================================
 
 #[test]
@@ -2141,11 +2142,11 @@ fn shift_rotate_cycle_baselines() {
     let mut mismatches = Vec::new();
 
     for (name, n, proc_name, expected) in [
-        ("shl_n5", 5u64, "shl", 51u64),
-        ("shr_n5", 5u64, "shr", 67u64),
-        ("shr_n33", 33u64, "shr", 67u64),
-        ("rotl_n5", 5u64, "rotl", 51u64),
-        ("rotr_n5", 5u64, "rotr", 67u64),
+        ("shl_n5", 5u64, "shl", 53u64),
+        ("shr_n5", 5u64, "shr", 69u64),
+        ("shr_n33", 33u64, "shr", 69u64),
+        ("rotl_n5", 5u64, "rotl", 53u64),
+        ("rotr_n5", 5u64, "rotr", 69u64),
     ] {
         let source = format!(
             "
