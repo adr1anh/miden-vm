@@ -40,7 +40,7 @@ mod tests {
     use super::*;
 
     /// Pinned bytes/row figures for the current AIR shape: Core, Chiplets, EidosCompression, and
-    /// And8 have 48/24/108/7 main columns, 4/4/20/4 extension-field auxiliary columns, and
+    /// And8 have 52/24/108/7 main columns, 5/4/20/4 extension-field auxiliary columns, and
     /// quotient degrees 8/8/2/2 respectively, with blowup 8. A width, auxiliary-width, or
     /// quotient-degree change must break this test loudly rather than silently drift the model.
     #[test]
@@ -56,17 +56,21 @@ mod tests {
                 MidenAir::AND8_LOOKUP,
             ]
         );
-        assert_eq!(AIRS.map(|air| air.width()), [48, 24, 108, 7]);
+        assert_eq!(AIRS.map(|air| air.width()), [52, 24, 108, 7]);
         assert_eq!(
             AIRS.map(|air| <MidenAir as LiftedAir<Felt, QuadFelt>>::aux_width(&air)),
-            [4, 4, 20, 4]
+            [5, 4, 20, 4]
         );
         assert_eq!(AIRS.map(|air| log_quotient_degree::<Felt, QuadFelt, _>(&air)), [3, 3, 1, 1]);
         assert_eq!(AIRS.map(|air| BaseAir::<Felt>::preprocessed_width(&air)), [0, 0, 0, 5]);
         assert_eq!(params.log_blowup(), 3);
         assert_eq!(AND8_LOOKUP_TRACE_HEIGHT, 1 << 16);
 
-        assert_eq!(prover_peak_bytes(&[1, 0, 0, 0], &params), Some(9920), "Core alone");
+        // Eight-byte base Felts and quadratic-extension auxiliary Felts, including an 8x LDE,
+        // cost 72 * (main + 2 * auxiliary + preprocessed) bytes per row. The four trace costs
+        // are 4464/2304/10656/1440; shared proof buffers cost 3904 per maximum-height row,
+        // and And8 preprocessing adds 1856. Apply the shared model's 5/4 safety factor once.
+        assert_eq!(prover_peak_bytes(&[1, 0, 0, 0], &params), Some(10460), "Core alone");
         assert_eq!(prover_peak_bytes(&[0, 1, 0, 0], &params), Some(7760), "Chiplets alone");
         assert_eq!(
             prover_peak_bytes(&[0, 0, 1, 0], &params),
@@ -74,7 +78,7 @@ mod tests {
             "EidosCompression alone"
         );
         assert_eq!(prover_peak_bytes(&[0, 0, 0, 1], &params), Some(9000), "And8Lookup alone");
-        assert_eq!(prover_peak_bytes(&[1, 1, 1, 1], &params), Some(30240), "all four at height 1");
+        assert_eq!(prover_peak_bytes(&[1, 1, 1, 1], &params), Some(30780), "all four at height 1");
     }
 
     #[test]
@@ -136,7 +140,7 @@ mod tests {
     #[test]
     fn maximum_heights_use_checked_arithmetic() {
         let params = pcs_params();
-        let expected = u64::try_from(30_240u128 * usize::MAX as u128).ok();
+        let expected = u64::try_from(30_780u128 * usize::MAX as u128).ok();
         assert_eq!(prover_peak_bytes(&[usize::MAX; MIDEN_AIR_COUNT], &params), expected);
     }
 }

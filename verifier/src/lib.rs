@@ -16,7 +16,10 @@ use miden_core::{Felt, field::QuadFelt};
 pub use miden_core::{
     Word,
     deferred::{DeferredRoot, PrecompileError, PrecompileLimits, PreparationError},
-    program::{ExecutionClaim, KernelDescriptor, ProgramInfo, StackInputs, StackOutputs},
+    program::{
+        EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, ProcedureKey, StackInputs,
+        StackOutputs,
+    },
     proof::{
         ExecutionProof, ExecutionProofCompatibility, ExecutionProofCompatibilityError,
         HashFunction, PrecompileProof, PrecompileStatus, StarkProof, VmProof,
@@ -55,8 +58,8 @@ impl VerifierSupport {
     }
 }
 
-const VERIFIER_SUPPORT_V2: VerifierSupport = VerifierSupport {
-    format: ExecutionProofCompatibility::FORMAT_V2,
+const VERIFIER_SUPPORT_V3: VerifierSupport = VerifierSupport {
+    format: ExecutionProofCompatibility::FORMAT_V3,
     accepted_vm_roots: &[CURRENT_VM_VERIFIER_ROOT],
     accepted_pvm_roots: &[CURRENT_PVM_VERIFIER_ROOT],
 };
@@ -138,16 +141,16 @@ impl Verifier {
         proof: &ExecutionProof,
     ) -> Result<VerificationOutcome, VerificationError> {
         match proof.compatibility().format() {
-            ExecutionProofCompatibility::FORMAT_V2 => {
-                VERIFIER_SUPPORT_V2.check(proof)?;
-                self.verify_v2(claim, proof)
+            ExecutionProofCompatibility::FORMAT_V3 => {
+                VERIFIER_SUPPORT_V3.check(proof)?;
+                self.verify_v3(claim, proof)
             },
             format => Err(VerificationError::UnsupportedProofFormat(format)),
         }
     }
 
-    /// Verifies an execution proof encoded with transport format 2.
-    fn verify_v2(
+    /// Verifies an execution proof encoded with transport format 3.
+    fn verify_v3(
         &self,
         claim: &ExecutionClaim,
         proof: &ExecutionProof,
@@ -281,7 +284,10 @@ impl Verifier {
         proof: &VmProof,
     ) -> Result<(), VerificationError> {
         miden_vm_stark::verifier::preflight(proof).map_err(|error| {
-            VerificationError::StarkVerificationError(claim.program_root(), Box::new(error))
+            VerificationError::StarkVerificationError(
+                claim.entry_key().into_word(),
+                Box::new(error),
+            )
         })
     }
 
@@ -301,16 +307,19 @@ impl Verifier {
     /// Verifies the Miden VM STARK proof and returns its authenticated security parameters.
     ///
     /// The returned parameters include the largest AIR trace height, the DEEP term count implied
-    /// by the commitment scheme's column alignment, and the lookup boundary terms implied by the
-    /// authenticated kernel. The PCS parameters and commitment collision resistance come from the
-    /// configuration used to verify the proof.
+    /// by the commitment scheme's column alignment, and the fixed three lookup boundary terms.
+    /// The PCS parameters and commitment collision resistance come from the configuration used
+    /// to verify the proof.
     fn verify_vm(
         &self,
         claim: &ExecutionClaim,
         proof: &VmProof,
     ) -> Result<ProofSecurityParameters, VerificationError> {
         miden_vm_stark::verifier::verify(claim, proof).map_err(|error| {
-            VerificationError::StarkVerificationError(claim.program_root(), Box::new(error))
+            VerificationError::StarkVerificationError(
+                claim.entry_key().into_word(),
+                Box::new(error),
+            )
         })
     }
 }
@@ -382,7 +391,7 @@ pub enum VerificationError {
     IncompatibleVmVerifier,
     #[error("execution proof does not name a compatible PVM verifier")]
     IncompatiblePvmVerifier,
-    #[error("failed to verify VM STARK proof for program with hash {0}")]
+    #[error("failed to verify VM STARK proof for entry key {0}")]
     StarkVerificationError(Word, #[source] Box<StarkVerificationError>),
     #[error("a deferred execution proof cannot authenticate TRUE_DIGEST")]
     DeferredTrueRoot,
@@ -430,8 +439,8 @@ mod tests {
     use super::*;
 
     fn claim() -> ExecutionClaim {
-        ExecutionClaim::from_program_info(
-            ProgramInfo::default(),
+        ExecutionClaim::new(
+            ExecutionDescriptor::new(ProcedureKey::new(root(10)), EnvironmentRoot::new(root(20))),
             StackInputs::default(),
             StackOutputs::default(),
         )
@@ -666,7 +675,7 @@ mod tests {
         let incompatible_vm = ExecutionProof::from_parts(
             ExecutionProofCompatibility::new(
                 vec![root(100)],
-                VERIFIER_SUPPORT_V2.accepted_pvm_roots.to_vec(),
+                VERIFIER_SUPPORT_V3.accepted_pvm_roots.to_vec(),
             )
             .unwrap(),
             proof.vm().clone(),
@@ -674,7 +683,7 @@ mod tests {
         );
         let incompatible_pvm = ExecutionProof::from_parts(
             ExecutionProofCompatibility::new(
-                VERIFIER_SUPPORT_V2.accepted_vm_roots.to_vec(),
+                VERIFIER_SUPPORT_V3.accepted_vm_roots.to_vec(),
                 vec![root(200)],
             )
             .unwrap(),
@@ -707,7 +716,7 @@ mod tests {
             Felt::new_unchecked(0),
         ]);
         const SUPPORT: VerifierSupport = VerifierSupport {
-            format: ExecutionProofCompatibility::FORMAT_V2,
+            format: ExecutionProofCompatibility::FORMAT_V3,
             accepted_vm_roots: &[OLD_VM_ROOT, CURRENT_VM_VERIFIER_ROOT],
             accepted_pvm_roots: &[OLD_PVM_ROOT, CURRENT_PVM_VERIFIER_ROOT],
         };
@@ -728,10 +737,12 @@ mod tests {
     #[test]
     fn eidos_preprocessed_commitment_matches_fixed_table() {
         let config = eidos_config(config::pcs_params(), config::RELATION_DIGEST);
+        let (public_values, aux_inputs) =
+            miden_air::vm::PublicInputs::from_claim(&claim(), TRUE_DIGEST).to_air_inputs();
         let statement = Statement::<Felt, QuadFelt, MidenMultiAir>::new(
             MidenMultiAir::new(),
-            vec![(0, vec![Felt::ZERO; miden_air::vm::NUM_PUBLIC_VALUES])],
-            Vec::new(),
+            public_values.into_iter().enumerate().collect(),
+            aux_inputs,
         )
         .unwrap();
 

@@ -17,14 +17,13 @@
 //! [`RecursiveVerifierInputs::for_request`] stores this stream in the advice map under the verifier
 //! and claim commitments. The consumer fetches it before calling `vm::verify_proof`. The consumer
 //! also supplies the claim commitment; the advice map stores its 40-felt preimage under that
-//! commitment, and `vm::verify_proof` authenticates the preimage before using it. The advice map
-//! stores the flattened kernel procedure digests under the kernel commitment as well. Query rows,
+//! commitment, and `vm::verify_proof` authenticates the preimage before using it. Query rows,
 //! the Merkle store, and the ACE circuit are content-addressed too.
+//!
+//! Advice construction uses the canonical native claim and does not verify the supplied proof.
+//! The MASM consumer must implement the matching claim domain and public-input relation.
 
-use alloc::{
-    string::{String, ToString},
-    vec,
-};
+use alloc::string::{String, ToString};
 
 use miden_air::vm::{MIDEN_AIR_COUNT, MidenMultiAir, config};
 use miden_air_definitions::vm::PublicInputs;
@@ -122,12 +121,7 @@ fn build_verifier_inputs(
     if stark.hash_fn() != HashFunction::Eidos {
         return Err(RecursiveVerifierInputsError::UnsupportedHashFunction(stark.hash_fn()));
     }
-    let pub_inputs = PublicInputs::new(
-        claim.to_program_info(),
-        *claim.stack_inputs(),
-        *claim.stack_outputs(),
-        vm.precompile_root,
-    );
+    let pub_inputs = PublicInputs::from_claim(claim, vm.precompile_root);
 
     let claim_commitment = claim.commitment();
     let mut inputs = build_from_proof_bytes(stark.bytes(), &pub_inputs, claim_commitment)?;
@@ -135,12 +129,6 @@ fn build_verifier_inputs(
     // The MASM verifier authenticates this preimage against the caller-provided commitment.
     inputs.advice = core::mem::take(&mut inputs.advice)
         .with_map([(claim_commitment, claim.to_elements().to_vec())]);
-
-    let kernel = claim.kernel();
-    // The MASM verifier derives the procedure count from the value length.
-    let kernel_witness = Word::words_as_elements(kernel.proc_hashes()).to_vec();
-    inputs.advice =
-        core::mem::take(&mut inputs.advice).with_map([(kernel.commitment(), kernel_witness)]);
 
     Ok(inputs)
 }
@@ -193,7 +181,7 @@ fn build_from_proof_bytes(
 
     let statement = Statement::<Felt, Challenge, _>::new(
         MidenMultiAir::new(),
-        vec![(0, public_values)],
+        public_values.into_iter().enumerate().collect(),
         aux_inputs,
     )
     .map_err(|e| RecursiveVerifierInputsError::StatementAssembly(e.to_string()))?;
@@ -253,9 +241,8 @@ fn build_advice(
         ));
     }
 
-    // This stream contains the verifier inputs derived from the proof. The claim preimage and
-    // kernel witness live in the advice map and are authenticated by the verifier against
-    // commitments supplied by the consumer.
+    // This stream contains the verifier inputs derived from the proof. The canonical claim
+    // preimage lives in the advice map and is authenticated against the consumer commitment.
     //
     // The section order below mirrors the consumption-order list in the module doc; both are
     // pinned against the MASM verifier by the stark e2e differential tests.
@@ -326,12 +313,238 @@ mod tests {
 
     use miden_core::{
         crypto::merkle::{InnerNodeInfo, MerkleStore},
-        program::{KernelDescriptor, ProgramInfo, StackInputs, StackOutputs, proof_request_key},
+        field::{BasedVectorSpace, QuotientMap},
+        program::{
+            EnvironmentRoot, ExecutionDescriptor, ProcedureKey, StackInputs, StackOutputs,
+            proof_request_key,
+        },
         proof::{PrecompileStatus, StarkProof as CoreStarkProof, VmProof},
+        serde::{Deserializable, Serializable},
     };
-    use miden_stark::Preprocessed;
+    use miden_stark::{Preprocessed, lmcs::proof::BatchProofView};
 
     use super::*;
+
+    fn claim() -> ExecutionClaim {
+        ExecutionClaim::new(
+            ExecutionDescriptor::new(
+                ProcedureKey::new(Word::new([1, 2, 3, 4].map(Felt::new_unchecked))),
+                EnvironmentRoot::new(Word::new([5, 6, 7, 8].map(Felt::new_unchecked))),
+            ),
+            StackInputs::default(),
+            StackOutputs::default(),
+        )
+    }
+
+    fn claim_from_elements(elements: &[Felt; 40]) -> ExecutionClaim {
+        ExecutionClaim::new(
+            ExecutionDescriptor::new(
+                ProcedureKey::new(Word::new(elements[0..4].try_into().unwrap())),
+                EnvironmentRoot::new(Word::new(elements[4..8].try_into().unwrap())),
+            ),
+            StackInputs::new(&elements[8..24]).unwrap(),
+            StackOutputs::new(&elements[24..40]).unwrap(),
+        )
+    }
+
+    /// This metadata is the fixture owner's expected statement, selected from the named source
+    /// environment and known zero I/O during maintenance. It is separate from the supplied proof;
+    /// neither a program implementation root nor the deferred root supplies claim authority.
+    fn native_fixture() -> (VmProof, ExecutionClaim) {
+        let bytes: &[u8; 320] = include_bytes!("../../tests/fixtures/vm_eidos_v3.claim");
+        let elements = core::array::from_fn(|i| {
+            let value = u64::from_le_bytes(bytes[i * 8..(i + 1) * 8].try_into().unwrap());
+            Felt::from_canonical_checked(value).expect("canonical fixture claim coordinate")
+        });
+        let claim = claim_from_elements(&elements);
+        assert_eq!(claim.to_elements(), elements);
+        assert_eq!(claim.to_elements().to_bytes(), bytes.as_slice());
+        assert_eq!(*claim.stack_inputs(), StackInputs::default());
+        assert_eq!(*claim.stack_outputs(), StackOutputs::default());
+        let vm = VmProof::read_from_bytes(include_bytes!("../../tests/fixtures/vm_eidos_v3.bin"))
+            .expect("valid native Eidos v3 fixture encoding");
+        assert_eq!(vm.proof.hash_fn(), HashFunction::Eidos);
+        (vm, claim)
+    }
+
+    fn assert_next(stream: &mut impl Iterator<Item = Felt>, expected: &[Felt]) {
+        assert_eq!(stream.by_ref().take(expected.len()).collect::<Vec<_>>(), expected);
+    }
+
+    /// A native verifier authenticates every claim field and D independently of advice creation.
+    #[test]
+    fn native_fixture_verifies_only_its_owner_selected_statement() {
+        let (vm, claim) = native_fixture();
+        crate::verifier::verify(&claim, &vm).expect("native descriptor-based fixture must verify");
+
+        for coordinate in [0, 4, 8, 24] {
+            let mut changed = claim.to_elements();
+            changed[coordinate] += Felt::new_unchecked(1);
+            assert!(
+                crate::verifier::verify(&claim_from_elements(&changed), &vm).is_err(),
+                "claim coordinate {coordinate} must be authenticated",
+            );
+        }
+        let mut changed_vm = vm.clone();
+        changed_vm.precompile_root[0] += Felt::new_unchecked(1);
+        assert!(crate::verifier::verify(&claim, &changed_vm).is_err());
+        assert_eq!(
+            PublicInputs::from_claim(&claim, vm.precompile_root).claim().commitment(),
+            PublicInputs::from_claim(&claim, changed_vm.precompile_root)
+                .claim()
+                .commitment(),
+            "D is authenticated by the proof but is outside CLAIM_HASH",
+        );
+    }
+
+    /// Decode the native transcript separately and consume the complete advice stream in MASM
+    /// order. This pins semantic content without inventing a replacement advice-byte digest.
+    #[test]
+    fn native_fixture_advice_preserves_claim_all_air_groups_and_transcript_order() {
+        let (vm, claim) = native_fixture();
+        let proof = ExecutionProof::new(vm.clone(), PrecompileStatus::Empty);
+        let inputs = build_verifier_inputs(&proof, &claim).expect("native fixture advice");
+        assert_eq!(inputs, build_verifier_inputs(&proof, &claim).unwrap());
+        assert_eq!(inputs.claim_commitment(), claim.commitment());
+        assert_eq!(
+            inputs.advice().map().get(&claim.commitment()).unwrap().as_ref(),
+            claim.to_elements(),
+            "the content-addressed claim preimage is exactly K4 || R_E4 || I16 || O16",
+        );
+
+        let pub_inputs = PublicInputs::from_claim(&claim, vm.precompile_root);
+        let (public_values, aux_inputs) = pub_inputs.to_air_inputs();
+        let elements = claim.to_elements();
+        let mut expected_core = elements[8..40].to_vec();
+        expected_core.extend_from_slice(&elements[0..4]);
+        assert_eq!(
+            public_values,
+            vec![expected_core, elements[4..8].to_vec(), vec![], vec![]],
+            "all four instance-order public groups, including empty groups, are retained",
+        );
+        assert_eq!(aux_inputs, vm.precompile_root.as_ref());
+
+        let config = eidos_config(config::pcs_params(), config::RELATION_DIGEST);
+        let native = deserialize_proof(vm.proof.bytes()).expect("native STARK data");
+        let statement = Statement::<Felt, Challenge, _>::new(
+            MidenMultiAir::new(),
+            public_values.into_iter().enumerate().collect(),
+            aux_inputs,
+        )
+        .unwrap();
+        let verifier = VerifierInstance::new(
+            &config,
+            &statement,
+            Some(config::EIDOS_PREPROCESSED_COMMITMENT.into()),
+        )
+        .unwrap();
+        let mut challenger = config.challenger();
+        observe_protocol_params(config.pcs(), &mut challenger);
+        let (stark, _) = StarkProof::from_data(&verifier, &native, challenger).unwrap();
+
+        let mut expected_order: Vec<u8> = (0..MIDEN_AIR_COUNT as u8).collect();
+        expected_order.sort_by_key(|&i| (stark.log_trace_heights()[i as usize], i));
+        assert_eq!(stark.air_order(), expected_order);
+        assert_eq!(stark.log_trace_heights().len(), MIDEN_AIR_COUNT);
+        assert_eq!(stark.log_trace_heights()[3] as usize, AND8_LOOKUP_LOG_HEIGHT);
+        assert_eq!(stark.all_aux_values.len(), MIDEN_AIR_COUNT);
+
+        let advice_stack = inputs.advice().stack();
+        let mut stream = advice_stack.iter().copied();
+        let pcs = config.pcs();
+        assert_next(
+            &mut stream,
+            &[
+                pcs.num_queries(),
+                pcs.query_pow_bits(),
+                pcs.deep_pow_bits(),
+                pcs.folding_pow_bits(),
+            ]
+            .map(|value| Felt::new_unchecked(value as u64)),
+        );
+        assert_next(&mut stream, vm.precompile_root.as_ref());
+        assert_next(
+            &mut stream,
+            &stark.log_trace_heights()[..3]
+                .iter()
+                .map(|&height| Felt::new_unchecked(height as u64))
+                .collect::<Vec<_>>(),
+        );
+        let commitment = |value: <RecursiveLmcs as miden_stark::lmcs::Lmcs>::Commitment| {
+            let limbs: [u64; 4] = value.into();
+            limbs.map(Felt::new_unchecked)
+        };
+        assert_next(&mut stream, &commitment(stark.main_commit));
+        assert_next(&mut stream, &commitment(stark.aux_commit));
+        for group in &stark.all_aux_values {
+            assert_next(&mut stream, &QuadFelt::flatten_to_base(group.clone()));
+        }
+        assert_next(&mut stream, &commitment(stark.quotient_commit));
+        let pcs = &stark.pcs_proof;
+        let deep_alpha = pcs.deep_proof.challenge_columns.as_basis_coefficients_slice();
+        assert_next(&mut stream, &[deep_alpha[1], deep_alpha[0]]);
+        for next_row in [false, true] {
+            for group in &pcs.deep_proof.evals {
+                for matrix in group {
+                    let rows = matrix.values.chunks_exact(matrix.width);
+                    assert!(rows.remainder().is_empty());
+                    assert!((1..=2).contains(&rows.len()));
+                    if let Some(row) = rows.into_iter().nth(usize::from(next_row)) {
+                        assert_next(&mut stream, &QuadFelt::flatten_to_base(row.to_vec()));
+                    }
+                }
+            }
+        }
+        assert_next(&mut stream, &[pcs.deep_proof.pow_witness]);
+        for round in &pcs.fri_proof.rounds {
+            assert_next(&mut stream, &commitment(round.commitment));
+            assert_next(&mut stream, &[round.pow_witness]);
+        }
+        assert_next(&mut stream, &QuadFelt::flatten_to_base(pcs.fri_proof.final_poly.to_vec()));
+        assert_next(&mut stream, &[pcs.query_pow_witness]);
+        assert_eq!(stream.next(), None, "no legacy statement or kernel sidecar on the stream");
+
+        let (expected_store, _) = build_merkle_advice(&stark).unwrap();
+        let mut expected_map = Vec::new();
+        for batch in pcs.deep_witnesses.iter().chain(pcs.fri_witnesses.iter()) {
+            for index in batch.indices() {
+                let key = Word::new(commitment(*batch.leaf_hash(index).unwrap()));
+                let row = batch.opening(index).unwrap().as_slice().to_vec();
+                expected_map.push((key, row));
+            }
+        }
+        #[cfg(feature = "std")]
+        let circuit = crate::setup::ace::shared_recursive_circuit();
+        #[cfg(not(feature = "std"))]
+        let circuit = crate::setup::ace::compiled_recursive_circuit();
+        expected_map.push((circuit.commitment, circuit.instructions.clone()));
+        expected_map.push((claim.commitment(), elements.to_vec()));
+        let expected_advice =
+            AdviceInputs::default().with_map(expected_map).with_merkle_store(expected_store);
+        assert_eq!(inputs.advice().map(), expected_advice.map());
+        assert_eq!(inputs.advice().store(), expected_advice.store());
+
+        let verifier_root = Word::new([101, 102, 103, 104].map(Felt::new_unchecked));
+        let package = RecursiveVerifierInputs::for_request(verifier_root, &proof, &claim).unwrap();
+        assert_eq!(package, inputs.clone().into_request_package(verifier_root));
+        let proof_stream = inputs.advice().stack().iter().copied().collect::<Vec<_>>();
+        assert!(package.advice().stack().is_empty());
+        assert_eq!(package.claim_commitment(), claim.commitment());
+        assert_eq!(package.advice().store(), inputs.advice().store());
+        assert_eq!(package.advice().map().len(), inputs.advice().map().len() + 1);
+        assert_eq!(
+            package
+                .advice()
+                .map()
+                .get(&proof_request_key(verifier_root, claim.commitment()))
+                .unwrap()
+                .as_ref(),
+            proof_stream,
+        );
+        for (key, value) in inputs.advice().map().iter() {
+            assert_eq!(package.advice().map().get(key), Some(value));
+        }
+    }
 
     /// The top-level entry rejects non-Eidos proofs up front, before touching the proof bytes.
     #[test]
@@ -343,11 +556,7 @@ mod tests {
             },
             PrecompileStatus::Empty,
         );
-        let claim = ExecutionClaim::from_program_info(
-            ProgramInfo::new(Word::default(), KernelDescriptor::default()),
-            StackInputs::default(),
-            StackOutputs::default(),
-        );
+        let claim = claim();
 
         let err = RecursiveVerifierInputs::for_request(Word::default(), &proof, &claim)
             .expect_err("a Blake3 proof must be rejected");
@@ -360,10 +569,12 @@ mod tests {
     #[test]
     fn eidos_preprocessed_commitment_matches_recursive_verifier_constant() {
         let config = eidos_config(config::pcs_params(), config::RELATION_DIGEST);
+        let (public_values, aux_inputs) =
+            PublicInputs::from_claim(&claim(), miden_core::deferred::TRUE_DIGEST).to_air_inputs();
         let statement = Statement::<Felt, Challenge, _>::new(
             MidenMultiAir::new(),
-            vec![(0, vec![Felt::ZERO; miden_air::vm::NUM_PUBLIC_VALUES])],
-            vec![],
+            public_values.into_iter().enumerate().collect(),
+            aux_inputs,
         )
         .expect("valid Miden statement shape");
         let commitment: [u64; 4] = Preprocessed::build(&statement, &config)
@@ -432,52 +643,14 @@ mod tests {
         );
     }
 
-    /// Pins the complete packaged advice from a fixed, independently verified VM proof.
+    /// This counterfactual uses an arbitrary descriptor, so rejection is only a weak regression
+    /// oracle. It does not establish rejection of every legacy proof or transport version; outer
+    /// proof decoding tests cover the explicit version boundary separately.
     #[test]
-    fn packaged_advice_matches_pre_extraction_bytes() {
-        use miden_core::serde::{Deserializable, Serializable};
-        use miden_crypto::hash::blake::Blake3_256;
-
+    fn native_verifier_rejects_legacy_statement_fixture() {
         let vm = VmProof::read_from_bytes(include_bytes!("../../tests/fixtures/vm_eidos_v1_0.bin"))
-            .expect("valid VM proof fixture encoding");
-        let program_root =
-            Word::read_from_bytes(include_bytes!("../../tests/fixtures/vm_eidos_v1_0.program"))
-                .expect("valid fixture program root");
-        let claim = ExecutionClaim::new(
-            program_root,
-            KernelDescriptor::default(),
-            StackInputs::default(),
-            StackOutputs::default(),
-        );
-        crate::verifier::verify(&claim, &vm).expect("pinned VM proof must verify");
-        let proof = ExecutionProof::new(vm, PrecompileStatus::Empty);
-        let inputs = RecursiveVerifierInputs::for_request(
-            Word::new([21, 22, 23, 24].map(Felt::new_unchecked)),
-            &proof,
-            &claim,
-        )
-        .unwrap();
-
-        assert!(inputs.advice().stack().is_empty());
-        // AdviceMap is ordered; MerkleStore uses HashMap under std, so sort its complete
-        // contents before hashing. The map includes the unchanged serialized proof stream.
-        let mut nodes: Vec<_> = inputs
-            .advice()
-            .store()
-            .inner_nodes()
-            .map(|node| (node.value, node.left, node.right))
-            .collect();
-        nodes.sort_unstable();
-        let mut bytes = inputs.advice().map().to_bytes();
-        bytes.extend(nodes.to_bytes());
-        bytes.extend(inputs.claim_commitment().to_bytes());
-        let digest: [u8; 32] = Blake3_256::hash(&bytes).into();
-        assert_eq!(
-            digest,
-            [
-                64, 70, 184, 218, 212, 109, 150, 180, 81, 241, 9, 30, 165, 30, 99, 0, 217, 199,
-                125, 94, 53, 49, 15, 43, 171, 24, 37, 8, 51, 53, 14, 87
-            ],
-        );
+            .expect("valid legacy VM proof fixture encoding");
+        let claim = claim();
+        assert!(crate::verifier::verify(&claim, &vm).is_err());
     }
 }

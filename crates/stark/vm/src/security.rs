@@ -57,13 +57,12 @@ pub fn num_deep_terms(alignment: usize) -> u32 {
 
 /// Builds MVM security parameters from values obtained during proof verification.
 ///
-/// `log_max_height` and `alignment` must come from successful STARK verification,
-/// `num_kernel_procedures` from the authenticated execution claim, and `hash_fn`
-/// from the configuration used to verify the proof, including its challenger.
+/// `log_max_height` and `alignment` must come from successful STARK verification, and `hash_fn`
+/// from the configuration used to verify the proof, including its challenger. The relation fixes
+/// three external lookup terms: one root Open and two deferred terminals.
 pub fn proof_security_parameters(
     pcs_params: &PcsParams,
     log_max_height: u32,
-    num_kernel_procedures: u32,
     alignment: usize,
     hash_fn: HashFunction,
 ) -> ProofSecurityParameters {
@@ -71,7 +70,6 @@ pub fn proof_security_parameters(
         protocol_params(pcs_params),
         u32::from(pcs_params.log_final_degree()),
         log_max_height,
-        num_kernel_procedures,
         alignment,
         hash_fn,
     )
@@ -81,7 +79,6 @@ fn mvm_security_parameters_from_protocol(
     protocol_params: ProtocolParams,
     log_final_degree: u32,
     log_max_height: u32,
-    num_kernel_procedures: u32,
     alignment: usize,
     hash_fn: HashFunction,
 ) -> ProofSecurityParameters {
@@ -99,7 +96,7 @@ fn mvm_security_parameters_from_protocol(
             ..AIR_SHAPE
         },
         num_ood_points: NUM_OOD_POINTS,
-        num_lookup_boundary_terms: CORE_BOUNDARY_LOOKUP_TERMS + num_kernel_procedures,
+        num_lookup_boundary_terms: CORE_BOUNDARY_LOOKUP_TERMS,
     }
 }
 
@@ -120,7 +117,6 @@ mod tests {
         let mut parameters = proof_security_parameters(
             &config::pcs_params(),
             20,
-            0,
             COMMITMENT_ALIGNMENT,
             HashFunction::Eidos,
         );
@@ -151,13 +147,8 @@ mod tests {
         for (hash_fn, expected_bits) in
             [(HashFunction::Eidos, 115.0), (HashFunction::Blake3_256, 117.0)]
         {
-            let mut parameters = proof_security_parameters(
-                &config::pcs_params(),
-                20,
-                0,
-                COMMITMENT_ALIGNMENT,
-                hash_fn,
-            );
+            let mut parameters =
+                proof_security_parameters(&config::pcs_params(), 20, COMMITMENT_ALIGNMENT, hash_fn);
             parameters.air_shape.num_composed_constraints = 1024;
             let report = parameters.proven_security_report();
             let composition =
@@ -179,7 +170,6 @@ mod tests {
         let mut parameters = proof_security_parameters(
             &config::pcs_params(),
             8,
-            0,
             COMMITMENT_ALIGNMENT,
             HashFunction::Eidos,
         );
@@ -205,8 +195,8 @@ mod tests {
         assert!((ldt_bits(&parameters.proven_security_report()) - expected_query).abs() < 1e-10);
     }
 
-    /// Both regimes include the lookup term with the kernel's boundary fractions, and list
-    /// decoding charges it the selected candidate's list size.
+    /// Both regimes include the three fixed boundary fractions, and list decoding charges the
+    /// lookup term the selected candidate's list size.
     #[test]
     fn proven_security_includes_lookup_boundary_terms_in_both_regimes() {
         use p3_security::{Regime, proximity::list_size_ldr_m};
@@ -214,7 +204,6 @@ mod tests {
         let mut parameters = proof_security_parameters(
             &config::pcs_params(),
             20,
-            255,
             COMMITMENT_ALIGNMENT,
             HashFunction::Eidos,
         );
@@ -253,7 +242,6 @@ mod tests {
         let mut parameters = proof_security_parameters(
             &config::pcs_params(),
             20,
-            0,
             COMMITMENT_ALIGNMENT,
             HashFunction::Eidos,
         );
@@ -277,7 +265,6 @@ mod tests {
             let parameters = proof_security_parameters(
                 &config::pcs_params(),
                 log_max_height,
-                0,
                 COMMITMENT_ALIGNMENT,
                 HashFunction::Eidos,
             );
@@ -361,7 +348,6 @@ mod tests {
         let parameters = proof_security_parameters(
             &config::pcs_params(),
             1,
-            0,
             COMMITMENT_ALIGNMENT,
             HashFunction::Eidos,
         );
@@ -435,7 +421,7 @@ mod tests {
     fn full_field_challengers_preserve_their_security_bounds() {
         let params = protocol_params(&config::pcs_params());
         for hash_fn in [HashFunction::Blake3_256, HashFunction::Keccak] {
-            let parameters = proof_security_parameters(&config::pcs_params(), 20, 0, 8, hash_fn);
+            let parameters = proof_security_parameters(&config::pcs_params(), 20, 8, hash_fn);
             assert_eq!(parameters.hash_fn, hash_fn);
             assert_eq!(
                 parameters.instance_shape.collision_resistance,
@@ -471,10 +457,16 @@ mod tests {
     /// rate (`lcm(8, 17·8)/8 = 17`).
     #[test]
     fn num_deep_terms_matches_the_pinned_alignment() {
+        // Auxiliary widths here count base-field coordinates. The Core's five extension
+        // columns and the packed Chiplets' four columns therefore contribute 10 and 8.
+        assert_eq!(RAW_WIDTHS, &[(0, 52, 10), (0, 24, 8), (0, 108, 40), (5, 7, 8)]);
+        assert_eq!(AIR_SHAPE.num_quotient_chunks, 8);
         assert_eq!(num_deep_terms(COMMITMENT_ALIGNMENT), AIR_SHAPE.num_deep_terms.unwrap());
-        assert_eq!(num_deep_terms(1), 274, "unexpected Blake3 (alignment 1) DEEP term count");
-        assert_eq!(num_deep_terms(8), 282, "unexpected algebraic (alignment 8) DEEP term count");
-        assert_eq!(num_deep_terms(17), 359, "unexpected Keccak (alignment 17) DEEP term count");
+        // Pad every matrix separately, then add the quadratic quotient's 16 coordinates
+        // (also padded) and the two OOD points: 262+16+2, 280+16+2, and 357+17+2.
+        assert_eq!(num_deep_terms(1), 280, "unexpected Blake3 (alignment 1) DEEP term count");
+        assert_eq!(num_deep_terms(8), 298, "unexpected algebraic (alignment 8) DEEP term count");
+        assert_eq!(num_deep_terms(17), 376, "unexpected Keccak (alignment 17) DEEP term count");
     }
 
     /// Parameters built for an MVM proof must reproduce the independent MVM security report.
@@ -482,17 +474,12 @@ mod tests {
     fn proof_security_parameters_match_mvm_security_report() {
         let pcs_params = config::pcs_params();
         let expected_protocol_params = protocol_params(&pcs_params);
-        let security_parameters = proof_security_parameters(
-            &pcs_params,
-            22,
-            255,
-            COMMITMENT_ALIGNMENT,
-            HashFunction::Eidos,
-        );
+        let security_parameters =
+            proof_security_parameters(&pcs_params, 22, COMMITMENT_ALIGNMENT, HashFunction::Eidos);
 
         assert_eq!(
             security_parameters.conjectured_security_report(),
-            security_report(&expected_protocol_params, 22, HashFunction::Eidos, 255)
+            security_report(&expected_protocol_params, 22, HashFunction::Eidos)
         );
         assert_eq!(security_parameters.log_final_degree, u32::from(pcs_params.log_final_degree()));
         assert_eq!(security_parameters.num_ood_points, NUM_OOD_POINTS);
@@ -511,7 +498,7 @@ mod tests {
             (24, 91, LOOKUP_LABEL),
             (29, 86, LOOKUP_LABEL),
         ] {
-            let report = security_report(&params, log_height, HashFunction::Eidos, 0);
+            let report = security_report(&params, log_height, HashFunction::Eidos);
             assert_eq!(
                 report.security_level(),
                 expected_level,
@@ -531,16 +518,34 @@ mod tests {
     /// silently drifted from the pinned snapshot.
     #[test]
     fn derived_security_constants_match_snapshot() {
+        // Subtract ceil(log2(coefficient) * 2^16) from the 126-bit Eidos support.
+        // The changed lookup/composition/DEEP coefficients are 18*79, 799, and 298.
         const FP_SHIFT: u32 = 16;
         const FP_ONE: u64 = 65_536;
         const BITS_PER_QUERY_FP: u64 = 193_381;
         const SECURITY_CAP_FP: u64 = 8_257_536;
-        const LOOKUP_BASE_FP: u64 = 7_572_335;
-        const COMPOSITION_TERM_FP: u64 = 7_647_953;
+        const LOOKUP_BASE_FP: u64 = 7_571_131;
+        const COMPOSITION_TERM_FP: u64 = 7_625_634;
         const OOD_BASE_FP: u64 = 8_030_818;
-        const DEEP_BASE_FP: u64 = 7_724_102;
+        const DEEP_BASE_FP: u64 = 7_718_884;
         const FOLDING_BASE_FP: u64 = 7_891_519;
         const LOOKUP_POW_BITS_SNAPSHOT: u32 = 0;
+
+        // The authored AIRs have 270/333/188/5 constraints, plus three multi-AIR batching
+        // slots. Lookup capacities are 19 Core + 13 packed Chiplets + 40 Eidos + 7 And8.
+        // Pin these inputs as well as the Q16 results so the snapshot records its derivation.
+        assert_eq!(AIR_SHAPE.num_composed_constraints, 270 + 333 + 188 + 5 + 3);
+        assert_eq!(AIR_SHAPE.max_constraint_degree, 9);
+        assert_eq!(AIR_SHAPE.num_quotient_chunks, 8);
+        assert_eq!(AIR_SHAPE.max_combo, 2);
+        assert_eq!(AIR_SHAPE.num_deep_terms, Some(298));
+        assert_eq!(
+            AIR_SHAPE.lookup,
+            Some(LookupShape {
+                fractions_per_row: 79,
+                max_message_width: 16
+            })
+        );
 
         assert_eq!(FIXED_POINT_FRACTIONAL_BITS, FP_SHIFT, "FP_SHIFT is stale");
         assert_eq!(FIXED_POINT_ONE, FP_ONE, "FP_ONE is stale");
@@ -567,35 +572,38 @@ mod tests {
     fn security_report_matches_reference_vectors() {
         // (queries, query PoW, DEEP PoW, folding PoW, log height)
         //   -> [lookup, composition, ood, deep, folding, query, collision], level
+        // Independent Q16 formulas use coefficients 1422/799/298 for lookup/composition/DEEP.
+        // Lookup also subtracts ceil(ceil(3*94549/79)/2^height) for the fixed root Open and
+        // two deferred terminals; this is 57 at height 6 and 1 at the other heights below.
         const VECTORS: &[((u32, u32, u32, u32, u32), [u64; 7], u32)] = &[
             (
                 (27, 17, 12, 4, 6),
-                [7_179_062, 7_647_953, 7_645_438, 7_920_710, 7_760_447, 6_335_399, 8_257_536],
+                [7_177_858, 7_625_634, 7_645_438, 7_915_492, 7_760_447, 6_335_399, 8_257_536],
                 96,
             ),
             (
                 (27, 17, 12, 4, 20),
-                [6_261_614, 7_647_953, 6_729_109, 7_003_206, 6_842_943, 6_335_399, 8_257_536],
+                [6_260_410, 7_625_634, 6_729_109, 6_997_988, 6_842_943, 6_335_399, 8_257_536],
                 95,
             ),
             (
                 (27, 17, 12, 4, 23),
-                [6_065_006, 7_647_953, 6_532_501, 6_806_598, 6_646_335, 6_335_399, 8_257_536],
+                [6_063_802, 7_625_634, 6_532_501, 6_801_380, 6_646_335, 6_335_399, 8_257_536],
                 92,
             ),
             (
                 (27, 17, 12, 4, 29),
-                [5_671_790, 7_647_953, 6_139_285, 6_413_382, 6_253_119, 6_335_399, 8_257_536],
+                [5_670_586, 7_625_634, 6_139_285, 6_408_164, 6_253_119, 6_335_399, 8_257_536],
                 86,
             ),
             (
                 (7, 0, 0, 0, 20),
-                [6_261_614, 7_647_953, 6_729_109, 6_216_774, 6_580_799, 1_353_667, 8_257_536],
+                [6_260_410, 7_625_634, 6_729_109, 6_211_556, 6_580_799, 1_353_667, 8_257_536],
                 20,
             ),
             (
                 (150, 31, 31, 31, 29),
-                [5_671_790, 7_647_953, 6_139_285, 7_658_566, 8_022_591, 8_257_536, 8_257_536],
+                [5_670_586, 7_625_634, 6_139_285, 7_653_348, 8_022_591, 8_257_536, 8_257_536],
                 86,
             ),
         ];
@@ -614,7 +622,7 @@ mod tests {
                 folding_pow_bits,
                 ..base
             };
-            let report = security_report(&params, log_height, HashFunction::Eidos, 0);
+            let report = security_report(&params, log_height, HashFunction::Eidos);
 
             assert_eq!(
                 (*report.terms()).map(|term| term.bits),
@@ -635,9 +643,7 @@ mod tests {
         let params = protocol_params(&config::pcs_params());
         let crossover = (6..=30)
             .find(|&log_height| {
-                security_report(&params, log_height, HashFunction::Eidos, 0)
-                    .binding_term()
-                    .label
+                security_report(&params, log_height, HashFunction::Eidos).binding_term().label
                     == LOOKUP_LABEL
             })
             .expect("the lookup round must bind at some supported height");
@@ -645,22 +651,27 @@ mod tests {
         assert_eq!(crossover, 19, "unexpected lookup/query crossover");
     }
 
-    /// A proof with the maximum kernel witness reports a lower lookup-round bound than a bare one
-    /// at the same height, since `emit_chiplets_boundary` adds one lookup fraction per kernel
-    /// procedure digest on top of the per-row bus terms `AIR_SHAPE` counts.
+    /// The fixed root Open and two deferred terminals lower the lookup bound compared with
+    /// ignoring the relation's external terms, without a caller-supplied procedure count.
     #[test]
-    fn lookup_boundary_correction_lowers_the_lookup_term_with_a_full_kernel_witness() {
+    fn lookup_boundary_correction_charges_three_fixed_external_terms() {
         let lookup_bits = |report: SecurityReport| {
             report.terms().iter().find(|term| term.label == LOOKUP_LABEL).unwrap().bits
         };
-
-        let params = protocol_params(&config::pcs_params());
-        let bare = lookup_bits(security_report(&params, 6, HashFunction::Eidos, 0));
-        let full_kernel = lookup_bits(security_report(&params, 6, HashFunction::Eidos, 255));
-        assert!(
-            full_kernel < bare,
-            "a full kernel witness should lower the lookup round's bound, got {full_kernel} vs \
-             {bare}"
+        let parameters = proof_security_parameters(
+            &config::pcs_params(),
+            6,
+            COMMITMENT_ALIGNMENT,
+            HashFunction::Eidos,
         );
+        assert_eq!(parameters.num_lookup_boundary_terms, 3);
+        let uncorrected = security_report_with_hash(
+            &parameters.protocol_params,
+            &parameters.instance_shape,
+            &parameters.air_shape,
+            HashFunction::Eidos,
+        );
+        let corrected = parameters.conjectured_security_report();
+        assert!(lookup_bits(corrected) < lookup_bits(uncorrected));
     }
 }

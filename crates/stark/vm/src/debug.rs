@@ -10,9 +10,12 @@ use miden_stark::air::{ProverStatement, Statement};
 pub fn check_constraints(trace: &VmTrace) {
     let (core, chiplets, eidos, and8) = trace.main_trace().clone_air_matrices();
     let (public_values, aux_inputs) = trace.public_inputs().to_air_inputs();
-    let statement: Statement<Felt, QuadFelt, MidenMultiAir> =
-        Statement::new(MidenMultiAir::new(), vec![(0, public_values)], aux_inputs)
-            .expect("statement construction failed");
+    let statement: Statement<Felt, QuadFelt, MidenMultiAir> = Statement::new(
+        MidenMultiAir::new(),
+        public_values.into_iter().enumerate().collect(),
+        aux_inputs,
+    )
+    .expect("statement construction failed");
     let statement = ProverStatement::new(statement, vec![core, chiplets, eidos, and8])
         .expect("prover statement construction failed");
     use miden_stark::StarkConfig;
