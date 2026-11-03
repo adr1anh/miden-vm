@@ -491,7 +491,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 fresh normal attempt passes assembly compilation, then stops at two prover calls missing ExecutionEnvironment; no processor tests ran. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Package9 `6233ae58c`, imports `359d5840d`, project naming bridge `9d6f8caa2`, fixtures `ea4fa6a57`; earlier refs below; base `82935d673` | Independent reviews; package280 pass/one ignored, producer54, assembly478 pass/43 project failures/6 ignored, registry25; strict package/assembly test/bench Clippy/no_std. Earlier D6/D8/codec/fuzz evidence remains below | Per-target NamespaceInputs/D5 routing, exact naming-aware project/cache matching, Program/kernel conversion and remaining consumer migration; native/generated/recursive D6 cutover, full fuzz qualification and inherited/external gates remain |
+| 09 Assembly/packages | in-progress | Target routing `959a1bded`, input matching `fc1eb143e`, provenance `fb4d5c141`; Package9/import/fixture refs below; base `82935d673` | Independent reviews; standard assembly Nextest539 pass/6 existing skips (including packaging); strict package/assembly test/bench Clippy/no_std and formatting pass. Prior package280/one ignored, producer54, registry25 and D6/D8/codec/fuzz evidence below | Program/kernel conversion and remaining consumer migration; D5 selector/file configuration and PR10 distinct instances; complete inherited AST snapshots for reuse remain open. Native/generated/recursive D6 cutover, full fuzz qualification and inherited/external gates remain |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -2344,3 +2344,47 @@ All four source commits and documentation `99c4d8967` have verified SSH signatur
 configured public key using the scratch allowed-signers file. No Git configuration, pushes or
 GitHub PRs changed. This is implementation progress within PR09/M1, not completed cutover or proof
 qualification. The current brief routes the next slice; this ledger owns the durable evidence.
+
+### PR09 target namespace routing and exact source reuse (3 November 2026)
+
+Source `fb4d5c141` extends existing source/Git, dependency-closure and profile provenance with an
+optional resolved compilation commitment. New section tags6/7 retain that value; tags0–5 remain
+readable without it and cannot establish equality with current committed inputs. Section decoding
+rejects trailing bytes. Tests cover independently encoded historical records, new variants,
+truncation and exact package-section consumption.
+
+Source `fc1eb143e` fingerprints complete typed caller homes, exact defining-source declarations
+and resolved semantic callable paths without D-derived names or publication authority. Local-path
+and equivalent bound inputs normalize together; source declaration bytes retain their exact
+spelling. Project matching additionally covers inline pins, effective profile/warnings, actual full
+imported artifacts/linkage and the separate kernel. Inherited AST/advice and declaration-only state
+without a complete snapshot remain compilable but cannot justify reuse; source printing/equality
+is deliberately not treated as an exact snapshot.
+
+Source `959a1bded` adds explicit per-target namespace providers after source loading and resolved
+import/kernel linking, before memory or registered source reuse. Callbacks receive the actual
+prebound assembler graph. Missing providers reject, including warm-cache paths. Graph identities
+and executable-target suffixes select consistent cache slots; provenance mismatch is a memory
+miss, while an immutable registered same-version collision retains its existing diagnostic. Both
+reuse paths enforce the same dependency-section eligibility. Manual ASTs preserve their origin,
+skip provider/post-processing hooks and never justify reuse, even with supplied file provenance;
+their declared source file/extension need not exist or have a source provider.
+
+Project fixtures explicitly select homes and bindings. Kernel reexports retain defining keys;
+the packaging fixture publishes its imported utility at N0 before reexporting it, with an explicit
+test profile. No production admission fallback is added. Existing debug coverage now verifies two
+real runtime EXEC edges and separate callee provenance; byte-tampering tests follow MAST0.0.6's
+invocation target table and still reject corrupted non-root hashes. Source-change diagnostics now
+identify the changed transitive leaf before parent reuse.
+
+Fresh AC/heavy-guarded standard `make test-assembly EXTRA=--locked NEXTEST_PROFILE=ci` passes539
+(537 unit and2 packaging tests), with6 existing skips. Strict package/assembly library/test/bench
+Clippy with `-D warnings`, no-default-features library checks, scoped pinned-nightly rustfmt and
+whitespace checks pass. Independent review's memory-section, manual-context and callback kernel
+visibility findings are fixed and covered. All three source commits have verified SSH signatures.
+Logs remain local scratch; no pushes or GitHub PRs were created.
+
+This closes the former project-input failures, not PR09/M1 or final qualification. Program/kernel
+reconstruction, remaining consumer migrations, D5 selector/file configuration, PR10 distinct bound
+instances and all inherited native/MASM/recursive/generated/security gates remain required. The
+normal processor's earlier prover ExecutionEnvironment compile failure is not claimed resolved.
