@@ -1880,7 +1880,7 @@ mod tests {
         dependencies: impl IntoIterator<Item = Dependency>,
     ) -> Result<Package, ManifestValidationError> {
         let exports = exports.into_iter().collect::<Vec<_>>();
-        let naming = super::arbitrary::fixture_naming(fixture_home(), kind, &mast, &exports);
+        let naming = arbitrary::fixture_naming(fixture_home(), kind, &mast, &exports);
         Package::create(name, version, kind, mast, exports, dependencies, &naming)
     }
 
@@ -1894,7 +1894,7 @@ mod tests {
         dependencies: impl IntoIterator<Item = Dependency>,
     ) -> Result<Package, ManifestValidationError> {
         let exports = exports.into_iter().collect::<Vec<_>>();
-        let naming = super::arbitrary::fixture_naming(fixture_home(), kind, &mast, &exports);
+        let naming = arbitrary::fixture_naming(fixture_home(), kind, &mast, &exports);
         Package::create_with_modules(
             name,
             version,

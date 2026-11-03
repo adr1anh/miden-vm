@@ -51,11 +51,11 @@ impl<D> TestProfile<D> {
 
     fn validate(
         &self,
-        context: &u8,
+        context: u8,
         operation: ArtifactProfileOperation,
     ) -> Result<(), &'static str> {
         self.calls.borrow_mut().push(operation);
-        if *context != 7 || self.reject == Some(operation) {
+        if context != 7 || self.reject == Some(operation) {
             return Err("test evidence rejected");
         }
         Ok(())
@@ -84,7 +84,7 @@ impl<D: EidosDomain<Encoding = FeltSequence>> InterfaceProfile for TestProfile<D
         context: &u8,
         descriptor: &[u8],
     ) -> Result<(), Self::Error> {
-        self.validate(context, ArtifactProfileOperation::PublisherDescriptor)?;
+        self.validate(*context, ArtifactProfileOperation::PublisherDescriptor)?;
         if !matches!(descriptor, b"" | b"Q") {
             return Err("unknown test descriptor");
         }
@@ -98,7 +98,7 @@ impl<D: EidosDomain<Encoding = FeltSequence>> InterfaceProfile for TestProfile<D
         id: LibraryId,
         _: DeclarationCommitment,
     ) -> Result<(), Self::Error> {
-        self.validate(context, ArtifactProfileOperation::Association)?;
+        self.validate(*context, ArtifactProfileOperation::Association)?;
         if id != library_id(99) {
             return Err("wrong test identity");
         }
@@ -113,7 +113,7 @@ impl<D: EidosDomain<Encoding = FeltSequence>> InterfaceProfile for TestProfile<D
         _: &[LibraryId],
     ) -> Result<(), Self::Error> {
         // Real profiles must authenticate contributing declarations, not just accept structure.
-        self.validate(context, ArtifactProfileOperation::DependencyClosure)
+        self.validate(*context, ArtifactProfileOperation::DependencyClosure)
     }
 }
 

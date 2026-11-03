@@ -1491,7 +1491,7 @@ mod tests {
 
         let other = named_import_fixture(&context, "other-home");
         assert!(matches!(
-            LinkLibrary::from_package(library.package.clone(), other.naming().as_ref().clone()),
+            LinkLibrary::from_package(library.package, other.naming().as_ref().clone()),
             Err(miden_mast_package::ManifestValidationError::MismatchedNamingTransport)
         ));
     }

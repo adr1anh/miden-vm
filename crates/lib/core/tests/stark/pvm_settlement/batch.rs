@@ -17,12 +17,13 @@ use miden_core::{
 use miden_core_lib::CoreLibrary;
 use miden_processor::{ExecutionOptions, FastProcessor, StackInputs, advice::AdviceInputs};
 use miden_prover::Prover;
+use miden_utils_testing::librarytree::fixture_from_product as from_product;
 use miden_verifier::Verifier;
 use miden_vm_stark::recursive::RecursiveVerifierInputs;
 
 use super::{PvmSettlementHost, prove_ecdsa_execution};
 use crate::{
-    naming::{NamedProgram, from_product},
+    naming::NamedProgram,
     support::ecdsa::{generator_public_key_fixture, valid_fixture},
 };
 

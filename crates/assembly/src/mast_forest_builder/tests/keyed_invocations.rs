@@ -344,7 +344,7 @@ fn static_package_import_retains_private_helper_and_callback_roots() {
                 .sections
                 .push(Section::new(SectionId::DEBUG_INFO, fixture.debug.to_bytes()));
         }
-        let library = crate::linker::LinkLibrary::from_package(Arc::new(package), naming).unwrap();
+        let library = LinkLibrary::from_package(Arc::new(package), naming).unwrap();
         for exact_source in [false, true] {
             let mut builder = MastForestBuilder::new_with_static_libraries([
                 StaticLibrary::from_link_library(&library, library.package.debug_info().unwrap())

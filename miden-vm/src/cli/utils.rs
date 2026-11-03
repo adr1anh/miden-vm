@@ -50,13 +50,13 @@ pub fn load_package_with_handlers(
         .event_handlers()
         .into_diagnostic()
         .wrap_err("Failed to load the package's Wasm event handlers")?;
-    if let Some(section) = &section {
-        if loaded_handler_sections.contains(section) {
-            return host
-                .load_library(HostLibrary::from(package.clone()))
-                .into_diagnostic()
-                .wrap_err("Failed to register the package's MAST forest");
-        }
+    if let Some(section) = &section
+        && loaded_handler_sections.contains(section)
+    {
+        return host
+            .load_library(HostLibrary::from(package.clone()))
+            .into_diagnostic()
+            .wrap_err("Failed to register the package's MAST forest");
     }
     let library = host_library_from_package(package, WasmHandlerLimits::default())
         .into_diagnostic()

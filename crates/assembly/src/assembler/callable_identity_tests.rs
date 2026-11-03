@@ -230,7 +230,7 @@ fn link_declared_caller(source: &str, binding: CallableBinding) -> (Assembler, G
 }
 
 fn attached_kernel(context: &TestContext) -> Assembler {
-    let mut parser = ast::Module::parser(Some(ast::ModuleKind::Kernel));
+    let mut parser = ast::Module::parser(Some(ModuleKind::Kernel));
     let kernel = parser
         .parse_str(Some(Path::KERNEL), "pub proc run push.1 end", context.source_manager())
         .unwrap();

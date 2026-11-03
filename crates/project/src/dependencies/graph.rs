@@ -1424,9 +1424,9 @@ mod tests {
     fn programmatic_dependency_omission_rejects_before_resolution() {
         let temp = TempDir::new().unwrap();
         let registry = TestRegistry::default();
-        let package = crate::Package::new(
+        let package = Package::new(
             "root",
-            crate::Target::library(
+            Target::library(
                 Arc::<miden_assembly_syntax::Path>::from(miden_assembly_syntax::Path::new("root")),
                 Uri::new("mod.masm"),
             ),

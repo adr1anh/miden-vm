@@ -1211,7 +1211,9 @@ fn project_cache_does_not_claim_complete_snapshots_of_inherited_ast_or_declarati
             )],
         )
         .unwrap();
-    assert!(declared.linker().modules().iter().all(|module| module.is_mast()));
+    for module in declared.linker().modules() {
+        assert!(module.is_mast());
+    }
     assert!(
         declared.project_cache_commitment("dev").unwrap().is_none(),
         "declaration-only modules must not be mistaken for committed package inputs"

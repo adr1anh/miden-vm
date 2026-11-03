@@ -14,7 +14,7 @@ use miden_package_registry::{PackageCache, PackageId, Version as PackageVersion}
 use miden_project::{
     DependencyInstanceId, ExpectedVisibleCallables, Linkage, Package as ProjectPackage,
     PreassembledDependencyMetadata, Profile, ProjectDependencyNodeProvenance, ProjectSource,
-    SourceNamingConvention, Target,
+    SourceNaming, SourceNamingConvention, Target,
 };
 
 use crate::{Assembler, NamespaceInputs, ast::Module};
@@ -539,7 +539,7 @@ where
         // Keep dependency graph identities distinct even when two projects publish the same name.
         // Executables also need a separate slot from their required library in this same graph.
         let cache_key = SourcePackageCacheKey::new(package_id, target);
-        let package_name = self.dependency_graph.get(&package_id)?.name.clone();
+        let package_name = self.dependency_graph.get(package_id)?.name.clone();
         let profile = project.resolve_profile(profile_name)?;
         let mut assembler = self.assembler.clone().with_profile(profile);
         let mut runtime_dependencies = RuntimeDependencies::default();
@@ -573,11 +573,11 @@ where
             None => (),
         }
 
-        let node = self.dependency_graph.get(&package_id)?;
+        let node = self.dependency_graph.get(package_id)?;
         let dependencies = node.dependencies.clone();
         for edge in dependencies.iter() {
             let dependency_package = match self.resolve_dependency_package(
-                &edge.dependency,
+                edge.dependency,
                 profile_name,
                 cache,
                 edge.binding.as_ref(),
@@ -639,7 +639,7 @@ where
         }
 
         let selected_binding =
-            requested_binding.or_else(|| target.naming.as_ref().map(|naming| naming.binding()));
+            requested_binding.or_else(|| target.naming.as_ref().map(SourceNaming::binding));
         let namespace_inputs = if let Some(provider) = &self.namespace_inputs_provider {
             let mut context = self.get_target_assembly_context(
                 &project,
@@ -694,7 +694,7 @@ where
         let build_provenance = if source_provenance.is_some() || !manually_provided_sources {
             self.dependency_graph
                 .build_source_provenance(
-                    &package_id,
+                    package_id,
                     project.clone(),
                     target,
                     profile_name,
@@ -919,7 +919,7 @@ where
 
     fn resolve_dependency_package(
         &mut self,
-        package_id: &DependencyInstanceId,
+        package_id: DependencyInstanceId,
         profile_name: &str,
         cache: &mut SourcePackageCache,
         requested_binding: Option<&miden_project::DependencyBinding>,
@@ -967,7 +967,7 @@ where
                         ))
                     })?;
                 let package = match self.assemble_source_package(
-                    *package_id,
+                    package_id,
                     project,
                     &target,
                     profile_name,

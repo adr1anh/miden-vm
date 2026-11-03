@@ -245,8 +245,7 @@ mod tests {
         assert_eq!(original_deps, vec![kernel.package.to_dependency()]);
 
         let mut consumer = package(TargetType::Library, Operation::Add, vec![dependency(3)]);
-        consumer.linked_kernel_package =
-            Some((conflicting.package.clone(), conflicting.naming.clone()));
+        consumer.linked_kernel_package = Some((conflicting.package.clone(), conflicting.naming));
         for linkage in [Linkage::Static, Linkage::Dynamic] {
             let error = runtime.merge_package(consumer.clone(), linkage).unwrap_err();
             assert!(error.to_string().contains("conflicting linked kernel packages"));

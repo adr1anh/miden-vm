@@ -28,7 +28,7 @@ fn assembler(context: &TestContext, bindings: &[(&str, CallableBinding)]) -> Ass
 }
 
 fn kernel(context: &TestContext, source: &str) -> Box<ast::Module> {
-    ast::Module::parser(Some(ast::ModuleKind::Kernel))
+    ast::Module::parser(Some(ModuleKind::Kernel))
         .parse_str(Some(Path::KERNEL), source, context.source_manager())
         .unwrap()
 }

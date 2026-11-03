@@ -34,7 +34,7 @@ use miden_processor::{
 
 /// Runs the named program against `host` with its explicit execution environment.
 fn execute_sync(
-    named: &crate::naming::NamedProgram,
+    named: &naming::NamedProgram,
     stack_inputs: StackInputs,
     advice_inputs: AdviceInputs,
     host: &mut impl SyncHost,
@@ -76,8 +76,7 @@ fn run(source: &str, advice: AdviceInputs) -> (String, ExecutionOutput) {
     let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let named =
-        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
+    let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
     let buf = Arc::new(Mutex::new(String::new()));
     let host_lib = HostLibrary {
@@ -118,8 +117,7 @@ fn run_with_default_core_handlers(source: &str, advice: AdviceInputs) -> Executi
     let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let named =
-        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
+    let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let mut host = DefaultHost::default()
         .with_environment_source(named.environment.source())
         .with_library(&core_lib)
@@ -303,8 +301,7 @@ fn print_mem_rejects_out_of_bounds_range_end() {
     let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let named =
-        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
+    let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary {
         mast_forest: core_lib.mast_forest().clone(),
         package_debug_info: Ok(None),
@@ -347,8 +344,7 @@ fn print_mem_rejects_oversized_range() {
     let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let named =
-        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
+    let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary {
         mast_forest: core_lib.mast_forest().clone(),
         package_debug_info: Ok(None),
@@ -391,8 +387,7 @@ fn print_mem_rejects_full_range() {
     let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let named =
-        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
+    let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary {
         mast_forest: core_lib.mast_forest().clone(),
         package_debug_info: Ok(None),
@@ -595,8 +590,7 @@ fn debug_handlers_compose_with_default_core_handlers() {
     let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let named =
-        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
+    let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
     let mut handlers = core_lib.handlers();
     handlers.extend(advice_debug_handlers());
@@ -669,8 +663,7 @@ fn noop_debug_handlers_run_print_stack_without_output() {
     let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let named =
-        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
+    let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary {
         mast_forest: core_lib.mast_forest().clone(),
         package_debug_info: Ok(None),

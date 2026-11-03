@@ -334,7 +334,7 @@ impl Serializable for PackageBuildProvenance {
 }
 
 impl Deserializable for PackageBuildProvenance {
-    fn read_from<R: miden_core::serde::ByteReader>(
+    fn read_from<R: ByteReader>(
         source: &mut R,
     ) -> Result<Self, miden_core::serde::DeserializationError> {
         match source.read_u8()? {

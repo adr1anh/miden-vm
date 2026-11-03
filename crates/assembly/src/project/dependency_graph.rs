@@ -193,9 +193,9 @@ impl DependencyGraph {
         self.dependency_graph.root()
     }
 
-    pub fn get(&self, instance: &DependencyInstanceId) -> Result<&ProjectDependencyNode, Report> {
+    pub fn get(&self, instance: DependencyInstanceId) -> Result<&ProjectDependencyNode, Report> {
         self.dependency_graph
-            .get(instance)
+            .get(&instance)
             .ok_or_else(|| Report::msg(format!("missing dependency graph node for '{instance}'")))
     }
 
@@ -229,7 +229,7 @@ impl DependencyGraph {
 
     pub fn build_source_provenance(
         &self,
-        instance: &DependencyInstanceId,
+        instance: DependencyInstanceId,
         project: Arc<ProjectPackage>,
         target: &Target,
         profile_name: &str,
@@ -237,7 +237,7 @@ impl DependencyGraph {
         package_registry: &dyn PackageRegistryAndProvider,
         source_provenance: Option<&ProjectSourceProvenanceInputs>,
     ) -> Result<Option<PackageBuildProvenance>, Report> {
-        let Some(node) = self.dependency_graph.get(instance) else {
+        let Some(node) = self.dependency_graph.get(&instance) else {
             return Ok(None);
         };
         let ProjectDependencyNodeProvenance::Source(source) = &node.provenance else {
@@ -264,7 +264,7 @@ impl DependencyGraph {
 
     pub fn expected_source_provenance(
         &self,
-        instance: &DependencyInstanceId,
+        instance: DependencyInstanceId,
         project: Arc<ProjectPackage>,
         target: &Target,
         profile_name: &str,
@@ -293,7 +293,7 @@ impl DependencyGraph {
 
     fn expected_source_provenance_with_visited(
         &self,
-        instance: &DependencyInstanceId,
+        instance: DependencyInstanceId,
         project: Arc<ProjectPackage>,
         target: &Target,
         profile_name: &str,
@@ -363,20 +363,20 @@ impl DependencyGraph {
 
     fn compute_dependency_closure_hash(
         &self,
-        instance: &DependencyInstanceId,
+        instance: DependencyInstanceId,
         profile_name: &str,
         source_provider: &SourceProviderRegistry,
         package_registry: &dyn PackageRegistryAndProvider,
         visiting: &mut BTreeSet<DependencyInstanceId>,
     ) -> Result<Word, Report> {
-        if !visiting.insert(*instance) {
+        if !visiting.insert(instance) {
             return Err(Report::msg(format!(
                 "dependency cycle detected while computing source provenance for '{instance}'"
             )));
         }
 
         let outcome = (|| {
-            let node = self.dependency_graph.get(instance).ok_or_else(|| {
+            let node = self.dependency_graph.get(&instance).ok_or_else(|| {
                 Report::msg(format!("missing dependency graph node for '{instance}'"))
             })?;
             if node.dependencies.is_empty() {
@@ -387,7 +387,7 @@ impl DependencyGraph {
             for edge in &node.dependencies {
                 let mut material = dependency_edge_hash_input(edge)?;
                 let resolution = self.dependency_resolution_hash_input(
-                    &edge.dependency,
+                    edge.dependency,
                     profile_name,
                     source_provider,
                     package_registry,
@@ -400,19 +400,19 @@ impl DependencyGraph {
             hash_dependency_records(dependencies)
         })();
 
-        visiting.remove(instance);
+        visiting.remove(&instance);
         outcome
     }
 
     fn dependency_resolution_hash_input(
         &self,
-        instance: &DependencyInstanceId,
+        instance: DependencyInstanceId,
         profile_name: &str,
         source_provider: &SourceProviderRegistry,
         package_registry: &dyn PackageRegistryAndProvider,
         visiting: &mut BTreeSet<DependencyInstanceId>,
     ) -> Result<Vec<u8>, Report> {
-        let node = self.dependency_graph.get(instance).ok_or_else(|| {
+        let node = self.dependency_graph.get(&instance).ok_or_else(|| {
             Report::msg(format!("missing dependency graph node for '{instance}'"))
         })?;
 
@@ -636,7 +636,7 @@ mod tests {
         .unwrap();
         let hash = graph
             .compute_dependency_closure_hash(
-                graph.root(),
+                *graph.root(),
                 "release",
                 &SourceProviderRegistry::default(),
                 &registry,
@@ -654,7 +654,7 @@ mod tests {
         let (reverse_hash, reverse) = hash_dependencies(vec![right, left]);
         let left_instance = |graph: &DependencyGraph| {
             graph
-                .get(graph.root())
+                .get(*graph.root())
                 .unwrap()
                 .dependencies
                 .iter()
@@ -665,12 +665,12 @@ mod tests {
         assert_ne!(left_instance(&forward), left_instance(&reverse));
         assert_eq!(forward_hash, reverse_hash);
 
-        let root = forward.get(forward.root()).unwrap();
+        let root = forward.get(*forward.root()).unwrap();
         assert_eq!(root.dependencies.len(), 2);
         let instances = root
             .dependencies
             .iter()
-            .map(|edge| forward.get(&edge.dependency).unwrap())
+            .map(|edge| forward.get(edge.dependency).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(instances[0].name, instances[1].name);
         assert_ne!(instances[0].version, instances[1].version);
@@ -769,7 +769,7 @@ mod tests {
         let mut visiting = BTreeSet::from([*graph.root()]);
         let error = graph
             .compute_dependency_closure_hash(
-                graph.root(),
+                *graph.root(),
                 "release",
                 &SourceProviderRegistry::default(),
                 &TestRegistry::default(),

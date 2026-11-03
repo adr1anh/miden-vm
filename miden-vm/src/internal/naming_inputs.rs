@@ -601,7 +601,7 @@ mod tests {
             .with_namespace_plan(compilation.clone())
             .with_callable_binding(
                 SourcePathBuf::new("::client::hidden").unwrap().into(),
-                CallableBinding::new(private.clone(), canonical(&["helpers", "local"])).unwrap(),
+                CallableBinding::new(private, canonical(&["helpers", "local"])).unwrap(),
             )
             .unwrap()
             .with_callable_binding(
@@ -625,7 +625,7 @@ mod tests {
             let typed_home = NamespacePlan::new(vec![typed]);
             let path = write_document(
                 directory.path(),
-                &document(&[typed_home.clone()], source_choice(&typed_home, json!([]))),
+                &document(std::slice::from_ref(&typed_home), source_choice(&typed_home, json!([]))),
             );
             assert!(NamingInputs::read(&path, JSON_LIMIT).is_err());
             let (base, base_naming, homes) = fixture("private");
@@ -668,7 +668,8 @@ mod tests {
     fn rejects_unknown_missing_duplicate_fields_and_nonfinite_or_malformed_limits() {
         let directory = tempfile::tempdir().unwrap();
         let compilation = home("compilation");
-        let valid = document(&[compilation.clone()], source_choice(&compilation, json!([])));
+        let valid =
+            document(std::slice::from_ref(&compilation), source_choice(&compilation, json!([])));
         let mut cases = Vec::new();
         let mut missing = valid.clone();
         missing.as_object_mut().unwrap().remove("kernel");
@@ -704,8 +705,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let compilation = home("compilation");
         let binding = source_binding("::client::run", &compilation, &["canonical", "run"]);
-        let valid =
-            document(&[compilation.clone()], source_choice(&compilation, json!([binding.clone()])));
+        let valid = document(
+            std::slice::from_ref(&compilation),
+            source_choice(&compilation, json!([binding])),
+        );
         let mut cases = Vec::new();
         for envelope in ["", "0x0", "0xzz", "0x020000000000", "0x01020400000000000000"] {
             let mut invalid = valid.clone();
@@ -719,7 +722,7 @@ mod tests {
         empty_path["target"]["bindings"][0]["path"] = json!([]);
         cases.push(empty_path);
         let mut duplicate = valid.clone();
-        duplicate["target"]["bindings"] = json!([binding.clone(), binding.clone()]);
+        duplicate["target"]["bindings"] = json!([binding, binding]);
         cases.push(duplicate);
         let mut duplicate_key = valid.clone();
         let mut second = binding;
@@ -773,7 +776,7 @@ mod tests {
         bytes.push(0);
         fs::write(directory.path().join("chosen.bin"), bytes).unwrap();
         assert!(NamingInputs::read(&path, JSON_LIMIT).is_err());
-        fs::write(directory.path().join("chosen.bin"), [0u8; 65537]).unwrap();
+        fs::write(directory.path().join("chosen.bin"), vec![0u8; 65537]).unwrap();
         assert!(NamingInputs::read(&path, JSON_LIMIT).is_err());
     }
 }
