@@ -13,6 +13,7 @@ mod library_import;
 mod linkage;
 mod package;
 mod profile;
+mod source_mount;
 mod target;
 #[cfg(all(test, feature = "std", feature = "serde"))]
 mod tests;
@@ -43,6 +44,7 @@ pub use self::{
     linkage::Linkage,
     package::Package,
     profile::Profile,
+    source_mount::PackageSourceMount,
     target::{SourceNaming, SourceNamingConvention, Target},
     workspace::Workspace,
 };
