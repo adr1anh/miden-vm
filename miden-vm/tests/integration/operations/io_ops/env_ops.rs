@@ -1,7 +1,11 @@
+use miden_assembly::{
+    CallableBinding, Path,
+    package::{CallableProcedurePath, NamespacePlan},
+    testing::FixtureNamespace,
+};
 use miden_core::{
     FMP_INIT_VALUE,
-    mast::{BasicBlockNodeBuilder, CallNodeBuilder, MastForest, MastNode, MastNodeExt},
-    operations::Operation,
+    mast::{CallNodeBuilder, MastNode, MastNodeExt},
 };
 use miden_utils_testing::{MIN_STACK_DEPTH, Word, build_op_test, build_test};
 
@@ -181,30 +185,42 @@ fn caller() {
 
     let test = build_test!(program_source, &[1, 2, 3, 4, 5]).with_kernel(kernel_source);
 
-    // top 4 elements should be overwritten with the hash of `bar` procedure, but the 5th
+    // Top 4 elements should be overwritten with the canonical key of `bar`, but the 5th
     // element should remain untouched (position 4 in input [1,2,3,4,5] is 5)
+    let bar_key = CallableBinding::new(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        CallableProcedurePath::from_semantic_components(vec![Path::EXEC_PATH.into(), "bar".into()])
+            .unwrap(),
+    )
+    .unwrap()
+    .key()
+    .into_word();
+
+    // Independently rebuild bar's implementation from foo's root binding. The caller oracle
+    // remains its canonical key, even though the syscall implementation has a different digest.
     let bar_hash = build_bar_hash();
-    test.expect_stack(&[bar_hash[0], bar_hash[1], bar_hash[2], bar_hash[3], 5]);
+    let (program, ..) = test.compile().unwrap();
+    assert!(program.mast_forest().find_procedure_root(bar_hash).is_some());
+    assert_ne!(bar_key, bar_hash);
+    test.expect_stack(&[
+        bar_key[0].as_canonical_u64(),
+        bar_key[1].as_canonical_u64(),
+        bar_key[2].as_canonical_u64(),
+        bar_key[3].as_canonical_u64(),
+        5,
+    ]);
 
     test.check_constraints();
 }
 
-fn build_bar_hash() -> [u64; 4] {
-    let mut mast_forest = MastForest::new();
-
-    let foo_root_id = BasicBlockNodeBuilder::new(vec![Operation::Caller])
-        .add_to_forest(&mut mast_forest)
-        .unwrap();
-
-    let bar_root: MastNode =
-        CallNodeBuilder::new_syscall(foo_root_id).build(&mast_forest).unwrap().into();
-    let bar_hash: Word = bar_root.digest();
-    [
-        bar_hash[0].as_canonical_u64(),
-        bar_hash[1].as_canonical_u64(),
-        bar_hash[2].as_canonical_u64(),
-        bar_hash[3].as_canonical_u64(),
-    ]
+fn build_bar_hash() -> Word {
+    let foo_binding = CallableBinding::new(
+        NamespacePlan::new(vec![]),
+        CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
+    )
+    .unwrap();
+    let bar_root: MastNode = CallNodeBuilder::new_syscall(foo_binding.key()).build().into();
+    bar_root.digest()
 }
 
 // CLK INSTRUCTION

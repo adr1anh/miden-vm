@@ -1,12 +1,12 @@
 use std::sync::{Arc, Mutex};
 
-use miden_assembly::Assembler;
+use miden_assembly::{Assembler, DefaultSourceManager};
 use miden_processor::{
-    DefaultHost, ExecutionOptions, FastProcessor, Felt, ProcessorState, Program, StackInputs,
-    StackOutputs,
+    DefaultHost, ExecutionOptions, FastProcessor, Felt, ProcessorState, StackInputs, StackOutputs,
     advice::AdviceInputs,
     event::{EventName, SystemEvent, TraceError},
 };
+use miden_utils_testing::librarytree::assemble_fixture_program;
 
 use super::TestHost;
 
@@ -33,18 +33,18 @@ fn test_trace_event_handling() {
     end"
     );
 
-    let program: Program = Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
-    let mut host = TestHost::default();
+    let source_manager = Arc::new(DefaultSourceManager::default());
+    let named =
+        assemble_fixture_program(Assembler::new(source_manager.clone()), "program", source, &[]);
+    let mut host = TestHost::default().with_environment_source(named.environment.source());
+    host.source_manager = source_manager;
     FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
         ExecutionOptions::default(),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&program, &mut host)
+    .execute_sync(&named.program, named.environment.execution(), &mut host)
     .unwrap();
 
     assert_eq!(host.event_handler, vec![3000, 4000]);
@@ -65,20 +65,25 @@ fn trace_emit_program(trace_name: &str) -> String {
 #[test]
 fn test_unhandled_trace_does_not_raise_error() {
     let trace_name = "test::trace::unhandled";
-    let program: Program = Assembler::default()
-        .assemble_program("program", trace_emit_program(trace_name))
-        .unwrap()
-        .unwrap_program();
+    let source_manager = Arc::new(DefaultSourceManager::default());
+    let named = assemble_fixture_program(
+        Assembler::new(source_manager.clone()),
+        "program",
+        trace_emit_program(trace_name),
+        &[],
+    );
 
     // No trace handler is registered on this host.
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(named.environment.source());
     let output = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
         ExecutionOptions::default(),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&program, &mut host)
+    .execute_sync(&named.program, named.environment.execution(), &mut host)
     .expect("emitting an unhandled trace event must not abort execution");
 
     assert_eq!(output.stack, StackOutputs::default());
@@ -97,10 +102,9 @@ fn test_trace_handler_registry() {
         trace.event(\"{trace_name}\")
     end"
     );
-    let program: Program = Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
+    let source_manager = Arc::new(DefaultSourceManager::default());
+    let named =
+        assemble_fixture_program(Assembler::new(source_manager.clone()), "program", source, &[]);
 
     let recorded: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let recorder = {
@@ -111,7 +115,9 @@ fn test_trace_handler_registry() {
         }
     };
 
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(named.environment.source());
     host.register_trace_handler(EventName::new(trace_name), Arc::new(recorder))
         .unwrap();
 
@@ -121,7 +127,7 @@ fn test_trace_handler_registry() {
         ExecutionOptions::default(),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&program, &mut host)
+    .execute_sync(&named.program, named.environment.execution(), &mut host)
     .unwrap();
 
     let recorded = recorded.lock().unwrap();
@@ -135,19 +141,19 @@ fn test_trace_event_from_stack() {
     begin
         trace
     end";
-    let program: Program = Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
+    let source_manager = Arc::new(DefaultSourceManager::default());
+    let named =
+        assemble_fixture_program(Assembler::new(source_manager.clone()), "program", source, &[]);
 
-    let mut host = TestHost::default();
+    let mut host = TestHost::default().with_environment_source(named.environment.source());
+    host.source_manager = source_manager;
     let output = FastProcessor::new_with_options(
         StackInputs::new(&[Felt::from_u32(1000)]).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default(),
     )
     .unwrap()
-    .execute_sync(&program, &mut host)
+    .execute_sync(&named.program, named.environment.execution(), &mut host)
     .unwrap();
 
     assert_eq!(host.trace_handler, vec![1000]);
@@ -170,19 +176,19 @@ fn test_trace_event_manual_emit() {
         drop
     end"
     );
-    let program: Program = Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
+    let source_manager = Arc::new(DefaultSourceManager::default());
+    let named =
+        assemble_fixture_program(Assembler::new(source_manager.clone()), "program", source, &[]);
 
-    let mut host = TestHost::default();
+    let mut host = TestHost::default().with_environment_source(named.environment.source());
+    host.source_manager = source_manager;
     FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
         ExecutionOptions::default(),
     )
     .unwrap()
-    .execute_sync(&program, &mut host)
+    .execute_sync(&named.program, named.environment.execution(), &mut host)
     .unwrap();
 
     assert_eq!(host.trace_handler, vec![1000]);

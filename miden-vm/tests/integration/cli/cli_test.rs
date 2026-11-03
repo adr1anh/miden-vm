@@ -6,8 +6,13 @@ use std::{
 };
 
 use assert_cmd::prelude::*;
-use miden_assembly::{Assembler, DefaultSourceManager};
+use miden_assembly::{
+    Assembler, DefaultSourceManager,
+    ast::{Module, ModuleKind, Path as SourcePath},
+    testing::FixtureNamespace,
+};
 use miden_mast_package::Package;
+use miden_utils_testing::librarytree::assemble_fixture_program;
 use miden_wasm_event_handlers::{
     WasmHandlerLimits, section_from_module, test_append_manifest_section,
 };
@@ -35,9 +40,8 @@ fn advice_budget_is_checked_before_merkle_loading_in_run_and_prove() {
     let masm_path = working_dir.path().join("budget.masm");
     let masp_path = working_dir.path().join("budget.masp");
     fs::write(&masm_path, source).unwrap();
-    Assembler::default()
-        .assemble_program("budget", source)
-        .unwrap()
+    assemble_fixture_program(Assembler::default(), "budget", source, &[])
+        .package
         .write_to_file(&masp_path)
         .unwrap();
 
@@ -628,9 +632,35 @@ fn run_loads_a_masp_whose_kernel_shares_the_handler_section() {
     // The kernel carries the section before it is embedded, so the executable's kernel dependency
     // commits to the kernel package the CLI later reads back.
     let source_manager = Arc::new(DefaultSourceManager::default());
-    let kernel = Assembler::new(source_manager.clone())
-        .assemble_kernel_from_root("kernel", fixture("tests/integration/cli/data/kernel_main.masm"))
-        .expect("the kernel assembles");
+    let kernel_root = Module::parser(Some(ModuleKind::Kernel))
+        .parse_file(
+            Some(SourcePath::KERNEL),
+            fixture("tests/integration/cli/data/kernel_main.masm"),
+            source_manager.clone(),
+        )
+        .expect("kernel source parses");
+    let kernel_lib = Module::parser(Some(ModuleKind::Library))
+        .parse_file(
+            Some(SourcePath::new("::$kernel::lib")),
+            fixture("tests/integration/cli/data/lib/mod.masm"),
+            source_manager.clone(),
+        )
+        .expect("kernel support source parses");
+    let assembler = Assembler::new(source_manager.clone());
+    let mut names = FixtureNamespace::assembly_tests();
+    names.add_kernel_modules(&assembler, &[&kernel_root, &kernel_lib]).unwrap();
+    let product = names
+        .configure(assembler, [&*kernel_root, &*kernel_lib])
+        .unwrap()
+        .assemble_library_modules(
+            "kernel".into(),
+            kernel_root,
+            [kernel_lib],
+            miden_mast_package::TargetType::Kernel,
+        )
+        .expect("the kernel assembles with explicit naming");
+    let kernel_naming = Arc::new(product.naming().clone());
+    let kernel = product.into_artifact(true).unwrap();
     let kernel = Arc::new(
         kernel
             .with_event_handlers(&section)
@@ -639,10 +669,11 @@ fn run_loads_a_masp_whose_kernel_shares_the_handler_section() {
 
     // Assembling against the kernel package embeds it and records the matching kernel dependency,
     // the way a project build does.
-    let mut package = Assembler::with_kernel(source_manager, kernel)
-        .expect("the assembler takes the kernel package")
-        .assemble_program("program", "begin push.1 drop end")
-        .expect("the program assembles");
+    let assembler = Assembler::with_kernel(source_manager, kernel, kernel_naming.clone())
+        .expect("the assembler takes the kernel package");
+    let named =
+        assemble_fixture_program(assembler, "program", "begin push.1 drop end", &[&kernel_naming]);
+    let mut package = named.package.as_ref().clone();
     package
         .attach_event_handlers(&section)
         .expect("the executable package takes the section");

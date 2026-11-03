@@ -1,13 +1,39 @@
 use alloc::sync::Arc;
 
-use miden_assembly::{Assembler, DefaultSourceManager, PathBuf, Report, ast::ModuleKind};
+use miden_assembly::{
+    Assembler, DefaultSourceManager, Parse, PathBuf, Report, ast::ModuleKind,
+    testing::FixtureNamespace,
+};
+use miden_core::program::ProcedureKey;
 use miden_core_lib::CoreLibrary;
+use miden_mast_package::{CallableProcedurePath, TargetType};
 use miden_processor::{
-    ExecutionError, Word,
+    ExecutionError,
     operation::{BinaryValueErrorContext, OperationError},
 };
-use miden_utils_testing::{build_debug_test, build_test, expect_exec_error_matches, push_inputs};
+use miden_utils_testing::{
+    Test, build_debug_test, build_test, expect_exec_error_matches,
+    librarytree::assemble_fixture_program, push_inputs,
+};
 use miden_vm::Module;
+
+/// Derives the expected identity from the fixture owner's declared home/path, independently of
+/// code digests, forest ordering, or the processor's observed stack outputs.
+fn fixture_procedure_key(test: &Test, procedure: &str) -> ProcedureKey {
+    let module = test
+        .source
+        .clone()
+        .parse(false, test.source_manager.clone())
+        .expect("test source must parse in its original source manager");
+    let mut fixture = FixtureNamespace::assembly_tests();
+    fixture
+        .add_module(&module)
+        .expect("test procedures must have canonical local bindings");
+    fixture
+        .binding(&module.path().join(procedure))
+        .expect("expected local procedure must have a fixture binding")
+        .key()
+}
 
 // SIMPLE FLOW CONTROL TESTS
 // ================================================================================================
@@ -470,33 +496,30 @@ fn simple_dyn_exec() {
             # move the first result of foo out of the way
             movdn.4
 
-            # use dynexec to call foo again via its hash, which is stored at memory location 40
+            # use dynexec to call foo again via its key, which is stored at memory location 40
             mem_storew_le.40 dropw
             push.40
             dynexec
         end";
 
-    // Compute the hash of foo by assembling the program
-    let context = miden_assembly::testing::TestContext::new();
-    let program = context.assemble(program_source).unwrap();
-    let procedure_digests: Vec<Word> = program.mast_forest().procedure_digests().collect();
-    let foo_digest = procedure_digests[0];
+    let test = build_debug_test!(program_source);
+    let foo_key = fixture_procedure_key(&test, "foo").into_word();
 
-    // Build stack inputs with foo's digest.
+    // Build stack inputs with foo's independently derived callable key.
     // We want the stack after call.foo + movdn.4 to be:
-    //   [digest[0], digest[1], digest[2], digest[3], 3, 3, ...]
-    // where digest[0] is on top.
+    //   [key[0], key[1], key[2], key[3], 3, 3, ...]
+    // where key[0] is on top.
     let stack_init: [u64; 7] = [
         2,
         1,
-        foo_digest[0].as_canonical_u64(),
-        foo_digest[1].as_canonical_u64(),
-        foo_digest[2].as_canonical_u64(),
-        foo_digest[3].as_canonical_u64(),
+        foo_key[0].as_canonical_u64(),
+        foo_key[1].as_canonical_u64(),
+        foo_key[2].as_canonical_u64(),
+        foo_key[3].as_canonical_u64(),
         3,
     ];
 
-    let test = build_debug_test!(program_source).with_stack_inputs(stack_init);
+    let test = test.with_stack_inputs(stack_init);
 
     test.expect_stack(&[6]);
 
@@ -527,8 +550,9 @@ fn dynexec_with_procref() {
         swap drop
     end";
 
+    let core_lib = CoreLibrary::default();
     let test = build_test!(program_source, &[])
-        .with_library(CoreLibrary::default().package())
+        .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
         .with_module(
             "external::module",
             "\
@@ -564,7 +588,7 @@ fn simple_dyncall() {
             # move the first result of foo out of the way
             movdn.4
 
-            # use dyncall to call foo again via its hash, which is on the stack
+            # use dyncall to call foo again via its key, which is on the stack
             mem_storew_le.40 dropw
             push.40
             dyncall
@@ -572,26 +596,23 @@ fn simple_dyncall() {
             swapw dropw
         end";
 
-    // Compute the hash of foo by assembling the program
-    let context = miden_assembly::testing::TestContext::new();
-    let program = context.assemble(program_source).unwrap();
-    let procedure_digests: Vec<Word> = program.mast_forest().procedure_digests().collect();
-    let foo_digest = procedure_digests[0];
+    let test = build_test!(program_source);
+    let foo_key = fixture_procedure_key(&test, "foo").into_word();
 
     let stack_init: [u64; 7] = [
         2,
         1,
-        foo_digest[0].as_canonical_u64(),
-        foo_digest[1].as_canonical_u64(),
-        foo_digest[2].as_canonical_u64(),
-        foo_digest[3].as_canonical_u64(),
+        foo_key[0].as_canonical_u64(),
+        foo_key[1].as_canonical_u64(),
+        foo_key[2].as_canonical_u64(),
+        foo_key[3].as_canonical_u64(),
         3,
     ];
 
     let core_lib = CoreLibrary::default();
-    let test = build_test!(program_source)
+    let test = test
         .with_stack_inputs(stack_init)
-        .with_library(core_lib.package())
+        .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
         .with_event_handlers(core_lib.handlers());
 
     test.expect_stack(&[6]);
@@ -600,7 +621,7 @@ fn simple_dyncall() {
 }
 
 /// Calls `bar` dynamically, which issues a syscall. We ensure that the `caller` instruction in the
-/// kernel procedure correctly returns the hash of `bar`.
+/// kernel procedure correctly returns the requested callable key of `bar`.
 ///
 /// We also populate the stack before `dyncall` to ensure that stack depth is properly restored
 /// after `dyncall`.
@@ -631,20 +652,15 @@ fn dyncall_with_syscall_and_caller() {
 
     let test = build_debug_test!(program_source).with_kernel(kernel_source);
 
-    // Compile to get the hash of `bar`
-    let (program, _kernel, _debug_info) = test.compile().unwrap();
-    let procedure_digests: Vec<Word> = program.mast_forest().procedure_digests().collect();
-    // bar is the first procedure root in the forest (index 0)
-    let bar_digest = procedure_digests[0];
+    let bar_key = fixture_procedure_key(&test, "bar").into_word();
 
-    // The `caller` instruction returns the hash of bar with digest[0] on top.
-    // The Word from procedure_digests stores elements in BE order (word[0] = high),
-    // so we need to reverse when comparing to stack output (word[3] on top).
+    // SYSCALL preserves the principal established by the dynamic call to bar. CALLER pushes
+    // that requested key with element[0] on top, followed by the caller's original stack.
     test.expect_stack(&[
-        bar_digest[0].as_canonical_u64(),
-        bar_digest[1].as_canonical_u64(),
-        bar_digest[2].as_canonical_u64(),
-        bar_digest[3].as_canonical_u64(),
+        bar_key[0].as_canonical_u64(),
+        bar_key[1].as_canonical_u64(),
+        bar_key[2].as_canonical_u64(),
+        bar_key[3].as_canonical_u64(),
         4,
         3,
         2,
@@ -670,27 +686,34 @@ fn procref() -> Result<(), Report> {
     end
     ";
 
-    // obtain procedures' MAST roots by compiling them as module
-    let mast_roots: Vec<Word> = {
+    let core_lib = CoreLibrary::default();
+    let (library, library_naming, module_foo_key) = {
         let source_manager = Arc::new(DefaultSourceManager::default());
         let module_path = PathBuf::new("test::foo").unwrap();
         let mut parser = Module::parser(Some(ModuleKind::Library));
         let module =
             parser.parse_str(Some(module_path.as_path()), module_source, source_manager.clone())?;
-        let library = Assembler::new(source_manager)
-            .with_package(CoreLibrary::default().package(), miden_assembly::Linkage::Dynamic)
+        let mut fixture = FixtureNamespace::assembly_tests();
+        fixture.add_module(&module)?;
+        let module_foo_key = fixture.binding(&module.path().join("foo")).unwrap().key();
+        let assembler = fixture.configure(Assembler::new(source_manager), [&*module])?;
+        let product = assembler
+            .with_package(
+                core_lib.package(),
+                miden_assembly::Linkage::Dynamic,
+                core_lib.naming().clone(),
+            )
             .unwrap()
-            .assemble_library("test", module, None::<Box<Module>>)
-            .unwrap();
-
-        let module_descriptor = library.module_descriptors().next().unwrap();
-
-        module_descriptor.procedure_digests().collect()
+            .assemble_library_modules("test".into(), module, [], TargetType::Library)?;
+        let naming = Arc::new(product.naming().clone());
+        let package: Arc<miden_mast_package::Package> = Arc::from(product.into_artifact(true)?);
+        (package, naming, module_foo_key)
     };
 
     let source = "
     use miden::core::math::u64
     use miden::core::sys
+    use test::foo as reexported
 
     @locals(4)
     proc foo
@@ -698,31 +721,86 @@ fn procref() -> Result<(), Report> {
     end
 
     begin
+        # A public reexport preserves the exact Core defining key.
         procref.u64::overflowing_add
+        procref.reexported::overflowing_add
+        assert_eqw
+
+        procref.reexported::overflowing_add
+        procref.reexported::foo
         push.0
         procref.foo
 
         exec.sys::truncate_stack
     end";
 
-    let core_lib = CoreLibrary::default();
     let test = build_test!(source, &[])
-        .with_library(core_lib.package())
+        .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
+        .with_library_and_naming(library.clone(), library_naming.clone())
         .with_event_handlers(core_lib.handlers());
 
-    // procref pushes element[0] on top
-    // Word from procedure_digests stores elements in BE order (word[0] = high)
-    // So we need to reverse when comparing to stack output
+    let local_foo_key = fixture_procedure_key(&test, "foo");
+    let core_path = CallableProcedurePath::from_semantic_components(
+        ["miden", "core", "math", "u64", "overflowing_add"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+    )
+    .unwrap();
+    let core_key = core_lib.naming().callables().key_for_visible_path(&core_path).unwrap();
+    let reexport_path = CallableProcedurePath::from_semantic_components(
+        ["test", "foo", "overflowing_add"].into_iter().map(String::from).collect(),
+    )
+    .unwrap();
+    assert_eq!(library_naming.callables().key_for_visible_path(&reexport_path), Some(core_key));
+    assert_ne!(
+        module_foo_key, local_foo_key,
+        "distinct defining paths must retain distinct keys"
+    );
+
+    // Equal bodies do not merge the independently declared module and program identities.
+    let named = assemble_fixture_program(
+        Assembler::new(test.source_manager.clone())
+            .with_package(
+                core_lib.package(),
+                miden_assembly::Linkage::Dynamic,
+                core_lib.naming().clone(),
+            )?
+            .with_package(library, miden_assembly::Linkage::Dynamic, library_naming.clone())?,
+        "procref_identities",
+        test.source.clone(),
+        &[core_lib.naming().as_ref(), library_naming.as_ref()],
+    );
+    assert_eq!(
+        named
+            .naming
+            .callables()
+            .selected_implementation(local_foo_key)
+            .expect("local foo must retain its implementation"),
+        library_naming
+            .callables()
+            .selected_implementation(module_foo_key)
+            .expect("module foo must retain its implementation"),
+    );
+
+    let local_foo = local_foo_key.into_word();
+    let module_foo = module_foo_key.into_word();
+    let core = core_key.into_word();
+    // PROCREF pushes key element[0] on top. Check both equal-body identities and the reexport.
     test.expect_stack(&[
-        mast_roots[0][0].as_canonical_u64(),
-        mast_roots[0][1].as_canonical_u64(),
-        mast_roots[0][2].as_canonical_u64(),
-        mast_roots[0][3].as_canonical_u64(),
+        local_foo[0].as_canonical_u64(),
+        local_foo[1].as_canonical_u64(),
+        local_foo[2].as_canonical_u64(),
+        local_foo[3].as_canonical_u64(),
         0,
-        mast_roots[1][0].as_canonical_u64(),
-        mast_roots[1][1].as_canonical_u64(),
-        mast_roots[1][2].as_canonical_u64(),
-        mast_roots[1][3].as_canonical_u64(),
+        module_foo[0].as_canonical_u64(),
+        module_foo[1].as_canonical_u64(),
+        module_foo[2].as_canonical_u64(),
+        module_foo[3].as_canonical_u64(),
+        core[0].as_canonical_u64(),
+        core[1].as_canonical_u64(),
+        core[2].as_canonical_u64(),
+        core[3].as_canonical_u64(),
     ]);
 
     test.check_constraints();
