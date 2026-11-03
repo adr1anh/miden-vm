@@ -12,10 +12,12 @@ use miden_assembly_syntax::{
 use miden_core::{
     mast::{BasicBlockNodeBuilder, DenseMastForestBuilder, MastNodeExt, MastNodeId},
     operations::Operation,
+    program::{CanonicalLabel, ImplementationRoot},
     serde::{Deserializable, Serializable},
 };
 use miden_mast_package::{
-    Package, PackageExport, PackageId, ProcedureExport, Section, SectionId, TargetType,
+    CallableBinding, CallableProcedurePath, NamespacePlan, Package, PackageCallables,
+    PackageExport, PackageId, PackageNaming, ProcedureExport, Section, SectionId, TargetType,
     debug_info::{
         DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, PackageDebugInfo,
         PackageDebugInfoBuilder,
@@ -48,6 +50,23 @@ fn package_bytes(with_debug_info: bool) -> Vec<u8> {
         forest[node_id].digest(),
         Some(signature),
     );
+    let path =
+        CallableProcedurePath::from_semantic_components(vec!["bench".into(), "deserialize".into()])
+            .unwrap();
+    let home =
+        NamespacePlan::new(vec![CanonicalLabel::text("package-benchmark-fixtures").unwrap()]);
+    let binding = CallableBinding::new(home.clone(), path.clone()).unwrap();
+    let naming = PackageNaming::new(
+        home,
+        PackageCallables::new(
+            [binding.clone()],
+            [(path, binding.key())],
+            [(binding.key(), ImplementationRoot::new(export.digest))],
+        )
+        .unwrap(),
+        None,
+    )
+    .unwrap();
     let mut package = Package::create(
         PackageId::from("benchmark_pkg"),
         Version::new(0, 0, 0),
@@ -55,6 +74,7 @@ fn package_bytes(with_debug_info: bool) -> Vec<u8> {
         Arc::new(forest),
         vec![PackageExport::Procedure(export)],
         None,
+        &naming,
     )
     .expect("benchmark package should be valid");
 

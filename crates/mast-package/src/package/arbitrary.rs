@@ -2,6 +2,89 @@ use alloc::vec;
 
 use super::*;
 
+/// Explicit naming convention for tests and generated fixtures, never publication authority.
+///
+/// The fixture owner supplies the complete home. Visible source paths are deliberately chosen
+/// as canonical fixture names; kernel exports instead receive distinct flat Text names at N0.
+/// Unexported retained roots get child helper names indexed independently of their code digests.
+/// Invalid export paths are left for the package constructor's manifest validation to reject.
+pub fn fixture_naming(
+    home: crate::NamespacePlan,
+    kind: TargetType,
+    mast: &MastForest,
+    exports: &[PackageExport],
+) -> PackageNaming {
+    use alloc::collections::BTreeSet;
+    use core::fmt::Write;
+
+    use miden_core::program::ImplementationRoot;
+
+    use crate::{CallableBinding, CallableProcedurePath, NamespacePlan};
+
+    let mut bindings = Vec::new();
+    let mut visible = Vec::new();
+    let mut selections = Vec::new();
+    let mut selected = BTreeSet::new();
+    let mut seen_paths = BTreeSet::new();
+    let mut entry = None;
+    for export in exports.iter().filter_map(PackageExport::as_procedure) {
+        let Ok(path) = super::naming::callable_path_from_manifest(&export.path) else {
+            continue;
+        };
+        if !seen_paths.insert(path.clone()) {
+            // Duplicate-path negative fixtures must reach manifest validation unchanged.
+            continue;
+        }
+        let (binding_home, canonical) = if kind == TargetType::Kernel {
+            let normalized = export.path.canonicalize().expect("validated fixture path");
+            // Hex keeps quotes/separators as data in one valid, collision-free fixture label.
+            let mut label = String::from("export_");
+            for byte in normalized.as_str().as_bytes() {
+                write!(&mut label, "{byte:02x}").expect("fixture label formatting");
+            }
+            (
+                NamespacePlan::new(vec![]),
+                CallableProcedurePath::from_semantic_components(vec![label])
+                    .expect("flat fixture export name"),
+            )
+        } else {
+            (home.clone(), path.clone())
+        };
+        let binding = CallableBinding::new(binding_home, canonical).expect("fixture binding");
+        let key = binding.key();
+        if kind.is_executable()
+            && export
+                .path
+                .last()
+                .is_some_and(|name| name == ast::ProcedureName::MAIN_PROC_NAME)
+        {
+            entry = Some(key);
+        }
+        let implementation = ImplementationRoot::new(export.digest);
+        bindings.push(binding);
+        visible.push((path, key));
+        selections.push((key, implementation));
+        selected.insert(implementation);
+    }
+    for (index, &root) in mast.procedure_roots().iter().enumerate() {
+        let implementation = ImplementationRoot::new(mast[root].digest());
+        if selected.insert(implementation) {
+            let canonical = CallableProcedurePath::from_semantic_components(vec![
+                "__fixture_helpers".into(),
+                index.to_string(),
+            ])
+            .expect("fixture helper path");
+            // Even a caller's explicit N0 home keeps these fixture helpers under a child Env.
+            let binding = CallableBinding::new(home.clone(), canonical).expect("fixture helper");
+            selections.push((binding.key(), implementation));
+            bindings.push(binding);
+        }
+    }
+    let callables =
+        PackageCallables::new(bindings, visible, selections).expect("fixture inventory");
+    PackageNaming::new(home, callables, entry).expect("fixture naming")
+}
+
 impl Package {
     pub fn generate(
         name: PackageId,
@@ -121,6 +204,11 @@ impl proptest::arbitrary::Arbitrary for Package {
                 };
 
                 let mast_forest = Arc::new(mast_forest);
+                let home = crate::NamespacePlan::new(vec![
+                    miden_core::program::CanonicalLabel::text("arbitrary-package-fixtures")
+                        .expect("fixture home"),
+                ]);
+                let naming = fixture_naming(home, kind, &mast_forest, &exports);
                 Package::create(
                     name.clone(),
                     version.clone(),
@@ -128,6 +216,7 @@ impl proptest::arbitrary::Arbitrary for Package {
                     mast_forest,
                     exports,
                     dependencies.clone(),
+                    &naming,
                 )
                 .expect("invalid package")
             })

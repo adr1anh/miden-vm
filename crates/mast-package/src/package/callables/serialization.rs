@@ -283,7 +283,7 @@ pub(crate) fn preflight_v1_decoding<'a, E>(
     Ok(DecodingPlan { bytes: &start[..length] })
 }
 
-impl DecodingPlan<'_> {
+impl<'a> DecodingPlan<'a> {
     /// Runs actual label/home policy only after the enclosing operation's complete preflight.
     /// `budget` is used for the wire bound only; every aggregate resource was already charged.
     pub(crate) fn decode<P: HomeProfile + ?Sized>(
@@ -292,6 +292,16 @@ impl DecodingPlan<'_> {
         context: &P::Context,
         budget: &Budget,
     ) -> Result<PackageCallables, CallablesCodecError<P::Error>> {
+        self.prepare::<P::Error>(budget)?.decode(profile, context, budget)
+    }
+
+    /// Prepares bounded paths and borrowed homes, validating all references without callbacks.
+    /// Enclosing operations can check their own references before any home policy is invoked.
+    /// The entire enclosing resource/layout/wire preflight must already have completed.
+    pub(crate) fn prepare<E>(
+        &self,
+        budget: &Budget,
+    ) -> Result<PreparedCallables<'a>, CallablesCodecError<E>> {
         let mut reader = Reader::new(self.bytes, budget)?;
         reader.u8("PackageCallablesV1 version")?;
         let count = reader.u32("callable binding count")? as usize;
@@ -329,6 +339,31 @@ impl DecodingPlan<'_> {
             selections.push((key, implementation));
         }
         reader.finish("PackageCallablesV1")?;
+        Ok(PreparedCallables { borrowed_bindings, visible, selections })
+    }
+}
+
+/// Bounded decoded paths and validated references, retaining home envelopes without authority.
+pub(crate) struct PreparedCallables<'a> {
+    borrowed_bindings: Vec<(ProcedureKey, &'a [u8], CallableProcedurePath)>,
+    visible: Vec<(CallableProcedurePath, ProcedureKey)>,
+    selections: Vec<(ProcedureKey, ImplementationRoot)>,
+}
+
+impl PreparedCallables<'_> {
+    pub(crate) fn contains_binding_key(&self, key: ProcedureKey) -> bool {
+        declares_key(&self.borrowed_bindings, key)
+    }
+
+    /// Applies actual label/home policy after all enclosing references have been checked.
+    /// Resources were charged by the first scan and are not charged again here.
+    pub(crate) fn decode<P: HomeProfile + ?Sized>(
+        self,
+        profile: &P,
+        context: &P::Context,
+        budget: &Budget,
+    ) -> Result<PackageCallables, CallablesCodecError<P::Error>> {
+        let Self { borrowed_bindings, visible, selections } = self;
         let mut bindings = Vec::new();
         reserve(&mut bindings, borrowed_bindings.len(), "callable bindings")?;
         for (stored, bytes, path) in borrowed_bindings {

@@ -4,7 +4,7 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-use core::fmt;
+use core::{convert::Infallible, fmt};
 
 use miden_assembly_syntax::ast::{
     self, AttributeSet, Path,
@@ -17,6 +17,7 @@ use miden_core::{Word, mast::MastNodeId, utils::DisplayHex};
 use proptest::prelude::{Strategy, any};
 use thiserror::Error;
 
+use super::{NamingCodecError, PackageNamingError};
 use crate::{Dependency, PackageId, debug_info::DebugSourceNodeId};
 
 // PACKAGE MANIFEST
@@ -65,6 +66,12 @@ pub struct PackageManifest {
 
 #[derive(Debug, Error)]
 pub enum ManifestValidationError {
+    #[error(transparent)]
+    InvalidNaming(#[from] PackageNamingError),
+    #[error(transparent)]
+    NamingTransport(#[from] NamingCodecError<Infallible>),
+    #[error("canonical naming does not match the package's required naming transport")]
+    MismatchedNamingTransport,
     #[error("duplicate export path '{0}' in package manifest")]
     DuplicateExport(Arc<Path>),
     #[error("duplicate module path '{0}' in package manifest")]

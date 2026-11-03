@@ -37,9 +37,10 @@ pub use self::{
     package::{
         CallablesCodecError, ConstantExport, EventHandlerManifestEntry, EventHandlerSection,
         EventHandlerSectionError, InvalidSectionIdError, InvalidTargetTypeError, MAX_HANDLERS,
-        MAX_MODULE_BYTES, MAX_NAME_BYTES, MIN_ABI_VERSION, ManifestValidationError, Package,
-        PackageCallables, PackageCallablesError, PackageDebugInfoError, PackageExport, PackageId,
-        PackageManifest, PackageModule, PackageStripError, PackageSubmodule, ProcedureExport,
-        Section, SectionId, TargetType, TypeExport, validate_manifest_entries,
+        MAX_MODULE_BYTES, MAX_NAME_BYTES, MIN_ABI_VERSION, ManifestValidationError,
+        NamingCodecError, Package, PackageCallables, PackageCallablesError, PackageDebugInfoError,
+        PackageExport, PackageId, PackageManifest, PackageModule, PackageNaming,
+        PackageNamingError, PackageStripError, PackageSubmodule, ProcedureExport, Section,
+        SectionId, TargetType, TypeExport, UnverifiedPackageNaming, validate_manifest_entries,
     },
 };

@@ -5,6 +5,7 @@ mod error;
 mod event_handlers;
 mod id;
 mod manifest;
+mod naming;
 mod section;
 #[cfg(test)]
 mod seed_gen;
@@ -49,6 +50,7 @@ pub use self::{
         ConstantExport, ManifestValidationError, PackageExport, PackageManifest, PackageModule,
         PackageSubmodule, ProcedureExport, TypeExport,
     },
+    naming::{NamingCodecError, PackageNaming, PackageNamingError, UnverifiedPackageNaming},
     section::{InvalidSectionIdError, Section, SectionId},
     target_type::{InvalidTargetTypeError, TargetType},
 };
@@ -58,8 +60,14 @@ use crate::{
         DebugFunctionIdx, DebugFunctionInfo, DebugSourceNode, DebugSourceNodeId, DebugStringIdx,
         DebugTypeIdx, DebugTypeInfo, PackageDebugInfo,
     },
+    interface::serialization::{CodecLimits, HomeProfile},
     serde_helpers::{PayloadError, read_payload_with_budget},
 };
+
+/// Wire representability bounds for owned generic naming transport, without profile admission.
+/// Caller-selected limits remain mandatory for every explicit naming admission operation.
+pub(crate) const FORMAT_NAMING_LIMITS: CodecLimits =
+    CodecLimits::new(u32::MAX, u32::MAX, u32::MAX, u32::MAX);
 
 // PACKAGE
 // ================================================================================================
@@ -70,6 +78,7 @@ use crate::{
 /// * The type of target the package represents, e.g. a library or executable
 /// * A manifest describing the contents of the package, see [PackageManifest] for more details.
 /// * A [MastForest] corresponding to the assembled target
+/// * Required opaque naming transport, admitted only with explicit current home policy
 /// * One or more custom sections containing metadata produced by the assembler or other tools which
 ///   is relevant to the package, e.g. debug symbols.
 ///
@@ -97,6 +106,8 @@ pub struct Package {
     /// The package manifest, containing the set of exported procedures and their signatures,
     /// if known.
     pub manifest: PackageManifest,
+    /// Required naming transport. Possession of a package does not admit canonical homes or keys.
+    naming: UnverifiedPackageNaming,
     /// The set of custom sections included with the package, e.g. debug information, account
     /// metadata, etc.
     pub sections: Vec<Section>,
@@ -155,12 +166,15 @@ impl<'a> PackageCommitment<'a> {
 
     fn dependency_commitment(&self) -> Word {
         let mut bytes = Vec::new();
-        bytes.write_bytes(b"miden.package.dependency.v1");
+        bytes.write_bytes(b"miden.package.dependency.v2");
         self.code_commitment().write_into(&mut bytes);
         self.package.name.write_into(&mut bytes);
         self.package.version.to_string().write_into(&mut bytes);
         bytes.write_u8(self.package.kind.into());
         self.package.manifest.write_into(&mut bytes);
+        let naming = self.package.naming.as_bytes();
+        bytes.write_usize(naming.len());
+        bytes.write_bytes(naming);
         self.write_dependency_commitment_sections(&mut bytes);
         hasher::hash(&bytes)
     }
@@ -190,7 +204,7 @@ impl<'a> PackageCommitment<'a> {
 
     fn artifacts_commitment(&self) -> Word {
         let mut bytes = Vec::new();
-        bytes.write_bytes(b"miden.package.artifacts.v1");
+        bytes.write_bytes(b"miden.package.artifacts.v2");
         self.package.write_header_into(&mut bytes);
         self.package.write_trailer_into(&mut bytes);
         hasher::hash(&bytes)
@@ -198,7 +212,7 @@ impl<'a> PackageCommitment<'a> {
 
     fn commitment(&self) -> Word {
         Self::merge_commitments(
-            b"miden.package.v1",
+            b"miden.package.v2",
             self.code_commitment(),
             self.artifacts_commitment(),
         )
@@ -215,7 +229,10 @@ impl<'a> PackageCommitment<'a> {
 
 /// Construction
 impl Package {
-    /// Construct a [Package] from its essential component parts
+    /// Construct a [Package] from its essential component parts and required naming metadata.
+    ///
+    /// The borrowed naming is checked structurally and retained as opaque transport. This does
+    /// not admit its homes under a profile; callers use [`Self::admit_naming`] with current policy.
     pub fn create(
         name: PackageId,
         version: Version,
@@ -223,11 +240,13 @@ impl Package {
         mast: Arc<MastForest>,
         exports: impl IntoIterator<Item = PackageExport>,
         dependencies: impl IntoIterator<Item = Dependency>,
+        naming: &PackageNaming,
     ) -> Result<Self, ManifestValidationError> {
-        Self::create_with_modules(name, version, kind, mast, exports, [], dependencies)
+        Self::create_with_modules(name, version, kind, mast, exports, [], dependencies, naming)
     }
 
     /// Construct a [Package] from its essential component parts and module surface metadata.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_with_modules(
         name: PackageId,
         version: Version,
@@ -236,6 +255,7 @@ impl Package {
         exports: impl IntoIterator<Item = PackageExport>,
         modules: impl IntoIterator<Item = PackageModule>,
         dependencies: impl IntoIterator<Item = Dependency>,
+        naming: &PackageNaming,
     ) -> Result<Self, ManifestValidationError> {
         let manifest = PackageManifest::new(exports)?
             .with_modules(modules)?
@@ -253,6 +273,18 @@ impl Package {
             }
         }
 
+        Self::validate_code_parts(kind, &mast, &manifest)?;
+        for procedure in manifest.exports().filter_map(PackageExport::as_procedure) {
+            if procedure.node.is_none() && mast.find_procedure_root(procedure.digest).is_none() {
+                return Err(ManifestValidationError::MissingProcedureMast {
+                    path: procedure.path.clone(),
+                    digest: procedure.digest,
+                });
+            }
+        }
+        naming.validate_package(kind, &mast, &manifest)?;
+        let naming = UnverifiedPackageNaming::from_owned(naming, FORMAT_NAMING_LIMITS)?;
+
         let package = Self {
             name,
             version,
@@ -260,6 +292,7 @@ impl Package {
             kind,
             mast,
             manifest,
+            naming,
             sections: Vec::new(),
             debug_sections_trusted: true,
         };
@@ -273,7 +306,15 @@ impl Package {
     /// Validates required code-package structure independently from public exports and reader
     /// trust. This does not grant an execution binding or infer an executable entrypoint.
     fn validate_code_structure(&self) -> Result<(), ManifestValidationError> {
-        if self.manifest.entrypoint().is_some() && !self.kind.is_executable() {
+        Self::validate_code_parts(self.kind, &self.mast, &self.manifest)
+    }
+
+    fn validate_code_parts(
+        kind: TargetType,
+        mast: &MastForest,
+        manifest: &PackageManifest,
+    ) -> Result<(), ManifestValidationError> {
+        if manifest.entrypoint().is_some() && !kind.is_executable() {
             return Err(ManifestValidationError::NonExecutableEntrypoint);
         }
 
@@ -281,7 +322,7 @@ impl Package {
         // bodies or explicit External(D) references; neither form grants execution authority or
         // establishes that the referenced code is available. Declaration metadata alone does not
         // supply a root.
-        if self.mast.procedure_roots().is_empty() {
+        if mast.procedure_roots().is_empty() {
             return Err(ManifestValidationError::NoProcedures);
         }
 
@@ -345,7 +386,41 @@ impl Package {
         &self.mast
     }
 
-    /// Returns the commitment to the exported procedure roots used by the linker.
+    /// Returns required opaque naming bytes without admitting their homes or callable identities.
+    pub fn naming_transport(&self) -> &UnverifiedPackageNaming {
+        &self.naming
+    }
+
+    /// Checks already owned canonical metadata against this package and its exact transport.
+    ///
+    /// This integrity check does not admit a home under a selected profile. Callers reading raw
+    /// packages must first obtain naming through [`Self::admit_naming`] with explicit policy;
+    /// compilers may retain the canonical metadata used when constructing the package.
+    pub fn check_naming(&self, naming: &PackageNaming) -> Result<(), ManifestValidationError> {
+        naming.validate_package(self.kind, &self.mast, &self.manifest)?;
+        let encoded = UnverifiedPackageNaming::from_owned(naming, FORMAT_NAMING_LIMITS)?;
+        if encoded.as_bytes() != self.naming.as_bytes() {
+            return Err(ManifestValidationError::MismatchedNamingTransport);
+        }
+        Ok(())
+    }
+
+    /// Admits naming using current explicit policy, context and resource limits.
+    ///
+    /// This checks the decoded naming against this package's current target, manifest and code.
+    /// Success retains no validation state and grants no environment or publication authority.
+    pub fn admit_naming<P: HomeProfile + ?Sized>(
+        &self,
+        profile: &P,
+        context: &P::Context,
+        limits: CodecLimits,
+    ) -> Result<PackageNaming, NamingCodecError<P::Error>> {
+        let naming = self.naming.decode(profile, context, limits)?;
+        naming.validate_package(self.kind, &self.mast, &self.manifest)?;
+        Ok(naming)
+    }
+
+    /// Returns the commitment to the package's exported procedure roots.
     pub fn interface_commitment(&self) -> Result<Word, ManifestValidationError> {
         PackageCommitment::new(self).interface_commitment()
     }
@@ -366,19 +441,20 @@ impl Package {
 
     /// Returns the commitment used to identify this package during dependency resolution.
     ///
-    /// This binds the package code, identity, manifest, and sections which affect package use
+    /// This v2 commitment binds the exact required naming transport, package code, identity,
+    /// manifest, and sections which affect package use
     /// (account component metadata and event handlers). Optional debug data, descriptions, and
     /// opaque custom sections are excluded.
     pub fn dependency_commitment(&self) -> Word {
         PackageCommitment::new(self).dependency_commitment()
     }
 
-    /// Returns the commitment to all serialized package data outside the MAST forest.
+    /// Returns the v2 commitment to all serialized data outside the MAST forest, including naming.
     pub fn artifacts_commitment(&self) -> Word {
         PackageCommitment::new(self).artifacts_commitment()
     }
 
-    /// Returns the commitment to the complete package.
+    /// Returns the v2 commitment to the complete package, including exact required naming bytes.
     pub fn commitment(&self) -> Word {
         PackageCommitment::new(self).commitment()
     }
@@ -553,8 +629,7 @@ impl Package {
 
     /// Returns an iterator over the module descriptors of the package.
     pub fn module_descriptors(&self) -> impl Iterator<Item = ModuleDescriptor> {
-        let source_library_commitment =
-            self.interface_commitment().expect("package manifest exports were validated");
+        let source_library_commitment = self.dependency_commitment();
         let mut modules_by_path: BTreeMap<Arc<Path>, ModuleDescriptor> = BTreeMap::new();
 
         for module in self.manifest.modules() {
@@ -619,7 +694,7 @@ impl Package {
     /// from item export paths. Link-time resolution relies on explicit module metadata so that
     /// modules remain distinct from exported items.
     pub fn try_module_descriptors(&self) -> Result<Vec<ModuleDescriptor>, ManifestValidationError> {
-        let source_library_commitment = self.interface_commitment()?;
+        let source_library_commitment = self.dependency_commitment();
         let mut modules_by_path: BTreeMap<Arc<Path>, ModuleDescriptor> = BTreeMap::new();
 
         for module in self.manifest.modules() {
@@ -1461,11 +1536,22 @@ impl Package {
     /// if the package was originally assembled as an executable, however the underlying
     /// [miden_core::mast::MastForest] is left untouched, so the resulting package may still contain
     /// nodes in the forest which are now unused.
-    pub fn make_executable(&self, entrypoint: &QualifiedProcedureName) -> Result<Self, Report> {
+    /// Current explicit home policy is required to select the existing visible callable key.
+    /// The executable alias preserves that canonical key and all retained declarations/code.
+    pub fn make_executable<P: HomeProfile + ?Sized>(
+        &self,
+        entrypoint: &QualifiedProcedureName,
+        profile: &P,
+        context: &P::Context,
+        limits: CodecLimits,
+    ) -> Result<Self, Report> {
         use miden_assembly_syntax::Path as MasmPath;
         if !self.is_library() {
             return Err(Report::msg("expected library but got an executable"));
         }
+        let admitted = self
+            .admit_naming(profile, context, limits)
+            .map_err(|error| Report::msg(error.to_string()))?;
 
         let entrypoint =
             Arc::<MasmPath>::from(entrypoint.to_absolute().map_err(Report::msg)?.to_path_buf());
@@ -1484,8 +1570,28 @@ impl Package {
                     }))
                 },
                 PackageExport::Procedure(procedure) => {
+                    let visible_path = naming::callable_path_from_manifest(&procedure.path)
+                        .map_err(Report::msg)?;
+                    let key = admitted.callables().key_for_visible_path(&visible_path).ok_or_else(
+                        || Report::msg("admitted entry export has no visible callable key"),
+                    )?;
                     let executable_entrypoint: Arc<MasmPath> =
                         MasmPath::exec_path().join(ast::ProcedureName::MAIN_PROC_NAME).into();
+                    let executable_path =
+                        naming::callable_path_from_manifest(&executable_entrypoint)
+                            .map_err(Report::msg)?;
+                    let callables = PackageCallables::new(
+                        admitted.callables().bindings().map(|(_, binding)| binding.clone()),
+                        [(executable_path, key)],
+                        admitted
+                            .callables()
+                            .selected_implementations()
+                            .map(|(&key, &implementation)| (key, implementation)),
+                    )
+                    .map_err(Report::msg)?;
+                    let naming =
+                        PackageNaming::new(admitted.namespace_plan().clone(), callables, Some(key))
+                            .map_err(Report::msg)?;
                     let mut procedure = procedure.clone();
                     procedure.path = executable_entrypoint;
                     let mut package = Self::create(
@@ -1495,6 +1601,7 @@ impl Package {
                         self.mast.clone(),
                         [PackageExport::Procedure(procedure)],
                         self.manifest.dependencies.clone(),
+                        &naming,
                     )
                     .map_err(Report::msg)?;
                     package.description = self.description.clone();
@@ -1770,6 +1877,48 @@ mod tests {
         (Arc::new(forest), new_exports, sections)
     }
 
+    fn fixture_home() -> crate::NamespacePlan {
+        crate::NamespacePlan::new(vec![
+            miden_core::program::CanonicalLabel::text("package-unit-fixture").unwrap(),
+        ])
+    }
+
+    fn fixture_create(
+        name: PackageId,
+        version: Version,
+        kind: TargetType,
+        mast: Arc<MastForest>,
+        exports: impl IntoIterator<Item = PackageExport>,
+        dependencies: impl IntoIterator<Item = Dependency>,
+    ) -> Result<Package, ManifestValidationError> {
+        let exports = exports.into_iter().collect::<Vec<_>>();
+        let naming = super::arbitrary::fixture_naming(fixture_home(), kind, &mast, &exports);
+        Package::create(name, version, kind, mast, exports, dependencies, &naming)
+    }
+
+    fn fixture_create_with_modules(
+        name: PackageId,
+        version: Version,
+        kind: TargetType,
+        mast: Arc<MastForest>,
+        exports: impl IntoIterator<Item = PackageExport>,
+        modules: impl IntoIterator<Item = PackageModule>,
+        dependencies: impl IntoIterator<Item = Dependency>,
+    ) -> Result<Package, ManifestValidationError> {
+        let exports = exports.into_iter().collect::<Vec<_>>();
+        let naming = super::arbitrary::fixture_naming(fixture_home(), kind, &mast, &exports);
+        Package::create_with_modules(
+            name,
+            version,
+            kind,
+            mast,
+            exports,
+            modules,
+            dependencies,
+            &naming,
+        )
+    }
+
     fn build_package(
         name: &str,
         kind: TargetType,
@@ -1777,8 +1926,9 @@ mod tests {
         dependencies: impl IntoIterator<Item = Dependency>,
         sections: Vec<Section>,
     ) -> Package {
+        let export = if kind.is_executable() { "$exec::$main" } else { export };
         let (mast, exports) = build_package_exports(export);
-        let mut package = Package::create(
+        let mut package = fixture_create(
             PackageId::from(name),
             Version::new(1, 0, 0),
             kind,
@@ -1801,7 +1951,7 @@ mod tests {
             let mut builder = DenseMastForestBuilder::new();
             let root = builder.push_node(BasicBlockNodeBuilder::new(vec![operation])).unwrap();
             builder.mark_root(root);
-            Package::create(
+            fixture_create(
                 PackageId::from("private"),
                 Version::new(1, 0, 0),
                 TargetType::Library,
@@ -1835,7 +1985,7 @@ mod tests {
         };
         for mast in [MastForest::new(), unrooted] {
             for kind in [TargetType::Library, TargetType::Executable] {
-                let result = Package::create_with_modules(
+                let result = fixture_create_with_modules(
                     PackageId::from("no_code"),
                     Version::new(1, 0, 0),
                     kind,
@@ -1863,7 +2013,7 @@ mod tests {
             digest,
             None,
         ));
-        Package::create(
+        fixture_create(
             PackageId::from("aliases"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2114,16 +2264,11 @@ mod tests {
     }
 
     fn build_debug_package(name: &str, kind: TargetType, export: &str, context: &str) -> Package {
+        let export = if kind.is_executable() { "$exec::$main" } else { export };
         let (mast, exports, sections) = build_same_digest_package_exports(&[(export, context)]);
-        let mut package = Package::create(
-            PackageId::from(name),
-            Version::new(1, 0, 0),
-            kind,
-            mast,
-            exports,
-            None,
-        )
-        .unwrap();
+        let mut package =
+            fixture_create(PackageId::from(name), Version::new(1, 0, 0), kind, mast, exports, None)
+                .unwrap();
         package.sections = sections;
         package
     }
@@ -2428,7 +2573,7 @@ mod tests {
         let source_root = DebugSourceNodeId::from(2);
         let (mast, exports, root_id, left_id, right_id) =
             build_split_package_exports("app::entry", Some(source_root));
-        let mut package = Package::create(
+        let mut package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2493,7 +2638,7 @@ mod tests {
         let source_root = DebugSourceNodeId::from(2);
         let (mast, exports, root_id, left_id, right_id) =
             build_split_package_exports("app::entry", Some(source_left));
-        let mut package = Package::create(
+        let mut package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2738,7 +2883,7 @@ mod tests {
         let path = relative_path("app::entry");
         let export =
             PackageExport::Procedure(ProcedureExport::new(path, Some(node_id), digest, None));
-        let package = Package::create(
+        let package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2772,7 +2917,7 @@ mod tests {
         let digest = forest[node_id].digest();
         let path = absolute_path("app::entry");
         let export = ProcedureExport::new(Arc::clone(&path), None, digest, None);
-        let package = Package::create(
+        let package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2791,7 +2936,7 @@ mod tests {
         let digest = forest[node_id].digest();
         let path = absolute_path("app::entry");
         let export = ProcedureExport::new(Arc::clone(&path), Some(node_id), digest, None);
-        let package = Package::create(
+        let package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2821,7 +2966,7 @@ mod tests {
         let path = absolute_path("app::entry");
         let valid_export =
             ProcedureExport::new(path.clone(), Some(matching_id), matching_digest, None);
-        let package = Package::create(
+        let package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2854,7 +2999,7 @@ mod tests {
         if let PackageExport::Procedure(proc) = &mut exports[0] {
             proc.attributes.insert(Attribute::Marker(Ident::new("account").unwrap()));
         }
-        let package = Package::create(
+        let package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2878,7 +3023,7 @@ mod tests {
             ("app::alias_a", "alias_a"),
             ("app::alias_b", "alias_b"),
         ]);
-        let mut package = Package::create(
+        let mut package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2890,7 +3035,14 @@ mod tests {
         package.sections = sections;
 
         let entrypoint = QualifiedProcedureName::from_str("app::alias_b").unwrap();
-        let executable = package.make_executable(&entrypoint).unwrap();
+        let executable = package
+            .make_executable(
+                &entrypoint,
+                &ExactNamingHomes,
+                &[fixture_home()],
+                FORMAT_NAMING_LIMITS,
+            )
+            .unwrap();
 
         let main_path = Path::exec_path().join(ProcedureName::MAIN_PROC_NAME);
         let entrypoint_node = executable.get_procedure_node_by_path(&main_path).unwrap();
@@ -2919,7 +3071,7 @@ mod tests {
             ("app::alias_a", "alias_a"),
             ("app::alias_b", "alias_b"),
         ]);
-        let mut package = Package::create(
+        let mut package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2932,7 +3084,12 @@ mod tests {
         package.debug_sections_trusted = false;
 
         let executable = package
-            .make_executable(&QualifiedProcedureName::from_str("app::alias_b").unwrap())
+            .make_executable(
+                &QualifiedProcedureName::from_str("app::alias_b").unwrap(),
+                &ExactNamingHomes,
+                &[fixture_home()],
+                FORMAT_NAMING_LIMITS,
+            )
             .unwrap();
 
         assert!(!executable.debug_sections_trusted);
@@ -2946,7 +3103,7 @@ mod tests {
         let path = relative_path("app::entry");
         let export =
             PackageExport::Procedure(ProcedureExport::new(path, Some(node_id), digest, None));
-        let package = Package::create(
+        let package = fixture_create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
             TargetType::Library,
@@ -2957,7 +3114,14 @@ mod tests {
         .expect("package should be valid");
 
         let entrypoint = QualifiedProcedureName::from_str("app::entry").unwrap();
-        let executable = package.make_executable(&entrypoint).unwrap();
+        let executable = package
+            .make_executable(
+                &entrypoint,
+                &ExactNamingHomes,
+                &[fixture_home()],
+                FORMAT_NAMING_LIMITS,
+            )
+            .unwrap();
 
         let main_path = Path::exec_path().join(ProcedureName::MAIN_PROC_NAME);
         assert_eq!(executable.get_procedure_root_by_path(&main_path), Some(digest));
@@ -3033,7 +3197,7 @@ mod tests {
     fn make_executable_same_digest_selection_is_export_order_independent() {
         fn selected_context_for_alias_b(exports: &[(&str, &str)]) -> String {
             let (mast, exports, sections) = build_same_digest_package_exports(exports);
-            let mut package = Package::create(
+            let mut package = fixture_create(
                 PackageId::from("app"),
                 Version::new(1, 0, 0),
                 TargetType::Library,
@@ -3045,7 +3209,12 @@ mod tests {
             package.sections = sections;
 
             let executable = package
-                .make_executable(&QualifiedProcedureName::from_str("app::alias_b").unwrap())
+                .make_executable(
+                    &QualifiedProcedureName::from_str("app::alias_b").unwrap(),
+                    &ExactNamingHomes,
+                    &[fixture_home()],
+                    FORMAT_NAMING_LIMITS,
+                )
                 .unwrap();
             let main_path = Path::exec_path().join(ProcedureName::MAIN_PROC_NAME);
             let main_export = executable
@@ -3078,5 +3247,181 @@ mod tests {
             ]),
             "alias_b",
         );
+    }
+
+    struct ExactNamingHomes;
+
+    impl crate::interface::serialization::TypedIdProfile for ExactNamingHomes {
+        type Context = [crate::NamespacePlan];
+        type Error = &'static str;
+
+        fn validate_typed_id(
+            &self,
+            _context: &Self::Context,
+            _codec: u32,
+            _canonical_bytes: &[u8],
+        ) -> Result<(), Self::Error> {
+            Err("this fixture permits no TypedId codec")
+        }
+    }
+
+    impl HomeProfile for ExactNamingHomes {
+        fn validate_home(
+            &self,
+            context: &Self::Context,
+            home: &[miden_core::program::CanonicalLabel],
+        ) -> Result<(), Self::Error> {
+            if context.iter().any(|permitted| permitted.home() == home) {
+                Ok(())
+            } else {
+                Err("home is absent from current fixture evidence")
+            }
+        }
+    }
+
+    fn naming_container_fixture(
+        canonical_home: &str,
+    ) -> (Package, Vec<crate::NamespacePlan>, miden_core::program::ProcedureKey) {
+        use miden_core::program::{CanonicalLabel, ImplementationRoot};
+
+        use crate::{CallableBinding, CallableProcedurePath, NamespacePlan};
+
+        let compilation_home = NamespacePlan::new(vec![CanonicalLabel::text("compile").unwrap()]);
+        let canonical_home =
+            NamespacePlan::new(vec![CanonicalLabel::text(canonical_home).unwrap()]);
+        let canonical_path = CallableProcedurePath::from_semantic_components(vec![
+            "implementation".into(),
+            "run".into(),
+        ])
+        .unwrap();
+        let binding = CallableBinding::new(canonical_home.clone(), canonical_path).unwrap();
+        let key = binding.key();
+        let (forest, root) = build_forest();
+        let digest = forest[root].digest();
+        let visible =
+            CallableProcedurePath::from_semantic_components(vec!["app".into(), "run".into()])
+                .unwrap();
+        let callables = PackageCallables::new(
+            [binding],
+            [(visible, key)],
+            [(key, ImplementationRoot::new(digest))],
+        )
+        .unwrap();
+        let naming = PackageNaming::new(compilation_home.clone(), callables, None).unwrap();
+        let package = Package::create(
+            PackageId::from("app"),
+            Version::new(1, 0, 0),
+            TargetType::Library,
+            Arc::new(forest),
+            [PackageExport::Procedure(ProcedureExport::new(
+                absolute_path("app::run"),
+                Some(root),
+                digest,
+                None,
+            ))],
+            [],
+            &naming,
+        )
+        .unwrap();
+        (package, vec![compilation_home, canonical_home], key)
+    }
+
+    #[test]
+    fn exact_required_naming_changes_dependency_and_artifact_commitments() {
+        let (first, ..) = naming_container_fixture("first");
+        let (second, ..) = naming_container_fixture("second");
+        assert_eq!(first.interface_commitment().unwrap(), second.interface_commitment().unwrap());
+        assert_eq!(first.mast_forest_commitment(), second.mast_forest_commitment());
+        assert_eq!(first.code_commitment(), second.code_commitment());
+        assert_ne!(first.naming_transport().as_bytes(), second.naming_transport().as_bytes());
+        assert_ne!(first.dependency_commitment(), second.dependency_commitment());
+        assert_ne!(first.artifacts_commitment(), second.artifacts_commitment());
+        assert_ne!(first.commitment(), second.commitment());
+    }
+
+    #[test]
+    fn check_naming_requires_exact_owned_inventory_and_compilation_home() {
+        let (first, first_homes, _) = naming_container_fixture("first");
+        let first_naming = first
+            .admit_naming(&ExactNamingHomes, first_homes.as_slice(), FORMAT_NAMING_LIMITS)
+            .unwrap();
+        first.check_naming(&first_naming).unwrap();
+
+        let (second, second_homes, _) = naming_container_fixture("second");
+        let second_naming = second
+            .admit_naming(&ExactNamingHomes, second_homes.as_slice(), FORMAT_NAMING_LIMITS)
+            .unwrap();
+        // Both inventories select identical code and visible source aliases. That does not make
+        // their distinct canonical names interchangeable at the linker boundary.
+        second_naming
+            .validate_package(first.kind, &first.mast, &first.manifest)
+            .unwrap();
+        assert!(matches!(
+            first.check_naming(&second_naming),
+            Err(ManifestValidationError::MismatchedNamingTransport)
+        ));
+
+        let other_compilation_home = PackageNaming::new(
+            crate::NamespacePlan::new(vec![
+                miden_core::program::CanonicalLabel::text("other-compilation-home").unwrap(),
+            ]),
+            first_naming.callables().clone(),
+            first_naming.entry_key(),
+        )
+        .unwrap();
+        assert!(matches!(
+            first.check_naming(&other_compilation_home),
+            Err(ManifestValidationError::MismatchedNamingTransport)
+        ));
+    }
+
+    #[test]
+    fn stripping_debug_preserves_required_naming_transport_and_admission() {
+        let (mut package, homes, key) = naming_container_fixture("canonical");
+        let naming_bytes = package.naming_transport().as_bytes().to_vec();
+        package.sections.push(Section::new(SectionId::DEBUG_INFO, vec![0xff]));
+        package.strip_debug_info().unwrap();
+        assert_eq!(package.naming_transport().as_bytes(), naming_bytes);
+        let admitted = package
+            .admit_naming(&ExactNamingHomes, homes.as_slice(), FORMAT_NAMING_LIMITS)
+            .unwrap();
+        assert!(admitted.callables().binding(key).is_some());
+        assert!(
+            package
+                .admit_naming(&ExactNamingHomes, &homes[..1], FORMAT_NAMING_LIMITS,)
+                .is_err()
+        );
+        package.manifest = PackageManifest::new([]).unwrap();
+        assert!(matches!(
+            package.admit_naming(&ExactNamingHomes, homes.as_slice(), FORMAT_NAMING_LIMITS),
+            Err(NamingCodecError::InvalidNaming(
+                PackageNamingError::UnexpectedVisiblePath { .. }
+            )),
+        ));
+    }
+
+    #[test]
+    fn executable_alias_preserves_admitted_canonical_entry_key() {
+        let (package, homes, key) = naming_container_fixture("canonical");
+        let executable = package
+            .make_executable(
+                &QualifiedProcedureName::from_str("app::run").unwrap(),
+                &ExactNamingHomes,
+                homes.as_slice(),
+                FORMAT_NAMING_LIMITS,
+            )
+            .unwrap();
+        let naming = executable
+            .admit_naming(&ExactNamingHomes, homes.as_slice(), FORMAT_NAMING_LIMITS)
+            .unwrap();
+        assert_eq!(naming.entry_key(), Some(key));
+        let declaration = naming.callables().binding(key).unwrap();
+        assert_eq!(declaration.path().components(), &["implementation", "run"]);
+        let entry_path = naming::callable_path_from_manifest(
+            &Path::exec_path().join(ProcedureName::MAIN_PROC_NAME),
+        )
+        .unwrap();
+        assert_eq!(naming.callables().visible_paths().len(), 1);
+        assert_eq!(naming.callables().key_for_visible_path(&entry_path), Some(key));
     }
 }

@@ -14,6 +14,7 @@
 //! - `mast` (see [`miden_assembly_syntax::Library`])
 //!
 //! #### Manifest
+//! - required naming (`u32` byte length, followed by opaque NamingV1 transport)
 //! - `manifest` (see [`crate::PackageManifest`])
 //!
 //! #### Custom Sections
@@ -62,7 +63,7 @@ use super::{
 };
 use crate::{
     Dependency, ManifestValidationError, Package, PackageExport, PackageManifest, Section,
-    debug_info::DebugSourceNodeId,
+    UnverifiedPackageNaming, debug_info::DebugSourceNodeId, interface::serialization::CodecLimits,
 };
 
 #[cfg(test)]
@@ -77,7 +78,7 @@ const MAGIC_PACKAGE: &[u8; 5] = b"MASP\0";
 /// The format version.
 ///
 /// If future modifications are made to this format, the version should be incremented by 1.
-const VERSION: [u8; 3] = [8, 0, 0];
+const VERSION: [u8; 3] = [9, 0, 0];
 
 /// Byte-read budget multiplier for package deserialization from a byte slice.
 ///
@@ -110,6 +111,11 @@ impl Package {
 
     #[doc(hidden)]
     pub fn write_trailer_into<W: ByteWriter>(&self, target: &mut W) {
+        // Required naming is transport metadata, not a debug section or home admission.
+        let naming = self.naming_transport().as_bytes();
+        target.write_u32(u32::try_from(naming.len()).expect("preflighted NamingV1 length"));
+        target.write_bytes(naming);
+
         // Write manifest
         self.manifest.write_into(target);
 
@@ -152,7 +158,11 @@ impl Package {
     pub fn read_from_bytes_trusted(bytes: &[u8]) -> Result<Self, DeserializationError> {
         let budget = bytes.len().saturating_mul(PACKAGE_BYTE_READ_BUDGET_MULTIPLIER);
         let mut reader = BudgetedReader::new(SliceReader::new(bytes), budget);
-        Self::read_from_trusted(&mut reader)
+        let package = Self::read_from_trusted(&mut reader)?;
+        if reader.has_more_bytes() {
+            return Err(DeserializationError::InvalidValue("trailing package bytes".into()));
+        }
+        Ok(package)
     }
 
     #[track_caller]
@@ -238,6 +248,18 @@ impl Package {
     ) -> Result<Self, DeserializationError> {
         let PackageHeader { name, version, description, kind } = header;
 
+        // Both reader modes preserve bounded, opaque naming transport. Neither mode installs
+        // a default home policy or validates unknown external TypedId codecs. Canonical metadata
+        // is available only through Package::admit_naming with current explicit caller evidence.
+        let naming_len = source.read_u32()?;
+        let naming_bytes = source.read_slice(naming_len as usize)?;
+        // Every record/component/blob occupies at least one payload byte. These input-derived
+        // transport bounds do not replace the caller's admission limits or selected profile.
+        let transport_limits = CodecLimits::new(naming_len, naming_len, naming_len, naming_len);
+        let naming =
+            UnverifiedPackageNaming::from_bytes_with_limits(naming_bytes, transport_limits)
+                .map_err(|error| DeserializationError::InvalidValue(error.to_string()))?;
+
         // Read manifest
         let manifest = if validate_manifest {
             PackageManifest::read_from_safe(source, &mast)?
@@ -254,6 +276,7 @@ impl Package {
             description,
             kind,
             mast,
+            naming,
             manifest,
             sections,
             debug_sections_trusted: true,
@@ -285,7 +308,10 @@ impl Deserializable for Package {
     /// Reads and validates a package from potentially adversarial input.
     ///
     /// This validates the embedded MAST forest, manifest references, and package-owned debug
-    /// information before returning. The caller's [`ByteReader`] controls the resource budget. For
+    /// information before returning an unadmitted code container. Required naming is opaque,
+    /// structurally bounded transport: use [`Package::admit_naming`] with explicit current policy,
+    /// context and limits before using canonical bindings. The caller's [`ByteReader`] controls
+    /// the resource budget. For
     /// a byte slice, prefer [`Package::read_from_bytes`], which applies a finite byte-read budget.
     /// Use [`Package::read_from_trusted`] for packages written and retained by the same trusted
     /// system when repeating these checks is unnecessary.
@@ -309,7 +335,11 @@ impl Deserializable for Package {
     fn read_from_bytes(bytes: &[u8]) -> Result<Self, DeserializationError> {
         let budget = bytes.len().saturating_mul(PACKAGE_BYTE_READ_BUDGET_MULTIPLIER);
         let mut reader = BudgetedReader::new(SliceReader::new(bytes), budget);
-        Self::read_from(&mut reader)
+        let package = Self::read_from(&mut reader)?;
+        if reader.has_more_bytes() {
+            return Err(DeserializationError::InvalidValue("trailing package bytes".into()));
+        }
+        Ok(package)
     }
 }
 
