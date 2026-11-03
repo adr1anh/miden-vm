@@ -5,9 +5,9 @@ use alloc::sync::Arc;
 use miden_utils_testing::{librarytree::FixtureEnvironment, processor as dependency_processor};
 
 use crate::{
-    EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
-    ExecutionEnvironment, LedgerLimits, OpeningLimits, OpeningStep, ResolutionWitness,
-    SessionLimits,
+    EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
+    EnvironmentWitnessSource, ExecutionEnvironment, LedgerLimits, OpeningLimits, OpeningStep,
+    ResolutionWitness, SessionLimits,
 };
 
 /// Preserves the fixture's core descriptor, native policies and bounded witness source.
@@ -49,6 +49,16 @@ pub(crate) fn native_fixture_environment(
 
 struct FixtureSource(Arc<dyn dependency_processor::EnvironmentWitnessSource>);
 
+pub(crate) fn native_trace_limits() -> EnvironmentTraceLimits {
+    let limits = miden_utils_testing::librarytree::trace_limits();
+    EnvironmentTraceLimits {
+        max_events: limits.max_events,
+        max_retained_bytes: limits.max_retained_bytes,
+        max_prepare_peak_bytes: limits.max_prepare_peak_bytes,
+        max_validation_work: limits.max_validation_work,
+    }
+}
+
 impl EnvironmentWitnessSource for FixtureSource {
     fn get(
         &self,
@@ -80,4 +90,15 @@ impl EnvironmentWitnessSource for FixtureSource {
             })
         })
     }
+}
+
+/// One finite aggregate budget for fixture replay sections belonging to the same witness.
+pub(crate) fn native_replay_budget() -> crate::trace::keyed::ReplayReadBudget {
+    crate::trace::keyed::ReplayReadBudget::new(
+        native_trace_limits(),
+        crate::trace::ReplayReadLimits {
+            max_wire_bytes: 16 * 1024 * 1024,
+            max_validation_peak_bytes: 1536 * 1024 * 1024,
+        },
+    )
 }
