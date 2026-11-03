@@ -5,7 +5,7 @@ use super::*;
 
 #[test]
 fn library_exports() -> Result<(), Report> {
-    let context = TestContext::new();
+    let mut context = TestContext::new();
 
     // build the first library
     let baz = r#"
@@ -17,11 +17,8 @@ fn library_exports() -> Result<(), Report> {
     "#;
     let baz = parse_module!(&context, baz);
 
-    let lib1 = Assembler::new(context.source_manager()).assemble_library(
-        "lib1",
-        baz,
-        None::<Box<Module>>,
-    )?;
+    let (lib1, bindings) = context.assemble_library_with_fixture("lib1", None, baz, [])?;
+    context.add_library_with_bindings(Arc::from(lib1), &bindings)?;
 
     // build the second library
     let foo = r#"
@@ -71,9 +68,7 @@ fn library_exports() -> Result<(), Report> {
     "#;
     let root = parse_module!(&context, root);
 
-    let lib2 = Assembler::new(context.source_manager())
-        .with_package(Arc::from(lib1), Linkage::Dynamic)?
-        .assemble_library("lib2", root, [foo])?;
+    let (lib2, bindings) = context.assemble_library_with_fixture("lib2", None, root, [foo])?;
 
     let foo2 = Path::new("::lib2::foo::foo2");
     let foo3 = Path::new("::lib2::foo::foo3");
@@ -88,13 +83,17 @@ fn library_exports() -> Result<(), Report> {
     let actual_exports: BTreeSet<_> = lib2.manifest.exports().map(PackageExport::path).collect();
     assert_eq!(expected_exports, actual_exports);
 
-    // make sure foo2, bar2, and bar3 map to the same MastNode
+    // The local re-export shares foo2's body; bar3 retains a runtime EXEC to foo2.
     assert_eq!(lib2.get_export_node_id(foo2), lib2.get_export_node_id(bar2));
-    assert_eq!(lib2.get_export_node_id(foo2), lib2.get_export_node_id(bar3));
+    assert_ne!(lib2.get_export_node_id(foo2), lib2.get_export_node_id(bar3));
+    let MastNode::Exec(exec) = &lib2.mast_forest()[lib2.get_export_node_id(bar3)] else {
+        panic!("bar3 must retain its runtime EXEC");
+    };
+    assert_eq!(exec.target(), bindings.binding(foo2).unwrap().key());
     assert_all_nodes_reachable_from_roots(lib2.mast_forest());
 
-    // make sure there are 6 roots in the MAST (foo1, foo2, foo3, bar1, bar4, and bar5)
-    assert_eq!(lib2.mast_forest().num_procedures(), 6);
+    // Keep every callable root, including bar3's runtime invocation body.
+    assert_eq!(lib2.mast_forest().num_procedures(), 7);
 
     // bar1 should be the only re-export (i.e. the only procedure re-exported from a dependency)
     assert!(!lib2.is_reexport(foo2));
@@ -110,7 +109,7 @@ fn library_exports() -> Result<(), Report> {
 #[test]
 #[ignore = "disabled until #3040 is resolved"]
 fn library_procedure_collision() -> Result<(), Report> {
-    let context = TestContext::new();
+    let mut context = TestContext::new();
 
     // build the first library
     let foo = r#"
@@ -125,11 +124,8 @@ fn library_procedure_collision() -> Result<(), Report> {
         end
     "#;
     let foo = parse_module!(&context, foo);
-    let lib1 = Assembler::new(context.source_manager()).assemble_library(
-        "lib1",
-        foo,
-        None::<Box<Module>>,
-    )?;
+    let (lib1, bindings) = context.assemble_library_with_fixture("lib1", None, foo, [])?;
+    context.add_library_with_bindings(Arc::from(lib1), &bindings)?;
 
     // build the second library which defines the same procedure as the first one
     let bar = r#"
@@ -147,9 +143,7 @@ fn library_procedure_collision() -> Result<(), Report> {
         end
     "#;
     let bar = parse_module!(&context, bar);
-    let lib2 = Assembler::new(context.source_manager())
-        .with_package(Arc::from(lib1), Linkage::Dynamic)?
-        .assemble_library("lib2", bar, None::<Box<Module>>)?;
+    let lib2 = context.assemble_library("lib2", None, bar, [])?;
 
     // make sure lib2 has the expected exports (i.e., bar1 and bar2)
     assert_eq!(lib2.manifest.num_exports(), 2);
@@ -183,9 +177,7 @@ fn get_module_by_path() {
     let foo = parse_module!(&context, foo_source);
 
     // create the bundle with locations
-    let bundle = Assembler::new(context.source_manager())
-        .assemble_library("test", foo, None::<Box<Module>>)
-        .unwrap();
+    let bundle = context.assemble_library("test", None, foo, []).unwrap();
 
     let foo_module_descriptor = bundle.module_descriptors().next().unwrap();
     assert_eq!(foo_module_descriptor.path(), &PathBuf::new("::test::foo").unwrap());
@@ -211,8 +203,8 @@ fn get_proc_digest_by_name() -> Result<(), Report> {
     let testing_module = parse_module!(&context, testing_module_source);
 
     // create the bundle with locations
-    let package = Assembler::new(context.source_manager())
-        .assemble_library("test", testing_module, None::<Box<Module>>)
+    let package = context
+        .assemble_library("test", None, testing_module, [])
         .context("failed to assemble library from testing module")?;
 
     // get the vector of library procedure digests

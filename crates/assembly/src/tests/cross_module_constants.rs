@@ -34,9 +34,7 @@ fn test_cross_module_constant_resolution() -> TestResult {
         "#
     ))?;
 
-    let assembler = Assembler::new(context.source_manager());
-
-    let _ = assembler.assemble_library("test", module_a, [module_b])?;
+    let _ = context.assemble_library("test", None, module_a, [module_b])?;
 
     Ok(())
 }
@@ -71,9 +69,7 @@ fn test_cross_module_constant_resolution_as_local_definition() -> TestResult {
         "#
     ))?;
 
-    let assembler = Assembler::new(context.source_manager());
-
-    let _ = assembler.assemble_library("cycle", module_a, [module_b])?;
+    let _ = context.assemble_library("cycle", None, module_a, [module_b])?;
 
     Ok(())
 }
@@ -106,8 +102,8 @@ fn importing_private_constant_from_another_module_is_rejected() -> TestResult {
         "#
     ))?;
 
-    let err = Assembler::new(context.source_manager())
-        .assemble_library("library", module_a, [module_b])
+    let err = context
+        .assemble_library("library", None, module_a, [module_b])
         .expect_err("expected private constant import to be rejected");
     assert_diagnostic!(&err, "private symbol reference");
     assert_diagnostic!(&err, "only public items can be referenced from another module");
@@ -143,8 +139,8 @@ fn importing_private_constant_from_another_module_by_absolute_path_is_rejected()
         "#
     ))?;
 
-    let err = Assembler::new(context.source_manager())
-        .assemble_library("library", module_a, [module_b])
+    let err = context
+        .assemble_library("library", None, module_a, [module_b])
         .expect_err("expected private absolute constant import to be rejected");
     assert_diagnostic!(&err, "private symbol reference");
     assert_diagnostic!(&err, "only public items can be referenced from another module");
@@ -180,8 +176,8 @@ fn importing_private_type_from_another_module_is_rejected() -> TestResult {
         "#
     ))?;
 
-    let err = Assembler::new(context.source_manager())
-        .assemble_library("library", module_a, [module_b])
+    let err = context
+        .assemble_library("library", None, module_a, [module_b])
         .expect_err("expected private type import to be rejected");
     assert_diagnostic!(&err, "private symbol reference");
     assert_diagnostic!(&err, "only public items can be referenced from another module");
@@ -210,8 +206,8 @@ fn public_item_import_reexporting_private_signature_is_rejected() {
         ))
         .expect("private procedure signature should be valid before public re-export");
 
-    let err = Assembler::new(context.source_manager())
-        .assemble_library("library", module, None::<Box<Module>>)
+    let err = context
+        .assemble_library("library", None, module, [])
         .expect_err("expected public re-export of private signature to be rejected");
 
     assert_diagnostic!(&err, "private type in exported procedure signature");
@@ -236,15 +232,15 @@ fn public_item_import_reexporting_private_type_is_allowed() {
         ))
         .expect("private type should be valid before public re-export");
 
-    let library = Assembler::new(context.source_manager())
-        .assemble_library("library", module, None::<Box<Module>>)
+    let library = context
+        .assemble_library("library", None, module, [])
         .expect("visible private types can be re-exported");
     assert_eq!(library.manifest.exports().count(), 2);
 }
 
 #[test]
 fn test_cross_module_constant_reexport_chain_in_procedure_scope() -> TestResult {
-    let context = TestContext::new();
+    let mut context = TestContext::new();
 
     let root = parse_module!(
         &context,
@@ -298,7 +294,8 @@ fn test_cross_module_constant_reexport_chain_in_procedure_scope() -> TestResult 
         "#
     );
 
-    let lib = Assembler::new(context.source_manager()).assemble_library("dcrc", root, [a, b, c])?;
+    let (lib, bindings) = context.assemble_library_with_fixture("dcrc", None, root, [a, b, c])?;
+    context.add_library_with_bindings(Arc::from(lib), &bindings)?;
 
     let src = source_file!(
         &context,
@@ -312,9 +309,7 @@ fn test_cross_module_constant_reexport_chain_in_procedure_scope() -> TestResult 
         "#
     );
 
-    let _program = Assembler::new(context.source_manager())
-        .with_package(Arc::from(lib), Linkage::Dynamic)?
-        .assemble_program("test", src)?;
+    let _program = context.assemble(src)?;
 
     Ok(())
 }
@@ -357,7 +352,7 @@ fn test_issue_2696_imported_constant_with_private_dependency() -> TestResult {
         "#
     );
 
-    Assembler::new(context.source_manager()).assemble_library("wallet", root, [memory, account])?;
+    context.assemble_library("wallet", None, root, [memory, account])?;
 
     Ok(())
 }

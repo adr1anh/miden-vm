@@ -5,7 +5,7 @@ use super::*;
 
 #[test]
 fn test_compiled_library() {
-    let context = TestContext::new();
+    let mut context = TestContext::new();
     let root = {
         context
             .parse_module(source_file!(
@@ -63,17 +63,16 @@ fn test_compiled_library() {
             .unwrap()
     };
 
-    let compiled_library = {
-        let assembler = Assembler::new(context.source_manager());
-        assembler.assemble_library("mylib", root, [mod1, mod2]).unwrap()
-    };
+    let (compiled_library, bindings) = context
+        .assemble_library_with_fixture("mylib", None, root, [mod1, mod2])
+        .unwrap();
 
     assert_eq!(compiled_library.manifest.num_exports(), 4);
 
     // Compile program that uses compiled library
-    let mut assembler = Assembler::new(context.source_manager());
-
-    assembler.link_package(Arc::from(compiled_library), Linkage::Dynamic).unwrap();
+    context
+        .add_library_with_bindings(Arc::from(compiled_library), &bindings)
+        .unwrap();
 
     let program_source = "
     use mylib::mod1
@@ -93,12 +92,12 @@ fn test_compiled_library() {
     end
     ";
 
-    let _program = assembler.assemble_program("test", program_source).unwrap();
+    let _program = context.assemble(program_source).unwrap();
 }
 
 #[test]
 fn test_reexported_proc_with_same_name_as_local_proc_diff_locals() {
-    let context = TestContext::new();
+    let mut context = TestContext::new();
     let root = {
         context
             .parse_module(source_file!(
@@ -141,17 +140,15 @@ fn test_reexported_proc_with_same_name_as_local_proc_diff_locals() {
             .unwrap()
     };
 
-    let compiled_library = {
-        let assembler = Assembler::new(context.source_manager());
-        assembler.assemble_library("test", root, [mod1, mod2]).unwrap()
-    };
+    let (compiled_library, bindings) =
+        context.assemble_library_with_fixture("test", None, root, [mod1, mod2]).unwrap();
 
     assert_eq!(compiled_library.manifest.num_exports(), 2);
 
     // Compile program that uses compiled library
-    let mut assembler = Assembler::new(context.source_manager());
-
-    assembler.link_package(Arc::from(compiled_library), Linkage::Dynamic).unwrap();
+    context
+        .add_library_with_bindings(Arc::from(compiled_library), &bindings)
+        .unwrap();
 
     let program_source = "
     use test::mod1
@@ -168,5 +165,5 @@ fn test_reexported_proc_with_same_name_as_local_proc_diff_locals() {
     end
     ";
 
-    let _program = assembler.assemble_program("test", program_source).unwrap();
+    let _program = context.assemble(program_source).unwrap();
 }
