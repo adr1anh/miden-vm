@@ -1,7 +1,16 @@
 // MAST TESTS
 // ================================================================================================
 
+use core::num::NonZeroU32;
+
+use miden_core::{
+    mast::BasicBlockNodeBuilder,
+    program::{CanonicalLabel, ProcedureKey},
+};
+use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+
 use super::*;
+use crate::CallableBinding;
 
 #[test]
 fn nested_blocks() -> Result<(), Report> {
@@ -16,19 +25,77 @@ fn nested_blocks() -> Result<(), Report> {
             push.29
         end"#;
 
+    let callable_path = |components: &[&str]| {
+        CallableProcedurePath::from_semantic_components(
+            components.iter().map(|component| (*component).to_string()).collect(),
+        )
+        .unwrap()
+    };
+    let program_home = NamespacePlan::new(vec![
+        CanonicalLabel::text("nested-blocks").unwrap(),
+        CanonicalLabel::text("program").unwrap(),
+    ]);
+    let kernel_home = NamespacePlan::new(vec![
+        CanonicalLabel::text("nested-blocks").unwrap(),
+        CanonicalLabel::revision(NonZeroU32::new(1).unwrap()),
+        CanonicalLabel::text("kernel").unwrap(),
+        CanonicalLabel::text("syscalls").unwrap(),
+    ]);
+    let helper_home = NamespacePlan::new(vec![
+        CanonicalLabel::text("nested-blocks").unwrap(),
+        CanonicalLabel::text("dependency").unwrap(),
+    ]);
+    let entry_path = callable_path(&["entry", "$main"]);
+    let foo_path = callable_path(&["private", "foo"]);
+    let bar_path = callable_path(&["private", "bar"]);
+    let kernel_foo_path = callable_path(&["foo"]);
+    let helper_path = callable_path(&["helpers", "help"]);
+
+    // Callable identities come only from the explicit homes and paths, before any body is built.
+    let foo_key: ProcedureKey = program_home.callable_procedure_key(&foo_path).unwrap();
+    let bar_key: ProcedureKey = program_home.callable_procedure_key(&bar_path).unwrap();
+    let kernel_foo_key: ProcedureKey =
+        kernel_home.callable_procedure_key(&kernel_foo_path).unwrap();
+    let helper_key: ProcedureKey = helper_home.callable_procedure_key(&helper_path).unwrap();
+    assert_ne!(foo_key, kernel_foo_key);
+
     let context = TestContext::new();
     let assembler = {
         let kernel_lib = Assembler::new(context.source_manager())
+            .with_namespace_plan(kernel_home.clone())
+            .with_callable_path(Path::kernel_path().join("foo").into(), kernel_foo_path.clone())
+            .unwrap()
             .assemble_kernel("kernel", context.parse_kernel(source_file!(&context, KERNEL))?, None)
             .map(Arc::<Package>::from)
             .unwrap();
 
         let dummy_module = context.parse_module(MODULE_PROCEDURE)?;
         let dummy_library = Assembler::new(context.source_manager())
+            .with_namespace_plan(helper_home.clone())
+            .with_callable_path(Arc::from(Path::new("::libs::helpers::help")), helper_path.clone())
+            .unwrap()
             .assemble_library("dummy", dummy_module, None::<Box<Module>>)
             .unwrap();
 
-        let mut assembler = Assembler::with_kernel(context.source_manager(), kernel_lib)?;
+        let mut assembler = Assembler::with_kernel(context.source_manager(), kernel_lib)?
+            .with_namespace_plan(program_home)
+            .with_kernel_namespace_plan(kernel_home.clone())
+            .with_callable_path(Path::exec_path().join("$main").into(), entry_path)
+            .unwrap()
+            .with_callable_path(Path::exec_path().join("foo").into(), foo_path)
+            .unwrap()
+            .with_callable_path(Path::exec_path().join("bar").into(), bar_path)
+            .unwrap()
+            .with_callable_binding(
+                Path::kernel_path().join("foo").into(),
+                CallableBinding::new(kernel_home, kernel_foo_path).unwrap(),
+            )
+            .unwrap()
+            .with_callable_binding(
+                Arc::from(Path::new("::libs::helpers::help")),
+                CallableBinding::new(helper_home, helper_path).unwrap(),
+            )
+            .unwrap();
         assembler.link_package(Arc::from(dummy_library), Linkage::Dynamic).unwrap();
 
         assembler
@@ -37,19 +104,18 @@ fn nested_blocks() -> Result<(), Report> {
     // The expected `MastForest` for the program (that we will build by hand)
     let mut expected_mast_forest_builder = MastForestBuilder::default();
 
-    // fetch the kernel digest and store into a syscall block
-    //
-    // Note: this assumes the current internal implementation detail that `assembler.mast_forest`
-    // contains the MAST nodes for the kernel after a call to
-    // `Assembler::with_kernel_from_module()`.
+    // Keep selected kernel code as an independent external root; the syscall commits to its key.
     let syscall_foo_node_id = {
-        let kernel_foo_node_ref = expected_mast_forest_builder
-            .ensure_block_ref(vec![Operation::Add], vec![], vec![], vec![], vec![])
+        let kernel_foo_digest =
+            BasicBlockNodeBuilder::new(vec![Operation::Add]).build().unwrap().digest();
+        let kernel_foo_external = expected_mast_forest_builder
+            .ensure_external_link_with_source_ref(kernel_foo_digest, None, None, None)
             .unwrap();
+        expected_mast_forest_builder.record_procedure_root_ref(kernel_foo_external);
 
         expected_mast_forest_builder
             .ensure_call_node_ref(
-                kernel_foo_node_ref,
+                kernel_foo_key,
                 true,
                 AssemblyOp::new(None, "test", 1, "syscall.foo"),
                 vec![],
@@ -95,10 +161,40 @@ fn nested_blocks() -> Result<(), Report> {
 
     let program = assembler.assemble_program("program", program).unwrap().unwrap_program();
 
-    // basic block representing foo::bar.baz procedure
-    let exec_foo_bar_baz_node_ref = expected_mast_forest_builder
-        .ensure_block_ref(vec![Operation::Push(Felt::from_u32(29))], vec![], vec![], vec![], vec![])
+    // Dynamic code supply also retains D separately from the helper's keyed EXEC.
+    let helper_digest = BasicBlockNodeBuilder::new(vec![Operation::Push(Felt::from_u32(29))])
+        .build()
+        .unwrap()
+        .digest();
+    let helper_external = expected_mast_forest_builder
+        .ensure_external_link_with_source_ref(helper_digest, None, None, None)
         .unwrap();
+    expected_mast_forest_builder.record_procedure_root_ref(helper_external);
+    let exec_helper = expected_mast_forest_builder
+        .ensure_exec_node_use(
+            helper_key,
+            AssemblyOp::new(None, "test", 1, "exec.helpers::help"),
+            vec![],
+        )
+        .unwrap()
+        .node_ref();
+
+    // Private helpers remain independently callable roots instead of being inlined into callers.
+    let foo_body = expected_mast_forest_builder
+        .ensure_block_ref(vec![Operation::Push(Felt::from_u32(19))], vec![], vec![], vec![], vec![])
+        .unwrap();
+    expected_mast_forest_builder.record_procedure_root_ref(foo_body);
+    let exec_foo = expected_mast_forest_builder
+        .ensure_exec_node_use(foo_key, AssemblyOp::new(None, "test", 1, "exec.foo"), vec![])
+        .unwrap()
+        .node_ref();
+    let push_17 = expected_mast_forest_builder
+        .ensure_block_ref(vec![Operation::Push(Felt::from_u32(17))], vec![], vec![], vec![], vec![])
+        .unwrap();
+    let bar_body = expected_mast_forest_builder
+        .join_node_refs(vec![push_17, exec_foo], None)
+        .unwrap();
+    expected_mast_forest_builder.record_procedure_root_ref(bar_body);
 
     let fmp_initialization = expected_mast_forest_builder
         .ensure_block_ref(fmp_initialization_sequence(), vec![], vec![], vec![], vec![])
@@ -137,18 +233,21 @@ fn nested_blocks() -> Result<(), Report> {
         .unwrap();
 
     let r#while = {
-        let body_node_ref = expected_mast_forest_builder
+        let exec_bar = expected_mast_forest_builder
+            .ensure_exec_node_use(bar_key, AssemblyOp::new(None, "test", 1, "exec.bar"), vec![])
+            .unwrap()
+            .node_ref();
+        let push_23 = expected_mast_forest_builder
             .ensure_block_ref(
-                vec![
-                    Operation::Push(Felt::from_u32(17)),
-                    Operation::Push(Felt::from_u32(19)),
-                    Operation::Push(Felt::from_u32(23)),
-                ],
+                vec![Operation::Push(Felt::from_u32(23))],
                 vec![],
                 vec![],
                 vec![],
                 vec![],
             )
+            .unwrap();
+        let body_node_ref = expected_mast_forest_builder
+            .join_node_refs(vec![exec_bar, push_23], None)
             .unwrap();
 
         let asm_op = AssemblyOp::new(None, "test", 1, "while.true");
@@ -180,14 +279,7 @@ fn nested_blocks() -> Result<(), Report> {
 
     let combined_node_ref = expected_mast_forest_builder
         .join_node_refs(
-            vec![
-                fmp_initialization,
-                before,
-                r#if1,
-                nested,
-                exec_foo_bar_baz_node_ref,
-                syscall_foo_node_id,
-            ],
+            vec![fmp_initialization, before, r#if1, nested, exec_helper, syscall_foo_node_id],
             None,
         )
         .unwrap();
@@ -200,9 +292,69 @@ fn nested_blocks() -> Result<(), Report> {
         Program::new(expected_mast_forest.into(), node_remapping[&combined_node_ref]);
     assert_eq!(expected_program.hash(), program.hash());
 
-    // also check that the program has the right number of procedures (which excludes the dummy
-    // library and kernel)
-    assert_eq!(program.num_procedures(), 3);
+    // Compare complete rooted structure without relying on final dense node numbering.
+    let canonical_roots = |forest: &MastForest| {
+        let mut roots = forest
+            .procedure_roots()
+            .iter()
+            .map(|&root| {
+                let node = &forest[root];
+                (node.digest(), node.to_display(forest).to_string())
+            })
+            .collect::<Vec<_>>();
+        roots.sort();
+        roots
+    };
+    assert_eq!(
+        canonical_roots(expected_program.mast_forest()),
+        canonical_roots(program.mast_forest()),
+    );
+    assert_all_nodes_reachable_from_roots(program.mast_forest());
+
+    let forest = program.mast_forest();
+    let exec_targets = forest
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            MastNode::Exec(exec) => {
+                assert!(!node.has_children());
+                Some(exec.target())
+            },
+            _ => None,
+        })
+        .collect::<Vec<ProcedureKey>>();
+    assert_eq!(exec_targets.len(), 3);
+    assert_eq!(
+        exec_targets.into_iter().collect::<BTreeSet<_>>(),
+        BTreeSet::from([foo_key, bar_key, helper_key]),
+    );
+    let calls = forest
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            MastNode::Call(call) => {
+                assert!(!node.has_children());
+                Some((call.target(), call.is_syscall()))
+            },
+            _ => None,
+        })
+        .collect::<Vec<(ProcedureKey, bool)>>();
+    assert_eq!(calls, vec![(kernel_foo_key, true)]);
+
+    // Three local implementations plus the two selected external implementations remain roots.
+    assert_eq!(program.num_procedures(), 5);
+    assert_eq!(
+        forest
+            .procedure_roots()
+            .iter()
+            .filter(|&&root| forest[root].is_external())
+            .count(),
+        2,
+    );
+    for body in [foo_body, bar_body] {
+        let digest = expected_program.mast_forest()[node_remapping[&body]].digest();
+        assert!(program.find_procedure_root(digest).is_some());
+    }
 
     Ok(())
 }
