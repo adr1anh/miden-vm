@@ -483,3 +483,6 @@ fn compare_wire_paths(mut left: &[u8], mut right: &[u8]) -> Ordering {
     }
     left.len().cmp(&right.len())
 }
+
+#[cfg(test)]
+mod tests;
