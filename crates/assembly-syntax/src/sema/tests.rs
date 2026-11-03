@@ -521,14 +521,14 @@ fn invocation_source_compatibility_sema_word_roundtrip() {
     ]);
     let literal = key.to_hex();
     let source = format!(
-        "begin\n    exec.{literal}\n    call.{literal}\n    syscall.{literal}\n    procref.{literal}\nend\n"
+        "begin\n    exec.{literal}\n    call.{literal}\n    syscall.{literal}\n    procref.{literal}\n    inline.{literal}\nend\n"
     );
     let module = context.parse_program(&source).expect("opaque key targets should pass sema");
     let printed = module.to_string();
     let reparsed = context.parse_program(&printed).expect("printed key targets should pass sema");
     for module in [&module, &reparsed] {
         let entry = module.procedures().find(|procedure| procedure.is_entrypoint()).unwrap();
-        assert_eq!(entry.body().len(), 4);
+        assert_eq!(entry.body().len(), 5);
         for op in entry.body().iter() {
             let Op::Inst(instruction) = op else {
                 panic!("expected an invocation instruction, got {op:?}");
@@ -537,7 +537,8 @@ fn invocation_source_compatibility_sema_word_roundtrip() {
                 Instruction::Exec(target)
                 | Instruction::Call(target)
                 | Instruction::SysCall(target)
-                | Instruction::ProcRef(target) => target,
+                | Instruction::ProcRef(target)
+                | Instruction::Inline(target) => target,
                 other => panic!("expected an invocation instruction, got {other:?}"),
             };
             assert!(matches!(target, InvocationTarget::MastRoot(value) if *value.inner() == key));
@@ -557,7 +558,7 @@ fn invocation_source_compatibility_sema_named_roundtrip() {
          proc \"proc.name\" nop end\n\
          begin\n",
     );
-    for mnemonic in ["exec", "call", "procref"] {
+    for mnemonic in ["exec", "call", "procref", "inline"] {
         for target in [
             "local",
             r#""quoted::local""#,

@@ -278,13 +278,18 @@ pub enum Instruction {
     EvalCircuit,
     LogDeferred,
 
-    // ----- exec / call -------------------------------------------------------------------------
+    // ----- invocations -------------------------------------------------------------------------
     Exec(InvocationTarget),
     Call(InvocationTarget),
     SysCall(InvocationTarget),
     DynExec,
     DynCall,
     ProcRef(InvocationTarget),
+    /// Explicitly expands an eligible fixed body at assembly time.
+    ///
+    /// Parsing a target does not establish body ownership or an explicit import pin. The frontend
+    /// checks eligibility and rejects structural expansion cycles separately from runtime calls.
+    Inline(InvocationTarget),
 
     // ----- debug decorators --------------------------------------------------------------------
     /// Records a source variable location at this point in the generated operation stream.

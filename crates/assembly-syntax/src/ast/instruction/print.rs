@@ -287,7 +287,15 @@ impl PrettyPrint for Instruction {
             Self::EvalCircuit => const_text("eval_circuit"),
             Self::LogDeferred => const_text("log_deferred"),
 
-            // ----- exec / call ------------------------------------------------------------------
+            // ----- invocations ------------------------------------------------------------------
+            Self::Inline(InvocationTarget::MastRoot(key)) => {
+                const_text("inline")
+                    + const_text(".")
+                    + text(format!("{:#x}", DisplayHex(key.as_bytes().as_slice())))
+            },
+            Self::Inline(target) => {
+                flatten(const_text("inline") + const_text(".") + display(target))
+            },
             Self::Exec(InvocationTarget::MastRoot(root)) => flatten(
                 const_text("exec")
                     + const_text(".")
@@ -486,6 +494,7 @@ mod tests {
             ("call", Instruction::Call),
             ("syscall", Instruction::SysCall),
             ("procref", Instruction::ProcRef),
+            ("inline", Instruction::Inline),
         ] {
             let instruction = build(InvocationTarget::MastRoot(Span::unknown(key)));
             assert_eq!(format!("{instruction}"), format!("{mnemonic}.{}", key.to_hex()));

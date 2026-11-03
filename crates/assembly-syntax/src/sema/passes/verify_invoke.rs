@@ -45,8 +45,8 @@ impl From<&Import> for LocalInvokeTarget {
     }
 }
 
-/// This visitor visits every `exec`, `call`, `syscall`, and `procref`, and ensures that the
-/// invocation target for that call is resolvable to the extent possible within the current
+/// This visitor visits every `exec`, `call`, `syscall`, `procref`, and `inline`, and ensures that
+/// the invocation target for that call is resolvable to the extent possible within the current
 /// module's context.
 ///
 /// This means that any reference to an external module must have a corresponding import, and that
@@ -249,6 +249,12 @@ impl VisitMut for VerifyInvokeTargets<'_> {
     fn visit_mut_exec(&mut self, target: &mut InvocationTarget) -> ControlFlow<()> {
         self.visit_mut_invoke_target(target)?;
         self.invoked.insert(Invoke::new(InvokeKind::Exec, target.clone()));
+        ControlFlow::Continue(())
+    }
+    fn visit_mut_inline(&mut self, target: &mut InvocationTarget) -> ControlFlow<()> {
+        self.visit_mut_invoke_target(target)?;
+        // Ownership, explicit pins, and structural cycles require frontend/linker context.
+        self.invoked.insert(Invoke::new(InvokeKind::Inline, target.clone()));
         ControlFlow::Continue(())
     }
     fn visit_mut_procref(&mut self, target: &mut InvocationTarget) -> ControlFlow<()> {
