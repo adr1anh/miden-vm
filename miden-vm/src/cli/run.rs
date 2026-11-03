@@ -7,12 +7,13 @@ use miden_processor::{
     DefaultHost, ExecutionOptions, FastProcessor,
     trace::{VmTrace, build_trace},
 };
-use miden_vm::internal::InputFile;
+use miden_vm::internal::{InputFile, execution_inputs::AdmittedExecutionInputs};
 use miden_vm_stark::memory::{DEFAULT_MAX_PROVER_MEMORY_BYTES, canonical_budget};
 use tracing::instrument;
 
 use super::{
     data::{Libraries, OutputFile},
+    execution_inputs::ExecutionArgs,
     precompile_limits::PrecompileArgs,
     utils::{
         get_masm_program, get_masp_package, load_package_with_handlers,
@@ -60,6 +61,9 @@ pub struct RunCmd {
     #[command(flatten)]
     precompile_limits: PrecompileArgs,
 
+    #[command(flatten)]
+    execution: ExecutionArgs,
+
     /// Number of outputs
     #[arg(short = 'n', long = "num-outputs", default_value = "16")]
     num_outputs: usize,
@@ -86,7 +90,10 @@ impl RunCmd {
     }
 
     pub fn execute(&self) -> Result<(), Report> {
-        let execution_options = self.get_execution_options()?;
+        let inputs = self.execution.admit()?;
+        let execution_options = self
+            .get_execution_options()?
+            .with_environment_trace_limits(inputs.trace_limits());
         println!("===============================================================================");
         println!("Run program: {}", self.program_file.display());
         println!("-------------------------------------------------------------------------------");
@@ -103,8 +110,8 @@ impl RunCmd {
 
         // use a single match expression based on file extension
         let (trace, program_hash) = match ext.as_str() {
-            "masp" => run_masp_program(self, execution_options)?,
-            "masm" => run_masm_program(self, execution_options)?,
+            "masp" => run_masp_program(self, execution_options, &inputs)?,
+            "masm" => run_masm_program(self, execution_options, &inputs)?,
             _ => return Err(Report::msg("The provided file must have a .masm or .masp extension")),
         };
 
@@ -172,10 +179,11 @@ impl RunCmd {
 fn run_masp_program(
     params: &RunCmd,
     exec_options: ExecutionOptions,
+    inputs: &AdmittedExecutionInputs,
 ) -> Result<(VmTrace, [u8; 32]), Report> {
     if params.kernel_file.is_some() {
         return Err(Report::msg(
-            "The `--kernel` option does not apply to a `.masp` package: the package fixes its own kernel.",
+            "The `--kernel` option applies to source assembly; a `.masp` package carries its embedded kernel code.",
         ));
     }
 
@@ -189,7 +197,9 @@ fn run_masp_program(
     let advice_inputs = input_data
         .parse_advice_inputs_with_options(&exec_options)
         .map_err(Report::msg)?;
-    let mut host = DefaultHost::default().with_library(&CoreLibrary::default())?;
+    let mut host = DefaultHost::default()
+        .with_environment_source(inputs.source())
+        .with_library(&CoreLibrary::default())?;
     load_program_package_with_handlers(&mut host, &package, &mut Vec::new())?;
 
     let program_hash: [u8; 32] = program.hash().into();
@@ -198,7 +208,7 @@ fn run_masp_program(
         .map_err(|err| Report::msg(format!("{err}")))?;
 
     let witness = processor
-        .execute_for_proving_sync(&program, &mut host)
+        .execute_for_proving_sync(&program, inputs.environment(), &mut host)
         .wrap_err("Failed to execute program")?;
     let (vm_witness, _) = witness.into_parts();
     let trace = build_trace(vm_witness, &canonical_budget(params.max_prover_memory))
@@ -211,6 +221,7 @@ fn run_masp_program(
 fn run_masm_program(
     params: &RunCmd,
     exec_options: ExecutionOptions,
+    inputs: &AdmittedExecutionInputs,
 ) -> Result<(VmTrace, [u8; 32]), Report> {
     for lib in &params.library_paths {
         if !lib.is_file() {
@@ -242,7 +253,9 @@ fn run_masm_program(
     let advice_inputs = input_data
         .parse_advice_inputs_with_options(&exec_options)
         .map_err(Report::msg)?;
-    let mut host = DefaultHost::default().with_source_manager(source_manager);
+    let mut host = DefaultHost::default()
+        .with_environment_source(inputs.source())
+        .with_source_manager(source_manager);
     host.load_library(&CoreLibrary::default())
         .into_diagnostic()
         .wrap_err("Failed to load core library")?;
@@ -263,16 +276,22 @@ fn run_masm_program(
         (Some(debug_info), Some(entrypoint_source_node_id)) => processor
             .execute_for_proving_with_package_debug_info_at_source_node_sync(
                 &program,
+                inputs.environment(),
                 debug_info,
                 entrypoint_source_node_id,
                 &mut host,
             )
             .wrap_err("Failed to execute program")?,
         (Some(debug_info), None) => processor
-            .execute_for_proving_with_package_debug_info_sync(&program, debug_info, &mut host)
+            .execute_for_proving_with_package_debug_info_sync(
+                &program,
+                inputs.environment(),
+                debug_info,
+                &mut host,
+            )
             .wrap_err("Failed to execute program")?,
         (None, _) => processor
-            .execute_for_proving_sync(&program, &mut host)
+            .execute_for_proving_sync(&program, inputs.environment(), &mut host)
             .wrap_err("Failed to execute program")?,
     };
     let (vm_witness, _) = execution_witness.into_parts();

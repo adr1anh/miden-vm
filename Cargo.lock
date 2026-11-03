@@ -2679,9 +2679,8 @@ dependencies = [
 name = "miden-prover"
 version = "1.0.0-rc.1"
 dependencies = [
+ "clap",
  "hex",
- "serde",
- "serde_json",
  "miden-air",
  "miden-air-definitions",
  "miden-assembly",
@@ -2696,6 +2695,8 @@ dependencies = [
  "miden-verifier",
  "miden-vm-stark",
  "rayon",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

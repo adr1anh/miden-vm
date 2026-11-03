@@ -8,6 +8,7 @@ use miden_vm::{HashFunction, PrecompileLimits, PrecompileStatus, Prover, interna
 
 use super::{
     data::{Libraries, OutputFile, ProofFile},
+    execution_inputs::ExecutionArgs,
     precompile_limits::PrecompileArgs,
     utils::{
         get_masm_program, get_masp_package, load_package_with_handlers,
@@ -55,6 +56,9 @@ pub struct ProveCmd {
 
     #[command(flatten)]
     precompile_limits: PrecompileArgs,
+
+    #[command(flatten)]
+    execution: ExecutionArgs,
 
     /// Generate a complete proof, including a STARK for any precompile work (the default)
     ///
@@ -133,7 +137,10 @@ impl ProveCmd {
     }
     pub fn execute(&self) -> Result<(), Report> {
         // Resolve every policy before loading inputs or executing the program.
-        let execution_options = self.get_execution_options()?;
+        let inputs = self.execution.admit()?;
+        let execution_options = self
+            .get_execution_options()?
+            .with_environment_trace_limits(inputs.trace_limits());
         let verification_limits = execution_options.verification_precompile_limits().clone();
         println!("===============================================================================");
         println!("Prove program: {}", self.program_file.display());
@@ -165,13 +172,15 @@ impl ProveCmd {
 
         let input_data = InputFile::read(&self.input_file, &self.program_file)?;
 
-        let mut host = DefaultHost::default().with_library(&CoreLibrary::default())?;
+        let mut host = DefaultHost::default()
+            .with_environment_source(inputs.source())
+            .with_library(&CoreLibrary::default())?;
         // Use a single match expression to load the program.
         let (program, package_debug_info, entrypoint_source_node) = match ext.as_str() {
             "masp" => {
                 if self.kernel_file.is_some() {
                     return Err(Report::msg(
-                        "The `--kernel` option does not apply to a `.masp` package: the package fixes its own kernel.",
+                        "The `--kernel` option applies to source assembly; a `.masp` package carries its embedded kernel code.",
                     ));
                 }
                 let package = get_masp_package(&self.program_file)?;
@@ -224,16 +233,22 @@ impl ProveCmd {
             (Some(debug_info), Some(entrypoint_source_node_id)) => processor
                 .execute_for_proving_with_package_debug_info_at_source_node_sync(
                     &program,
+                    inputs.environment(),
                     debug_info,
                     entrypoint_source_node_id,
                     &mut host,
                 )
                 .wrap_err("Failed to execute program")?,
             (Some(debug_info), None) => processor
-                .execute_for_proving_with_package_debug_info_sync(&program, debug_info, &mut host)
+                .execute_for_proving_with_package_debug_info_sync(
+                    &program,
+                    inputs.environment(),
+                    debug_info,
+                    &mut host,
+                )
                 .wrap_err("Failed to execute program")?,
             (None, _) => processor
-                .execute_for_proving_sync(&program, &mut host)
+                .execute_for_proving_sync(&program, inputs.environment(), &mut host)
                 .wrap_err("Failed to execute program")?,
         };
         let stack_outputs = *witness.claim().stack_outputs();
@@ -297,8 +312,13 @@ mod tests {
             ),
             (vec!["--max-prover-memory", "2Mi"], 2 << 20, 2 << 20),
         ] {
-            let cmd = ProveCmd::try_parse_from(["prove", "program.masm"].into_iter().chain(args))
-                .unwrap();
+            let cmd = ProveCmd::try_parse_from(
+                ["prove", "program.masm"]
+                    .into_iter()
+                    .chain(crate::cli::execution_inputs::tests::required_args())
+                    .chain(args),
+            )
+            .unwrap();
             let options = cmd.get_execution_options().unwrap();
             let prover = cmd
                 .prover(HashFunction::Blake3_256, options.verification_precompile_limits().clone());
@@ -319,8 +339,12 @@ mod tests {
         let witness =
             state.into_witness(&default_verification_precompile_limits()).unwrap().unwrap();
         for args in [["--max-prover-memory", "1"], ["--max-precompile-elements", "0"]] {
-            let cmd =
-                ProveCmd::try_parse_from(["prove", "program.masm", args[0], args[1]]).unwrap();
+            let cmd = ProveCmd::try_parse_from(
+                ["prove", "program.masm", args[0], args[1]]
+                    .into_iter()
+                    .chain(crate::cli::execution_inputs::tests::required_args()),
+            )
+            .unwrap();
             let options = cmd.get_execution_options().unwrap();
             let error = cmd
                 .prover(HashFunction::Blake3_256, options.verification_precompile_limits().clone())
