@@ -2710,3 +2710,42 @@ pushes or GitHub PRs. Next migrate CLI source/package loaders and CoreLibrary li
 retained or independently admitted naming. Raw inputs need caller-selected profile/context and
 expected mappings; PR10/PR12/PR14 and all previous security/final gates remain open. PR09/M1/overall
 completion is not claimed. Short scratch findings retain exact remaining caller sites.
+
+### PR09 explicit CLI naming and owned consumer imports, 3 November 2026
+
+`48e8e9a37` adds Test::with_library_and_naming and revalidates exact owned pairs plus current raw
+fixture admission before cache lookup. Four regressions cover foreign-home K/D execution, mismatched
+equal-code metadata, raw-after-owned cache reuse and dangling naming. Core tests/benchmark imports
+retain the same CoreLibrary naming; hostile handlers and security/proof assertions are unchanged.
+The helper's full 16-test suite passes, and a real core u64 procedure executes natively through
+the retained import. Manual core/benchmark source, environment and proof adapters remain unmigrated.
+
+`d86140278` adds naming-retaining root library/kernel assembly entrypoints; legacy wrappers share
+the parser/assembly path and preserve debug behavior. Full assembly units: 542 pass, six existing
+ignores, no new skips. `b3c850d40` adds the explicit CLI builtin-exact-v1 naming-input backend and
+source/package loader integration. Caller-selected complete home permissions, codec limits, source
+declaration bindings and independent existing NamingV1 expectations replace discarded/inferred
+naming. Every raw target, embedded kernel and library requires its own expectation; actual admission
+must equal it in full. TypedId always rejects; this generic custom-home profile claims no Protocol,
+publisher or publication validation. JSON byte caps and per-operation codec bounds have separate
+documented accounting scopes, without an allocator/RSS guarantee.
+
+Local source retains AssemblyProduct naming, checks caller entry equality and preserves core/foreign
+metadata through linking; code and private advice remain separate from execution authority. Compile
+now emits Package9 .masp, and producers can export checked NamingV1. Runtime branches share source/raw
+loading and handler registration; handler-section deduplication is published only after successful
+registration. No legacy kernel authority or permissive profile was restored.
+
+**Validation:** VM library/internal tests: 42 pass, including all nine new naming tests; one existing
+socket-file test failed at sandbox-denied UnixListener::bind (EPERM), then passed unchanged in a
+focused sandbox-exempt retry. Strict library Clippy for VM/internal, assembly and test-utils passes;
+assembly/test-utils no_std, scoped formatting and whitespace pass. Source reviews found no remaining
+actionable issue. All three source commits have verified signatures. Root centralized guarded checks;
+bounded agents ran no builds. No pushes or GitHub PRs.
+
+**Open gates:** executable checking finds the removed to_kernel_descriptor call in cli/verify.rs:228;
+the verifier's legacy program-hash/kernel claim path needs PR12 expected-statement migration. No full
+executable/CLI-test/proof success is claimed. Remaining manual core/benchmark source bindings,
+program extraction, native environment/trace setup and legacy claims stay in the scratch source
+index. Existing PR14 compatibility-root, security-counterfactual and guest/project gates remain;
+PR09/M1/final acceptance and PR10/PR12/PR14 work are still open. No proof constant regeneration.
