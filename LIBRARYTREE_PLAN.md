@@ -494,7 +494,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Fresh normal/parallel/streamed fixture evidence and 32 reviewed snapshots are at PR09; 24 unit checks stop at the legacy public-statement adapter. Full production forged matrices/Range+And8 closure, claim12, generated/MASM/recursive/security/qualification remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; fresh processor/parallel/decoder/lookup migration evidence is at PR09, including 24 public-statement failures. Full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate now compiles and runs: 1,866 pass/24 legacy-public-statement failures/one existing ignore; 49 integrations and 69 concurrent replay tests pass. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Wasm consumers `b98d4bf31`, fuzz consumers `9ebd0652e`, VM facade `5d4e4b550`; earlier D5/prover refs below; base `82935d673` | Independent reviews; Wasm 116 tests and all-target strict Clippy; five fuzz targets compile offline and two library tests pass. Prior project 48/assembly project 54/callable 13, processor 1,866/49 integrations/69 concurrent and package/assembly evidence below | CLI execution-input/assembly/verification migration and core producer naming; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; PR12 statement cutover and renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
+| 09 Assembly/packages | in-progress | Latest consumer checkpoint `ed5d3006d`; shared fixtures `22f5089f4`, benchmarks `ef12fb33b`; prior source and fixture SHAs below; base `82935d673` | Independent reviews; three benchmark packages pass all-target compilation/strict Clippy; VM integrations compile and pass arbitrary-feature strict Clippy; scoped native/cache/helper checks and earlier package/assembly/processor/Wasm/fuzz evidence below | VM-owned benchmark and CLI runtime fixtures; fresh PR09 package/assembly gates; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; PR12 statement cutover and renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -2783,3 +2783,39 @@ these focused native tests. Legacy claim construction and every existing PR12/PR
 remain, without padding old public values or refreshing root constants. Next migrate benchmark/VM
 integration source naming and environment/trace consumers; the CLI verification compile error and
 previous claim/security/guest/final gates remain open. PR09, M1 and the overall goal are not complete.
+
+### PR09 benchmark and VM integration consumers, 3 November 2026
+
+`22f5089f4` shares NamedProgram assembly/product conversion through test-utils; core support becomes
+a reexport. Exact artifact/naming, same parsing context and finite environment stay together. The
+fallible conversion preserves calibration's Result contract when valid products exceed fixture
+resource limits; a small valid deep-home product regression verifies error propagation, not panic.
+Helper units 20/external builders 2 and strict library/test Clippy/no_std pass.
+
+`ef12fb33b` migrates Blake3/precompile/synthetic source, calibration and recursive benchmark paths.
+Each actual host gets a fresh matching witness source; execution/proving gets selected environment
+and finite trace policy. Debug entry/source metadata, workload/configuration/measurement axes,
+precompile limits and verification checks stay intact. Local transaction cache v6 additionally binds
+independently selected K_entry/R_E; compatibility, relation, PCS, ProgramInfo and input checks remain.
+Cache tests 2 and snippet tests 5 pass; all targets of all three packages compile/pass strict Clippy.
+This is not a benchmark campaign, baseline refresh, calibration/proof-runtime or performance claim.
+
+`ed5d3006d` migrates VM native/proving/event/advice and bounded witness round-trip fixtures. Reads
+retain the original NamedProgram/environment and preselected capture trace policy, with explicit
+4 MiB wire/16 MiB validation bounds. Structural external forests, byte/metadata/deferred round trips,
+malformed traces, mutations and security assertions remain. Native dynamic/procref/caller oracles
+now derive independent declaration K, retain Core reexport K, and distinguish equal-D module/local
+identities; syscall D is rebuilt from an independently declared root callee K. These are PR09/D2
+native oracles, not deferred proof-compatibility identity changes. Constraint checks are preserved.
+CLI test package construction retains kernel/source naming; CLI command inputs remain unmigrated.
+
+The VM integration target compiles; arbitrary-feature strict Clippy passes. Native events 6 and
+advice-budget 6 pass. Full VM runtime, constraints/witness/proof/recursive paths remain unqualified
+where legacy claims reach PR12. No new skips, weakened attack oracle, padded public values or proof
+root refresh. Scoped formatting/whitespace and three source signatures verified. Root centralized
+AC/heavy-guarded checks; bounded agents ran no builds. No pushes or GitHub PRs.
+
+Next close VM-owned benchmark/CLI fixture consumers and fresh PR09 package/assembly checks. Existing
+CLI verification compile error, PR12 statement transport, PR14 proof-request/compatibility roots,
+security-counterfactual/guest/project/performance and final gates remain. PR09/M1/overall completion
+is not claimed; PR10 and all later planned scope remain intact.
