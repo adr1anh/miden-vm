@@ -318,3 +318,181 @@ fn namespace_replacement_keeps_separate_inline_pin_validation() {
         .expect("namespace replacement must not discard separately supplied inline pins");
     assert!(error.to_string().contains("inline implementation pin does not name"));
 }
+
+#[test]
+fn cache_commitment_requires_a_caller_home_even_for_complete_foreign_bindings() {
+    let missing = NamespaceInputs::new();
+    let bound = missing
+        .clone()
+        .with_callable_binding(declaration("::client::run"), binding("foreign", "entry"))
+        .unwrap();
+    for inputs in [missing, bound] {
+        assert!(
+            inputs
+                .cache_commitment()
+                .unwrap_err()
+                .to_string()
+                .contains("explicit caller NamespacePlan")
+        );
+    }
+    assert!(
+        NamespaceInputs::new()
+            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .cache_commitment()
+            .is_ok(),
+        "an explicitly requested root home is distinct from missing configuration"
+    );
+}
+
+#[test]
+fn cache_commitment_normalizes_resolved_bindings_and_builder_order() {
+    let early = NamespaceInputs::new()
+        .with_callable_path(declaration("::client::run"), canonical("entry"))
+        .unwrap()
+        .with_namespace_plan(home("previous"))
+        .with_callable_binding(declaration("::dep::helper"), binding("foreign", "helper"))
+        .unwrap()
+        .with_namespace_plan(home("caller"));
+    let late = NamespaceInputs::new()
+        .with_namespace_plan(home("caller"))
+        .with_callable_binding(declaration("::dep::helper"), binding("foreign", "helper"))
+        .unwrap()
+        .with_callable_binding(declaration("::client::run"), binding("caller", "entry"))
+        .unwrap();
+    assert_eq!(early.resolved_bindings().unwrap(), late.resolved_bindings().unwrap());
+    assert_eq!(early.cache_commitment().unwrap(), late.cache_commitment().unwrap());
+}
+
+#[test]
+fn cache_commitment_tracks_the_caller_home_with_only_foreign_bindings() {
+    let foreign = NamespaceInputs::new()
+        .with_namespace_plan(home("first"))
+        .with_callable_binding(declaration("::client::run"), binding("foreign", "entry"))
+        .unwrap();
+    let changed = foreign.clone().with_namespace_plan(home("second"));
+    assert_eq!(foreign.resolved_bindings().unwrap(), changed.resolved_bindings().unwrap());
+    assert_ne!(foreign.cache_commitment().unwrap(), changed.cache_commitment().unwrap());
+}
+
+#[test]
+fn cache_commitment_tracks_typed_home_labels_and_complete_home_paths() {
+    use core::num::NonZeroU32;
+
+    let make = |labels| {
+        NamespaceInputs::new()
+            .with_namespace_plan(NamespacePlan::new(labels))
+            .cache_commitment()
+            .unwrap()
+    };
+    let text = make(vec![CanonicalLabel::text("1").unwrap()]);
+    let revision = make(vec![CanonicalLabel::revision(NonZeroU32::new(1).unwrap())]);
+    assert_ne!(text, revision);
+    assert_ne!(
+        make(vec![CanonicalLabel::text("a::b").unwrap()]),
+        make(vec![CanonicalLabel::text("a").unwrap(), CanonicalLabel::text("b").unwrap()])
+    );
+    assert_ne!(
+        make(vec![CanonicalLabel::typed_id(7, b"id", |_, _| Ok(())).unwrap()]),
+        make(vec![CanonicalLabel::typed_id(8, b"id", |_, _| Ok(())).unwrap()])
+    );
+}
+
+#[test]
+fn cache_commitment_tracks_complete_foreign_binding_homes_and_paths() {
+    let make = |foreign| {
+        NamespaceInputs::new()
+            .with_namespace_plan(home("caller"))
+            .with_callable_binding(declaration("::client::run"), foreign)
+            .unwrap()
+            .cache_commitment()
+            .unwrap()
+    };
+    let original = make(binding("foreign", "entry"));
+    assert_ne!(original, make(binding("other-foreign", "entry")));
+    assert_ne!(original, make(binding("foreign", "other-entry")));
+}
+
+#[test]
+fn cache_commitment_frames_semantic_callable_path_components() {
+    let make = |components| {
+        NamespaceInputs::new()
+            .with_namespace_plan(home("caller"))
+            .with_callable_path(
+                declaration("::client::run"),
+                CallableProcedurePath::from_semantic_components(components).unwrap(),
+            )
+            .unwrap()
+            .cache_commitment()
+            .unwrap()
+    };
+    assert_ne!(make(vec!["a::b".to_string()]), make(vec!["a".to_string(), "b".to_string()]));
+    assert_ne!(
+        make(vec!["ab".to_string(), "c".to_string()]),
+        make(vec!["a".to_string(), "bc".to_string()])
+    );
+}
+
+#[test]
+fn cache_commitment_preserves_exact_defining_source_path_bytes() {
+    let make = |source_path| {
+        NamespaceInputs::new()
+            .with_namespace_plan(home("caller"))
+            .with_callable_path(declaration(source_path), canonical("entry"))
+            .unwrap()
+            .cache_commitment()
+            .unwrap()
+    };
+    let original = make("::client::run");
+    assert_ne!(original, make("::client::other"));
+    assert_ne!(original, make("::client::\"run\""));
+    assert_ne!(original, make("::client::::run"));
+}
+
+#[test]
+fn cache_commitment_includes_unreferenced_declaration_metadata() {
+    let original = inputs("caller");
+    for with_bound in [false, true] {
+        let extra = if with_bound {
+            original.clone().with_callable_binding(
+                declaration("::absent::helper"),
+                binding("foreign", "helper"),
+            )
+        } else {
+            original
+                .clone()
+                .with_callable_path(declaration("::absent::helper"), canonical("helper"))
+        }
+        .unwrap();
+        assert_ne!(original.cache_commitment().unwrap(), extra.cache_commitment().unwrap());
+    }
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn project_cache_does_not_claim_complete_snapshots_of_inherited_ast_or_declarations() {
+    let context = TestContext::default();
+    let base = Assembler::new(context.source_manager()).with_namespace_inputs(inputs("caller"));
+    assert!(base.project_cache_commitment("dev").unwrap().is_some());
+    let mut source = base.clone();
+    source
+        .compile_and_statically_link(
+            context.parse_module("namespace dep\npub proc helper push.7 end").unwrap(),
+        )
+        .unwrap();
+    assert!(source.project_cache_commitment("dev").unwrap().is_none());
+    let mut declared = base;
+    declared
+        .link_callable_declarations(
+            declaration("::dep"),
+            [CallableDeclaration::new(
+                Ident::new("helper").unwrap(),
+                binding("foreign", "helper"),
+            )],
+        )
+        .unwrap();
+    assert!(declared.linker().modules().iter().all(|module| module.is_mast()));
+    assert!(
+        declared.project_cache_commitment("dev").unwrap().is_none(),
+        "declaration-only modules must not be mistaken for committed package inputs"
+    );
+}
