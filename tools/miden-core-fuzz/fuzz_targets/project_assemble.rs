@@ -15,15 +15,25 @@ use std::{
 };
 
 use libfuzzer_sys::fuzz_target;
-use miden_assembly::{Assembler, ProjectTargetSelector};
+use miden_assembly::{
+    Assembler, NamespaceInputs, ProjectSourceInputs, ProjectTargetSelector, TargetAssemblyContext,
+};
+use miden_assembly_syntax::{
+    PathComponent,
+    diagnostics::{IntoDiagnostic, Report},
+};
 use miden_core::serde::{Deserializable, Serializable, SliceReader};
+use miden_core_fuzz::naming::{SyntheticProfile, check_naming_admission, source_home};
 use miden_mast_package::{
-    Package as MastPackage, SectionId, TargetType, debug_info::PackageDebugInfo,
+    CallableBinding, CallableProcedurePath, NamespacePlan, Package as MastPackage, SectionId,
+    TargetType, debug_info::PackageDebugInfo, interface::serialization::CodecLimits,
 };
 use miden_package_registry::InMemoryPackageRegistry;
 
 const MAX_MANIFEST_SNIPPET_LEN: usize = 40 * 1024;
 const EXECUTABLE_TARGET: &str = "main";
+const NAMING_LIMITS: CodecLimits =
+    CodecLimits::new(4 * 1024 * 1024, 100_000, 100_000, 4 * 1024 * 1024);
 
 static NEXT_DIR_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -255,15 +265,60 @@ fn assemble_project(manifest_path: &Path, target: ProjectTargetSelector<'_>, pro
     let assembler = Assembler::default();
     let mut registry = InMemoryPackageRegistry::default();
 
-    let Ok(mut project_assembler) = assembler.for_project_at_path(manifest_path, &mut registry)
-    else {
-        return;
-    };
-    let Ok(package) = project_assembler.assemble(target, profile) else {
-        return;
-    };
+    let mut project_assembler = assembler
+        .for_project_at_path(manifest_path, &mut registry)
+        .expect("the controlled project manifest must load");
+    project_assembler
+        .with_namespace_inputs_provider(source_namespace_inputs)
+        .with_package_naming_provider(|package| {
+            package
+                .admit_naming(&SyntheticProfile::packages(), &true, NAMING_LIMITS)
+                .map_err(Report::msg)
+        });
+    let package = project_assembler
+        .assemble(target, profile)
+        .expect("the controlled library, executable and kernel fixtures must assemble");
 
     validate_package(&package);
+}
+
+/// The harness explicitly names its complete fixed source cohort, including private helpers and
+/// entrypoints. Dependency requests choose the default home before these declarations are bound.
+/// Public kernel definitions use unique root labels; their private helpers keep a child home.
+fn source_namespace_inputs(
+    context: &TargetAssemblyContext<'_>,
+    sources: &ProjectSourceInputs,
+    _base: &Assembler,
+) -> Result<NamespaceInputs, Report> {
+    let home = context
+        .dependency_binding
+        .map_or_else(source_home, |binding| binding.namespace_plan());
+    let mut inputs = NamespaceInputs::new().with_namespace_plan(home.clone());
+    for module in
+        core::iter::once(sources.root.as_ref()).chain(sources.support.iter().map(Box::as_ref))
+    {
+        for procedure in module.procedures() {
+            let declaration = module.path().join(procedure.name());
+            let (binding_home, components) =
+                if context.target.is_kernel() && procedure.visibility().is_exported() {
+                    (NamespacePlan::new(vec![]), vec![procedure.name().to_string()])
+                } else {
+                    let mut components = Vec::new();
+                    for component in declaration.components() {
+                        let component = component.into_diagnostic()?;
+                        if component != PathComponent::Root {
+                            components.push(component.as_str().to_owned());
+                        }
+                    }
+                    (home.clone(), components)
+                };
+            let canonical =
+                CallableProcedurePath::from_semantic_components(components).into_diagnostic()?;
+            let binding = CallableBinding::new(binding_home, canonical).into_diagnostic()?;
+            inputs = inputs.with_callable_binding(declaration.into(), binding)?;
+        }
+    }
+    Ok(inputs)
 }
 
 fn validate_package(package: &MastPackage) {
@@ -276,19 +331,34 @@ fn validate_package(package: &MastPackage) {
     let canonical = package.to_bytes();
     let redecoded = MastPackage::read_from_bytes(&canonical)
         .expect("an assembled package must satisfy its own wire format");
+    assert_eq!(redecoded, *package, "assembled package must round-trip through its wire format");
+
+    let profile = SyntheticProfile::packages();
+    let naming = check_naming_admission(package, &profile, &true, NAMING_LIMITS)
+        .expect("assembled fixtures must use the harness's independently selected homes");
     assert_eq!(
-        redecoded, *package,
-        "assembled package must round-trip through its wire format"
+        check_naming_admission(&redecoded, &profile, &true, NAMING_LIMITS).unwrap(),
+        naming
+    );
+    let trusted = MastPackage::read_from_bytes_trusted(&canonical).unwrap();
+    assert_eq!(trusted, *package);
+    assert_eq!(
+        check_naming_admission(&trusted, &profile, &true, NAMING_LIMITS).unwrap(),
+        naming
     );
 
     // These conversion helpers borrow the package, despite the `try_into_*` names.
     match package.kind {
         TargetType::Executable => {
-            let _ = package.try_into_program();
+            package
+                .try_into_program(&naming)
+                .expect("assembled executable has an explicit entry");
             let _ = package.try_embedded_kernel_package();
         },
         TargetType::Kernel => {
-            let _ = package.to_kernel_descriptor();
+            package
+                .check_kernel_code(&naming)
+                .expect("assembled kernel exports named root code");
             let _ = package.kernel_module_descriptor();
         },
         _ if package.is_library() => {
