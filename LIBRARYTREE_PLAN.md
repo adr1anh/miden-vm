@@ -494,7 +494,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Fresh normal/parallel/streamed fixture evidence and 32 reviewed snapshots are at PR09; 24 unit checks stop at the legacy public-statement adapter. Full production forged matrices/Range+And8 closure, claim12, generated/MASM/recursive/security/qualification remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; fresh processor/parallel/decoder/lookup migration evidence is at PR09, including 24 public-statement failures. Full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate now compiles and runs: 1,866 pass/24 legacy-public-statement failures/one existing ignore; 49 integrations and 69 concurrent replay tests pass. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | D5 helpers `db3b3b668`, config `dbebdfd51`, source routing `520574869`; prover fixtures `b33d07fab`; prior refs below; base `82935d673` | Independent source reviews; project 48, assembly project 54/callable 13; strict project/prover library+test and assembly-library Clippy, project no_std/formatting. Previous processor 1,866/49 integrations/69 concurrent, assembly Nextest540/6 skips and package289/one ignored evidence below | Complete artifact-callable expectations, automatic target naming/distinct instances (PR10); remaining VM/CLI/wasm/fuzz/tooling consumers. PR12 statement cutover still gates 24 unit checks; zero-root-principal security fixtures require renewed counterfactual evidence. Inherited native/generated/MASM/recursive/security/fuzz gates remain open |
+| 09 Assembly/packages | in-progress | Wasm consumers `b98d4bf31`, fuzz consumers `9ebd0652e`, VM facade `5d4e4b550`; earlier D5/prover refs below; base `82935d673` | Independent reviews; Wasm 116 tests and all-target strict Clippy; five fuzz targets compile offline and two library tests pass. Prior project 48/assembly project 54/callable 13, processor 1,866/49 integrations/69 concurrent and package/assembly evidence below | CLI execution-input/assembly/verification migration and core producer naming; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; PR12 statement cutover and renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
 | 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
@@ -2573,3 +2573,53 @@ processor/proof run or regeneration was launched. All four source commits have v
 Separate README/SPEC updates describe actual configuration and current limits; scratch findings
 index exact source locations, while logs remain separate. No pushes or GitHub PRs. Overall goal,
 PR09/M1 and the remaining CLI/wasm/fuzz/PR10/PR12/inherited acceptance gates remain active.
+
+
+### PR09 Wasm/fuzz consumers and VM facade checkpoint, 3 November 2026
+
+`b98d4bf31` migrates Wasm handler source/project fixtures and the calibration bench to exact naming,
+independent bounded environment inputs and matching opening sources. Local compiler naming is
+retained through artifact extraction. Both local and project wire-roundtrip execution uses the
+pre-wire expected PackageNaming, detecting changed labels/entry even within an admitted home;
+handler sections are compared exactly. Project fixtures explicitly select their namespace/naming
+providers. Existing ABI/fuel/resource/capability/panic/mutation/embedded-kernel assertions remain.
+The two test-utils dependency edges are recorded in the main lockfile.
+
+`9ebd0652e` migrates five fuzz targets and shares an explicit finite synthetic naming policy.
+Detached callable-codec synthetic TypedId recognition remains exact; package policy recognizes
+only independently enumerated built-in homes and rejects every TypedId. Generated valid named
+packages execute semantic checks before hostile-input rejection, including different K sharing D,
+private retained roots, explicit private entry and entryless candidates. Safe/trusted admission,
+canonical byte equality, revocation, selected-root/key/program-code, debug, embedded-kernel and
+workspace-inheritance oracles remain. Controlled source/project fixtures require successful assembly
+with explicit source inputs; they no longer silently discard fixed valid cases. Body-changing
+metamorphic checks cover 32 selectors and require exactly the two public selected bodies to change,
+while names/entry remain stable. No corpus or generated artifact was rewritten.
+
+`5d4e4b550` exposes the existing execution descriptor/key/root/environment, finite policy, witness
+source/request/error and program-building primitives through miden-vm's public facade. This is a
+source-level reexport update; no whole-VM compilation/runtime/proof claim is made. CoreLibrary
+build.rs still needs explicit producer target naming before that build is ready.
+
+**Fresh guarded validation:** miden-wasm-event-handlers library 7, WAT/package E2E 3 and handler 78
+pass; four Rust-guest cases were command-filtered to avoid nested guest compilation, with their
+assertions intact. miden-wasm-event-handlers-project library 5/config 23 pass; its two cargo-building
+project E2E cases remain unrun. Strict all-target Clippy for both crates passes, including bench/test
+compilation. The standalone fuzz library and callable_inventory_codec/package_deserialize/
+package_semantic_deserialize/project_assemble/project_load compile with locked/offline dependencies
+and shared target cache. Its two library tests pass, including the 32-selector semantic matrix;
+this is not fuzz-campaign/sanitizer/throughput qualification. Scoped formatting/whitespace pass.
+All three source commits have verified signatures. Two source implementers, two independent
+reviewers and one CLI source auditor ran no builds. Root centralized the focused checks; no broad
+processor, whole-VM/core, proof or guest generation was launched. No pushes or GitHub PRs.
+
+**Next concrete CLI slice:** add a shared execution-input admission layer independent of packages
+and private advice: exact caller K_entry/R_E, finite opening/ledger/session/trace policies and a
+bounded local opening source using existing exact EnvNode decoding/child slots. Do not infer a
+production home/profile, ID or descriptor from package/body/source data. CLI argument names and
+bounded local input layout are implementation design. Source/package loaders then need explicit
+NamespaceInputs and retained/admitted PackageNaming pairs; core artifacts must be injected with
+owned naming. Embedded kernel remains code/handler supply, not authority. Verify must obtain the
+independently authorized expected statement; PR12 owns actual claim/proof activation. Existing
+CLI methods still call superseded APIs and old program-hash/kernel authority, so remain unqualified.
+Scratch source index records exact sites. PR09/M1/overall goal and all remaining acceptance stay open.
