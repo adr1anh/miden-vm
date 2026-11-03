@@ -2,7 +2,7 @@
 
 This brief owns current handoff. [LIBRARYTREE_PLAN.md](LIBRARYTREE_PLAN.md) alone owns backlog, scope, dependencies, acceptance and durable evidence. `PR_DESCRIPTION.md` is final branch review scope, never discovery.
 
-Verified 3 November 2026: branch `adr1anh/librarytree-09-keyed-packages`, HEAD `b6807f1b700b92849ceeede66d511f1b7bc29705`, base `82935d6733278d871ab1f3f5a7e94f88b6e468d9`. Builder/frontend/graph sources are uncommitted; `.scratch/` stays untracked; documentation commits follow. Recheck Git/status.
+Verified 3 November 2026: branch `adr1anh/librarytree-09-keyed-packages`, HEAD `9c802b5a54747e44942982861f6f07a659aec538`, base `82935d6733278d871ab1f3f5a7e94f88b6e468d9`. Builder/frontend/graph sources are uncommitted; `.scratch/` stays untracked; documentation commits follow. Recheck Git/status.
 
 PR09 is **in-progress**; PR02–08 remain implemented-awaiting-validation. Root owns integration, documentation, guarded checks/commits. Callable paths and semantic cleanup are committed. Builder owns MAST builder/finalizer/import files and keyed tests, fixing P1 loss of independent helper/callback roots. Frontend owns `assembler/callable_identity_tests.rs` and unused getter removal. Graph owns scheduling, linker `{mod,callgraph,namespaces}.rs` and cycle tests: runtime reachability separately from source-alias cycles. No root compile while owners write. Findings: `.scratch/librarytree/findings-pr09-{assembler,package}.md`. Explicit-inline syntax/API remains pending; expansion is unimplemented. `PR_DESCRIPTION.md` remains final PR08 scope.
 
@@ -12,6 +12,8 @@ D2 preserves MASM syntax and stack/memory conventions after rebuilding; digest-s
 
 Read plan **PR09**, superseding **PR04/08/12** gates, **invariants 1–10**, **D2/D3**, **Workflow**, then assigned findings/source. Selected cache `assembly.md`: frontend §§3.2/4.1/5.1–5.3/6.2; package §§7.1–7.2. Older stage indices are historical.
 
-PR09 package215 pass/one manual seed ignored, strict package Clippy/no_std; syntax317 and strict Clippy pass. First actual assembly library check passes with legacy inline-copy warnings; focused tests await stable integration. Prior PR08 checks remain in the plan. Current normal private suites await PR09 integration; relocation/sidecar unit tests remain unrun. PR07 AIR383 pass/legacy-claim failure remains PR12. Full forged/global/generated/MASM/recursive/security/benchmark/fuzz gates remain. Plan owns durable evidence; logs stay separate. Root runs powerguards before heavy work.
+Passed: package215 (one manual seed ignored), syntax317, scoped Clippy/no_std. First actual assembly library check passes with legacy inline-copy warnings; focused tests await stable integration. Prior PR08 checks remain in the plan. Normal private/relocation/sidecar checks await PR09 integration. PR07 AIR383 pass/legacy-claim failure remains PR12. Full forged/global/generated/MASM/recursive/security/benchmark/fuzz gates remain. Plan owns durable evidence; logs stay separate. Root runs powerguards before heavy work.
+
+PR15a schedules AIR/Chiplets cleanup after PR15 and before PR16; current implementation remains the integration baseline.
 
 Cache `.scratch/librarytree/reference-cache/` has Page/date/hash provenance. Archives/duplicates/whole chapters are outside routine input. Use fresh bounded agents with exclusive files and applicable constraints. No pushes/GitHub PRs. Continue while required external inputs remain pending.

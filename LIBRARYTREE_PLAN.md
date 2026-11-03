@@ -41,6 +41,9 @@ Use `LIBRARYTREE_CURRENT.md` for the current handoff, then read only the active 
 
 Use one local branch per proposed PR in a **linear stack**: PR NN has PR NN−1 as its Git parent/base, even when its semantic dependency list is shorter. Research and design can proceed in parallel according to semantic dependencies; shared-worktree edits must have clear ownership. Branch names below are exact defaults using the required `adr1anh/` prefix. PR 00 starts from the baseline. Keep incomplete/noncompiling units as an unsubmitted local stack with deferred checks recorded. **Do not create any GitHub PR, including a draft, until the user explicitly says to do so.** No push or publication is required to execute the local stack.
 
+The deferred AIR/Chiplets cleanup inserts PR 15a between PR 15 and PR 16; existing numbers and
+completed branch history stay unchanged. PR 16 qualifies the final post-cleanup relation.
+
 Intermediate tips may fail to compile during the intentional breaking cutover. Record the exact known failure and the PR expected to resolve it. That permission does not waive soundness, malicious-input, native/recursive or final tests. Do not expose or release host-only keyed dispatch as a completed proof system. The final tip must build, lint, test and regenerate cleanly.
 
 Choose many focused, reviewable commits as work proceeds; do not freeze commit counts now. Before each slice, identify the invariant/refactor it delivers, touched consumers and focused acceptance evidence. Prefer refactor/remove/reuse over duplicate resolvers, interpreters, codecs, builders or compatibility layers. If newly discovered coupling changes a boundary, update this plan in a **separate signed documentation commit**, never mixed with implementation.
@@ -93,6 +96,9 @@ Add EXEC control opcode 0x5f and target-only Exec/Call/SysCall nodes that hash K
 
 Extract logical Controller-address handling and checked relocation/sentinel rules; do not shift VM clocks, context IDs or memory/overflow addresses. Simplify Memory equations and reusable degree-reduced arithmetic with equivalence evidence. Preserve current relation behavior where possible and explicit lookup multiplicity ownership.
 
+PR 15a revisits Controller counter/address ownership and removes relocation machinery if the
+validated cleanup makes it unnecessary. This follow-up does not waive PR 03's outstanding checks.
+
 **Acceptance:** sequential/parallel traces agree; old/new Memory equations agree in context-change cases; writes preserve untouched slots/read-only/range rules; address conversion occurs once including valid logical zero and saved/replayed states; native/generated evaluator values/order/degrees agree. **Checks:** `cargo test -p miden-air-definitions --lib vm::constraints::chiplets`; `cargo test -p miden-processor --lib --features concurrent trace::parallel`; `cargo test -p miden-air --test constraint_capture --test generated_drift --test ace_codegen`.
 
 ### PR 04 Namespace plans and declaration-only interfaces
@@ -126,6 +132,10 @@ Resolve `(R_E,K)->(N,D,opening)` before typed D-indexed code loading. Share prep
 **New:** `crates/air/source/src/vm/constraints/chiplets/library/{mod,columns,tests}.rs`, `crates/air/source/src/vm/constraints/lookup/buses/library.rs`, `crates/air/source/src/vm/trace/chiplets/library.rs`, `processor/src/trace/chiplets/library/{mod,trace,tests}.rs`. **Existing:** chiplet selectors/columns/Memory/ACE/hasher control, lookup messages/buses, main trace schema, chiplet/parallel assembly and `processor/src/trace/tests/lookup.rs`.
 
 Implement two-row Env/Merkle/Mast, complete reverse Lists, unit Open edges, normal/syscall Resolve frequencies, local four-coordinate syscall equations, compression interning and checked counts. Realize selected packed bands, 22 Library cells, ninth periodic column and `[4,4,3,2]` lookup groups without a fifth AIR or new Chiplets auxiliary column. Finalize prefix before physical address conversion.
+
+Keep this implementation as the integration baseline. After functional integration through PR 15,
+PR 15a revisits physical region order, clock ownership and trace packing; no redesign is required in
+the current in-flight work, and every existing security/acceptance gate still applies.
 
 **Acceptance:** forged full matrices reject list early-exit/midchain/CV/namespace/depth/padding changes, unrooted Open, false selectors/prefix exit, missing PAD/Controller initialization, cross-band/cyclic transitions and weighted namespace cancellation after dependent helpers are recomputed. Capture complete base/extension constraint and lookup degrees; degree ≤9 and capacity are measured gates. **Checks:** `cargo test -p miden-air-definitions --lib library`; `cargo test -p miden-processor --lib library`; generated capture/drift checks and `cargo test -p miden-processor --lib trace::tests::lookup`.
 
@@ -227,11 +237,38 @@ Replace root-only verification flags and implicit Program/kernel reconstruction 
 
 **Acceptance:** run/prove/verify round trips across supported transcript hashes, stopped witnesses and deferred/complete proof paths; changed expected descriptor fields/legacy flags/artifacts fail explicitly; allocation/budget checks precede execution; optional code hints cannot override bindings. **Checks:** `make test-vm test=cli::`; focused `prove_verify::`/`flow_control::` filters in the existing `miden-cli` integration test binary; compile supported public and no_std surfaces. Run the final commands in PR 16 before declaring release readiness.
 
-## Stage 5 Qualification and release evidence
+## Stage 5 AIR cleanup, qualification and release evidence
+
+### PR 15a Revisit AIR and Chiplets trace cleanup
+
+**Branch:** `adr1anh/librarytree-15a-air-cleanup`. **Git base:** PR 15. **Semantic dependencies:**
+03, 06–08 and functional/native/recursive/public integration through 12–15. Planned follow-up;
+do not create this branch or interrupt current implementation now.
+
+Revisit the AIR/trace choices from PRs 03/06–08 against the integrated system. The preferred
+direction is a Controller-owned one-based address counter: anchor it at Controller entry, increment
+only within Controller, preserve absent-zero semantics and evaluate reusing its cell outside that
+region. It need not equal the global Chiplets row number. Review Controller-first/Library-second
+against Library-first with a local counter; choose and record the validated simpler design rather
+than assuming physical order follows selector priority. Simplify selectors, overlays, writers,
+initialization and replay/address adapters; remove physical-prefix retagging if no longer needed.
+
+**Acceptance:** preserve 24 main/four auxiliary columns, four AIRs, nine periodics, `[4,4,3,2]`
+lookup capacity and measured degree≤9. Preserve rooted unit Open, every Resolve demand, complete
+Lists, full syscall namespace checks, statement/deferred obligations, resource bounds and D2.
+Keep Core/Memory/ACE operation clocks separate from Controller addresses. Test counter forgery,
+entry/exit/reentry, A/B and eight-row alignment, padding, sentinels and stopped/parallel replay.
+Capture actual MAIN/extension/lookup degrees and compare padded height and trace behavior.
+
+Own regeneration and rebinding of every affected native/generated/MASM/recursive evaluator,
+layout, constant, relation root and verifier identity after PR 14's initial migration; update PVM
+artifacts only if its emitted code/relation changes. Require focused adversarial checks, native/
+recursive parity and clean regeneration before PR 16. Record the chosen layout and evidence in
+this ledger. Existing deferred checks remain required; cleanup is not a substitute for them.
 
 ### PR 16 Adversarial, performance and final qualification
 
-**Branch:** `adr1anh/librarytree-16-qualification`. **Git base:** PR 15. **Semantic dependencies:** all implementation PRs and resolved release gates.
+**Branch:** `adr1anh/librarytree-16-qualification`. **Git base:** PR 15a. **Semantic dependencies:** all implementation PRs, completed PR 15a cleanup and resolved release gates. Qualify the final post-cleanup relation and regenerated identities.
 
 **Existing files:** processor decoder/lookup/full-matrix harness and parallel tests, generated capture/drift/ACE tests, VM prove_verify integration, core-lib proof-order/security suites, Stark security/memory accounting and registered `miden-vm/benches/build_trace.rs`. **New:** `miden-vm/tests/integration/librarytree.rs`, registered in existing integration main; a real VM proof benchmark registered explicitly in `miden-vm/Cargo.toml` if no existing harness supplies the required measurements. Add a concise checked-in qualification report only once measured evidence exists.
 
@@ -335,7 +372,8 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 13 Core library | planned | — | — | Depends on 09–12 and supported ABI |
 | 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
-| 16 Qualification | planned | — | — | Entire stack and release gates |
+| 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
+| 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
 ## Implementation evidence
 
