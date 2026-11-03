@@ -346,13 +346,15 @@ fn run_program_with_handler(
     handler: Option<Arc<dyn EventHandler>>,
 ) -> Result<ExecutionOutput, ExecutionError> {
     let library = CoreLibrary::default();
-    let program = Assembler::default()
+    let assembler = Assembler::default()
         .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
-        .unwrap()
-        .assemble_program("ed25519_test", source)
-        .expect("Ed25519 verification interface must assemble")
-        .unwrap_program();
-    let mut host = DefaultHost::default().with_library(&library).unwrap();
+        .unwrap();
+    let named =
+        crate::naming::assemble(assembler, "ed25519_test", source, &[library.naming().as_ref()]);
+    let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
+        .with_library(&library)
+        .unwrap();
     if let Some(handler) = handler {
         assert!(host.replace_handler(ED25519_DECOMPRESS_EVENT_NAME, handler).unwrap());
     }
@@ -362,10 +364,11 @@ fn run_program_with_handler(
     let output = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default().with_stack(advice),
-        ExecutionOptions::default(),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .unwrap()
-    .execute_sync(&program, &mut host);
+    .execute_sync(&named.program, named.environment.execution(), &mut host);
     if let Ok(output) = &output {
         assert!(output.advice.stack().is_empty(), "signature witness must be consumed");
     }

@@ -189,6 +189,14 @@ fn core_packages_do_not_block_sibling_miden_namespaces() {
         .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("official Miden packages should link");
 
+    let mut names = miden_assembly::testing::FixtureNamespace::assembly_tests();
+    names
+        .add_module(&protocol_utils)
+        .expect("protocol utility declarations must be named");
+    let assembler = names
+        .configure(assembler, [protocol_utils.as_ref()])
+        .expect("protocol utility naming must be explicit");
+
     assembler
         .assemble_library("miden-protocol-utils", protocol_utils, None::<Box<Module>>)
         .expect("official packages must not claim the parent of miden::protocol_utils");
@@ -238,6 +246,8 @@ mod helpers;
 mod mast_forest_merge;
 mod math;
 mod mem;
+#[path = "support/naming.rs"]
+mod naming;
 mod pcs;
 mod precompiles;
 mod stark_asserts;

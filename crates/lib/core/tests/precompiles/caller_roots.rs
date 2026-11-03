@@ -15,7 +15,10 @@ use miden_precompiles::{
 use super::helpers::{
     masm_store_felts, read_memory_felts, read_stack_felts, run_precompile_program as run_raw,
 };
-use crate::helpers::{assert_exported_manual_root, masm_push_word};
+use crate::{
+    helpers::{assert_exported_manual_root, masm_push_word},
+    naming::assemble,
+};
 
 fn run_precompile_program(
     source: &str,
@@ -518,13 +521,18 @@ fn manual_hashes_reject_forged_digest_advice() {
         let source = format!(
             "begin push.6513249 push.128 mem_store push.256 push.3 push.128 exec.::miden::core::precompiles::hashes::{module}::hash_bytes_mem_with_root end"
         );
-        let program = Assembler::default()
-            .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
-            .unwrap()
-            .assemble_program("forged_manual_hash", source)
-            .unwrap()
-            .unwrap_program();
-        let mut host = DefaultHost::default().with_library(&library).unwrap();
+        let program = assemble(
+            Assembler::default()
+                .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
+                .unwrap(),
+            "forged_manual_hash",
+            source,
+            &[library.naming()],
+        );
+        let mut host = DefaultHost::default()
+            .with_environment_source(program.environment.source())
+            .with_library(&library)
+            .unwrap();
         assert!(host.replace_handler(event, handler).unwrap());
         let error = FastProcessor::new_with_options(
             StackInputs::default(),
@@ -532,7 +540,7 @@ fn manual_hashes_reject_forged_digest_advice() {
             ExecutionOptions::default(),
         )
         .unwrap()
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program.program, program.environment.execution(), &mut host)
         .unwrap_err();
         assert!(
             matches!(error,ExecutionError::DeferredError { ref err, .. } if matches!(err.root(),PrecompileError::AssertionFailed)),

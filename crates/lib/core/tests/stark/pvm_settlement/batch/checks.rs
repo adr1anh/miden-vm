@@ -15,15 +15,17 @@ use miden_core::{
 use miden_core_lib::{CoreLibrary, PVM_PROOF_REQUEST_EVENT_NAME};
 use miden_precompiles_stark::recursive::PvmRecursiveVerifierInputs;
 use miden_processor::{
-    DefaultHost, ExecutionError, ExecutionOptions, FastProcessor, ProcessorState, Program,
-    StackInputs,
+    DefaultHost, ExecutionError, ExecutionOptions, FastProcessor, ProcessorState, StackInputs,
     advice::{AdviceInputs, AdviceMutation},
     operation::OperationError,
 };
 use miden_prover::Prover;
 
 use super::{PvmSettlementHost, assemble_batch, batch_inputs, prove_ecdsa_execution};
-use crate::support::ecdsa::{generator_public_key_fixture, valid_fixture};
+use crate::{
+    naming::{NamedProgram, assemble},
+    support::ecdsa::{generator_public_key_fixture, valid_fixture},
+};
 
 #[tokio::test(flavor = "current_thread")]
 async fn batch_root_and_response_checks() {
@@ -60,14 +62,16 @@ async fn batch_root_and_response_checks() {
         &core_lib,
         vec![first_witness.clone(), second_witness, repeated_witness],
     );
+    host.inner = host.inner.with_environment_source(program.environment.source());
 
     let witness = FastProcessor::new_with_options(
         stack_inputs,
         advice_inputs.clone(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .unwrap()
-    .execute_for_proving(&program, &mut host)
+    .execute_for_proving(&program.program, program.environment.execution(), &mut host)
     .await
     .expect("batch settlement failed");
     let precompile_proof = host.precompile_proof.take().unwrap();
@@ -112,14 +116,17 @@ async fn batch_root_and_response_checks() {
     let wrong_commitment = Word::new(elements[1..5].try_into().unwrap());
     let wrong_advice = advice_inputs
         .with_map([(wrong_commitment, Word::words_as_elements(&commitments).to_vec())]);
-    let mut host = DefaultHost::default().with_library(&core_lib).unwrap();
+    let mut host = DefaultHost::default()
+        .with_environment_source(program.environment.source())
+        .with_library(&core_lib)
+        .unwrap();
     let error = FastProcessor::new_with_options(
         wrong_batch_input,
         wrong_advice,
         ExecutionOptions::default(),
     )
     .unwrap()
-    .execute_sync(&program, &mut host)
+    .execute_sync(&program.program, program.environment.execution(), &mut host)
     .expect_err("accepted a claim list with the wrong public hash");
     assert_failed_assertion(error);
 
@@ -128,32 +135,35 @@ async fn batch_root_and_response_checks() {
     let error =
         FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
             .unwrap()
-            .execute_sync(&program, &mut host)
+            .execute_sync(&program.program, program.environment.execution(), &mut host)
             .expect_err("accepted an odd number of claims");
     assert_failed_assertion(error);
 
     // With only TRUE roots, the batch needs no PVM proof. This host has no request handler.
     let (stack_inputs, advice_inputs) = batch_inputs(&core_lib, &[(&plain, &plain_claim); 2]);
-    let witness =
-        FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
-            .unwrap()
-            .execute_for_proving_sync(&program, &mut host)
-            .expect("a batch with no deferred work requested a PVM proof");
+    let witness = FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        ExecutionOptions::default()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+    )
+    .unwrap()
+    .execute_for_proving_sync(&program.program, program.environment.execution(), &mut host)
+    .expect("a batch with no deferred work requested a PVM proof");
     assert!(!witness.has_precompiles());
 }
 
 fn prove_without_precompiles() -> (ExecutionProof, ExecutionClaim) {
-    let program = Assembler::default()
-        .assemble_program("no_precompiles", "begin push.7 drop end")
-        .unwrap()
-        .unwrap_program();
+    let program = assemble(Assembler::default(), "no_precompiles", "begin push.7 drop end", &[]);
+    let mut host = DefaultHost::default().with_environment_source(program.environment.source());
     let witness = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .unwrap()
-    .execute_for_proving_sync(&program, &mut DefaultHost::default())
+    .execute_for_proving_sync(&program.program, program.environment.execution(), &mut host)
     .unwrap();
     let claim = witness.claim();
     let proof = Prover::new().with_hash_fn(HashFunction::Eidos).prove(witness).unwrap();
@@ -162,7 +172,7 @@ fn prove_without_precompiles() -> (ExecutionProof, ExecutionClaim) {
 
 fn assert_rejects_pvm_response(
     core_lib: &CoreLibrary,
-    program: &Program,
+    program: &NamedProgram,
     stack_inputs: StackInputs,
     advice_inputs: AdviceInputs,
     proof: &PrecompileProof,
@@ -172,7 +182,10 @@ fn assert_rejects_pvm_response(
     let response_root = response.claim_commitment();
     let requests = Arc::new(AtomicUsize::new(0));
     let handler_requests = Arc::clone(&requests);
-    let mut host = DefaultHost::default().with_library(core_lib).unwrap();
+    let mut host = DefaultHost::default()
+        .with_environment_source(program.environment.source())
+        .with_library(core_lib)
+        .unwrap();
     host.register_handler(
         PVM_PROOF_REQUEST_EVENT_NAME,
         Arc::new(move |process: &ProcessorState<'_>| {
@@ -195,7 +208,7 @@ fn assert_rejects_pvm_response(
     let error =
         FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
             .unwrap()
-            .execute_sync(program, &mut host)
+            .execute_sync(&program.program, program.environment.execution(), &mut host)
             .expect_err("accepted a PVM proof of different deferred work");
     assert_eq!(requests.load(Ordering::Relaxed), 1, "MASM did not receive the PVM response");
     assert_failed_assertion(error);

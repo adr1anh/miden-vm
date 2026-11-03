@@ -1,7 +1,7 @@
 use miden_assembly::Linkage;
 use miden_processor::{
-    ContextId, DefaultHost, ExecutionError, FastProcessor, Felt, ONE, Program, StackInputs, Word,
-    ZERO, operation::OperationError, trace::RowIndex,
+    ContextId, DefaultHost, ExecutionError, FastProcessor, Felt, ONE, StackInputs, Word, ZERO,
+    operation::OperationError, trace::RowIndex,
 };
 use miden_utils_testing::{
     AdviceStack, build_expected_compress, build_expected_hash, expect_exec_error_matches,
@@ -74,15 +74,18 @@ fn test_memcopy_words() {
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
 
-    let program: Program = assembler
-        .assemble_program("program", source)
-        .expect("Failed to compile test source.")
-        .unwrap_program();
+    let named =
+        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
-    let mut host = DefaultHost::default().with_library(&core_lib).unwrap();
+    let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
+        .with_library(&core_lib)
+        .unwrap();
 
     let processor = FastProcessor::new(StackInputs::default());
-    let exec_output = processor.execute_sync(&program, &mut host).unwrap();
+    let exec_output = processor
+        .execute_sync(&named.program, named.environment.execution(), &mut host)
+        .unwrap();
 
     let dummy_clk = RowIndex::from(0_usize);
 
@@ -192,15 +195,18 @@ fn test_memcopy_elements() {
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
 
-    let program: Program = assembler
-        .assemble_program("program", source)
-        .expect("Failed to compile test source.")
-        .unwrap_program();
+    let named =
+        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
-    let mut host = DefaultHost::default().with_library(&core_lib).unwrap();
+    let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
+        .with_library(&core_lib)
+        .unwrap();
 
     let processor = FastProcessor::new(StackInputs::default());
-    let exec_output = processor.execute_sync(&program, &mut host).unwrap();
+    let exec_output = processor
+        .execute_sync(&named.program, named.environment.execution(), &mut host)
+        .unwrap();
 
     for addr in 2002_u32..2020_u32 {
         assert_eq!(

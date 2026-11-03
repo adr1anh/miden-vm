@@ -6,7 +6,7 @@
 //! in the parent module uses the executions' deferred witness data to generate a PVM proof when
 //! MASM requests it.
 
-use miden_assembly::{Assembler, Linkage};
+use miden_assembly::{Assembler, Linkage, Parse, testing::FixtureNamespace};
 use miden_core::{
     Felt, Word,
     chiplets::hasher,
@@ -15,15 +15,16 @@ use miden_core::{
     proof::{ExecutionProof, HashFunction, PrecompileStatus},
 };
 use miden_core_lib::CoreLibrary;
-use miden_processor::{
-    ExecutionOptions, FastProcessor, Program, StackInputs, advice::AdviceInputs,
-};
+use miden_processor::{ExecutionOptions, FastProcessor, StackInputs, advice::AdviceInputs};
 use miden_prover::Prover;
 use miden_verifier::Verifier;
 use miden_vm_stark::recursive::RecursiveVerifierInputs;
 
 use super::{PvmSettlementHost, prove_ecdsa_execution};
-use crate::support::ecdsa::{generator_public_key_fixture, valid_fixture};
+use crate::{
+    naming::{NamedProgram, from_product},
+    support::ecdsa::{generator_public_key_fixture, valid_fixture},
+};
 
 mod checks;
 
@@ -48,14 +49,19 @@ async fn batch_settles_deferred_obligations_with_one_pvm_proof() {
     // D = digest(AND(D1, D2)) from their portable witnesses.
     let expected_root = fold_deferred_root(roots[0], roots[1]);
     let mut host = PvmSettlementHost::new(&core_lib, vec![first_witness, second_witness]);
+    host.inner = host.inner.with_environment_source(program.environment.source());
 
     // Execution awaits the PVM proof, then MASM verifies it against the combined root.
-    let witness =
-        FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
-            .unwrap()
-            .execute_for_proving(&program, &mut host)
-            .await
-            .expect("batch settlement failed");
+    let witness = FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        ExecutionOptions::default()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+    )
+    .unwrap()
+    .execute_for_proving(&program.program, program.environment.execution(), &mut host)
+    .await
+    .expect("batch settlement failed");
     let precompile_proof = host.precompile_proof.take().expect("the host did not produce a proof");
     assert_eq!(precompile_proof.roots, roots);
     assert_eq!(precompile_proof.aggregate_root(), Some(expected_root));
@@ -79,13 +85,10 @@ async fn batch_settles_deferred_obligations_with_one_pvm_proof() {
     assert!(outcome.vm_security_parameters().conjectured_security_level() >= 95);
 }
 
-fn assemble_batch(core_lib: &CoreLibrary) -> Program {
-    let mut assembler = Assembler::default()
+fn assemble_batch(core_lib: &CoreLibrary) -> NamedProgram {
+    let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .unwrap();
-    assembler
-        .compile_and_statically_link(include_str!("batch.masm"))
-        .expect("failed to link the batch verifier");
 
     let source = r#"
         use batch
@@ -101,10 +104,25 @@ fn assemble_batch(core_lib: &CoreLibrary) -> Program {
             exec.run_batch_example
         end
     "#;
+    let batch = Parse::parse(
+        include_str!("batch.masm"),
+        assembler.warnings_as_errors(),
+        assembler.source_manager(),
+    )
+    .expect("failed to parse the batch verifier");
+    let root = Parse::parse(source, assembler.warnings_as_errors(), assembler.source_manager())
+        .expect("failed to parse the batcher");
+    let mut fixture = FixtureNamespace::assembly_tests();
+    fixture.add_module(&batch).unwrap();
+    fixture.add_module(&root).unwrap();
+    let mut assembler = fixture.configure(assembler, [&*batch, &*root]).unwrap();
     assembler
-        .assemble_program("batch_precompile_settlement", source)
-        .expect("failed to assemble the batcher")
-        .unwrap_program()
+        .compile_and_statically_link(batch)
+        .expect("failed to link the batch verifier");
+    let product = assembler
+        .assemble_executable_modules("batch_precompile_settlement".into(), root, [])
+        .expect("failed to assemble the batcher");
+    from_product(product, &[core_lib.naming()])
 }
 
 /// Put the claims and proofs where the MASM batcher can read them.

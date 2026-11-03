@@ -852,14 +852,18 @@ fn run_core_program(
     handler: Option<HandlerOverride>,
 ) -> Result<ExecutionOutput, ExecutionError> {
     let core_lib = CoreLibrary::default();
-    let program = Assembler::default()
+    let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
-        .expect("failed to link core library")
-        .assemble_program("core_ecdsa_p256_sha256_test", source)
-        .expect("failed to assemble core ECDSA P-256 test program")
-        .unwrap_program();
+        .expect("failed to link core library");
+    let named = crate::naming::assemble(
+        assembler,
+        "core_ecdsa_p256_sha256_test",
+        source,
+        &[core_lib.naming().as_ref()],
+    );
 
     let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
         .with_library(&core_lib)
         .expect("failed to load CoreLibrary into the host");
     if let Some((event, handler)) = handler {
@@ -872,11 +876,12 @@ fn run_core_program(
     let processor = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default().with_stack(advice_stack),
-        ExecutionOptions::default(),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .expect("processor construction");
 
-    let output = processor.execute_sync(&program, &mut host);
+    let output = processor.execute_sync(&named.program, named.environment.execution(), &mut host);
     if let Ok(output) = &output {
         assert!(output.advice.stack().is_empty(), "core ECDSA wrapper must consume advice");
     }

@@ -575,10 +575,12 @@ fn callable_from_a_kernel_procedure() {
     use miden_assembly::{
         Assembler, DefaultSourceManager, Linkage, Path,
         ast::{Module, ModuleKind},
+        package::TargetType,
+        testing::FixtureNamespace,
     };
     use miden_core::program::{StackInputs, StackOutputs};
     use miden_core_lib::CoreLibrary;
-    use miden_processor::{DefaultHost, FastProcessor};
+    use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor};
 
     let secret = sample();
     let public_key = recipient().public_key();
@@ -611,28 +613,47 @@ fn callable_from_a_kernel_procedure() {
         assembler
             .link_package(core.package(), Linkage::Dynamic, core.naming().clone())
             .unwrap();
-        let kernel = Arc::from(assembler.assemble_kernel("kernel", kernel, None).unwrap());
-        let program = Assembler::with_kernel(source_manager, Arc::clone(&kernel))
+        let mut kernel_fixture = FixtureNamespace::assembly_tests();
+        kernel_fixture.add_kernel_modules(&assembler, &[kernel.as_ref()]).unwrap();
+        let kernel_product = kernel_fixture
+            .configure(assembler, [kernel.as_ref()])
             .unwrap()
-            .assemble_program(
-                "kernel-dh",
-                r#"proc user
+            .assemble_library_modules("kernel".into(), kernel, [], TargetType::Kernel)
+            .unwrap();
+        let kernel_naming = kernel_product.naming().clone();
+        let kernel = Arc::from(kernel_product.into_artifact(true).unwrap());
+        let assembler =
+            Assembler::with_kernel(source_manager, Arc::clone(&kernel), kernel_naming.clone())
+                .unwrap();
+        let named = crate::naming::assemble(
+            assembler,
+            "kernel-dh",
+            r#"proc user
                     push.456 mem_store.64
                     syscall.agree
                     mem_load.64 eq.456 assert.err="caller memory"
                 end
                 begin call.user end"#,
-            )
-            .unwrap()
-            .unwrap_program();
+            &[core.naming().as_ref(), &kernel_naming],
+        );
         let inputs = StackInputs::new(commitment.as_elements()).unwrap();
-        let mut host = DefaultHost::default().with_library(&core).unwrap();
-        host.load_library(kernel.mast_forest()).unwrap();
-        let witness = FastProcessor::new(inputs)
-            .with_advice(advice)
-            .unwrap()
-            .execute_for_proving_sync(&program, &mut host)
+        let mut host = DefaultHost::default()
+            .with_environment_source(named.environment.source())
+            .with_library(&core)
             .unwrap();
+        host.load_library(kernel.mast_forest()).unwrap();
+        let witness =
+            FastProcessor::new(inputs)
+                .with_options(
+                    ExecutionOptions::default().with_environment_trace_limits(
+                        miden_utils_testing::librarytree::trace_limits(),
+                    ),
+                )
+                .unwrap()
+                .with_advice(advice)
+                .unwrap()
+                .execute_for_proving_sync(&named.program, named.environment.execution(), &mut host)
+                .unwrap();
         let expected: Vec<_> =
             expected(&secret, &public_key).into_iter().map(Felt::new_unchecked).collect();
         assert_eq!(witness.claim().stack_outputs(), &StackOutputs::new(&expected).unwrap());

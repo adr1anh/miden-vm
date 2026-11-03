@@ -320,25 +320,30 @@ fn truncate_call_for_module(module: &str) -> &'static str {
 
 fn run_core_program(source: &str) -> Result<ExecutionOutput, ExecutionError> {
     let core_lib = CoreLibrary::default();
-    let program = Assembler::default()
+    let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
-        .expect("failed to link core library")
-        .assemble_program("core_hash_compat_test", source)
-        .expect("failed to assemble core hash compatibility test program")
-        .unwrap_program();
+        .expect("failed to link core library");
+    let named = crate::naming::assemble(
+        assembler,
+        "core_hash_compat_test",
+        source,
+        &[core_lib.naming().as_ref()],
+    );
 
     let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
         .with_library(&core_lib)
         .expect("failed to load CoreLibrary into the host");
 
     let processor = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .expect("processor construction");
 
-    let output = processor.execute_sync(&program, &mut host);
+    let output = processor.execute_sync(&named.program, named.environment.execution(), &mut host);
     if let Ok(output) = &output {
         assert!(output.advice.stack().is_empty(), "core hash wrappers must consume advice");
     }
