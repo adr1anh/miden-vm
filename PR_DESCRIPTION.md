@@ -1,24 +1,9 @@
-# PR11: exact immutable advice resource lengths
+Execution claims now bind the caller-selected entry key and environment root alongside public stack I/O. Processor witnesses retain the actual authenticated descriptor; native verification and CLI verification consume that expected statement independently of code/debug metadata or execution evidence.
 
-Fixed-format resource loaders consumed a compiled prefix without checking the complete advice-map
-value length. They now reject short or appended values before copying or semantic use: both ACE
-streams, eight VM/PVM query rows and the FRI row. The shared ACE renderer and checked-in wrappers
-carry the same length assertion; existing hash, Merkle, codec and domain checks remain intact.
-Arbitrary/private/transaction advice keys and calling conventions remain supported. No optional ABI,
-initialization or resource-inventory schema is introduced.
+The branch activates claim40/domain v2, transport format3, Core36/Chiplets4 public groups, deferred-only aux4 and three fixed external lookup terms. It removes kernel-list/count authority, updates the MASM claim/transcript/boundary bridge, and regenerates the protocol5 relation coherently. A fresh owner-selected Eidos fixture verifies natively. Existing preprocessing commitments remain unchanged. Downstream fixtures and benchmark consumers use explicit descriptors; inherited strict lint violations are cleared.
 
-**Stack base:** PR10 `eefae17e7be44b130044bb5e53b6d1eec3dc2b9b`.
+Stack base: PR11 `10bc8a5f0`; semantic dependencies: PR01/06/07, with PR09 naming fixtures.
 
-Central guarded validation:
+Validation: core/AIR378 and processor1891 pass (one existing ignore); affected integration1641/1659 passes; all-target strict repository Clippy passes14 crates including both benchmark consumers; five no_std surfaces pass. Deterministic generation/check and committed generated-file drift checks pass. Native claim-coordinate mutations, CLI public-only verification, direct MASM proof/claim/transcript/boundary hooks and all resource-loader controls pass. Commits are signed.
 
-- Eight actual-loader tests run: seven pass, one VM valid control remains failing. All 33 malformed
-  length/hash cases pass independently; PVM, query-row and FRI valid controls pass.
-- Renderer alignment and mixed advice-key transport tests pass. The latter removes real debug data
-  and checks values/stable dependency commitments through trusted and normal readers.
-- Core-library test target and ACE/package all-target strict Clippy pass; independent reviews pass.
-
-**Open qualification:** the VM embeds 7,920 circuit felts while its wrapper expects 6,992. The valid
-control stays unignored. Full generation check fails; the generator refuses to write because its
-pinned ACE digest is stale. No identity, proof constant or compatibility whitelist was refreshed.
-PR12/PR14 must complete coherent relation/statement/recursive qualification; all inherited security
-and final gates remain open. No GitHub PRs or pushes.
+Eighteen checks remain enabled: fifteen request paths register under implementation D but fetch via procref key K, assigned to planned PR14 typed identities/requestv2; three unchanged scatter/security cost gates require deliberate PR13 inline choices. The failing security cost gate precedes its numeric matrix. Compatibility-root whitelists were not refreshed. Full recursive, adversarial/principal, guest, fuzz, performance and final qualification remain open; PR12 is implemented-awaiting-validation. No GitHub PR or push was created.
