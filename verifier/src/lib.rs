@@ -18,7 +18,7 @@ pub use miden_core::{
     deferred::{DeferredRoot, PrecompileError, PrecompileLimits, PreparationError},
     program::{
         EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, ProcedureKey, StackInputs,
-        StackOutputs,
+        StackOutputs, VerifierIdentity,
     },
     proof::{
         ExecutionProof, ExecutionProofCompatibility, ExecutionProofCompatibilityError,
@@ -27,7 +27,7 @@ pub use miden_core::{
 };
 use miden_core::{
     deferred::{MAX_PRECOMPILE_ROOTS, PrecompileRegistry, TRUE_DIGEST},
-    proof::{CURRENT_PVM_VERIFIER_ROOT, CURRENT_VM_VERIFIER_ROOT, MAX_STARK_PROOF_BYTES},
+    proof::{CURRENT_PVM_VERIFIER_IDENTITY, CURRENT_VM_VERIFIER_IDENTITY, MAX_STARK_PROOF_BYTES},
 };
 #[cfg(test)]
 use miden_stark::air::Statement;
@@ -37,8 +37,8 @@ use miden_vm_stark::setup::config::eidos_config;
 
 struct VerifierSupport {
     format: u8,
-    accepted_vm_roots: &'static [Word],
-    accepted_pvm_roots: &'static [Word],
+    accepted_vm_identities: &'static [VerifierIdentity],
+    accepted_pvm_identities: &'static [VerifierIdentity],
 }
 
 impl VerifierSupport {
@@ -47,10 +47,14 @@ impl VerifierSupport {
         if compatibility.format() != self.format {
             return Err(VerificationError::UnsupportedProofFormat(compatibility.format()));
         }
-        if !roots_overlap(compatibility.vm_verifier_roots(), self.accepted_vm_roots) {
+        if !identities_overlap(compatibility.vm_verifier_identities(), self.accepted_vm_identities)
+        {
             return Err(VerificationError::IncompatibleVmVerifier);
         }
-        if !roots_overlap(compatibility.pvm_verifier_roots(), self.accepted_pvm_roots) {
+        if !identities_overlap(
+            compatibility.pvm_verifier_identities(),
+            self.accepted_pvm_identities,
+        ) {
             return Err(VerificationError::IncompatiblePvmVerifier);
         }
 
@@ -60,8 +64,8 @@ impl VerifierSupport {
 
 const VERIFIER_SUPPORT_V3: VerifierSupport = VerifierSupport {
     format: ExecutionProofCompatibility::FORMAT_V3,
-    accepted_vm_roots: &[CURRENT_VM_VERIFIER_ROOT],
-    accepted_pvm_roots: &[CURRENT_PVM_VERIFIER_ROOT],
+    accepted_vm_identities: &[CURRENT_VM_VERIFIER_IDENTITY],
+    accepted_pvm_identities: &[CURRENT_PVM_VERIFIER_IDENTITY],
 };
 
 // VERIFIER
@@ -423,8 +427,11 @@ pub use miden_vm_stark::verifier::VerificationError as StarkVerificationError;
 // HELPER FUNCTIONS
 // ================================================================================================
 
-fn roots_overlap(proof_roots: &[Word], accepted_roots: &[Word]) -> bool {
-    proof_roots.iter().any(|root| accepted_roots.contains(root))
+fn identities_overlap(
+    proof_identities: &[VerifierIdentity],
+    accepted_identities: &[VerifierIdentity],
+) -> bool {
+    proof_identities.iter().any(|identity| accepted_identities.contains(identity))
 }
 
 // TESTS
@@ -454,6 +461,16 @@ mod tests {
             Felt::new(0).unwrap(),
         ]
         .into()
+    }
+
+    fn verifier_identity(value: u64) -> VerifierIdentity {
+        // Opaque synthetic metadata; wrapping does not derive or authorize this identity.
+        VerifierIdentity::new(Word::new([
+            Felt::new(value).unwrap(),
+            Felt::ZERO,
+            Felt::ZERO,
+            Felt::ZERO,
+        ]))
     }
 
     fn vm_proof(precompile_root: Word) -> VmProof {
@@ -670,12 +687,12 @@ mod tests {
     }
 
     #[test]
-    fn verifier_requires_compatible_vm_and_pvm_roots() {
+    fn verifier_requires_compatible_vm_and_pvm_identities() {
         let proof = complete(TRUE_DIGEST, None);
         let incompatible_vm = ExecutionProof::from_parts(
             ExecutionProofCompatibility::new(
-                vec![root(100)],
-                VERIFIER_SUPPORT_V3.accepted_pvm_roots.to_vec(),
+                vec![verifier_identity(100)],
+                VERIFIER_SUPPORT_V3.accepted_pvm_identities.to_vec(),
             )
             .unwrap(),
             proof.vm().clone(),
@@ -683,8 +700,8 @@ mod tests {
         );
         let incompatible_pvm = ExecutionProof::from_parts(
             ExecutionProofCompatibility::new(
-                VERIFIER_SUPPORT_V3.accepted_vm_roots.to_vec(),
-                vec![root(200)],
+                VERIFIER_SUPPORT_V3.accepted_vm_identities.to_vec(),
+                vec![verifier_identity(200)],
             )
             .unwrap(),
             proof.vm().clone(),
@@ -703,35 +720,44 @@ mod tests {
 
     #[test]
     fn current_proof_compatibility_excludes_verifier_history() {
-        const OLD_VM_ROOT: Word = Word::new([
+        // Synthetic historical identities exercise this test's separate support policy.
+        const OLD_VM_IDENTITY: VerifierIdentity = VerifierIdentity::new(Word::new([
             Felt::new_unchecked(1),
             Felt::new_unchecked(0),
             Felt::new_unchecked(0),
             Felt::new_unchecked(0),
-        ]);
-        const OLD_PVM_ROOT: Word = Word::new([
+        ]));
+        const OLD_PVM_IDENTITY: VerifierIdentity = VerifierIdentity::new(Word::new([
             Felt::new_unchecked(2),
             Felt::new_unchecked(0),
             Felt::new_unchecked(0),
             Felt::new_unchecked(0),
-        ]);
+        ]));
         const SUPPORT: VerifierSupport = VerifierSupport {
             format: ExecutionProofCompatibility::FORMAT_V3,
-            accepted_vm_roots: &[OLD_VM_ROOT, CURRENT_VM_VERIFIER_ROOT],
-            accepted_pvm_roots: &[OLD_PVM_ROOT, CURRENT_PVM_VERIFIER_ROOT],
+            accepted_vm_identities: &[OLD_VM_IDENTITY, CURRENT_VM_VERIFIER_IDENTITY],
+            accepted_pvm_identities: &[OLD_PVM_IDENTITY, CURRENT_PVM_VERIFIER_IDENTITY],
         };
 
         let proof = complete(TRUE_DIGEST, None);
 
-        assert_eq!(proof.compatibility().vm_verifier_roots(), &[CURRENT_VM_VERIFIER_ROOT]);
-        assert_eq!(proof.compatibility().pvm_verifier_roots(), &[CURRENT_PVM_VERIFIER_ROOT]);
+        assert_eq!(proof.compatibility().vm_verifier_identities(), &[CURRENT_VM_VERIFIER_IDENTITY]);
+        assert_eq!(
+            proof.compatibility().pvm_verifier_identities(),
+            &[CURRENT_PVM_VERIFIER_IDENTITY]
+        );
 
         let old_compatible = ExecutionProof::from_parts(
-            ExecutionProofCompatibility::new(vec![OLD_VM_ROOT], vec![OLD_PVM_ROOT]).unwrap(),
+            ExecutionProofCompatibility::new(vec![OLD_VM_IDENTITY], vec![OLD_PVM_IDENTITY])
+                .unwrap(),
             proof.vm().clone(),
             proof.precompile().clone(),
         );
         assert!(SUPPORT.check(&old_compatible).is_ok());
+        assert!(matches!(
+            VERIFIER_SUPPORT_V3.check(&old_compatible),
+            Err(VerificationError::IncompatibleVmVerifier)
+        ));
     }
 
     #[test]

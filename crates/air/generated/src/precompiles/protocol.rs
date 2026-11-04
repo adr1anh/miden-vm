@@ -137,7 +137,7 @@ mod tests {
     use super::*;
     use crate::precompiles::policy;
 
-    const UPDATE_HINT: &str = "an intentional relation change must update PINS in crates/air/generated/src/precompiles/protocol.rs and CURRENT_PVM_VERIFIER_ROOT in core/src/proof.rs";
+    const UPDATE_HINT: &str = "an intentional relation change must update PINS in crates/air/generated/src/precompiles/protocol.rs and rederive CURRENT_PVM_VERIFIER_IDENTITY in core/src/proof.rs from the qualified embedded verifier profile";
 
     #[test]
     fn embedded_circuit_matches_the_authored_relation() {

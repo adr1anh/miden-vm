@@ -103,7 +103,8 @@ mod tests {
 
     const UPDATE_HINT: &str = "an intentional relation change must update the pinned constants \
                                in crates/air/generated/src/vm/config.rs and update \
-                               CURRENT_VM_VERIFIER_ROOT in core/src/proof.rs";
+                               rederive CURRENT_VM_VERIFIER_IDENTITY in core/src/proof.rs \
+                               from the qualified embedded verifier profile";
 
     /// Every authored AIR must fit within the degree admitted by the production PCS policy.
     #[test]

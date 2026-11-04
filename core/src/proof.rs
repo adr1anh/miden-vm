@@ -11,6 +11,7 @@ use crate::{
     Word,
     crypto::hash::Blake3_256,
     deferred::{DeferredRoot, MAX_PRECOMPILE_ROOTS, PrecompileWitness, fold_deferred_root},
+    program::VerifierIdentity,
     serde::{
         BudgetedReader, ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable,
         SliceReader,
@@ -26,20 +27,26 @@ pub const MAX_STARK_PROOF_BYTES: usize = 64 * 1024 * 1024;
 const DEFERRED_PROOF_DISCRIMINANT: u8 = 0;
 const COMPLETE_PROOF_DISCRIMINANT: u8 = 1;
 
-/// The recursive VM verifier root declared by proofs from the current prover.
-pub const CURRENT_VM_VERIFIER_ROOT: Word = Word::new([
-    crate::Felt::new_unchecked(6531317477902291971),
-    crate::Felt::new_unchecked(6330145662319840937),
-    crate::Felt::new_unchecked(1346989877885786889),
-    crate::Felt::new_unchecked(2977526316393511162),
-]);
-/// The recursive precompile verifier root declared by proofs from the current prover.
-pub const CURRENT_PVM_VERIFIER_ROOT: Word = Word::new([
-    crate::Felt::new_unchecked(7107144425070209002),
-    crate::Felt::new_unchecked(3878108566258647521),
-    crate::Felt::new_unchecked(6191699580199477240),
-    crate::Felt::new_unchecked(3714974346477231786),
-]);
+/// The declared identity of the current recursive VM verifier profile.
+///
+/// Captured from the native profile's relation, entry key, and exact configuration; the profile
+/// parity test checks that derivation against the current verifier artifacts.
+pub const CURRENT_VM_VERIFIER_IDENTITY: VerifierIdentity = VerifierIdentity::new(Word::new([
+    crate::Felt::new_unchecked(1296826861425311155),
+    crate::Felt::new_unchecked(3087799817876503572),
+    crate::Felt::new_unchecked(8944196526185342626),
+    crate::Felt::new_unchecked(3286879713004126183),
+]));
+/// The declared identity of the current recursive precompile verifier profile.
+///
+/// Captured from the native profile's relation, entry key, and exact configuration; the profile
+/// parity test checks that derivation against the current verifier artifacts.
+pub const CURRENT_PVM_VERIFIER_IDENTITY: VerifierIdentity = VerifierIdentity::new(Word::new([
+    crate::Felt::new_unchecked(6963383701663350617),
+    crate::Felt::new_unchecked(2262645465322750605),
+    crate::Felt::new_unchecked(6097343931062184292),
+    crate::Felt::new_unchecked(3701016618575808391),
+]));
 
 // HASH FUNCTION
 // ================================================================================================
@@ -242,15 +249,17 @@ impl Deserializable for PrecompileProof {
     }
 }
 
-/// The transport format and recursive verifier roots declared by an execution proof.
+/// The transport format and opaque verifier identities declared by an execution proof.
 ///
-/// Verifier roots are listed in chronological order, with the newest root last. Root order does
-/// not affect compatibility checks.
+/// Identities are listed in chronological order, with the newest identity last. Identity order
+/// does not affect compatibility checks. Construction and decoding preserve these declarations;
+/// they do not authenticate identity derivation, authorize execution, or establish compatibility.
+/// Consumers must apply their own admission checks and verify the proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionProofCompatibility {
     format: u8,
-    vm_verifier_roots: Vec<Word>,
-    pvm_verifier_roots: Vec<Word>,
+    vm_verifier_identities: Vec<VerifierIdentity>,
+    pvm_verifier_identities: Vec<VerifierIdentity>,
 }
 
 impl ExecutionProofCompatibility {
@@ -262,29 +271,32 @@ impl ExecutionProofCompatibility {
     ///
     /// # Errors
     ///
-    /// Returns an error if either verifier root list contains duplicates.
+    /// Returns an error if either verifier identity list contains duplicates.
     pub fn new(
-        vm_verifier_roots: Vec<Word>,
-        pvm_verifier_roots: Vec<Word>,
+        vm_verifier_identities: Vec<VerifierIdentity>,
+        pvm_verifier_identities: Vec<VerifierIdentity>,
     ) -> Result<Self, ExecutionProofCompatibilityError> {
-        if has_duplicate(&vm_verifier_roots) {
-            return Err(ExecutionProofCompatibilityError::DuplicateVmVerifierRoot);
+        if has_duplicate(&vm_verifier_identities) {
+            return Err(ExecutionProofCompatibilityError::DuplicateVmVerifierIdentity);
         }
-        if has_duplicate(&pvm_verifier_roots) {
-            return Err(ExecutionProofCompatibilityError::DuplicatePvmVerifierRoot);
+        if has_duplicate(&pvm_verifier_identities) {
+            return Err(ExecutionProofCompatibilityError::DuplicatePvmVerifierIdentity);
         }
 
         Ok(Self {
             format: Self::FORMAT_V3,
-            vm_verifier_roots,
-            pvm_verifier_roots,
+            vm_verifier_identities,
+            pvm_verifier_identities,
         })
     }
 
     /// Returns the compatibility declared by proofs produced by the current prover.
     pub fn current() -> Self {
-        Self::new(alloc::vec![CURRENT_VM_VERIFIER_ROOT], alloc::vec![CURRENT_PVM_VERIFIER_ROOT])
-            .expect("current execution proof compatibility must not contain duplicate roots")
+        Self::new(
+            alloc::vec![CURRENT_VM_VERIFIER_IDENTITY],
+            alloc::vec![CURRENT_PVM_VERIFIER_IDENTITY],
+        )
+        .expect("current execution proof compatibility must not contain duplicate identities")
     }
 
     /// Returns the transport format.
@@ -292,33 +304,32 @@ impl ExecutionProofCompatibility {
         self.format
     }
 
-    /// Returns the VM verifier roots which can be used to verify this proof.
+    /// Returns the VM verifier identities declared by this proof.
     ///
-    /// The roots are unique and listed in chronological order with the most recent verifier listed
-    /// last.
-    pub fn vm_verifier_roots(&self) -> &[Word] {
-        &self.vm_verifier_roots
+    /// The identities are unique and listed in chronological order with the most recent verifier
+    /// listed last. This metadata does not authenticate or authorize the named verifiers.
+    pub fn vm_verifier_identities(&self) -> &[VerifierIdentity] {
+        &self.vm_verifier_identities
     }
 
-    /// Returns the precompile VM verifier roots which can be used to verify the precompile proof
-    /// associated with this execution proof, if any.
+    /// Returns the precompile VM verifier identities declared by this proof.
     ///
-    /// The roots are unique and listed in chronological order with the most recent verifier listed
-    /// last.
-    pub fn pvm_verifier_roots(&self) -> &[Word] {
-        &self.pvm_verifier_roots
+    /// The identities are unique and listed in chronological order with the most recent verifier
+    /// listed last. This metadata does not authenticate or authorize the named verifiers.
+    pub fn pvm_verifier_identities(&self) -> &[VerifierIdentity] {
+        &self.pvm_verifier_identities
     }
 }
 
 /// Errors returned while constructing execution proof compatibility metadata.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ExecutionProofCompatibilityError {
-    /// The VM verifier root list contains a duplicate.
-    #[error("VM verifier roots must not contain duplicates")]
-    DuplicateVmVerifierRoot,
-    /// The precompile VM verifier root list contains a duplicate.
-    #[error("PVM verifier roots must not contain duplicates")]
-    DuplicatePvmVerifierRoot,
+    /// The VM verifier identity list contains a duplicate.
+    #[error("VM verifier identities must not contain duplicates")]
+    DuplicateVmVerifierIdentity,
+    /// The precompile VM verifier identity list contains a duplicate.
+    #[error("PVM verifier identities must not contain duplicates")]
+    DuplicatePvmVerifierIdentity,
 }
 
 /// The state of precompile work associated with an execution proof.
@@ -428,8 +439,8 @@ impl ExecutionProof {
 impl Serializable for ExecutionProof {
     fn write_into<W: ByteWriter>(&self, target: &mut W) {
         target.write_u8(self.compatibility.format);
-        self.compatibility.vm_verifier_roots.write_into(target);
-        self.compatibility.pvm_verifier_roots.write_into(target);
+        self.compatibility.vm_verifier_identities.write_into(target);
+        self.compatibility.pvm_verifier_identities.write_into(target);
         self.write_into_v3(target);
     }
 }
@@ -443,18 +454,19 @@ impl Deserializable for ExecutionProof {
             )));
         }
 
-        let vm_verifier_roots = Vec::<Word>::read_from(source)?;
-        let pvm_verifier_roots = Vec::<Word>::read_from(source)?;
-        let compatibility = ExecutionProofCompatibility::new(vm_verifier_roots, pvm_verifier_roots)
-            .map_err(|error| DeserializationError::InvalidValue(error.to_string()))?;
+        let vm_verifier_identities = Vec::<VerifierIdentity>::read_from(source)?;
+        let pvm_verifier_identities = Vec::<VerifierIdentity>::read_from(source)?;
+        let compatibility =
+            ExecutionProofCompatibility::new(vm_verifier_identities, pvm_verifier_identities)
+                .map_err(|error| DeserializationError::InvalidValue(error.to_string()))?;
 
         Self::read_from_v3(source, compatibility)
     }
 
     fn min_serialized_size() -> usize {
         u8::min_serialized_size()
-            + Vec::<Word>::min_serialized_size()
-            + Vec::<Word>::min_serialized_size()
+            + Vec::<VerifierIdentity>::min_serialized_size()
+            + Vec::<VerifierIdentity>::min_serialized_size()
             + ExecutionProof::min_serialized_size_v3()
     }
 }
@@ -590,9 +602,9 @@ impl Deserializable for StarkProof {
 // HELPER FUNCTIONS
 // ================================================================================================
 
-fn has_duplicate(roots: &[Word]) -> bool {
+fn has_duplicate(identities: &[VerifierIdentity]) -> bool {
     let mut unique = BTreeSet::new();
-    roots.iter().any(|root| !unique.insert(*root))
+    identities.iter().any(|identity| !unique.insert(identity.as_word()))
 }
 
 // TESTS
@@ -630,6 +642,16 @@ mod tests {
 
     fn root(value: u64) -> DeferredRoot {
         [Felt::new(value).unwrap(), Felt::ZERO, Felt::ZERO, Felt::ZERO].into()
+    }
+
+    fn verifier_identity(value: u64) -> VerifierIdentity {
+        // Opaque synthetic metadata; wrapping does not derive or authorize this identity.
+        VerifierIdentity::new(Word::new([
+            Felt::new(value).unwrap(),
+            Felt::ZERO,
+            Felt::ZERO,
+            Felt::ZERO,
+        ]))
     }
 
     fn vm_proof(precompile_root: DeferredRoot) -> VmProof {
@@ -677,18 +699,25 @@ mod tests {
 
     fn versioned(vm: VmProof, precompile: PrecompileStatus) -> ExecutionProof {
         ExecutionProof::from_parts(
-            ExecutionProofCompatibility::new(vec![root(11), root(12)], vec![root(21)]).unwrap(),
+            ExecutionProofCompatibility::new(
+                vec![verifier_identity(11), verifier_identity(12)],
+                vec![verifier_identity(21)],
+            )
+            .unwrap(),
             vm,
             precompile,
         )
     }
 
     fn version_prefix() -> Vec<u8> {
-        let compatibility =
-            ExecutionProofCompatibility::new(vec![root(11), root(12)], vec![root(21)]).unwrap();
+        let compatibility = ExecutionProofCompatibility::new(
+            vec![verifier_identity(11), verifier_identity(12)],
+            vec![verifier_identity(21)],
+        )
+        .unwrap();
         let mut bytes = vec![compatibility.format()];
-        compatibility.vm_verifier_roots().to_vec().write_into(&mut bytes);
-        compatibility.pvm_verifier_roots().to_vec().write_into(&mut bytes);
+        compatibility.vm_verifier_identities().to_vec().write_into(&mut bytes);
+        compatibility.pvm_verifier_identities().to_vec().write_into(&mut bytes);
         bytes
     }
 
@@ -717,8 +746,11 @@ mod tests {
         assert_eq!(bytes[0], 3);
         assert_eq!(decoded, proof);
         assert_eq!(decoded.compatibility().format(), ExecutionProofCompatibility::FORMAT_V3);
-        assert_eq!(decoded.compatibility().vm_verifier_roots(), &[root(11), root(12)]);
-        assert_eq!(decoded.compatibility().pvm_verifier_roots(), &[root(21)]);
+        assert_eq!(
+            decoded.compatibility().vm_verifier_identities(),
+            &[verifier_identity(11), verifier_identity(12)]
+        );
+        assert_eq!(decoded.compatibility().pvm_verifier_identities(), &[verifier_identity(21)]);
     }
 
     #[test]
@@ -728,7 +760,7 @@ mod tests {
             assert!(matches!(error, DeserializationError::InvalidValue(message)
                 if message == format!("unsupported execution proof format {version}")));
 
-            // Neither root-list lengths nor proof/witness payloads may be read or allocated
+            // Neither identity-list lengths nor proof/witness payloads may be read or allocated
             // before the transport version is accepted, even if the body is hostile.
             let mut bytes = vec![version];
             bytes.write_usize(usize::MAX);
@@ -760,7 +792,7 @@ mod tests {
         assert!(ExecutionProof::read_from_bytes(&trailing).is_err());
 
         let canonical = proof.to_bytes();
-        assert_eq!(canonical[1], 5, "two VM roots use a one-byte vint encoding");
+        assert_eq!(canonical[1], 5, "two VM identities use a one-byte vint encoding");
         let mut noncanonical = alloc::vec![canonical[0], 0];
         noncanonical.extend_from_slice(&2u64.to_le_bytes());
         noncanonical.extend_from_slice(&canonical[2..]);
@@ -771,53 +803,90 @@ mod tests {
     }
 
     #[test]
-    fn versioned_proof_decoder_applies_the_input_budget_to_root_lists() {
-        let mut bytes = vec![ExecutionProofCompatibility::FORMAT_V3];
-        bytes.write_usize(usize::MAX);
+    fn versioned_proof_decoder_applies_the_input_budget_to_identity_lists() {
+        for vm in [true, false] {
+            let mut bytes = vec![ExecutionProofCompatibility::FORMAT_V3];
+            if !vm {
+                Vec::<VerifierIdentity>::new().write_into(&mut bytes);
+            }
+            bytes.write_usize(usize::MAX);
 
-        let error = ExecutionProof::read_from_bytes(&bytes).unwrap_err();
-        assert!(matches!(error, DeserializationError::InvalidValue(_)));
+            let error = ExecutionProof::read_from_bytes(&bytes).unwrap_err();
+            assert!(matches!(error, DeserializationError::InvalidValue(_)));
+        }
     }
 
     #[test]
-    fn compatibility_constructor_rejects_duplicate_roots() {
+    fn versioned_proof_decoder_rejects_noncanonical_identity_words() {
+        let proof = versioned(vm_proof(TRUE_DIGEST), PrecompileStatus::Empty);
+        let proof_bytes = proof.to_bytes();
+        let body = &proof_bytes[version_prefix().len()..];
+
+        for vm in [true, false] {
+            let mut bytes = vec![ExecutionProofCompatibility::FORMAT_V3];
+            if !vm {
+                Vec::<VerifierIdentity>::new().write_into(&mut bytes);
+            }
+            bytes.write_usize(1);
+            bytes.extend_from_slice(&[u8::MAX; 32]);
+            if vm {
+                Vec::<VerifierIdentity>::new().write_into(&mut bytes);
+            }
+            bytes.extend_from_slice(body);
+
+            assert!(ExecutionProof::read_from_bytes(&bytes).is_err());
+        }
+    }
+
+    #[test]
+    fn compatibility_constructor_rejects_duplicate_identities() {
         assert_eq!(
-            ExecutionProofCompatibility::new(vec![root(1), root(1)], vec![]),
-            Err(ExecutionProofCompatibilityError::DuplicateVmVerifierRoot)
+            ExecutionProofCompatibility::new(
+                vec![verifier_identity(1), verifier_identity(1)],
+                vec![]
+            ),
+            Err(ExecutionProofCompatibilityError::DuplicateVmVerifierIdentity)
         );
         assert_eq!(
-            ExecutionProofCompatibility::new(vec![], vec![root(2), root(2)]),
-            Err(ExecutionProofCompatibilityError::DuplicatePvmVerifierRoot)
+            ExecutionProofCompatibility::new(
+                vec![],
+                vec![verifier_identity(2), verifier_identity(2)]
+            ),
+            Err(ExecutionProofCompatibilityError::DuplicatePvmVerifierIdentity)
         );
     }
 
     #[test]
-    fn versioned_proof_decoder_rejects_duplicate_roots() {
+    fn versioned_proof_decoder_rejects_duplicate_identities() {
         let proof = versioned(vm_proof(TRUE_DIGEST), PrecompileStatus::Empty);
         let proof_bytes = proof.to_bytes();
         let body = &proof_bytes[version_prefix().len()..];
 
         let mut duplicate_vm = vec![ExecutionProofCompatibility::FORMAT_V3];
-        vec![root(1), root(1)].write_into(&mut duplicate_vm);
-        Vec::<Word>::new().write_into(&mut duplicate_vm);
+        vec![verifier_identity(1), verifier_identity(1)].write_into(&mut duplicate_vm);
+        Vec::<VerifierIdentity>::new().write_into(&mut duplicate_vm);
         duplicate_vm.extend_from_slice(body);
         let error = ExecutionProof::read_from_bytes(&duplicate_vm).unwrap_err();
         assert!(
-            matches!(error, DeserializationError::InvalidValue(message) if message.contains("VM verifier roots must not contain duplicates"))
+            matches!(error, DeserializationError::InvalidValue(message) if message.contains("VM verifier identities must not contain duplicates"))
         );
 
         let mut duplicate_pvm = vec![ExecutionProofCompatibility::FORMAT_V3];
-        Vec::<Word>::new().write_into(&mut duplicate_pvm);
-        vec![root(2), root(2)].write_into(&mut duplicate_pvm);
+        Vec::<VerifierIdentity>::new().write_into(&mut duplicate_pvm);
+        vec![verifier_identity(2), verifier_identity(2)].write_into(&mut duplicate_pvm);
         duplicate_pvm.extend_from_slice(body);
         let error = ExecutionProof::read_from_bytes(&duplicate_pvm).unwrap_err();
         assert!(
-            matches!(error, DeserializationError::InvalidValue(message) if message.contains("PVM verifier roots must not contain duplicates"))
+            matches!(error, DeserializationError::InvalidValue(message) if message.contains("PVM verifier identities must not contain duplicates"))
         );
     }
 
     #[test]
     fn proof_minimum_serialized_sizes_match_shortest_canonical_encodings() {
+        let identity = verifier_identity(1);
+        assert_eq!(VerifierIdentity::min_serialized_size(), identity.to_bytes().len());
+        assert_eq!(VerifierIdentity::min_serialized_size(), 32);
+
         let stark = StarkProof::new(Vec::new(), HashFunction::Eidos);
         assert_eq!(StarkProof::min_serialized_size(), stark.to_bytes().len());
         assert_eq!(StarkProof::min_serialized_size(), 2);
@@ -828,6 +897,14 @@ mod tests {
         };
         assert_eq!(VmProof::min_serialized_size(), vm.to_bytes().len());
         assert_eq!(VmProof::min_serialized_size(), 34);
+
+        let execution = ExecutionProof::from_parts(
+            ExecutionProofCompatibility::new(Vec::new(), Vec::new()).unwrap(),
+            vm,
+            PrecompileStatus::Empty,
+        );
+        assert_eq!(ExecutionProof::min_serialized_size(), execution.to_bytes().len());
+        assert_eq!(ExecutionProof::min_serialized_size(), 39);
 
         let empty = PrecompileProof {
             proof: StarkProof::new(Vec::new(), HashFunction::Eidos),
@@ -932,7 +1009,11 @@ mod tests {
         };
         assert_eq!(
             completed_compatibility,
-            ExecutionProofCompatibility::new(vec![root(11), root(12)], vec![root(21)]).unwrap()
+            ExecutionProofCompatibility::new(
+                vec![verifier_identity(11), verifier_identity(12)],
+                vec![verifier_identity(21)],
+            )
+            .unwrap()
         );
         assert_eq!(completed_vm.to_bytes(), vm.to_bytes());
         assert_eq!(completed_precompile.to_bytes(), precompile.to_bytes());
@@ -987,7 +1068,7 @@ mod proof_arbitrary {
         ExecutionProof, ExecutionProofCompatibility, HashFunction, PrecompileProof,
         PrecompileStatus, PrecompileWitness, StarkProof, VmProof,
     };
-    use crate::{Felt, Word};
+    use crate::{Felt, Word, program::VerifierIdentity};
 
     impl Arbitrary for StarkProof {
         type Parameters = ();
@@ -1052,15 +1133,22 @@ mod proof_arbitrary {
         type Strategy = BoxedStrategy<Self>;
 
         fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            // Sound by construction: compatibility roots are index-derived (distinct within each
-            // list, satisfying the duplicate check); the rest composes covered parts.
+            // Sound by construction: compatibility identities are index-derived (distinct within
+            // each list, satisfying the duplicate check); the rest composes covered
+            // parts.
             (0usize..=3, 0usize..=3, any::<VmProof>(), any::<PrecompileStatus>())
                 .prop_map(|(vm_count, pvm_count, vm, precompile)| {
                     let compatibility = ExecutionProofCompatibility::new(
-                        (0..vm_count).map(|i| [Felt::from(i as u32); 4].into()).collect(),
-                        (0..pvm_count).map(|i| [Felt::from((i as u32) + 1000); 4].into()).collect(),
+                        (0..vm_count)
+                            .map(|i| VerifierIdentity::new([Felt::from(i as u32); 4].into()))
+                            .collect(),
+                        (0..pvm_count)
+                            .map(|i| {
+                                VerifierIdentity::new([Felt::from((i as u32) + 1000); 4].into())
+                            })
+                            .collect(),
                     )
-                    .expect("index-derived roots are distinct");
+                    .expect("index-derived identities are distinct");
                     Self::from_parts(compatibility, vm, precompile)
                 })
                 .boxed()

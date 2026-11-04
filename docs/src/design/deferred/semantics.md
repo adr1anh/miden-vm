@@ -266,20 +266,20 @@ security parameters.
 
 `ExecutionProof::to_bytes` is infallible. `ExecutionProof::read_from_bytes` checks canonical syntax,
 rejects trailing bytes, and does not need a registry. The proof stores the transport format and the
-compatible VM and PVM verifier root histories. Native verification requires a shared VM root and a
-shared PVM root with the verifier's private support policy. Transport preserves the portable
-witness without validating consistency between proof artifacts.
+declared VM and PVM verifier identity histories. Native verification requires a shared typed VM
+identity and PVM identity with the verifier's private support policy. Decoding these opaque words
+does not authorize the named configurations. Transport preserves the portable witness without
+validating consistency between proof artifacts.
 
-`ExecutionProof`, `ExecutionWitness`, and `PrecompileWitness` use encoding version 2.
+`ExecutionProof` uses format 3, `ExecutionWitness` version 5, and `PrecompileWitness` version 2.
 Each canonical decoder accepts only its supported version and rejects other versions before
 decoding their payloads. Previous encodings and conversion between formats are not supported.
 
 Canonical binary decoders enforce fixed hard ceilings before allocating declared collections:
 `MAX_STARK_PROOF_BYTES` per inner STARK, `MAX_PRECOMPILE_ROOTS = 128` per ordered root list, and
 `MAX_DEFERRED_WIRE_ELEMENTS` for each portable witness. The same 128-root ceiling applies to proving
-requests and verification of in-memory proofs. This lowers the previous ceiling of 4,096 roots:
-existing format-2 proofs with 129–4,096 roots are now rejected, although the encoding version and
-valid byte layouts are unchanged.
+requests and verification of in-memory proofs. Ordered lists containing more than 128 roots are
+rejected before proving or verification.
 
 Logical element and operation limits apply independently to every witness, including repetitions.
 Computation sharing does not discount admission. A batch may exceed these totals collectively;
@@ -316,8 +316,13 @@ The shortest canonical singleton `PrecompileProof` is 35 bytes; a vector of two 
 71-byte shortest encoding.
 
 Recursive VM verification packages the unchanged proof stream under
-`proof_request_key(verifier_root, claim_commitment)`. The consumer derives the same key from the
-claim commitment and `vm::verify_proof` procedure root, fetches the stream with
-`adv.push_mapval`, and then invokes `vm::verify_proof`. Claim and kernel preimages remain
-separately content-addressed; no proof values are copied into claim memory. Recursive verification
-authenticates and returns the VM root but does not settle precompile work.
+`proof_request_key(expected_verifier, claim_commitment)`. Request v2 hashes exactly the claim
+commitment followed by the caller's typed verifier identity under domain0x01000202. That identity
+commits to the relation, entry callable key and exact helper/mount/resource configuration; it is
+selected independently of proof advice. The owner authorizes the actual environment and required
+resource subset. Neither an implementation root nor a `procref` key alone is a verifier identity.
+The consumer fetches the stream with `adv.push_mapval` and invokes `vm::verify_proof` with the
+unchanged claim commitment. The environment-bound claim preimage remains separately
+content-addressed; no proof values are copied into claim memory. Recursive verification returns
+the security descriptor and deferred root; the deferred precompile obligation still requires
+settlement.
