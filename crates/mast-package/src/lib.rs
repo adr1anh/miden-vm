@@ -8,6 +8,7 @@ extern crate alloc;
 #[cfg(any(test, feature = "std"))]
 extern crate std;
 
+mod code_package;
 pub mod debug_info;
 mod dependency;
 pub mod interface;
@@ -21,6 +22,7 @@ pub use miden_core::{Word, mast::MastForest, program::Program};
 #[cfg(feature = "arbitrary")]
 pub use self::package::arbitrary;
 pub use self::{
+    code_package::CodePackage,
     dependency::Dependency,
     interface::{
         CallableProcedurePath, DeclarationError, DeclarationSet, ProcedureDeclaration,
