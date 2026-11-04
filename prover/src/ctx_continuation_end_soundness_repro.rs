@@ -26,8 +26,11 @@
 //! The ordinary-transition controls and honest baselines check the regression harness. These
 //! rejection tests alone do not establish necessity of an individual END rule: in particular,
 //! changes carried through the final principal also violate the independent K_entry boundary.
-//! The alias-principal cases below preserve that boundary. An isolated counterfactual evaluator
-//! remains required for individual-rule necessity.
+//! The alias-principal cases below preserve that boundary. Their private evaluator comparison
+//! changes only the four principal-preservation equations: the historical coarse-END selector
+//! accepts the continuation witness while the current native and MASM verifiers reject the same
+//! artifact. The ordinary-transition witness still rejects under the comparison evaluator. This
+//! establishes necessity for the principal rule without attributing the separate context cases.
 
 use alloc::{vec, vec::Vec};
 
@@ -42,7 +45,7 @@ use miden_core::{
 use miden_processor::{DefaultHost, ExecutionError, FastProcessor, StackInputs};
 use miden_verifier::{VerificationError, Verifier};
 
-use crate::repro_harness::{ReproTrace, core_row_mut};
+use crate::repro_harness::{CoreMode, ReproTrace, core_row_mut};
 
 // HARNESS
 // ================================================================================================
@@ -173,7 +176,7 @@ fn forged_context_at_ordinary_row_is_rejected() {
 
 /// Exchange equal-D callee aliases after nested continuation ENDs. The unchanged entry boundary
 /// and balanced resolution demand counts cannot substitute for preserving the callee principal.
-/// Individual-rule necessity still requires a separate counterfactual evaluator.
+/// The same witness is accepted only by the isolated historical coarse-END principal evaluator.
 #[test]
 fn forged_fn_hash_at_continuation_end_is_rejected() {
     check_alias_principal_exchange(true);
@@ -261,7 +264,15 @@ fn check_alias_principal_exchange(after_continuation: bool) {
         }
     });
     let mut repro = ReproTrace::new(&trace);
-    let honest = repro.prove_current().expect("honest alias proof construction must complete");
+    let honest = repro
+        .prove_comparison(CoreMode::Standard)
+        .expect("the unchanged wrapper must construct the honest alias proof");
+    assert!(
+        honest.verification.is_ok(),
+        "the unchanged evaluator must accept: {:?}",
+        honest.verification
+    );
+    let honest = honest.proof;
     assert!(
         repro.verify_vm_proof(honest.clone(), repro.outputs()).is_ok(),
         "the honest aliases must verify natively"
@@ -284,9 +295,18 @@ fn check_alias_principal_exchange(after_continuation: bool) {
     }
     assert_eq!(core_row_mut(&mut repro.core, 0).system.fn_hash, entry);
     assert_eq!(core_row_mut(&mut repro.core, height - 1).system.fn_hash, entry);
-    let proof = repro
-        .prove_current()
-        .expect("balanced alias demands must reach actual proof construction");
+    let comparison = repro
+        .prove_comparison(CoreMode::Alternate)
+        .expect("balanced alias demands must reach actual comparison proof construction");
+    assert_eq!(
+        comparison.verification.is_ok(),
+        after_continuation,
+        "the historical selector must accept only the continuation witness: {:?}",
+        comparison.verification
+    );
+    // Verify this very artifact with the current native and MASM evaluators. The captured
+    // descriptor, claim, configuration/pins and every witness matrix are identical.
+    let proof = comparison.proof;
     let result = repro.verify_vm_proof(proof.clone(), repro.outputs());
     assert!(
         matches!(&result, Err(VerificationError::StarkVerificationError(..))),

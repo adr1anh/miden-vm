@@ -17,6 +17,13 @@ use miden_utils_testing::Test;
 use miden_verifier::{VerificationError, VerificationOutcome, Verifier};
 use miden_vm_stark::{prover::prove, recursive::RecursiveVerifierInputs};
 
+mod comparison_air;
+mod comparison_core;
+mod comparison_runner;
+mod emission_adapter;
+
+pub(crate) use comparison_air::CoreMode;
+
 /// Returns a mutable view of one core trace row.
 pub fn core_row_mut(matrix: &mut RowMajorMatrix<Felt>, row: usize) -> &mut CoreCols<Felt> {
     let width = matrix.width();

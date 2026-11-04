@@ -58,3 +58,7 @@ miden-verifier = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt"] }
 miden-core = { workspace = true, features = ["testing"] }
 miden-core-lib.workspace = true
+miden-constraint-compiler = { workspace = true, features = ["testing"] }
+p3-air.workspace = true
+p3-challenger.workspace = true
+serde-wincode.workspace = true
