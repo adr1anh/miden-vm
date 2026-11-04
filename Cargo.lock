@@ -2685,6 +2685,7 @@ dependencies = [
  "miden-air-definitions",
  "miden-assembly",
  "miden-core",
+ "miden-core-lib",
  "miden-crypto",
  "miden-debug-types",
  "miden-precompiles",

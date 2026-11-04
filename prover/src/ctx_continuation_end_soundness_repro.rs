@@ -23,9 +23,11 @@
 //! The fix gates both on the same precise caller-frame restoration selector already used for
 //! stack depth `b0` and the overflow pointer `b1` in stack/overflow.rs.
 //!
-//! Each forgery below is paired with a control applying the same mutation across an ordinary
-//! transition. The controls failed before the fix as well, so they are what pins each
-//! rejection to the END transition specifically rather than to the harness.
+//! The ordinary-transition controls and honest baselines check the regression harness. These
+//! rejection tests alone do not establish necessity of an individual END rule: in particular,
+//! changes carried through the final principal also violate the independent K_entry boundary.
+//! The alias-principal cases below preserve that boundary. An isolated counterfactual evaluator
+//! remains required for individual-rule necessity.
 
 use alloc::{vec, vec::Vec};
 
@@ -35,8 +37,10 @@ use miden_core::{
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::{Operation, opcodes},
     program::Program,
+    proof::{ExecutionProof, PrecompileStatus},
 };
-use miden_processor::{DefaultHost, FastProcessor, StackInputs};
+use miden_processor::{DefaultHost, ExecutionError, FastProcessor, StackInputs};
+use miden_verifier::{VerificationError, Verifier};
 
 use crate::repro_harness::{ReproTrace, core_row_mut};
 
@@ -56,13 +60,6 @@ fn set_fn_hash(trace: &mut ReproTrace, rows: impl Iterator<Item = usize>, fn_has
 }
 
 const FORGED_CTX: Felt = Felt::new_unchecked(7);
-const FORGED_FN_HASH: [Felt; 4] = [
-    Felt::new_unchecked(11),
-    Felt::new_unchecked(22),
-    Felt::new_unchecked(33),
-    Felt::new_unchecked(44),
-];
-
 // SINGLE BASIC BLOCK: THE MINIMAL GAP
 // ================================================================================================
 
@@ -123,9 +120,11 @@ fn build_basic_harness() -> (ReproTrace, BasicRows) {
         .expect("the program must contain a NOOP");
     assert!(noop < continuation_end);
 
-    // The honest trace runs entirely in the root context with a zero function hash.
+    // Root context and principal are separate: the principal is the independently selected key.
     assert_eq!(main.ctx(RowIndex::from(continuation_end)), Felt::ZERO);
-    assert_eq!(main.fn_hash(RowIndex::from(continuation_end)), [Felt::ZERO; 4]);
+    let entry = trace.execution_descriptor().entry_key().into_word().into_elements();
+    assert_ne!(entry, [Felt::ZERO; 4]);
+    assert_eq!(main.fn_hash(RowIndex::from(continuation_end)), entry);
 
     let repro = ReproTrace::new(&trace);
     (repro, BasicRows { continuation_end, noop, height })
@@ -136,7 +135,10 @@ fn build_basic_harness() -> (ReproTrace, BasicRows) {
 #[test]
 fn honest_basic_block_trace_verifies() {
     let (repro, _) = build_basic_harness();
-    assert!(repro.prove_and_verify_current().is_ok(), "the honest trace must verify");
+    let claim = repro.claim();
+    let proof = repro.prove_current().expect("honest proof construction must complete");
+    let proof = ExecutionProof::new(proof, PrecompileStatus::Empty);
+    assert!(Verifier::new().verify(&claim, &proof).is_ok(), "the honest trace must verify");
 }
 
 /// `ctx` jumps from 0 to 7 across the continuation END and is preserved (as the default-flag
@@ -169,31 +171,18 @@ fn forged_context_at_ordinary_row_is_rejected() {
     );
 }
 
-/// `fn_hash` feeds the CALLER operation (`stack/ops.rs`), which copies it onto the top four
-/// stack slots -- so a forged digest becomes a forged public output.
+/// Exchange equal-D callee aliases after nested continuation ENDs. The unchanged entry boundary
+/// and balanced resolution demand counts cannot substitute for preserving the callee principal.
+/// Individual-rule necessity still requires a separate counterfactual evaluator.
 #[test]
 fn forged_fn_hash_at_continuation_end_is_rejected() {
-    let (mut repro, rows) = build_basic_harness();
-    set_fn_hash(&mut repro, (rows.continuation_end + 1)..rows.height, FORGED_FN_HASH);
-
-    let result = repro.prove_and_verify_current();
-    assert!(
-        result.is_err(),
-        "the verifier must reject a function-digest change across a continuation END: {result:?}"
-    );
+    check_alias_principal_exchange(true);
 }
 
-/// Control for the above.
+/// Control: exchange the same aliases across ordinary callee transitions.
 #[test]
 fn forged_fn_hash_at_ordinary_row_is_rejected() {
-    let (mut repro, rows) = build_basic_harness();
-    set_fn_hash(&mut repro, (rows.noop + 1)..rows.height, FORGED_FN_HASH);
-
-    let result = repro.prove_and_verify_current();
-    assert!(
-        result.is_err(),
-        "the verifier must reject a function-digest change on an ordinary transition: {result:?}"
-    );
+    check_alias_principal_exchange(false);
 }
 
 // INSIDE A CALL: THE ISOLATION-RELEVANT CASE
@@ -207,6 +196,117 @@ struct CallRows {
     nested_continuation_end: usize,
     /// The END of the CALL block itself: it restores a CALL/DYNCALL caller frame.
     call_end: usize,
+}
+
+fn check_alias_principal_exchange(after_continuation: bool) {
+    let body = "push.1 if.true push.7 drop else push.8 drop end push.9 drop";
+    let source =
+        alloc::format!("proc left {body} end proc right {body} end begin call.left call.right end");
+    let fixture = crate::named_fixture::named_source(&source);
+    let keys = [fixture.key("left"), fixture.key("right")];
+    assert_ne!(keys[0], keys[1]);
+    let implementations = keys.map(|key| {
+        fixture.naming.callables().selected_implementation(key).expect("selected alias")
+    });
+    assert_eq!(implementations[0], implementations[1], "the aliases must select equal D");
+    let mut host = DefaultHost::default().with_environment_source(fixture.environment.source());
+    let (trace, precompile) = FastProcessor::new(StackInputs::default())
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
+        .execute_and_build_trace_sync(
+            &fixture.program,
+            fixture.environment.execution(),
+            &mut host,
+            &miden_vm_stark::memory::default_budget(),
+        )
+        .unwrap();
+    assert!(precompile.is_none());
+    let main = trace.main_trace();
+    let height = main.core_height();
+    let opcode = |row| main.get_op_code(RowIndex::from(row));
+    let calls = (0..height)
+        .filter(|&row| opcode(row) == Felt::from_u8(opcodes::CALL))
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 2);
+    let principals = keys.map(|key| key.into_word().into_elements());
+    let entry = trace.execution_descriptor().entry_key().into_word().into_elements();
+    let rows: [CallRows; 2] = core::array::from_fn(|index| {
+        let call = calls[index];
+        let call_end = ((call + 1)..height)
+            .find(|&row| {
+                opcode(row) == Felt::from_u8(opcodes::END)
+                    && main.restores_caller_frame_flag(RowIndex::from(row)) == Felt::ONE
+            })
+            .expect("caller-frame END");
+        let nested_continuation_end = ((call + 1)..call_end)
+            .find(|&row| {
+                opcode(row) == Felt::from_u8(opcodes::END)
+                    && main.restores_caller_frame_flag(RowIndex::from(row)) == Felt::ZERO
+            })
+            .expect("nested continuation END");
+        let ordinary_in_callee = ((call + 1)..nested_continuation_end)
+            .find(|&row| opcode(row) != Felt::from_u8(opcodes::END))
+            .expect("ordinary callee transition");
+        assert_eq!(main.fn_hash(RowIndex::from(call + 1)), principals[index]);
+        assert_eq!(main.fn_hash(RowIndex::from(call_end)), principals[index]);
+        assert_eq!(main.fn_hash(RowIndex::from(call_end + 1)), entry);
+        assert!(nested_continuation_end + 1 < call_end);
+        CallRows {
+            ordinary_in_callee,
+            nested_continuation_end,
+            call_end,
+        }
+    });
+    let mut repro = ReproTrace::new(&trace);
+    let honest = repro.prove_current().expect("honest alias proof construction must complete");
+    assert!(
+        repro.verify_vm_proof(honest.clone(), repro.outputs()).is_ok(),
+        "the honest aliases must verify natively"
+    );
+    repro
+        .recursive_verifier_test(honest)
+        .expect("honest recursive verifier setup must authorize")
+        .execute_for_output()
+        .expect("the honest aliases must verify in MASM");
+
+    // Both aliases already have authenticated openings. Invocation and root-completion demands
+    // remain unchanged; only the callee principal tails change in the Core matrix.
+    for index in 0..2 {
+        let start = if after_continuation {
+            rows[index].nested_continuation_end
+        } else {
+            rows[index].ordinary_in_callee
+        };
+        set_fn_hash(&mut repro, (start + 1)..=rows[index].call_end, principals[1 - index]);
+    }
+    assert_eq!(core_row_mut(&mut repro.core, 0).system.fn_hash, entry);
+    assert_eq!(core_row_mut(&mut repro.core, height - 1).system.fn_hash, entry);
+    let proof = repro
+        .prove_current()
+        .expect("balanced alias demands must reach actual proof construction");
+    let result = repro.verify_vm_proof(proof.clone(), repro.outputs());
+    assert!(
+        matches!(&result, Err(VerificationError::StarkVerificationError(..))),
+        "the STARK verifier must reject the exchanged principals: {result:?}"
+    );
+    let execution = repro
+        .recursive_verifier_test(proof)
+        .expect("the constructed proof must reach the authorized recursive verifier")
+        .execute_for_output();
+    let Err(error) = execution else {
+        panic!("MASM must reject the same exchanged-principal proof");
+    };
+    assert!(
+        matches!(
+            &error,
+            ExecutionError::AceChipError { error: ace, .. }
+                if ace.0 == "circuit does not evaluate to zero"
+        ),
+        "the recursive verifier must reject the AIR evaluation in ACE: {error:?}"
+    );
 }
 
 /// Builds a trace for `begin call.inner end`, where `inner` contains a nested block -- so the

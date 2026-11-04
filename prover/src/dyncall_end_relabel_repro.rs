@@ -3,13 +3,11 @@
 //! DYNCALL records its saved caller frame into decoder cells rather than the real columns:
 //! `block_stack_and_range_logcap.rs` builds a caller-frame addition with
 //! `caller_stack_depth = h4` and `caller_overflow_addr = h5` (CALL/SYSCALL use the real `b0`/`b1`).
-//! At the root, `caller_ctx = 0`, `caller_fn_hash = [0;4]`, and `caller_overflow_addr = 0`, so the
-//! honest saved stack depth of 16 is the frame's only nonzero saved-state slot.
-//!
-//! With `h4 = 0`, the inserted caller frame's payload matches a continuation except for its
-//! entry-kind tag. Clearing decoder `h6` on the DYNCALL's END would then select continuation
-//! preservation rules. The AIR binds `h4` to the saved depth, and the tag authenticates the entry
-//! kind. This regression exercises both checks together.
+//! At the root, `caller_ctx = 0` and `caller_overflow_addr = 0`, while `caller_fn_hash` is the
+//! independently selected K_entry. Clearing saved depth no longer creates the historical
+//! zero-principal payload collision. These compound rejection controls preserve the current
+//! nonzero-principal baseline; they do not attribute rejection to a single protection. Carrying
+//! a callee principal through the final row also violates the independent K_entry boundary.
 
 use alloc::vec;
 
@@ -32,9 +30,8 @@ struct Fixture {
 }
 
 fn build_fixture() -> Fixture {
-    // A DYNCALL at root depth 16 with an empty overflow table, so h4 = 16 is the sole nonzero
-    // caller-frame payload slot. `call.foo` keeps `foo` in the forest for the dynamic reference;
-    // its canonical key is retained separately.
+    // A DYNCALL at root depth 16 with an empty overflow table and the actual entry principal.
+    // `call.foo` keeps `foo` in the forest; its canonical key is retained separately.
     let source = "
         proc foo
             nop
@@ -85,14 +82,16 @@ fn build_fixture() -> Fixture {
         })
         .expect("DYNCALL block has a caller-frame END");
 
-    // Preconditions the forgery relies on.
+    // Current baseline: root context does not imply a zero principal.
     assert_eq!(main.stack_depth(RowIndex::from(dyncall_row)), Felt::new_unchecked(16));
     assert_eq!(main.ctx(RowIndex::from(dyncall_row)), Felt::ZERO);
-    assert_eq!(main.fn_hash(RowIndex::from(dyncall_row)), [Felt::ZERO; 4]);
+    let entry = trace.execution_descriptor().entry_key().into_word().into_elements();
+    assert_ne!(entry, [Felt::ZERO; 4]);
+    assert_eq!(main.fn_hash(RowIndex::from(dyncall_row)), entry);
     assert_eq!(
         main.decoder_hasher_state_element(4, RowIndex::from(dyncall_row)),
         Felt::new_unchecked(16),
-        "h4 must honestly hold the caller depth 16 (the sole nonzero saved-state slot)"
+        "h4 must honestly hold the caller depth 16"
     );
 
     // Callee context and digest, honestly restored to root right after the caller-frame END.
@@ -147,14 +146,14 @@ fn relabelled_dyncall_end_is_rejected() {
         result.is_err(),
         "the proof pipeline must reject a relabelled DYNCALL END: {result:?}"
     );
-    // The direct `h4 = b0 - overflow()` constraint rejects this forgery before the tag is used.
-    // `block_stack_entry_kind_repro` checks the tag with an unchanged DYNCALL row.
+    // The mutation violates the direct `h4 = b0 - overflow()` binding and saved-frame rules.
+    // This combined rejection does not isolate either rule or the independent entry boundary.
 }
 
 /// Control: relabel the END and carry the context forward, but leave `h4 = 16`. The DYNCALL
 /// addition remains a caller-frame entry, so the continuation removal matches no addition.
-/// Carrying the callee context forward satisfies continuation preservation; rejection comes
-/// from the block-stack relation. The entry-kind tag is isolated in `block_stack_entry_kind_repro`.
+/// Carrying the callee context forward satisfies continuation preservation but also changes the
+/// final principal. Block-stack rejection and the K_entry boundary are independent here.
 #[test]
 fn relabel_without_degenerating_the_addition_is_rejected() {
     let f = build_fixture();

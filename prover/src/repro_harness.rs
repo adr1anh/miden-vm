@@ -11,9 +11,11 @@ use miden_core::{
     proof::{ExecutionProof, HashFunction, PrecompileStatus, VmProof},
     utils::{Matrix, RowMajorMatrix},
 };
+use miden_core_lib::CoreLibrary;
 use miden_processor::trace::VmTrace;
+use miden_utils_testing::Test;
 use miden_verifier::{VerificationError, VerificationOutcome, Verifier};
-use miden_vm_stark::prover::prove;
+use miden_vm_stark::{prover::prove, recursive::RecursiveVerifierInputs};
 
 /// Returns a mutable view of one core trace row.
 pub fn core_row_mut(matrix: &mut RowMajorMatrix<Felt>, row: usize) -> &mut CoreCols<Felt> {
@@ -63,6 +65,90 @@ impl ReproTrace {
         self.outputs
     }
 
+    /// Returns the independently captured execution claim for the honest trace.
+    pub fn claim(&self) -> ExecutionClaim {
+        ExecutionClaim::new(self.execution_descriptor, self.init_stack, self.outputs)
+    }
+
+    /// Proves the currently stored AIR matrices against the captured public outputs.
+    pub fn prove_current(&self) -> Result<VmProof, String> {
+        self.prove_parts(
+            self.core.clone(),
+            self.chiplets.clone(),
+            self.eidos_compression.clone(),
+            self.and8.clone(),
+            self.outputs,
+        )
+    }
+
+    /// Prepares the real MASM VM verifier for a retained proof and the captured expected claim.
+    ///
+    /// The caller chooses whether execution must succeed or reach a specific verification error.
+    pub fn recursive_verifier_test(&self, proof: VmProof) -> Result<Test, String> {
+        let core_lib = CoreLibrary::default();
+        let profile = core_lib.vm_recursive_verifier_profile().map_err(|error| {
+            format!("embedded VM verifier profile construction failed: {error}")
+        })?;
+        let expected_verifier = profile.identity();
+        let claim = self.claim();
+        let proof = ExecutionProof::new(proof, PrecompileStatus::Empty);
+        let (advice_inputs, claim_commitment) =
+            RecursiveVerifierInputs::for_request(expected_verifier, &proof, &claim)
+                .map_err(|error| {
+                    format!("recursive verifier request construction failed: {error}")
+                })?
+                .into_parts();
+        let [v0, v1, v2, v3] = expected_verifier
+            .into_word()
+            .into_elements()
+            .map(|felt| felt.as_canonical_u64());
+        let source = format!(
+            "
+            use miden::core::sys
+            use miden::core::sys::vm
+
+            begin
+                # Initial stack: [CLAIM_COMMITMENT].
+                dupw
+                push.{v3} push.{v2} push.{v1} push.{v0}
+                exec.sys::build_proof_request_key
+                adv.push_mapval dropw
+                exec.vm::verify_proof
+                # => [security_descriptor(12), D]
+                exec.sys::truncate_stack
+            end
+            "
+        );
+        let mut test = Test::new("retained_vm_proof_recursive_verifier", &source, false)
+            .with_stack_inputs(claim_commitment.into_elements().map(|felt| felt.as_canonical_u64()))
+            .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
+            .with_environment_fragment(profile.shared_fragment())
+            .with_event_handlers(core_lib.handlers());
+        test.advice_inputs = advice_inputs;
+
+        let fixture = test
+            .fixture_environment()
+            .map_err(|error| format!("recursive verifier environment assembly failed: {error}"))?;
+        let environment = fixture.validated_environment();
+        let mut effective_advice = test.advice_inputs.map().clone();
+        for package in &test.libraries {
+            effective_advice.merge(package.mast_forest().advice_map()).map_err(|error| {
+                format!("recursive verifier package and request advice conflict: {error:?}")
+            })?;
+        }
+        profile
+            .authorize(
+                fixture.execution().descriptor().environment_root(),
+                environment,
+                &effective_advice,
+                environment.visits(),
+            )
+            .map_err(|error| {
+                format!("recursive verifier environment authorization failed: {error}")
+            })?;
+        Ok(test)
+    }
+
     /// Proves `core` against the honest public outputs and runs the resulting proof through the
     /// verifier. A low-level proving failure is unexpected in tests using this method.
     pub fn prove_and_verify(
@@ -84,7 +170,7 @@ impl ReproTrace {
         outputs: StackOutputs,
     ) -> Result<VerificationOutcome, VerificationError> {
         let proof = self
-            .prove(
+            .prove_parts(
                 core,
                 self.chiplets.clone(),
                 self.eidos_compression.clone(),
@@ -94,7 +180,7 @@ impl ReproTrace {
             .unwrap_or_else(|error| {
                 panic!("the low-level prover should encode the forged trace: {error}")
             });
-        self.verify(proof, outputs)
+        self.verify_vm_proof(proof, outputs)
     }
 
     /// Proves and verifies caller-supplied AIR matrices while permitting lookup construction to
@@ -107,7 +193,7 @@ impl ReproTrace {
         and8: RowMajorMatrix<Felt>,
         outputs: StackOutputs,
     ) -> Result<VerificationOutcome, String> {
-        let proof = match self.prove(core, chiplets, eidos_compression, and8, outputs) {
+        let proof = match self.prove_parts(core, chiplets, eidos_compression, and8, outputs) {
             Ok(proof) => proof,
             Err(error) => {
                 assert!(
@@ -118,7 +204,7 @@ impl ReproTrace {
             },
         };
 
-        self.verify(proof, outputs)
+        self.verify_vm_proof(proof, outputs)
             .map_err(|error| format!("verifier rejected: {error}"))
     }
 
@@ -137,7 +223,8 @@ impl ReproTrace {
         )
     }
 
-    fn prove(
+    /// Proves caller-supplied AIR matrices using the independently captured execution inputs.
+    pub fn prove_parts(
         &self,
         core: RowMajorMatrix<Felt>,
         chiplets: RowMajorMatrix<Felt>,
@@ -177,7 +264,8 @@ impl ReproTrace {
         prove(trace, HashFunction::Eidos, false).map_err(|error| format!("{error}"))
     }
 
-    fn verify(
+    /// Verifies a constructed VM proof against the captured inputs and supplied public outputs.
+    pub fn verify_vm_proof(
         &self,
         proof: VmProof,
         outputs: StackOutputs,
