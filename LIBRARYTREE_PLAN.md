@@ -3375,7 +3375,7 @@ The fresh rerun passes3772, with nine existing skips. After lint-equivalent owne
 all615 affected assembler/codec/source/instance controls pass; this is not another whole3772 run.
 Final11-crate all-target strict custom Clippy also type-checks CLI/public/private-prover consumers.
 Logs: `pr15-occurrence-replay-{checks,final,postlint,clippy-final}.log`. The initial lint failures
-remain a separate diagnostic log. Cache2 runtime is pending; no fresh no_std or proof-regeneration
+remain a separate diagnostic log. The two target/verifier cache regressions pass in `pr15-target-cache-checks.log`; no fresh no_std or proof-regeneration
 claim is made. No production AIR/claim/pin changes in these slices.
 
 Next: immutable checked CodePackage association, keyed host code/source ownership, then target-only
