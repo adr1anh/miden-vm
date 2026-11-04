@@ -718,7 +718,10 @@ fn assert_native_core_bindings(
             if main.is_root_end(row) == ONE {
                 root_ends.push(row);
                 assert_eq!(main.is_loop_body_flag(row), ZERO);
-                assert_eq!(main.decoder_hasher_state_first_half(row), *trace.program_hash());
+                assert_eq!(
+                    main.decoder_hasher_state_first_half(row),
+                    *trace.entry_implementation().as_word()
+                );
                 let next = RowIndex::from(index + 1);
                 assert_eq!(main.get_op_code(next), Felt::from_u8(opcodes::HALT));
                 assert_eq!(main.fn_hash(next), entry.into_word().into_elements());
@@ -1549,7 +1552,7 @@ fn explicit_native_budgets_and_missing_trace_policy_fail_closed() {
 }
 
 #[test]
-fn replay_v5_roundtrip_uses_caller_authority_and_explicit_budgets() {
+fn replay_v6_roundtrip_uses_caller_authority_and_explicit_budgets() {
     let entry = key(&[], "entry");
     let target = key(&["lib"], "child");
     let callee = body(observe());
@@ -1566,7 +1569,7 @@ fn replay_v5_roundtrip_uses_caller_authority_and_explicit_budgets() {
         .execute_for_proving_sync(&program, configuration, &mut host)
         .unwrap();
     let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
-    assert_eq!(bytes[0], 5);
+    assert_eq!(bytes[0], 6);
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
         &configuration,
@@ -1577,7 +1580,7 @@ fn replay_v5_roundtrip_uses_caller_authority_and_explicit_budgets() {
     assert_eq!(restored.execution_descriptor(), configuration.descriptor());
     assert_eq!(restored.claim(), witness.claim());
     assert_eq!(restored.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
-    for version in [3, 4, 6] {
+    for version in [3, 4, 5, 7] {
         assert!(
             ExecutionWitness::read_from_bytes_with_limits(
                 &[version],

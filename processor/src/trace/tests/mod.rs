@@ -215,7 +215,7 @@ fn empty_execution_witness_splits_and_replays_with_explicit_stack_inputs() {
     assert!(output.precompile_witness.is_none());
 
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap();
-    assert_eq!(trace.program_info(), &program.to_info());
+    assert_eq!(trace.entry_implementation().as_word(), &program.hash());
     assert_eq!(trace.execution_descriptor(), fixture.environment.descriptor());
     assert_eq!(trace.init_stack_state(), stack_inputs);
     assert_eq!(trace.precompile_root(), TRUE_DIGEST);

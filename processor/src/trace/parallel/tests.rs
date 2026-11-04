@@ -411,7 +411,10 @@ fn test_trace_generation_at_fragment_boundaries(
     assert_eq!(trace_from_fragments.public_inputs(), trace_from_single_fragment.public_inputs());
 
     // Verify code/debug metadata and trace length summary match.
-    assert_eq!(trace_from_fragments.program_info(), trace_from_single_fragment.program_info(),);
+    assert_eq!(
+        trace_from_fragments.entry_implementation(),
+        trace_from_single_fragment.entry_implementation(),
+    );
     assert_eq!(
         trace_from_fragments.trace_len_summary(),
         trace_from_single_fragment.trace_len_summary(),
@@ -1884,7 +1887,7 @@ impl core::fmt::Debug for DeterministicTrace<'_> {
         f.debug_struct("VmTrace")
             .field("air_matrices", &air_matrices)
             .field("last_program_row", &trace.main_trace().last_program_row())
-            .field("program_info", &trace.program_info())
+            .field("entry_implementation", &trace.entry_implementation())
             .field("stack_outputs", &trace.stack_outputs())
             .field("trace_len_summary", trace.trace_len_summary())
             .finish()

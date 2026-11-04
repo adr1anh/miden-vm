@@ -21,8 +21,7 @@ pub use miden_core::{
     program,
     program::{
         CanonicalLabel, EnvironmentRoot, ExecutionClaim, ExecutionTarget, ImplementationRoot,
-        InputError, KernelDescriptor, Namespace, ProcedureKey, Program, ProgramInfo, StackInputs,
-        StackOutputs,
+        InputError, KernelDescriptor, Namespace, ProcedureKey, Program, StackInputs, StackOutputs,
     },
     proof::{
         ExecutionProof, ExecutionProofCompatibility, ExecutionProofCompatibilityError,

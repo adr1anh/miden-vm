@@ -1081,7 +1081,7 @@ mod execution_witness_serialization {
             let restored_trace =
                 build_trace(restored_vm, &miden_vm_stark::memory::default_budget()).expect("restored generated witness should build a trace");
             prop_assert_eq!(restored_trace.stack_outputs(), original_trace.stack_outputs());
-            prop_assert_eq!(restored_trace.program_info(), original_trace.program_info());
+            prop_assert_eq!(restored_trace.entry_implementation(), original_trace.entry_implementation());
             prop_assert_eq!(
                 restored_trace.trace_len_summary(),
                 original_trace.trace_len_summary()
@@ -1140,7 +1140,7 @@ mod execution_witness_serialization {
         let restored_trace = build_trace(restored_vm, &miden_vm_stark::memory::default_budget())
             .expect("restored witness builds trace");
         assert_eq!(restored_trace.stack_outputs(), original_trace.stack_outputs());
-        assert_eq!(restored_trace.program_info(), original_trace.program_info());
+        assert_eq!(restored_trace.entry_implementation(), original_trace.entry_implementation());
         assert_eq!(restored_trace.trace_len_summary(), original_trace.trace_len_summary());
         assert_eq!(
             restored_trace.public_inputs().to_air_inputs(),

@@ -145,7 +145,7 @@ fn verifier_rejects_forged_overflow_pop_order() {
     assert_ne!(forged_outputs, *trace.stack_outputs());
 
     let forged_trace = VmTrace::new_from_parts(
-        trace.program_info().clone(),
+        trace.entry_implementation(),
         trace.execution_descriptor(),
         trace.init_stack_state(),
         forged_outputs,

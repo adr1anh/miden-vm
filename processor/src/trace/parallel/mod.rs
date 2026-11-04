@@ -103,7 +103,7 @@ mod tests;
 ///     miden_processor::trace::build_trace(vm_witness, &miden_vm_stark::memory::default_budget())
 ///         .unwrap();
 ///
-/// assert_eq!(*trace.program_hash(), program.hash());
+/// assert_eq!(*trace.entry_implementation().as_word(), program.hash());
 /// ```
 #[instrument(name = "build_trace", skip_all)]
 pub fn build_trace(
@@ -131,8 +131,8 @@ fn build_trace_inner(
     budget: &ProvingBudget<MIDEN_AIR_COUNT>,
 ) -> Result<VmTrace, ExecutionError> {
     witness.require_validated()?;
+    let entry_implementation = witness.trace.entry_implementation()?;
     let VmWitness {
-        program_info,
         stack_inputs,
         stack_outputs,
         trace,
@@ -287,7 +287,7 @@ fn build_trace_inner(
     };
 
     Ok(VmTrace::new_from_parts(
-        program_info,
+        entry_implementation,
         execution_descriptor,
         stack_inputs,
         stack_outputs,

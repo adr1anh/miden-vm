@@ -13,7 +13,7 @@ pub use miden_core::{
     Word,
     advice::AdviceInputs,
     deferred::{PrecompileLimits, PrecompileWitness},
-    program::{ExecutionClaim, InputError, Program, ProgramInfo, StackInputs, StackOutputs},
+    program::{ExecutionClaim, InputError, Program, StackInputs, StackOutputs},
     proof::{ExecutionProof, HashFunction, PrecompileProof, PrecompileStatus, StarkProof, VmProof},
     serde::DeserializationError,
 };

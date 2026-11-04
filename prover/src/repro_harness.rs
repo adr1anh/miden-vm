@@ -43,7 +43,7 @@ pub struct ReproTrace {
     chiplets: RowMajorMatrix<Felt>,
     eidos_compression: RowMajorMatrix<Felt>,
     and8: RowMajorMatrix<Felt>,
-    program_info: miden_processor::ProgramInfo,
+    entry_implementation: miden_core::program::ImplementationRoot,
     execution_descriptor: ExecutionTarget,
     init_stack: miden_processor::StackInputs,
     precompile_root: miden_core::deferred::DeferredRoot,
@@ -62,7 +62,7 @@ impl ReproTrace {
             chiplets,
             eidos_compression,
             and8,
-            program_info: trace.program_info().clone(),
+            entry_implementation: trace.entry_implementation(),
             execution_descriptor: trace.execution_descriptor(),
             init_stack: trace.init_stack_state(),
             precompile_root: trace.precompile_root(),
@@ -293,7 +293,7 @@ impl ReproTrace {
             ],
         );
         let trace = VmTrace::new_from_parts(
-            self.program_info.clone(),
+            self.entry_implementation,
             self.execution_descriptor,
             self.init_stack,
             outputs,

@@ -782,7 +782,11 @@ impl Test {
             let (vm_witness, _) = witness.into_parts();
             let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget())?;
 
-            assert_eq!(&program.hash(), trace.program_hash(), "inconsistent program hash");
+            assert_eq!(
+                &program.hash(),
+                trace.entry_implementation().as_word(),
+                "inconsistent program hash"
+            );
             Ok(trace)
         })
     }

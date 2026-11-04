@@ -343,7 +343,6 @@ pub(super) fn load_tx_fixtures(
         .expect("link core library");
     let program = assemble_fixture_program(assembler, "tx_fixture", source, &[core_lib.naming()]);
     let fixture = Arc::new(TxProgramFixture { program, core_lib: core_lib.clone() });
-    let program_info = fixture.program.program.to_info();
 
     println!(
         "\n=== transaction proof fixtures\n    scenario={scenario} hash={:?} proof_cache={}",
@@ -361,7 +360,6 @@ pub(super) fn load_tx_fixtures(
             let stack_inputs = stack_inputs(&stack_values);
             let advice_inputs = AdviceInputs::default();
             let proof_cache_key = tx_proof_cache_key(
-                &program_info,
                 fixture.program.environment.execution().descriptor(),
                 &stack_values,
                 &compatibility,

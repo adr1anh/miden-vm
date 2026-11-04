@@ -268,14 +268,9 @@ impl FastProcessor {
 
             match execution_output {
                 Ok((output, session)) => {
-                    let (mut vm_witness, precompiles_witness) = Self::execution_witness_from_parts(
-                        program,
-                        stack_inputs,
-                        output,
-                        session,
-                        tracer,
-                    )?
-                    .into_parts();
+                    let (mut vm_witness, precompiles_witness) =
+                        Self::execution_witness_from_parts(stack_inputs, output, session, tracer)?
+                            .into_parts();
                     // End the stream before this scope waits for the builder.
                     drop(vm_witness.take_hasher_replay());
                     Ok((vm_witness, precompiles_witness))
@@ -332,7 +327,7 @@ impl FastProcessor {
     ///     miden_processor::trace::build_trace(vm_witness, &miden_vm_stark::memory::default_budget())
     ///         .unwrap();
     ///
-    /// assert_eq!(*trace.program_hash(), program.hash());
+    /// assert_eq!(*trace.entry_implementation().as_word(), program.hash());
     /// ```
     #[instrument(name = "execute_for_proving_sync", skip_all)]
     pub fn execute_for_proving_sync(
@@ -353,7 +348,7 @@ impl FastProcessor {
         )?;
         let (execution_output, session) =
             self.execute_with_tracer_and_session_sync(program, environment, host, &mut tracer)?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
+        Self::execution_witness_from_parts(stack_inputs, execution_output, session, tracer)
     }
 
     /// Executes the given program synchronously with package-owned source/debug context and returns
@@ -385,7 +380,7 @@ impl FastProcessor {
                 host,
                 &mut tracer,
             )?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
+        Self::execution_witness_from_parts(stack_inputs, execution_output, session, tracer)
     }
 
     /// Executes the given program synchronously with package-owned source/debug context rooted at
@@ -421,7 +416,7 @@ impl FastProcessor {
                 host,
                 &mut tracer,
             )?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
+        Self::execution_witness_from_parts(stack_inputs, execution_output, session, tracer)
     }
 
     /// Async variant of [`Self::execute_for_proving_sync`] for async hosts.
@@ -446,7 +441,7 @@ impl FastProcessor {
         let (execution_output, session) = self
             .execute_with_tracer_and_session(program, environment, host, &mut tracer)
             .await?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
+        Self::execution_witness_from_parts(stack_inputs, execution_output, session, tracer)
     }
 
     /// Async variant of [`Self::execute_for_proving_with_package_debug_info_sync`].
@@ -480,7 +475,7 @@ impl FastProcessor {
                 &mut tracer,
             )
             .await?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
+        Self::execution_witness_from_parts(stack_inputs, execution_output, session, tracer)
     }
 
     /// Async variant of
@@ -516,7 +511,7 @@ impl FastProcessor {
                 &mut tracer,
             )
             .await?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
+        Self::execution_witness_from_parts(stack_inputs, execution_output, session, tracer)
     }
 
     /// Executes the given program with the provided tracer using an async host.
@@ -760,20 +755,13 @@ impl FastProcessor {
     /// Pairs execution output with the initial inputs and replay witness captured during execution.
     #[inline(always)]
     fn execution_witness_from_parts(
-        program: &Program,
         stack_inputs: StackInputs,
         execution_output: ExecutionOutput,
         session: crate::ResolutionSession,
         tracer: ExecutionTracer,
     ) -> Result<ExecutionWitness, ExecutionError> {
         let trace = tracer.into_trace_replay(session)?;
-        // Until the statement cutover, legacy transport metadata names the authenticated body.
-        // The original Program remains a code-supply hint, never execution authority.
-        let program_info = miden_core::program::ProgramInfo::new(
-            trace.entry_implementation()?.into_word(),
-            program.kernel().clone(),
-        );
-        ExecutionWitness::from_execution(program_info, stack_inputs, execution_output, trace)
+        ExecutionWitness::from_execution(stack_inputs, execution_output, trace)
     }
 
     /// Returns the current top 16 stack elements in public input order.

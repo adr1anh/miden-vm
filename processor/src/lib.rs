@@ -85,7 +85,7 @@ pub use miden_core::{
     EMPTY_WORD, Felt, ONE, WORD_SIZE, Word, ZERO, crypto, field, mast,
     program::{
         ExecutionClaim, ExecutionTarget, InputError, KernelDescriptor, MIN_STACK_DEPTH, Program,
-        ProgramInfo, StackInputs, StackOutputs,
+        StackInputs, StackOutputs,
     },
     serde, utils,
 };
