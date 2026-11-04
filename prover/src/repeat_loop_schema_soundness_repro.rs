@@ -89,12 +89,26 @@ fn chiplet_row(matrix: &RowMajorMatrix<Felt>, row: usize) -> &ChipletCols<Felt> 
     matrix.values[row * width..(row + 1) * width].borrow()
 }
 
+/// Controller addresses are one-based within their band, after the physical Library prefix.
+fn controller_row_index(matrix: &RowMajorMatrix<Felt>, address: Felt) -> usize {
+    assert_ne!(address, Felt::ZERO, "a Controller row must have a present address");
+    let mut matches = (0..matrix.height()).filter(|&index| {
+        let row = chiplet_row(matrix, index);
+        row.chiplet_selectors()[..2] == [Felt::ZERO, Felt::ONE] && row.chip_clk == address
+    });
+    let index = matches.next().expect("Controller address must exist in its own band");
+    assert!(matches.next().is_none(), "Controller address must identify exactly one row");
+    index
+}
+
 fn copy_chiplet_row(
     dst: &mut RowMajorMatrix<Felt>,
     dst_row: usize,
     src: &RowMajorMatrix<Felt>,
     src_row: usize,
 ) {
+    assert_eq!(chiplet_row(dst, dst_row).chiplet_selectors()[..2], [Felt::ZERO, Felt::ONE]);
+    assert_eq!(chiplet_row(src, src_row).chiplet_selectors()[..2], [Felt::ZERO, Felt::ONE]);
     let width = dst.width();
     let row: &mut ChipletCols<Felt> =
         dst.values[dst_row * width..(dst_row + 1) * width].borrow_mut();
@@ -391,8 +405,10 @@ fn forged_early_loop_iteration_body_is_rejected() {
     for row in span..=repeat {
         *core_row_mut(&mut core, row) = core_row(&attacker_core, row).clone();
     }
-    let controller_row = core_row(&core, body_op).decoder.addr.as_canonical_u64() as usize - 1;
-    copy_chiplet_row(&mut chiplets, controller_row, &attacker_chiplets, controller_row);
+    let controller_addr = core_row(&core, body_op).decoder.addr;
+    let controller_row = controller_row_index(&chiplets, controller_addr);
+    let attacker_controller_row = controller_row_index(&attacker_chiplets, controller_addr);
+    copy_chiplet_row(&mut chiplets, controller_row, &attacker_chiplets, attacker_controller_row);
     let (compression, and8) = rebuild_hash_witnesses(&victim, &chiplets);
     assert_lookup_delta(
         &victim,
@@ -428,7 +444,7 @@ fn loop_skip_body_with_retired_hasher_rows_is_rejected() {
         })
         .unwrap();
     assert_eq!(decode_opcode(&core_row(&core, loop_end + 1).decoder.op_bits), opcodes::HALT);
-    let body_controller = core_row(&core, 2).decoder.addr.as_canonical_u64() as usize - 1;
+    let body_controller = controller_row_index(&chiplets, core_row(&core, 2).decoder.addr);
     for row in 1..=loop_end {
         let source = if row == 1 { loop_end } else { loop_end + 1 };
         *core_row_mut(&mut core, row) = core_row(&honest_core, source).clone();
@@ -490,8 +506,10 @@ fn forged_in_span_repeat_with_body_hash_evidence_is_rejected() {
     let outputs = StackOutputs::from(final_stack.top);
     assert_ne!(outputs, *victim.stack_outputs());
 
-    let controller_row = core_row(&core, 4).decoder.addr.as_canonical_u64() as usize - 1;
-    copy_chiplet_row(&mut chiplets, controller_row, &body_chiplets, controller_row);
+    let controller_addr = core_row(&core, 4).decoder.addr;
+    let controller_row = controller_row_index(&chiplets, controller_addr);
+    let body_controller_row = controller_row_index(&body_chiplets, controller_addr);
+    copy_chiplet_row(&mut chiplets, controller_row, &body_chiplets, body_controller_row);
     let (compression, and8) = rebuild_hash_witnesses(&victim, &chiplets);
     assert_lookup_delta(
         &victim,
