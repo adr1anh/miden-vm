@@ -11,9 +11,9 @@
 //! - `SYNTH_SNAPSHOT`: path to a single producer JSON; if set, only this file is benched. Otherwise
 //!   every `snapshots/*.json` in the manifest dir is used.
 //! - `SYNTH_SCENARIO`: if set, restrict to scenarios whose slugified key contains this slugified
-//!   substring (case- and separator-insensitive; `"VM memory"`, `"vm-memory"`, and
-//!   `"vm memory"` match `"VM memory and compression"`). Without a filter, selects the four
-//!   measured generic VM producer scenarios.
+//!   substring (case- and separator-insensitive; `"VM memory"`, `"vm-memory"`, and `"vm memory"`
+//!   match `"VM memory and compression"`). Without a filter, selects the four measured generic VM
+//!   producer scenarios.
 //! - `SYNTH_BENCH_AXES`: comma-separated axes to run. Supported values are `exec`, `trace_prep`,
 //!   `prove`, `verify`, and `all`. Defaults to all axes.
 //! - `SYNTH_HASH_LDE_BLOCKS`: enable blockwise LDE hashing with `1`; defaults to `0`.
