@@ -1214,7 +1214,7 @@ fn assert_aead_error(case: &str, test: &Test, expected_error: &str) {
                 err: OperationError::FailedAssertion { err_code, err_msg }
                     | OperationError::U32AssertionFailed { err_code, err_msg, .. },
                 ..
-            } if *err_code == expected_code && err_msg.is_none()
+            } if *err_code == expected_code && err_msg.as_deref() == Some(expected_error)
         ),
         "{case}: expected {expected_error:?} ({expected_code}), got {error:?}"
     );

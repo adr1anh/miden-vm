@@ -514,7 +514,7 @@ fn test_mod_12289_rejects_forged_remainder_zero(#[case] dividend: u64) {
         ExecutionError::OperationError {
             err: OperationError::FailedAssertion { err_code, err_msg }, ..
         } if err_code == error_code_from_msg("comparison failed: quotient overflow")
-            && err_msg.is_none()
+            && err_msg.as_deref() == Some("comparison failed: quotient overflow")
     );
 }
 
@@ -530,7 +530,7 @@ fn test_mod_12289_rejects_forged_addition_overflow() {
         ExecutionError::OperationError {
             err: OperationError::FailedAssertion { err_code, err_msg }, ..
         } if err_code == error_code_from_msg("comparison failed: addition overflow")
-            && err_msg.is_none()
+            && err_msg.as_deref() == Some("comparison failed: addition overflow")
     );
 }
 
@@ -701,7 +701,8 @@ fn test_falcon512_probabilistic_product_rejects_chosen_evaluation_point() {
         ExecutionError::OperationError {
             err: OperationError::FailedAssertion { err_code, err_msg }, ..
         }
-        if err_code == error_code_from_msg("comparison failed: tau") && err_msg.is_none()
+        if err_code == error_code_from_msg("comparison failed: tau")
+            && err_msg.as_deref() == Some("comparison failed: tau")
     );
 }
 
@@ -721,7 +722,7 @@ fn falcon_verify_norm_boundary(#[case] first: usize, #[case] second: usize, #[ca
         ExecutionError::OperationError {
             err: OperationError::FailedAssertion { err_code, err_msg }, ..
         } if err_code == error_code_from_msg("comparison failed: norm bound")
-            && err_msg.is_none()
+            && err_msg.as_deref() == Some("comparison failed: norm bound")
     );
 }
 
