@@ -522,7 +522,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
-| 14 Recursive verifier | in progress | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3 and syscall5/native/MASM; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Isolated context necessity, remaining guest/fuzz/performance/final gates and inherited qualification; DYNCALL controls remain compound/rejection-only |
+| 14 Recursive verifier | in progress | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Packed loop-fixture repair, remaining guest/fuzz/performance/final gates and inherited qualification; DYNCALL controls remain compound/rejection-only |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
@@ -3239,3 +3239,29 @@ require actual proof construction/native rejection, but lack necessity/MASM comp
 three controls remain explicitly compound/rejection-only; the stale zero-principal collision story
 does not create a fresh isolated-tag gate. Guest/fuzz/performance/final and inherited gates, PR14/M1
 and the general goal remain open. No PR/push; context and implementation commits stay separate.
+
+
+### PR14 isolated context qualification, 4 November 2026
+
+`aae409c8e` isolates only Core context-preservation emission5 with the historical coarse-END
+selector; principal preservation remains current. The nested-call witness restores its original
+caller context and keeps all principal columns, non-Core matrices and expected claim fixed. The
+isolated evaluator accepts the continuation witness; the same artifact gets current native STARK
+and exact MASM ACE circuit-nonzero rejection. Its ordinary-transition control still rejects.
+Structural/full-field/per-assertion degree guards identify the single change. Shared slice mapping
+and retained-artifact assertion helpers preserve the already qualified principal/N0 policies.
+All eight affected tests, final five-crate all-target strict custom Clippy and independent source
+review pass; signature verifies. Logs: `pr14-context-comparison-{checks,clippy}.log`. Production
+code/pins are unchanged, so prior production no_std/consumer/capture evidence is retained.
+
+The inherited context-necessity gate is closed. DYNCALL stays compound/rejection-only; no fresh
+isolated-tag claim is inferred from the stale collision prerequisite. A bounded audit found an
+actual migration defect in the existing loop regression helper: it interprets S_lib=1 as Controller
+instead of requiring [S_lib,C]=[0,1], and a Controller-only rebuild would lose Library compression.
+Three of seven loop tests call that helper before their rejection assertions; the padding search
+also needs the role predicate. Repair must preserve captured Library/nonhasher demand and declared
+lookup-delta oracles. No numeric-address, donor-prefix or principal bug has been established, so
+o speculative offset changes are authorized by this finding. The root-END replacement case is
+compound and changes independent hash/Resolve demands; do not promote it to isolated necessity.
+No loop runtime result is claimed yet. PR14/M1/general goal and remaining guest/fuzz/performance/
+final qualification remain open; no PR/push or branch change.
