@@ -16,11 +16,9 @@ const NAMESPACE_START: usize = 115;
 const NAMESPACE_LANES: usize = 4;
 
 pub(super) fn eval<AB: LiftedAirBuilder<F = Felt>>(builder: &mut AB) {
-    eval_with_base_replacements(
-        MidenAir::CHIPLETS,
-        builder,
-        core::array::from_fn(|lane| (NAMESPACE_START + lane, AB::Expr::ZERO)),
-    );
+    let replacements: [(usize, AB::Expr); NAMESPACE_LANES] =
+        core::array::from_fn(|lane| (NAMESPACE_START + lane, AB::Expr::ZERO));
+    eval_with_base_replacements(MidenAir::CHIPLETS, builder, &replacements);
 }
 
 #[cfg(test)]

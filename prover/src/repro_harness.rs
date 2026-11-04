@@ -12,12 +12,13 @@ use miden_core::{
     utils::{Matrix, RowMajorMatrix},
 };
 use miden_core_lib::CoreLibrary;
-use miden_processor::trace::VmTrace;
+use miden_processor::{ExecutionError, trace::VmTrace};
 use miden_utils_testing::Test;
 use miden_verifier::{VerificationError, VerificationOutcome, Verifier};
 use miden_vm_stark::{prover::prove, recursive::RecursiveVerifierInputs};
 
 mod comparison_air;
+mod comparison_context;
 mod comparison_core;
 mod comparison_library;
 mod comparison_runner;
@@ -156,6 +157,35 @@ impl ReproTrace {
                 format!("recursive verifier environment authorization failed: {error}")
             })?;
         Ok(test)
+    }
+
+    /// Requires both production consumers to accept the same retained artifact and expected claim.
+    #[track_caller]
+    pub(crate) fn assert_native_and_recursive_accept(&self, proof: VmProof) {
+        let native = self.verify_vm_proof(proof.clone(), self.outputs);
+        assert!(native.is_ok(), "honest artifact must verify natively: {native:?}");
+        self.recursive_verifier_test(proof)
+            .expect("honest recursive setup must authorize")
+            .execute_for_output()
+            .expect("honest artifact must verify in MASM");
+    }
+
+    /// Requires proof-stage native and exact MASM AIR rejection, after artifact construction.
+    #[track_caller]
+    pub(crate) fn assert_native_and_recursive_air_rejection(&self, proof: VmProof) {
+        let native = self.verify_vm_proof(proof.clone(), self.outputs);
+        assert!(
+            matches!(&native, Err(VerificationError::StarkVerificationError(..))),
+            "current native verification must reject the constructed AIR witness: {native:?}"
+        );
+        let execution = self
+            .recursive_verifier_test(proof)
+            .expect("the same artifact must reach the authorized recursive verifier")
+            .execute_for_output();
+        assert!(
+            matches!(&execution, Err(ExecutionError::AceChipError { error, .. }) if error.0 == "circuit does not evaluate to zero"),
+            "current MASM must reject the same AIR evaluation in ACE: {execution:?}"
+        );
     }
 
     /// Proves `core` against the honest public outputs and runs the resulting proof through the

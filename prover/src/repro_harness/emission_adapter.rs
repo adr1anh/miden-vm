@@ -186,14 +186,14 @@ where
     }
 }
 
-/// Shares one mapped evaluator instantiation across the private four-lane comparison policies.
+/// Shares one mapped evaluator instantiation across the private comparison policies.
 /// Keeping the policy data outside the mapper also preserves one primitive assertion order.
 pub(super) fn eval_with_base_replacements<
     AB: miden_stark::air::LiftedAirBuilder<F = miden_core::Felt>,
 >(
     air: miden_air::vm::MidenAir,
     builder: &mut AB,
-    replacements: [(usize, AB::Expr); 4],
+    replacements: &[(usize, AB::Expr)],
 ) {
     use miden_stark::air::LiftedAir;
 

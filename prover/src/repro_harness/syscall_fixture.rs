@@ -354,9 +354,6 @@ fn assert_lookup_delta(honest: &ReproTrace, forged: &ReproTrace) {
 
 #[test]
 fn actual_nonroot_syscall_fails_native_and_masm() {
-    use miden_processor::ExecutionError;
-    use miden_verifier::VerificationError;
-
     use super::CoreMode;
 
     let (honest, mut forged) = build_nonroot_syscall_fixture();
@@ -368,12 +365,7 @@ fn actual_nonroot_syscall_fails_native_and_masm() {
         "honest root SYS must verify: {:?}",
         baseline.verification
     );
-    assert!(honest.verify_vm_proof(baseline.proof.clone(), honest.outputs()).is_ok());
-    honest
-        .recursive_verifier_test(baseline.proof)
-        .expect("honest recursive setup must authorize")
-        .execute_for_output()
-        .expect("honest root SYS must verify in MASM");
+    honest.assert_native_and_recursive_accept(baseline.proof);
 
     let comparison = forged
         .prove_syscall_comparison()
@@ -383,19 +375,7 @@ fn actual_nonroot_syscall_fails_native_and_masm() {
         "only the namespace policy must reject this witness: {:?}",
         comparison.verification
     );
-    let native = forged.verify_vm_proof(comparison.proof.clone(), forged.outputs());
-    assert!(
-        matches!(&native, Err(VerificationError::StarkVerificationError(..))),
-        "current native verification must reject the child SYS: {native:?}"
-    );
-    let execution = forged
-        .recursive_verifier_test(comparison.proof)
-        .expect("the same proof must reach the authorized recursive verifier")
-        .execute_for_output();
-    assert!(
-        matches!(&execution, Err(ExecutionError::AceChipError { error, .. }) if error.0 == "circuit does not evaluate to zero"),
-        "current MASM must reject this AIR evaluation in ACE: {execution:?}"
-    );
+    forged.assert_native_and_recursive_air_rejection(comparison.proof);
 
     // A HALT-only clock mutation adds an unrelated defect without changing lookup demands or
     // expected public inputs. Removing the namespace equations must not turn off clock checks.

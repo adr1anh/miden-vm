@@ -26,11 +26,12 @@
 //! The ordinary-transition controls and honest baselines check the regression harness. These
 //! rejection tests alone do not establish necessity of an individual END rule: in particular,
 //! changes carried through the final principal also violate the independent K_entry boundary.
-//! The alias-principal cases below preserve that boundary. Their private evaluator comparison
-//! changes only the four principal-preservation equations: the historical coarse-END selector
-//! accepts the continuation witness while the current native and MASM verifiers reject the same
-//! artifact. The ordinary-transition witness still rejects under the comparison evaluator. This
-//! establishes necessity for the principal rule without attributing the separate context cases.
+//! The alias-principal and nested-call context cases preserve that boundary. Their separate
+//! private evaluator comparisons change only the targeted preservation rule. Each historical
+//! coarse-END selector accepts its continuation witness while current native and MASM verifiers
+//! reject that same artifact; ordinary-transition controls still reject under each comparison.
+//! The context comparison keeps principal preservation, and the principal comparison keeps context
+//! preservation. Neither attributes the separate compound DYNCALL controls.
 
 use alloc::{vec, vec::Vec};
 
@@ -42,8 +43,8 @@ use miden_core::{
     program::Program,
     proof::{ExecutionProof, PrecompileStatus},
 };
-use miden_processor::{DefaultHost, ExecutionError, FastProcessor, StackInputs};
-use miden_verifier::{VerificationError, Verifier};
+use miden_processor::{DefaultHost, FastProcessor, StackInputs};
+use miden_verifier::Verifier;
 
 use crate::repro_harness::{CoreMode, ReproTrace, core_row_mut};
 
@@ -272,16 +273,7 @@ fn check_alias_principal_exchange(after_continuation: bool) {
         "the unchanged evaluator must accept: {:?}",
         honest.verification
     );
-    let honest = honest.proof;
-    assert!(
-        repro.verify_vm_proof(honest.clone(), repro.outputs()).is_ok(),
-        "the honest aliases must verify natively"
-    );
-    repro
-        .recursive_verifier_test(honest)
-        .expect("honest recursive verifier setup must authorize")
-        .execute_for_output()
-        .expect("the honest aliases must verify in MASM");
+    repro.assert_native_and_recursive_accept(honest.proof);
 
     // Both aliases already have authenticated openings. Invocation and root-completion demands
     // remain unchanged; only the callee principal tails change in the Core matrix.
@@ -306,27 +298,7 @@ fn check_alias_principal_exchange(after_continuation: bool) {
     );
     // Verify this very artifact with the current native and MASM evaluators. The captured
     // descriptor, claim, configuration/pins and every witness matrix are identical.
-    let proof = comparison.proof;
-    let result = repro.verify_vm_proof(proof.clone(), repro.outputs());
-    assert!(
-        matches!(&result, Err(VerificationError::StarkVerificationError(..))),
-        "the STARK verifier must reject the exchanged principals: {result:?}"
-    );
-    let execution = repro
-        .recursive_verifier_test(proof)
-        .expect("the constructed proof must reach the authorized recursive verifier")
-        .execute_for_output();
-    let Err(error) = execution else {
-        panic!("MASM must reject the same exchanged-principal proof");
-    };
-    assert!(
-        matches!(
-            &error,
-            ExecutionError::AceChipError { error: ace, .. }
-                if ace.0 == "circuit does not evaluate to zero"
-        ),
-        "the recursive verifier must reject the AIR evaluation in ACE: {error:?}"
-    );
+    repro.assert_native_and_recursive_air_rejection(comparison.proof);
 }
 
 /// Builds a trace for `begin call.inner end`, where `inner` contains a nested block -- so the
@@ -428,20 +400,13 @@ fn honest_call_program_trace_verifies() {
 ///
 /// `call` resets `ctx` to `clk + 1` on entry, and the block-stack bus pins `ctx` back to the
 /// caller's value only on the END *of the call*. Between those two points the only thing
-/// holding `ctx` at the callee value is the default-flag preservation constraint, which goes
-/// vacuous at every nested continuation END. Memory requests read `ctx` straight from this column
+/// holding `ctx` at the callee value is the default-flag preservation constraint. The historical
+/// coarse-END selector made it vacuous at nested continuation ENDs. This fixture isolates that
+/// context column; memory requests read `ctx` straight from it
 /// (`chiplet_requests.rs`), so a callee tail running at `ctx = 0` addresses caller memory.
 #[test]
 fn callee_reentering_caller_context_at_nested_continuation_end_is_rejected() {
-    let (mut repro, rows) = build_call_harness();
-    set_ctx(&mut repro, (rows.nested_continuation_end + 1)..=rows.call_end, Felt::ZERO);
-
-    let result = repro.prove_and_verify_current();
-    assert!(
-        result.is_err(),
-        "the verifier must reject a callee re-entering the caller's context at a nested \
-         continuation END (memory-isolation break): {result:?}"
-    );
+    check_call_context_comparison(true);
 }
 
 /// Control for the above: dropping into the caller's context one transition earlier -- across
@@ -449,12 +414,39 @@ fn callee_reentering_caller_context_at_nested_continuation_end_is_rejected() {
 /// the acceptance to the END transition specifically, not to `ctx` being loose inside calls.
 #[test]
 fn callee_reentering_caller_context_at_ordinary_row_is_rejected() {
-    let (mut repro, rows) = build_call_harness();
-    set_ctx(&mut repro, (rows.ordinary_in_callee + 1)..=rows.call_end, Felt::ZERO);
+    check_call_context_comparison(false);
+}
 
-    let result = repro.prove_and_verify_current();
+fn check_call_context_comparison(after_continuation: bool) {
+    let (mut repro, rows) = build_call_harness();
+    let expected_claim = repro.claim();
+    let honest = repro
+        .prove_comparison(CoreMode::Standard)
+        .expect("honest call context proof construction must complete");
     assert!(
-        result.is_err(),
-        "the verifier must reject a context change on an ordinary callee transition: {result:?}"
+        honest.verification.is_ok(),
+        "the unchanged evaluator must accept: {:?}",
+        honest.verification
     );
+    repro.assert_native_and_recursive_accept(honest.proof);
+
+    let start = if after_continuation {
+        rows.nested_continuation_end
+    } else {
+        rows.ordinary_in_callee
+    };
+    // Only Core ctx changes: the caller-frame END restores the original root context. All
+    // principal columns, other AIR matrices and the independently expected claim remain fixed.
+    set_ctx(&mut repro, (start + 1)..=rows.call_end, Felt::ZERO);
+    assert_eq!(repro.claim(), expected_claim);
+    let comparison = repro
+        .prove_comparison(CoreMode::CoarseContext)
+        .expect("the changed context witness must finish comparison proof construction");
+    assert_eq!(
+        comparison.verification.is_ok(),
+        after_continuation,
+        "only the continuation context witness may pass the historical selector: {:?}",
+        comparison.verification
+    );
+    repro.assert_native_and_recursive_air_rejection(comparison.proof);
 }

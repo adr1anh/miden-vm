@@ -18,6 +18,7 @@ use p3_challenger::CanObserve;
 pub(crate) enum CoreMode {
     Standard,
     Alternate,
+    CoarseContext,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -167,7 +168,10 @@ impl<EF: ExtensionField<Felt>> LiftedAir<Felt, EF> for ComparisonAir {
 
     fn eval<AB: LiftedAirBuilder<F = Felt>>(&self, builder: &mut AB) {
         if self.inner == MidenAir::CORE {
-            super::comparison_core::eval(builder, self.mode);
+            match self.mode {
+                CoreMode::CoarseContext => super::comparison_context::eval(builder),
+                mode => super::comparison_core::eval(builder, mode),
+            }
         } else if self.inner == MidenAir::CHIPLETS && self.compare_syscall_namespace {
             super::comparison_library::eval(builder);
         } else {
@@ -233,6 +237,13 @@ impl ComparisonMultiAir {
             ComparisonAir::without_syscall_namespace_check();
         result
     }
+}
+
+#[test]
+fn comparison_context_policy_is_isolated() {
+    super::comparison_context::assert_context_policy_is_isolated(ComparisonAir::core(
+        CoreMode::CoarseContext,
+    ));
 }
 
 #[test]

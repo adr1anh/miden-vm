@@ -19,17 +19,15 @@ const PRESERVE_START: usize = 10;
 const PRINCIPAL_LANES: usize = 4;
 
 pub(super) fn eval<AB: LiftedAirBuilder<F = Felt>>(builder: &mut AB, mode: CoreMode) {
-    if mode == CoreMode::Standard {
+    if mode != CoreMode::Alternate {
         <MidenAir as LiftedAir<Felt, AB::EF>>::eval(&MidenAir::CORE, builder);
         return;
     }
 
-    let replacements = principal_constraints(builder, mode);
-    eval_with_base_replacements(
-        MidenAir::CORE,
-        builder,
-        core::array::from_fn(|lane| (PRESERVE_START + lane, replacements[lane].clone())),
-    );
+    let values = principal_constraints(builder, mode);
+    let replacements: [(usize, AB::Expr); PRINCIPAL_LANES] =
+        core::array::from_fn(|lane| (PRESERVE_START + lane, values[lane].clone()));
+    eval_with_base_replacements(MidenAir::CORE, builder, &replacements);
 }
 
 fn principal_constraints<AB: LiftedAirBuilder<F = Felt>>(
@@ -52,7 +50,9 @@ fn principal_constraints<AB: LiftedAirBuilder<F = Felt>>(
         * (AB::Expr::ONE - bits[0].clone()))
         * local.decoder.extra[0];
     let restore = match mode {
-        CoreMode::Standard => f_end * local.decoder.end_block_flags().restores_caller_frame,
+        CoreMode::Standard | CoreMode::CoarseContext => {
+            f_end * local.decoder.end_block_flags().restores_caller_frame
+        },
         CoreMode::Alternate => f_end,
     };
     let preserve = AB::Expr::ONE - (f_call + f_dyncall + restore);
