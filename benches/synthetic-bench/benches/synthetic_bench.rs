@@ -4,6 +4,9 @@
 //! their workloads. All four independently padded AIR heights must match before timing the
 //! `exec`, `trace_prep`, `prove`, and `verify` axes.
 //!
+//! `--librarytree MODE SCENARIO` dispatches a single LibraryTree qualification sample before
+//! Criterion setup; see the nested `librarytree` module for modes, scenarios, and metric scopes.
+//!
 //! Env vars:
 //! - `SYNTH_SNAPSHOT`: path to a single producer JSON; if set, only this file is benched. Otherwise
 //!   every `snapshots/*.json` in the manifest dir is used.
@@ -23,7 +26,7 @@
 use std::{collections::BTreeSet, hint::black_box, path::PathBuf, sync::Arc, time::Duration};
 
 use codspeed_criterion_compat as criterion;
-use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, SamplingMode, criterion_group};
 use miden_core::program::{ExecutionClaim, ExecutionTarget};
 use miden_processor::{
     DefaultHost, ExecutionOptions, FastProcessor, StackInputs, advice::AdviceInputs,
@@ -41,6 +44,9 @@ use miden_vm_synthetic_bench::{
     snippets::SNIPPETS,
     workload::{load_scenarios, slugify, synthesize},
 };
+
+#[path = "synthetic_bench/librarytree.rs"]
+mod librarytree;
 
 /// Hash function used for STARK `prove` and `verify` axes.
 const BENCH_HASH: HashFunction = HashFunction::Eidos;
@@ -250,12 +256,8 @@ fn bench_one_scenario(
     println!("\n=== verification\n{}", synthesized.report);
 
     let source_manager = Arc::new(DefaultSourceManager::default());
-    let (code, environment) = assemble_fixture_program(
-        Assembler::new(source_manager.clone()),
-        "program",
-        source.as_str(),
-        &[],
-    );
+    let (code, environment) =
+        assemble_fixture_program(Assembler::new(source_manager), "program", source.as_str(), &[]);
 
     let mut group = c.benchmark_group(format!("{producer_stem}/{scenario_slug}"));
     group
@@ -354,4 +356,20 @@ fn bench_one_scenario(
 }
 
 criterion_group!(benches, synthetic_bench);
-criterion_main!(benches);
+fn main() {
+    if librarytree::dispatch() {
+        return;
+    }
+    criterion_runner::run();
+}
+
+// Keep the compatibility crate's ordinary entry point, including Codspeed configuration.
+mod criterion_runner {
+    use super::{benches, criterion};
+
+    criterion::criterion_main!(benches);
+
+    pub(super) fn run() {
+        main();
+    }
+}

@@ -28,7 +28,7 @@ pub const CALIBRATION_ITERS: u64 = 1000;
 /// assembler + fast processor + trace builder.
 pub fn measure_program(source: &str) -> Result<TraceShape, MeasurementError> {
     let source_manager = Arc::new(DefaultSourceManager::default());
-    let assembler = Assembler::new(source_manager.clone());
+    let assembler = Assembler::new(source_manager);
     let module = Parse::parse(source, assembler.warnings_as_errors(), assembler.source_manager())
         .map_err(|e| MeasurementError::Assembly(format!("{e}")))?;
     // This is an explicit local fixture policy, independent of publication admission.
