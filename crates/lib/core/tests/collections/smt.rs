@@ -1,7 +1,5 @@
 use miden_core_lib::handlers::smt_peek::SMT_PEEK_EVENT_NAME;
 use miden_crypto::hash::eidos::{Eidos, domains::SMT_BUCKET_LEAF};
-use miden_processor::{ExecutionError, operation::OperationError};
-use miden_utils_testing::Test;
 
 use super::*;
 
@@ -193,7 +191,10 @@ fn test_smt_get_rejects_authenticated_duplicate_keys() {
     push_word(&mut initial_stack, &key);
 
     let test = build_test!(SOURCE, &initial_stack, &[], store, advice_map);
-    assert_smt_error(&test, "invalid multi-leaf preimage: keys must be unique and sorted");
+    crate::expect_assert_error_code_from_msg!(
+        test,
+        "invalid multi-leaf preimage: keys must be unique and sorted"
+    );
 }
 
 #[test]
@@ -220,7 +221,10 @@ fn test_smt_get_rejects_authenticated_unsorted_unique_keys() {
     push_word(&mut initial_stack, &low_key);
 
     let test = build_test!(SOURCE, &initial_stack, &[], store, advice_map);
-    assert_smt_error(&test, "invalid multi-leaf preimage: keys must be unique and sorted");
+    crate::expect_assert_error_code_from_msg!(
+        test,
+        "invalid multi-leaf preimage: keys must be unique and sorted"
+    );
 }
 
 #[test]
@@ -252,7 +256,10 @@ fn test_smt_set_rejects_authenticated_duplicate_keys() {
     push_word(&mut initial_stack, &EMPTY_WORD);
 
     let test = build_test!(SOURCE, &initial_stack, &[], store, advice_map);
-    assert_smt_error(&test, "invalid multi-leaf preimage: keys must be unique and sorted");
+    crate::expect_assert_error_code_from_msg!(
+        test,
+        "invalid multi-leaf preimage: keys must be unique and sorted"
+    );
 }
 
 /// Tests inserting and removing key-value pairs to an SMT. We do the insert/removal twice to ensure
@@ -538,7 +545,10 @@ fn test_smt_set_single_to_multi_rejects_forged_preimage() {
     push_word(&mut initial_stack, &v_new);
 
     let test = build_test!(SOURCE, &initial_stack, &[], store, advice_map);
-    assert_smt_error(&test, "invalid single-leaf preimage: hash does not match node value");
+    crate::expect_assert_error_code_from_msg!(
+        test,
+        "invalid single-leaf preimage: hash does not match node value"
+    );
 }
 
 /// Regression test for the multi-leaf no-op deletion bypass.
@@ -956,22 +966,6 @@ fn test_smt_multi_leaf_hash_differs_from_generic_felt_hash() {
 
 // HELPER FUNCTIONS
 // ================================================================================================
-
-#[track_caller]
-fn assert_smt_error(test: &Test, expected_message: &str) {
-    let error = test.execute().expect_err(expected_message);
-    let expected_code = miden_core::mast::error_code_from_msg(expected_message);
-    assert!(
-        matches!(
-            &error,
-            ExecutionError::OperationError {
-                err: OperationError::FailedAssertion { err_code, err_msg },
-                ..
-            } if *err_code == expected_code && err_msg.as_deref() == Some(expected_message)
-        ),
-        "expected {expected_message:?} ({expected_code}), got {error:?}"
-    );
-}
 
 fn prepare_insert_or_set(
     key: Word,
