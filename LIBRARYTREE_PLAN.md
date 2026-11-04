@@ -526,7 +526,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
-| 15 API/CLI closure | in-progress | Base `f4350360d` | PR14 final review committed; exact API direction approved | API cleanup, host-owned package execution and all PR15 acceptance checks pending; depends on 08–14 |
+| 15 API/CLI closure | in-progress | API names `652e1780c`; base `f4350360d` | Independent review; core/package/project/assembly1427 and strict four-crate all-target custom Clippy pass; authority compile-fail and existing codecs retained | Exact package occurrences/host-owned execution, downstream/public/no_std closure and remaining PR15 acceptance pending |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
@@ -3324,3 +3324,25 @@ PR14 is implemented-awaiting-validation. Final branch review belongs in PR_DESCR
 the linear transition to PR15. PR15 follows the approved host-owned code/API card; the general
 goal and M1 remain active. Guest/fuzz/performance/final and inherited qualification remain open,
 with PR15a still preceding PR16. No GitHub PR, push or publication is authorized.
+
+
+### PR15 source-name checkpoint, 4 November 2026
+
+Signed `652e1780c` applies the approved ExecutionTarget, NamespacePath, ProcedureName,
+PackageSymbols, LibraryRef, Revision and validate_symbols source names across tracked Rust
+consumers. LibraryRef exposes explicit latest/revision constructors; Revision still encodes
+the canonical `pinned` label. Existing syntax-local ProcedureName remains under the AST API;
+the package facade now exposes the canonical complete procedure name. No identity algorithm,
+canonical label/domain, framing, selection policy or profile budget changed.
+
+Independent source review, all1427 core/package/project/assembly lib and core public-API tests
+(eight existing skips), including the exact compile-fail authority fixture, and final four-crate
+all-target strict custom Clippy pass. Logs: `pr15-api-name-{checks,clippy}.log` under scratch.
+This does not establish downstream/no_std or host execution acceptance. Program/ProgramInfo
+remain pending retirement; consistent types alone do not satisfy the PR15 card.
+
+Next implementation boundary preserves package-owned keyed executable/source occurrences before
+removing Program's entry hints. A private entry/helper must retain its exact occurrence through
+serialization and host loading, including equal-D roots; never reconstruct an occurrence by
+selecting the first D. The package codec/assembler and processor owners are disjoint. Preserve
+canonical symbol bytes, all existing admission/resource gates and caller-supplied target authority.
