@@ -10,9 +10,9 @@ use miden_stark::air::{LiftedAir, LiftedAirBuilder};
 
 use super::emission_adapter::eval_with_base_replacements;
 
-// Selectors emit 41 assertions, chip_clk emits 2, and Library emits 72 before these four.
-// Indices are zero-based in the shared base/extension emission order.
-const NAMESPACE_START: usize = 115;
+// Selectors emit 41 assertions and Library emits 72 before these four. Controller clock
+// assertions follow Library. Indices are zero-based in the shared base/extension emission order.
+const NAMESPACE_START: usize = 113;
 const NAMESPACE_LANES: usize = 4;
 
 pub(super) fn eval<AB: LiftedAirBuilder<F = Felt>>(builder: &mut AB) {

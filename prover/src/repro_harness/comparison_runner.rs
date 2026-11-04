@@ -42,6 +42,10 @@ impl ReproTrace {
         self.prove_comparison_air(ComparisonMultiAir::without_syscall_namespace_check())
     }
 
+    pub(super) fn prove_controller_entry_comparison(&self) -> Result<ComparisonResult, String> {
+        self.prove_comparison_air(ComparisonMultiAir::without_controller_entry_check())
+    }
+
     fn prove_comparison_air(
         &self,
         multi_air: ComparisonMultiAir,
