@@ -1,0 +1,74 @@
+{
+  "VM arithmetic and memory": {
+    "producer_source": "snapshots/sources/arithmetic-memory.masm",
+    "provenance": "current_vm_producer_measured",
+    "trace": {
+      "byte_pair_lookup_rows": 65536,
+      "chiplets_rows": 2722,
+      "chiplets_shape": {
+        "ace_rows": 0,
+        "aead_rows": 0,
+        "bitwise_rows": 400,
+        "hasher_rows": 1304,
+        "library_rows": 16,
+        "memory_rows": 1001
+      },
+      "core_rows": 21146,
+      "eidos_compression_rows": 41888
+    }
+  },
+  "VM bitwise and memory": {
+    "producer_source": "snapshots/sources/bitwise-memory.masm",
+    "provenance": "current_vm_producer_measured",
+    "trace": {
+      "byte_pair_lookup_rows": 65536,
+      "chiplets_rows": 2970,
+      "chiplets_shape": {
+        "ace_rows": 0,
+        "aead_rows": 0,
+        "bitwise_rows": 1200,
+        "hasher_rows": 952,
+        "library_rows": 16,
+        "memory_rows": 801
+      },
+      "core_rows": 12593,
+      "eidos_compression_rows": 30592
+    }
+  },
+  "VM compression and arithmetic": {
+    "producer_source": "snapshots/sources/compression-arithmetic.masm",
+    "provenance": "current_vm_producer_measured",
+    "trace": {
+      "byte_pair_lookup_rows": 65536,
+      "chiplets_rows": 3726,
+      "chiplets_shape": {
+        "ace_rows": 0,
+        "aead_rows": 0,
+        "bitwise_rows": 300,
+        "hasher_rows": 2808,
+        "library_rows": 16,
+        "memory_rows": 601
+      },
+      "core_rows": 15851,
+      "eidos_compression_rows": 90144
+    }
+  },
+  "VM memory and compression": {
+    "producer_source": "snapshots/sources/memory-compression.masm",
+    "provenance": "current_vm_producer_measured",
+    "trace": {
+      "byte_pair_lookup_rows": 65536,
+      "chiplets_rows": 4370,
+      "chiplets_shape": {
+        "ace_rows": 0,
+        "aead_rows": 0,
+        "bitwise_rows": 400,
+        "hasher_rows": 952,
+        "library_rows": 16,
+        "memory_rows": 3001
+      },
+      "core_rows": 18791,
+      "eidos_compression_rows": 30592
+    }
+  }
+}

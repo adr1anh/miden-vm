@@ -1,6 +1,6 @@
 //! Synthetic benchmark generator for VM-level proving regression tests.
 //!
-//! Given a snapshot of per-component trace row counts captured by an external producer,
+//! Given a snapshot of per-component trace row counts captured by an independent producer,
 //! this crate calibrates a small catalog of MASM snippets against the VM, solves
 //! for iteration counts, emits a synthetic program, and verifies that the program lands
 //! in all four target padded AIR heights.
@@ -13,6 +13,7 @@
 //! See `README.md` for design rationale.
 
 pub mod calibrator;
+pub mod producer;
 pub mod snapshot;
 pub mod snippets;
 pub mod solver;

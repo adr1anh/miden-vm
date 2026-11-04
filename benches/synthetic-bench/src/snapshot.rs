@@ -1,7 +1,7 @@
 //! Snapshot schema for the VM-side synthetic benchmark.
 //!
-//! A producer JSON file (e.g. `bench-tx.json` from `protocol/bin/bench-transaction/`) maps
-//! scenario keys to entries with measured row counts in a `trace` section.
+//! A producer JSON file maps scenario keys to entries with row counts measured by executing
+//! fixed assembly workloads, stored in a `trace` section.
 //!
 //! `trace` carries the AIR-side row totals used by the verifier (`core_rows`, `chiplets_rows`,
 //! `eidos_compression_rows`, `byte_pair_lookup_rows`). `chiplets_shape` (nested under `trace`) is
@@ -19,15 +19,7 @@ const MIN_TRACE_LEN: u64 = 64;
 /// One Eidos compression cycle occupies 32 rows.
 const EIDOS_COMPRESSION_CYCLE_LEN: u64 = 32;
 
-/// Representative protocol P2ID scenarios measured separately for each signing scheme.
-pub const DEFAULT_SCENARIOS: &[&str] = &[
-    "consume single P2ID note with Falcon signing",
-    "consume single P2ID note with ECDSA signing",
-    "consume two P2ID notes with Falcon signing",
-    "consume two P2ID notes with ECDSA signing",
-    "create single P2ID note with Falcon signing",
-    "create single P2ID note with ECDSA signing",
-];
+pub use crate::producer::DEFAULT_SCENARIOS;
 
 /// Measured AIR totals and an advisory per-chiplet breakdown for one producer scenario.
 /// The JSON stores the breakdown under `trace.chiplets_shape`; this type exposes it as `shape`.
@@ -270,14 +262,13 @@ pub enum SnapshotError {
 mod tests {
     use super::*;
 
-    // Independently pin the four AIR heights of the default producer scenarios.
+    // Filled from the independent producer capture before accepting the dataset. The capture
+    // example prints these rows only after measuring the source and checking synthesis.
     const SCENARIO_HEIGHTS: &[(&str, [u64; 4])] = &[
-        ("consume single P2ID note with Falcon signing", [65_536, 8_192, 131_072, 65_536]),
-        ("consume single P2ID note with ECDSA signing", [16_384, 4_096, 65_536, 65_536]),
-        ("consume two P2ID notes with Falcon signing", [65_536, 8_192, 131_072, 65_536]),
-        ("consume two P2ID notes with ECDSA signing", [32_768, 4_096, 65_536, 65_536]),
-        ("create single P2ID note with Falcon signing", [65_536, 8_192, 131_072, 65_536]),
-        ("create single P2ID note with ECDSA signing", [16_384, 4_096, 65_536, 65_536]),
+        ("VM arithmetic and memory", [32_768, 4_096, 65_536, 65_536]),
+        ("VM bitwise and memory", [16_384, 4_096, 32_768, 65_536]),
+        ("VM memory and compression", [32_768, 8_192, 32_768, 65_536]),
+        ("VM compression and arithmetic", [16_384, 4_096, 131_072, 65_536]),
     ];
 
     fn sample_shape() -> (TraceTotals, TraceBreakdown) {
@@ -388,10 +379,10 @@ mod tests {
 
     #[test]
     fn committed_snapshots_load() {
-        // Requires a real protocol recapture after the packed Library/AEAD cutover. The
-        // pre-cutover capture remains unchanged until its producer can measure the new bands.
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("snapshots/bench-tx.json");
-        let scenarios = TraceSnapshot::load_all(path).expect("load measured protocol snapshot");
+        assert_eq!(SCENARIO_HEIGHTS.len(), DEFAULT_SCENARIOS.len(), "pin captured AIR heights");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(crate::producer::SNAPSHOT_PATH);
+        let scenarios = TraceSnapshot::load_all(path).expect("load measured VM snapshot");
+        assert_eq!(scenarios.len(), DEFAULT_SCENARIOS.len(), "unexpected producer scenarios");
         for &name in DEFAULT_SCENARIOS {
             let (_, heights) = SCENARIO_HEIGHTS
                 .iter()
