@@ -211,16 +211,18 @@ fn pvm_verifies_a_session_mixing_every_precompile() {
     advice.append_elements(eddsa_25519_sha512::sign(&ed25519_key, k256.message));
     advice.append_elements(ecdsa_p256_sha256::sign(&p256_key, k256.message));
     let mut host = DefaultHost::default()
-        .with_environment_source(program.environment.source())
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&core_lib)
         .unwrap();
     let output = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default().with_stack(advice),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
     )
     .unwrap()
-    .execute_sync(&program.program, program.environment.execution(), &mut host)
+    .execute_sync(program.1.target(), &mut host)
     .expect("the mixed execution must succeed");
     assert!(output.advice.stack().is_empty(), "the execution must consume its advice");
 

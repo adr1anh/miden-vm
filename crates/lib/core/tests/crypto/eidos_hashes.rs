@@ -13,6 +13,8 @@ fn assert_hash_input_error(source: &str, message: &str) {
     let environment = test.fixture_environment().unwrap();
     let mut host = DefaultHost::default()
         .with_environment_source(environment.source())
+        .with_library(program)
+        .expect("fixture code must load into the host")
         .with_library(&miden_core_lib::CoreLibrary::default())
         .unwrap();
     // A missing range check must fail the test without running an unbounded absorption loop.
@@ -21,9 +23,9 @@ fn assert_hash_input_error(source: &str, message: &str) {
             .unwrap()
             .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits());
     let error = FastProcessor::new(StackInputs::default())
-        .with_options(options)
+        .with_options(options.with_resolution_limits(environment.resolution_limits()))
         .unwrap()
-        .execute_sync(&program, environment.execution(), &mut host)
+        .execute_sync(environment.target(), &mut host)
         .unwrap_err();
     match error {
         ExecutionError::OperationError {

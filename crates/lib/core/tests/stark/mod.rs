@@ -1,4 +1,4 @@
-use std::{array, fmt::Write as _, sync::Arc};
+use std::{array, fmt::Write as _};
 
 use miden_air::vm::{MIDEN_AIR_COUNT, MidenAir, MidenMultiAir, config};
 use miden_assembly::{
@@ -12,7 +12,7 @@ use miden_core::{
     proof::HashFunction,
 };
 use miden_core_lib::{CoreLibrary, CoreVerifierProfile, CoreVerifierProfileError};
-use miden_mast_package::{Package, TargetType};
+use miden_mast_package::TargetType;
 use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor};
 use miden_stark::{Preprocessed, StarkConfig, air::Statement};
 use miden_utils_testing::{
@@ -680,10 +680,10 @@ pub fn generate_recursive_verifier_data(
                     .assemble_library_modules("kernel".into(), kernel, [], TargetType::Kernel)
                     .unwrap();
                 let kernel_naming = product.naming().clone();
-                let kernel_lib = product.into_artifact(false).map(Arc::<Package>::from).unwrap();
+                let kernel_lib = product.into_code_package(false).unwrap();
                 let assembler = Assembler::with_kernel(
                     context.source_manager(),
-                    kernel_lib.clone(),
+                    kernel_lib.package().clone(),
                     kernel_naming.clone(),
                 )
                 .unwrap();
@@ -698,29 +698,27 @@ pub fn generate_recursive_verifier_data(
     };
     let stack_inputs = stack_inputs_from_ints(stack_inputs);
     let advice_inputs = AdviceInputs::default();
-    let mut host = DefaultHost::default().with_environment_source(program.environment.source());
+    let mut host = DefaultHost::default()
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host");
     if let Some(ref kernel_lib) = kernel_lib {
-        host.mast_forest_store_mut().insert(kernel_lib.mast_forest().clone());
+        host.load_library(kernel_lib.clone()).unwrap();
     }
 
     let processor = FastProcessor::new_with_options(
         stack_inputs,
         advice_inputs,
         ExecutionOptions::default()
+            .with_resolution_limits(program.1.resolution_limits())
             .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .unwrap();
-    let witness = processor
-        .execute_for_proving_sync(&program.program, program.environment.execution(), &mut host)
-        .unwrap();
+    let witness = processor.execute_for_proving_sync(program.1.target(), &mut host).unwrap();
     let stack_outputs = *witness.claim().stack_outputs();
     let proof = Prover::new().with_hash_fn(HashFunction::Eidos).prove(witness).unwrap();
 
-    let claim = ExecutionClaim::new(
-        program.environment.execution().descriptor(),
-        stack_inputs,
-        stack_outputs,
-    );
+    let claim = ExecutionClaim::new(program.1.target(), stack_inputs, stack_outputs);
 
     generate_advice_inputs(vm_verify_proof_identity(), &proof, &claim).unwrap()
 }
@@ -1832,7 +1830,7 @@ fn boundary_inputs_and_outer_logup_boundary(
     let mut rng = ChaCha20Rng::from_seed([seed; 32]);
     let fixture_source = format!("begin push.{seed} drop end");
     let fixture = assemble(Assembler::default(), "boundary_claim", &fixture_source, &[]);
-    let descriptor = fixture.environment.execution().descriptor();
+    let descriptor = fixture.1.target();
     let stack_inputs: [Felt; 16] = array::from_fn(|_| Felt::from_u32(rng.next_u32()));
     let stack_outputs: [Felt; 16] = array::from_fn(|_| Felt::from_u32(rng.next_u32()));
     let deferred_root = Word::new(array::from_fn(|_| Felt::from_u32(rng.next_u32())));

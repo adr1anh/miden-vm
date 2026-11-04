@@ -494,7 +494,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
 
     fn prepare_environment_completion(
         &mut self,
-        _environment: &crate::ExecutionEnvironment,
+        _target: crate::ExecutionTarget,
         _session: &crate::ResolutionSession,
     ) -> Result<KeyedEvent, ExecutionError> {
         Err(ExecutionError::Internal("fragment replay cannot capture native environment"))

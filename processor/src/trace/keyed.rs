@@ -19,8 +19,8 @@ use miden_core::{
 
 use super::{limits::MAX_TRACE_LEN, trace_state::CoreTraceFragmentContext};
 use crate::{
-    EnvironmentTraceLimits, ExecutionEnvironment, InvocationTag, InvocationUse, OpeningError,
-    OpeningLimits, OpeningOccurrence, OpeningResource, OpeningStep, ResolutionSession,
+    EnvironmentTraceLimits, InvocationTag, InvocationUse, OpeningError, OpeningLimits,
+    OpeningOccurrence, OpeningResource, OpeningStep, ResolutionLimits, ResolutionSession,
     ResolutionWitness, SessionBinding, SessionError, SessionPhase,
     mast::{MastForestId, MastNodeId},
     trace::RowIndex,
@@ -406,7 +406,8 @@ impl EnvironmentReplay {
     /// Recreates authority through the native APIs, leaving the environment untrusted on failure.
     pub(crate) fn revalidate(
         &mut self,
-        environment: &ExecutionEnvironment,
+        target: ExecutionTarget,
+        resolution_limits: ResolutionLimits,
         contexts: &mut [CoreTraceFragmentContext],
         policies: EnvironmentTraceLimits,
         read: ReplayReadLimits,
@@ -437,7 +438,7 @@ impl EnvironmentReplay {
                 record.native_use = None;
             }
         }
-        if self.descriptor != environment.descriptor() {
+        if self.descriptor != target {
             return Err(KeyedReplayError::Invalid("descriptor differs from caller authority"));
         }
         limit(ReplayResource::Events, events, policies.max_events)?;
@@ -449,12 +450,12 @@ impl EnvironmentReplay {
         // Clamp before any native allocation: the native owner survives validation and must fit
         // both retained and peak allowance. Temporary paths/replacement buffers consume peak only.
         // Native preparation includes full Lists, old native buffers and staged replacements.
-        let mut session_limits = environment.session_limits();
+        let mut session_limits = resolution_limits.session_limits();
         session_limits.max_prepare_peak_bytes =
             session_limits.max_prepare_peak_bytes.min(peak_available);
         session_limits.max_retained_bytes =
             session_limits.max_retained_bytes.min(retained_available).min(peak_available);
-        let mut ledger_limits = environment.ledger_limits();
+        let mut ledger_limits = resolution_limits.ledger_limits();
         ledger_limits.max_peak_bytes = ledger_limits.max_peak_bytes.min(peak_available);
         ledger_limits.max_retained_bytes =
             ledger_limits.max_retained_bytes.min(retained_available).min(peak_available);
@@ -462,7 +463,7 @@ impl EnvironmentReplay {
         let binding = self.resolve_path(
             self.entry.opening,
             self.descriptor.entry_key(),
-            environment.opening_limits(),
+            resolution_limits.opening_limits(),
             raw_bytes,
             session.counters().retained_bytes,
             read,
@@ -507,7 +508,7 @@ impl EnvironmentReplay {
                             let binding = self.resolve_path(
                                 record.opening,
                                 record.key,
-                                environment.opening_limits(),
+                                resolution_limits.opening_limits(),
                                 raw_bytes,
                                 session.counters().retained_bytes,
                                 read,

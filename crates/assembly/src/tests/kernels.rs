@@ -363,14 +363,14 @@ fn syscall_of_public_kernel_submodule_export_uses_its_root_binding() {
             [&*program],
         )
         .unwrap();
-    let program = assembler
+    let package = assembler
         .assemble_program("program", program)
         .expect("the exported submodule definition has an explicit root binding");
-    assert!(program.mast_forest().nodes().iter().any(|node| {
+    assert!(package.mast_forest().nodes().iter().any(|node| {
         matches!(node, MastNode::Call(call)
             if call.is_syscall() && call.target() == target_key)
     }));
-    assert_all_nodes_reachable_from_roots(program.mast_forest());
+    assert_all_nodes_reachable_from_roots(package.mast_forest());
 }
 
 #[test]
@@ -493,11 +493,12 @@ fn test_syscall_resolution_uses_kernel_module() -> TestResult {
     let assembler = bindings.configure(assembler, [&*program])?;
     let package = assembler.assemble_program("program", program)?;
     let naming = bindings.admit_package(&package)?;
-    let program = package.unwrap_program(&naming);
+    package.check_executable_code(&naming)?;
+    let program = CodePackage::new(Arc::from(package), Arc::new(naming)).map_err(Report::msg)?;
 
     let mast = {
-        let entry = program.get_node_by_id(program.entrypoint()).unwrap();
-        format!("{}", entry.to_display(program.mast_forest()))
+        let entry = program.package().mast_forest().get_node_by_id(entry_node(&program)).unwrap();
+        format!("{}", entry.to_display(program.package().mast_forest()))
     };
 
     let expected = format!(

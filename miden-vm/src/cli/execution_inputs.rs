@@ -10,7 +10,7 @@ use miden_core::{
     serde::read_file_bounded,
 };
 use miden_processor::{
-    EnvironmentTraceLimits, ExecutionEnvironment, LedgerLimits, OpeningLimits, SessionLimits,
+    EnvironmentTraceLimits, LedgerLimits, OpeningLimits, ResolutionLimits, SessionLimits,
 };
 use miden_vm::internal::execution_inputs::{AdmittedExecutionInputs, ExecutionInputLimits};
 use serde::Deserialize;
@@ -55,15 +55,12 @@ impl ExecutionArgs {
         let bytes = read_file_bounded(&self.environment_policy, self.max_environment_policy_bytes)
             .map_err(|error| Report::msg(format!("execution policy file: {error}")))?;
         let policy = Policy::parse(&bytes).map_err(Report::msg)?;
-        let environment = ExecutionEnvironment::new(
-            self.descriptor.descriptor(),
-            policy.opening,
-            policy.ledger,
-            policy.session,
-        );
+        let resolution_limits =
+            ResolutionLimits::new(policy.opening, policy.ledger, policy.session);
         AdmittedExecutionInputs::read(
             &self.environment_openings,
-            environment,
+            self.descriptor.descriptor(),
+            resolution_limits,
             policy.trace,
             policy.source,
         )
@@ -335,9 +332,9 @@ pub(super) mod tests {
         .execution;
         let admitted = args.admit().unwrap();
         let expected = Policy::parse(&policy_bytes).unwrap();
-        assert_eq!(admitted.environment().opening_limits(), expected.opening);
-        assert_eq!(admitted.environment().ledger_limits(), expected.ledger);
-        assert_eq!(admitted.environment().session_limits(), expected.session);
+        assert_eq!(admitted.resolution_limits().opening_limits(), expected.opening);
+        assert_eq!(admitted.resolution_limits().ledger_limits(), expected.ledger);
+        assert_eq!(admitted.resolution_limits().session_limits(), expected.session);
         assert_eq!(admitted.trace_limits(), expected.trace);
         let request = EnvironmentWitnessRequest { root, key, limits: expected.opening };
         admitted

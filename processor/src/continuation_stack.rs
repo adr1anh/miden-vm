@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use miden_core::{
     mast::{MastForestId, MastNodeId},
-    program::{ImplementationRoot, ProcedureKey, Program},
+    program::{ImplementationRoot, ProcedureKey},
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
 };
 use miden_mast_package::debug_info::{DebugSourceInlineCall, DebugSourceNodeId, PackageDebugInfo};
@@ -288,7 +288,8 @@ impl<F> Default for ContinuationStack<F> {
 }
 
 impl<F> ContinuationStack<F> {
-    /// Starts the authenticated root selected by the environment, independently of Program hints.
+    /// Starts the authenticated root selected by the environment, independently of code-supply
+    /// hints.
     pub(crate) fn for_root(
         root: MastNodeId,
         implementation: ImplementationRoot,
@@ -436,13 +437,10 @@ impl<F> ContinuationStack<F> {
         })
     }
 
-    /// Creates a new continuation stack for a program.
-    ///
-    /// # Arguments
-    /// * `program` - The program whose execution will be managed by this continuation stack
-    pub fn new(program: &Program) -> Self {
+    /// Creates internal continuations for an already selected execution root.
+    pub fn new(root: MastNodeId) -> Self {
         let mut stack = Vec::with_capacity(CONTINUATION_STACK_SIZE_HINT);
-        stack.push(Continuation::StartNode(program.entrypoint()));
+        stack.push(Continuation::StartNode(root));
 
         Self {
             stack,
@@ -454,19 +452,19 @@ impl<F> ContinuationStack<F> {
 
     #[cfg(test)]
     pub(crate) fn new_with_source_node_id(
-        program: &Program,
+        root: MastNodeId,
         source_node_id: DebugSourceNodeId,
     ) -> Self {
-        Self::new_with_optional_source_node_id(program, Some(source_node_id))
+        Self::new_with_optional_source_node_id(root, Some(source_node_id))
     }
 
     #[cfg(test)]
     pub(crate) fn new_with_optional_source_node_id(
-        program: &Program,
+        root: MastNodeId,
         source_node_id: Option<DebugSourceNodeId>,
     ) -> Self {
         let mut stack = Vec::with_capacity(CONTINUATION_STACK_SIZE_HINT);
-        stack.push(Continuation::StartNode(program.entrypoint()));
+        stack.push(Continuation::StartNode(root));
 
         let mut source_node_ids = Vec::with_capacity(CONTINUATION_STACK_SIZE_HINT);
         source_node_ids.push(source_node_id);

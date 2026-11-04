@@ -149,7 +149,7 @@ impl ReproTrace {
         }
         profile
             .authorize(
-                fixture.execution().descriptor().environment_root(),
+                fixture.target().environment_root(),
                 environment,
                 &effective_advice,
                 environment.visits(),

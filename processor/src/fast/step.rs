@@ -4,13 +4,13 @@ use alloc::{sync::Arc, vec::Vec};
 use core::ops::ControlFlow;
 
 use miden_core::{
-    mast::{MastForest, MastNodeId},
-    program::ProcedureKey,
+    mast::MastForest,
+    program::{ExecutionTarget, ProcedureKey},
 };
 use miden_mast_package::debug_info::{DebugSourceNodeId, PackageDebugInfo};
 
 use crate::{
-    CycleProjection, ExecutionEnvironment, ExecutionError, FastProcessor, LoadedMastForest,
+    CycleProjection, ExecutionError, FastProcessor, LoadedMastForest, ResolutionLimits,
     ResolutionSession, ResolvedBinding, SessionBinding, SourceInlineCallContext, Stopper,
     continuation_stack::{Continuation, ContinuationStack},
     execution::KeyedRequest,
@@ -28,14 +28,12 @@ pub struct ResumeContext {
     pub(crate) continuation_stack: ContinuationStack<Arc<MastForest>>,
     pub(crate) package_debug_info: Option<Arc<PackageDebugInfo>>,
     pub(crate) inline_call_contexts: Vec<Option<SourceInlineCallContext>>,
-    pub(crate) environment: ExecutionEnvironment,
+    pub(crate) target: ExecutionTarget,
+    pub(crate) resolution_limits: ResolutionLimits,
     pub(crate) session: ResolutionSession,
     pub(crate) pending: Option<PendingResolution>,
     pub(crate) lifecycle: ExecutionLifecycle,
     pub(crate) identity: Arc<()>,
-    pub(crate) program_hint: LoadedMastForest,
-    pub(crate) entrypoint_hint: MastNodeId,
-    pub(crate) entry_source_hint: Option<DebugSourceNodeId>,
     pub(crate) source_aware: bool,
 }
 
@@ -75,8 +73,13 @@ pub(crate) struct PendingResolution {
 
 impl ResumeContext {
     /// The authority fixed when this execution was created. Resuming cannot replace it.
-    pub fn environment(&self) -> &ExecutionEnvironment {
-        &self.environment
+    pub fn target(&self) -> &ExecutionTarget {
+        &self.target
+    }
+
+    /// Resolution limits fixed when this execution was created.
+    pub fn resolution_limits(&self) -> &ResolutionLimits {
+        &self.resolution_limits
     }
 
     /// Authenticated bindings and committed demand accounting for this execution.
@@ -92,7 +95,7 @@ impl ResumeContext {
         &self.continuation_stack
     }
 
-    /// Returns a reference to the MAST forest being currently executed.
+    /// Returns the current MAST forest, or an empty forest before authenticated entry.
     pub fn current_forest(&self) -> &Arc<MastForest> {
         &self.current_forest
     }

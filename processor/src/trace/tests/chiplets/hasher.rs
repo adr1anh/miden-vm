@@ -34,8 +34,8 @@ use miden_core::{
     deferred::DEFERRED_AND_INIT_CV,
     mast::{BasicBlockNodeBuilder, MastForest, SplitNodeBuilder},
     operations::{Operation, opcodes},
-    program::Program,
 };
+use miden_mast_package::CodePackage;
 use miden_utils_testing::{stack, stack_inputs_from_ints};
 use rstest::rstest;
 
@@ -43,7 +43,9 @@ use super::super::{
     build_trace_from_ops_with_inputs, build_trace_from_program,
     lookup_harness::{Expectations, InteractionLog},
 };
-use crate::{AdviceInputs, RowIndex, trace::utils::build_span_with_respan_ops};
+use crate::{
+    AdviceInputs, RowIndex, test_utils::fixture_code, trace::utils::build_span_with_respan_ops,
+};
 
 // RESPONSE-SIDE DISPATCH
 // ================================================================================================
@@ -224,7 +226,7 @@ fn merge_hasher_bus() {
             .add_to_forest(&mut mast_forest)
             .unwrap();
         mast_forest.make_root(split_id);
-        Program::new(mast_forest.into(), split_id)
+        fixture_code(mast_forest.into(), split_id)
     };
 
     let trace = build_trace_from_program(&program, &[]);
@@ -597,11 +599,11 @@ fn mrupdate_hasher_bus() {
 // HELPERS
 // ================================================================================================
 
-fn single_block_program(ops: Vec<Operation>) -> Program {
+fn single_block_program(ops: Vec<Operation>) -> CodePackage {
     let mut mast_forest = MastForest::new();
     let id = BasicBlockNodeBuilder::new(ops).add_to_forest(&mut mast_forest).unwrap();
     mast_forest.make_root(id);
-    Program::new(mast_forest.into(), id)
+    fixture_code(mast_forest.into(), id)
 }
 
 fn block_from_hasher_state(main: &MainTrace, row: RowIndex) -> [Felt; 8] {

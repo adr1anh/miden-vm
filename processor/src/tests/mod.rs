@@ -12,7 +12,7 @@ use miden_core::{
 };
 use miden_debug_types::{Location, SourceFile, SourceManager, SourceSpan};
 use miden_mast_package::{
-    CallableProcedurePath, Package, PackageSymbols, ProcedureName, TargetType,
+    CallableProcedurePath, CodePackage, Package, PackageSymbols, ProcedureName, TargetType,
 };
 use miden_utils_testing::{
     Test,
@@ -21,12 +21,14 @@ use miden_utils_testing::{
 
 /// Tests in this file make sure that diagnostics presented to the user are as expected.
 use crate::{
-    BaseHost, DefaultHost, FastProcessor, LoadedMastForest, ONE, ProcessorState, Program,
+    BaseHost, DefaultHost, ExecutionOptions, FastProcessor, LoadedMastForest, ONE, ProcessorState,
     StackInputs, SyncHost, Word, ZERO,
     advice::{AdviceInputs, AdviceMap, AdviceMutation},
     event::{EventError, EventHandler, EventName, TraceError, TraceHandler},
     operation::Operation,
-    test_utils::{NamedFixture, named_module, named_program, native_fixture_environment},
+    test_utils::{
+        NamedFixture, fixture_code, named_module, named_program, native_fixture_environment,
+    },
 };
 
 macro_rules! assert_diagnostic_lines {
@@ -156,6 +158,7 @@ macro_rules! build_test_by_mode {
 }
 
 struct MalformedMastForestHost {
+    entry_code: LoadedMastForest,
     source_manager: Arc<DefaultSourceManager>,
     mast_forest: Arc<MastForest>,
     environment_source: Arc<dyn crate::EnvironmentWitnessSource>,
@@ -180,7 +183,12 @@ impl SyncHost for MalformedMastForestHost {
         self.environment_source.get(request)
     }
 
-    fn get_mast_forest(&self, _request: crate::CodeRequest) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, request: crate::CodeRequest) -> Option<LoadedMastForest> {
+        if let crate::CodeRequest::Procedure { key, .. } = request
+            && self.entry_code.procedure_occurrence(key).is_some()
+        {
+            return Some(self.entry_code.clone());
+        }
         Some(LoadedMastForest::new(self.mast_forest.clone()))
     }
 
@@ -246,16 +254,16 @@ fn test_diagnostic_advice_map_key_already_present() {
     mast_forest.make_root(basic_block_id);
 
     let fixture = named_program(
-        Program::new(mast_forest.into(), basic_block_id),
+        fixture_code(mast_forest.into(), basic_block_id),
         diagnostic_binding("advice_entry"),
         [],
     )
     .unwrap();
-    host = host.with_environment_source(fixture.source);
-    let processor = FastProcessor::new(StackInputs::default());
-    let err = processor
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
-        .unwrap_err();
+    host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
+    let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap();
+    let err = processor.execute_sync(fixture.target, &mut host).unwrap_err();
 
     assert_diagnostic_lines!(
         err,
@@ -324,23 +332,19 @@ fn test_diagnostic_host_event_error_uses_emit_location() {
     );
     let fixture =
         diagnostic_fixture(source_manager.clone(), Assembler::new(source_manager.clone()), &source);
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(fixture.source);
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
     host.register_handler(event.clone(), Arc::new(AlwaysFailEventHandler)).unwrap();
 
     let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
-    let err = processor
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
-        .expect_err("expected error");
+    let err = processor.execute_sync(fixture.target, &mut host).expect_err("expected error");
     #[rustfmt::skip]
     assert_diagnostic_lines!(
         err,
@@ -369,24 +373,20 @@ fn test_diagnostic_host_trace_error_uses_trace_location() {
     );
     let fixture =
         diagnostic_fixture(source_manager.clone(), Assembler::new(source_manager.clone()), &source);
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(fixture.source);
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
     host.register_trace_handler(trace.clone(), Arc::new(AlwaysFailTraceHandler))
         .unwrap();
 
     let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
-    let err = processor
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
-        .expect_err("expected error");
+    let err = processor.execute_sync(fixture.target, &mut host).expect_err("expected error");
     #[rustfmt::skip]
     assert_diagnostic_lines!(
         err,
@@ -413,23 +413,19 @@ fn test_diagnostic_host_event_advice_error_uses_emit_location() {
     );
     let fixture =
         diagnostic_fixture(source_manager.clone(), Assembler::new(source_manager.clone()), &source);
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(fixture.source);
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
     host.register_handler(event, Arc::new(DuplicateMapMutationHandler)).unwrap();
 
     let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
         .with_advice(AdviceInputs::default().with_map([(Word::default(), vec![ZERO])]))
         .expect("advice inputs should fit advice map limits");
-    let err = processor
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
-        .expect_err("expected error");
+    let err = processor.execute_sync(fixture.target, &mut host).expect_err("expected error");
     #[rustfmt::skip]
     assert_diagnostic_lines!(
         err,
@@ -524,17 +520,15 @@ fn test_diagnostic_procedure_not_found_dynexec() {
 
     let source_manager = Arc::new(DefaultSourceManager::default());
     let (fixture, missing_root) = missing_code_fixture(source_manager.clone(), source);
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(fixture.source);
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
     let err = FastProcessor::new(StackInputs::default())
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
+        .execute_sync(fixture.target, &mut host)
         .expect_err("expected missing implementation");
     assert_diagnostic_lines!(
         err,
@@ -557,17 +551,15 @@ fn test_diagnostic_procedure_not_found_dyncall() {
 
     let source_manager = Arc::new(DefaultSourceManager::default());
     let (fixture, missing_root) = missing_code_fixture(source_manager.clone(), source);
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(fixture.source);
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
     let err = FastProcessor::new(StackInputs::default())
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
+        .execute_sync(fixture.target, &mut host)
         .expect_err("expected missing implementation");
     assert_diagnostic_lines!(
         err,
@@ -616,8 +608,12 @@ fn test_diagnostic_failed_assertion() {
         end";
 
     let build_test = build_test_by_mode!(true, source, &[1, 2]);
-    let (_, _, debug_info) = build_test.compile().expect("test source should compile");
-    let debug_info = debug_info.expect("debug-mode assembly should emit package debug info");
+    let (code, _) = build_test.compile().expect("test source should compile");
+    let debug_info = code
+        .package()
+        .debug_info()
+        .expect("package debug info should decode")
+        .expect("debug-mode assembly should emit package debug info");
     assert_eq!(
         debug_info
             .error_message(error_code_from_msg("some error message").as_canonical_u64())
@@ -724,8 +720,12 @@ fn test_diagnostic_merkle_path_verification_failed() {
     ];
 
     let build_test = build_test_by_mode!(true, source, &stack_inputs, &[], store.clone());
-    let (_, _, debug_info) = build_test.compile().expect("test source should compile");
-    let debug_info = debug_info.expect("debug-mode assembly should emit package debug info");
+    let (code, _) = build_test.compile().expect("test source should compile");
+    let debug_info = code
+        .package()
+        .debug_info()
+        .expect("package debug info should decode")
+        .expect("debug-mode assembly should emit package debug info");
     assert_eq!(
         debug_info
             .error_message(error_code_from_msg("some error message").as_canonical_u64())
@@ -1092,22 +1092,18 @@ fn test_diagnostic_procedure_not_found_call() {
         .with_package(library, miden_assembly::Linkage::Dynamic, naming)
         .unwrap();
     let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(fixture.source);
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
 
     let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
-    let err = processor
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
-        .unwrap_err();
+    let err = processor.execute_sync(fixture.target, &mut host).unwrap_err();
     assert_diagnostic_lines!(
         err,
         format!("procedure with root digest {missing_root} could not be found"),
@@ -1149,22 +1145,18 @@ fn test_diagnostic_procedure_not_found_join() {
         .with_package(library, miden_assembly::Linkage::Dynamic, naming)
         .unwrap();
     let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(fixture.source);
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
 
     let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
-    let err = processor
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
-        .unwrap_err();
+    let err = processor.execute_sync(fixture.target, &mut host).unwrap_err();
     assert_diagnostic_lines!(
         err,
         format!("procedure with root digest {missing_root} could not be found"),
@@ -1208,22 +1200,18 @@ fn test_diagnostic_procedure_not_found_loop() {
         .with_package(library, miden_assembly::Linkage::Dynamic, naming)
         .unwrap();
     let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(fixture.source);
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
 
     let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
-    let err = processor
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
-        .unwrap_err();
+    let err = processor.execute_sync(fixture.target, &mut host).unwrap_err();
     assert_diagnostic_lines!(
         err,
         format!("procedure with root digest {missing_root} could not be found"),
@@ -1269,22 +1257,18 @@ fn test_diagnostic_procedure_not_found_split() {
         .with_package(library, miden_assembly::Linkage::Dynamic, naming)
         .unwrap();
     let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(fixture.source);
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
 
     let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
-    let err = processor
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
-        .unwrap_err();
+    let err = processor.execute_sync(fixture.target, &mut host).unwrap_err();
     assert_diagnostic_lines!(
         err,
         format!("procedure with root digest {missing_root} could not be found"),
@@ -1307,7 +1291,6 @@ fn test_diagnostic_malformed_mast_forest_in_host() {
                 dyncall
             end",
     );
-    let debug_info = fixture.package.debug_info().unwrap().unwrap();
 
     let mut malformed_forest = MastForest::new();
     let unexpected_root = BasicBlockNodeBuilder::new(vec![Operation::Noop])
@@ -1316,20 +1299,16 @@ fn test_diagnostic_malformed_mast_forest_in_host() {
     malformed_forest.make_root(unexpected_root);
 
     let mut host = MalformedMastForestHost {
+        entry_code: LoadedMastForest::from_code_package(fixture.code.clone()),
         source_manager,
         mast_forest: malformed_forest.into(),
         environment_source: fixture.source,
     };
 
-    let processor = FastProcessor::new(StackInputs::default());
-    let err = processor
-        .execute_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug_info,
-            &mut host,
-        )
-        .unwrap_err();
+    let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap();
+    let err = processor.execute_sync(fixture.target, &mut host).unwrap_err();
 
     assert_diagnostic_lines!(
         err,
@@ -1538,14 +1517,19 @@ fn test_diagnostic_syscall_rejects_authenticated_child_target() {
     let entry = CallNodeBuilder::new_syscall(target.key()).add_to_forest(&mut forest).unwrap();
     forest.make_root(entry);
     let fixture = named_program(
-        Program::new(forest.into(), entry),
+        fixture_code(forest.into(), entry),
         diagnostic_binding("syscall_entry"),
         [(target.clone(), implementation)],
     )
     .unwrap();
-    let mut host = DefaultHost::default().with_environment_source(fixture.source);
+    let mut host = DefaultHost::default()
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
     let err = FastProcessor::new(StackInputs::default())
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
+        .execute_sync(fixture.target, &mut host)
         .expect_err(
             "authenticated ordinary target must be rejected before entering available code",
         );
@@ -1562,12 +1546,19 @@ fn test_diagnostic_syscall_rejects_authenticated_child_target() {
 fn syscall_root_target_executes_without_a_kernel_descriptor() {
     let test = Test::new("program", "begin syscall.dummy_proc end", false)
         .with_kernel_source("kernel", "pub proc dummy_proc push.1 drop end");
-    let (program, kernel, _) = test.compile().unwrap();
-    let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
-    let mut host = DefaultHost::default().with_environment_source(source);
-    host.mast_forest_store_mut().insert(kernel.unwrap().mast_forest().clone());
+    let (program, kernel) = test.compile().unwrap();
+    let (target, resolution_limits, source) =
+        native_fixture_environment(&test.fixture_environment().unwrap());
+    let mut host = DefaultHost::default()
+        .with_environment_source(source)
+        .with_library(program)
+        .unwrap();
+    host.mast_forest_store_mut()
+        .insert(kernel.unwrap().package().mast_forest().clone());
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, environment, &mut host)
+        .with_options(ExecutionOptions::default().with_resolution_limits(resolution_limits))
+        .unwrap()
+        .execute_sync(target, &mut host)
         .unwrap();
 }
 
@@ -1582,7 +1573,26 @@ fn test_assert_message_without_debug_info_reports_error_code() {
         end";
 
     let build_test = build_test_by_mode!(false, source, &[1, 2]);
-    let err = build_test.execute().expect_err("expected error");
+    let (code, _) = build_test.compile().expect("test source should compile");
+    let stripped = code
+        .package()
+        .as_ref()
+        .clone()
+        .without_debug_info()
+        .expect("package debug info should strip");
+    assert!(stripped.debug_info().unwrap().is_none());
+    let stripped = CodePackage::new(Arc::new(stripped), code.symbols().clone()).unwrap();
+    let (target, resolution_limits, source) =
+        native_fixture_environment(&build_test.fixture_environment().unwrap());
+    let mut host = DefaultHost::default()
+        .with_environment_source(source)
+        .with_library(stripped)
+        .unwrap();
+    let err = FastProcessor::new(StackInputs::new(&[ONE, miden_core::Felt::from_u32(2)]).unwrap())
+        .with_options(ExecutionOptions::default().with_resolution_limits(resolution_limits))
+        .unwrap()
+        .execute_sync(target, &mut host)
+        .expect_err("expected error");
 
     assert_diagnostic_lines!(
         err,
@@ -1598,6 +1608,6 @@ fn test_assert_message_without_debug_info_reports_error_code() {
     );
     assert!(
         !diagnostic.contains("assertion failed with error message: Value is not zero"),
-        "non-debug execution should not recover package debug assertion messages:\n{diagnostic}"
+        "stripped execution should not recover package debug assertion messages:\n{diagnostic}"
     );
 }

@@ -17,7 +17,7 @@ mod package;
 mod serde_helpers;
 
 pub use miden_assembly_syntax::{PathBuf, Version, VersionError, ast::QualifiedProcedureName};
-pub use miden_core::{Word, mast::MastForest, program::Program};
+pub use miden_core::{Word, mast::MastForest};
 
 #[cfg(feature = "arbitrary")]
 pub use self::package::arbitrary;

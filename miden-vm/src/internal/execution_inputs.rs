@@ -18,11 +18,11 @@ use std::{
 
 use miden_core::{
     Felt, Word,
-    program::{EnvNode, EnvironmentRoot, ProcedureKey},
+    program::{EnvNode, EnvironmentRoot, ExecutionTarget, ProcedureKey},
 };
 use miden_processor::{
     EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, ExecutionEnvironment, OpeningLimits, OpeningStep, ResolutionWitness,
+    EnvironmentWitnessSource, OpeningLimits, OpeningStep, ResolutionLimits, ResolutionWitness,
 };
 use serde::{
     Deserialize,
@@ -271,7 +271,8 @@ struct SourceData {
 /// Successfully checked local evidence, with the caller's policies retained unchanged.
 /// No code is loaded and no proof/publication authorization is implied.
 pub struct AdmittedExecutionInputs {
-    environment: ExecutionEnvironment,
+    target: ExecutionTarget,
+    resolution_limits: ResolutionLimits,
     trace_limits: EnvironmentTraceLimits,
     data: Arc<SourceData>,
 }
@@ -279,16 +280,18 @@ pub struct AdmittedExecutionInputs {
 impl AdmittedExecutionInputs {
     pub fn from_bytes(
         bytes: &[u8],
-        environment: ExecutionEnvironment,
+        target: ExecutionTarget,
+        resolution_limits: ResolutionLimits,
         trace_limits: EnvironmentTraceLimits,
         limits: ExecutionInputLimits,
     ) -> Result<Self> {
-        Self::admit(bytes, bytes.len(), environment, trace_limits, limits)
+        Self::admit(bytes, bytes.len(), target, resolution_limits, trace_limits, limits)
     }
 
     pub fn read(
         path: impl AsRef<Path>,
-        environment: ExecutionEnvironment,
+        target: ExecutionTarget,
+        resolution_limits: ResolutionLimits,
         trace_limits: EnvironmentTraceLimits,
         limits: ExecutionInputLimits,
     ) -> Result<Self> {
@@ -317,13 +320,14 @@ impl AdmittedExecutionInputs {
             )?;
             bytes.extend_from_slice(&chunk[..read]);
         }
-        Self::admit(&bytes, bytes.capacity(), environment, trace_limits, limits)
+        Self::admit(&bytes, bytes.capacity(), target, resolution_limits, trace_limits, limits)
     }
 
     fn admit(
         bytes: &[u8],
         input_storage: usize,
-        environment: ExecutionEnvironment,
+        target: ExecutionTarget,
+        resolution_limits: ResolutionLimits,
         trace_limits: EnvironmentTraceLimits,
         limits: ExecutionInputLimits,
     ) -> Result<Self> {
@@ -335,7 +339,7 @@ impl AdmittedExecutionInputs {
         if document.version != 1 {
             return Err(invalid("unsupported execution input version"));
         }
-        let descriptor = environment.descriptor();
+        let descriptor = target;
         if word(document.entry_key)? != *descriptor.entry_key().as_word()
             || word(document.environment_root)? != *descriptor.environment_root().as_word()
         {
@@ -343,7 +347,7 @@ impl AdmittedExecutionInputs {
                 "execution input descriptor differs from caller expected descriptor",
             ));
         }
-        let native = environment.opening_limits();
+        let native = resolution_limits.opening_limits();
         let mut count = 0;
         let mut total = Shape::default();
         let mut max_native = 0;
@@ -483,7 +487,8 @@ impl AdmittedExecutionInputs {
             return Err(invalid("entry opening is unavailable"));
         }
         Ok(Self {
-            environment,
+            target,
+            resolution_limits,
             trace_limits,
             data: Arc::new(SourceData {
                 root: descriptor.environment_root(),
@@ -494,8 +499,11 @@ impl AdmittedExecutionInputs {
         })
     }
 
-    pub fn environment(&self) -> ExecutionEnvironment {
-        self.environment
+    pub fn target(&self) -> ExecutionTarget {
+        self.target
+    }
+    pub fn resolution_limits(&self) -> ResolutionLimits {
+        self.resolution_limits
     }
     pub fn trace_limits(&self) -> EnvironmentTraceLimits {
         self.trace_limits

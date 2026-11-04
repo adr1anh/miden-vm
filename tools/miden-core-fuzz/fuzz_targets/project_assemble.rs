@@ -279,7 +279,7 @@ fn assemble_project(manifest_path: &Path, target: ProjectTargetSelector<'_>, pro
         .assemble(target, profile)
         .expect("the controlled library, executable and kernel fixtures must assemble");
 
-    validate_package(&package);
+    validate_package(package.package());
 }
 
 /// The harness explicitly names its complete fixed source cohort, including private helpers and
@@ -347,11 +347,11 @@ fn validate_package(package: &MastPackage) {
         naming
     );
 
-    // These conversion helpers borrow the package, despite the `try_into_*` names.
+    // Validate the checked code surface without constructing execution authority.
     match package.kind {
         TargetType::Executable => {
             package
-                .try_into_program(&naming)
+                .check_executable_code(&naming)
                 .expect("assembled executable has an explicit entry");
             let _ = package.try_embedded_kernel_package();
         },

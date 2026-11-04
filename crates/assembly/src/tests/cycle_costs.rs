@@ -100,6 +100,7 @@ fn instruction_cycle_costs_match_docs() {
             .fixture_program();
 
         program
+            .package()
             .mast_forest()
             .nodes()
             .iter()
@@ -140,7 +141,7 @@ fn bare_exp_lowers_to_63_expacc_rows() -> Result<(), Report> {
         .configure(Assembler::new(context.source_manager()), [&*module])?
         .assemble_program("p", module)?
         .fixture_program();
-    let ops: Vec<Operation> = program.mast_forest()[program.entrypoint()]
+    let ops: Vec<Operation> = program.package().mast_forest()[entry_node(&program)]
         .unwrap_basic_block()
         .operations()
         .copied()
@@ -172,7 +173,7 @@ fn exp_imm_uses_exact_exponent_bit_length() -> Result<(), Report> {
             .configure(Assembler::new(context.source_manager()), [&*module])?
             .assemble_program("p", module)?
             .fixture_program();
-        let num_expacc = program.mast_forest()[program.entrypoint()]
+        let num_expacc = program.package().mast_forest()[entry_node(&program)]
             .unwrap_basic_block()
             .operations()
             .filter(|op| matches!(op, Operation::Expacc))

@@ -64,10 +64,11 @@ async fn batch_settles_deferred_obligations_with_one_pvm_proof() {
         stack_inputs,
         advice_inputs,
         ExecutionOptions::default()
+            .with_resolution_limits(program.1.resolution_limits())
             .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .unwrap()
-    .execute_for_proving(&program.program, program.environment.execution(), &mut host)
+    .execute_for_proving(program.1.target(), &mut host)
     .await
     .expect("batch settlement failed");
     let precompile_proof = host.precompile_proof.take().expect("the host did not produce a proof");

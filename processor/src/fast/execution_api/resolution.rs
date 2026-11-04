@@ -44,9 +44,9 @@ impl FastProcessor {
 
     fn witness_request(resume: &ResumeContext) -> EnvironmentWitnessRequest {
         EnvironmentWitnessRequest {
-            root: resume.environment.descriptor().environment_root(),
+            root: resume.target.environment_root(),
             key: resume.pending.as_ref().expect("pending resolution").request.key(),
-            limits: resume.environment.opening_limits(),
+            limits: resume.resolution_limits.opening_limits(),
         }
     }
 
@@ -173,20 +173,7 @@ impl FastProcessor {
         {
             return Some(owner.clone());
         }
-        if key == resume.environment.descriptor().entry_key()
-            && resume.entry_source_hint.is_some()
-            && Self::has_exact_program_entry(resume, implementation)
-        {
-            return Some(resume.program_hint.clone());
-        }
         None
-    }
-
-    fn has_exact_program_entry(resume: &ResumeContext, implementation: ImplementationRoot) -> bool {
-        let forest = resume.program_hint.mast_forest();
-        forest.procedure_roots().contains(&resume.entrypoint_hint)
-            && !forest[resume.entrypoint_hint].is_external()
-            && forest[resume.entrypoint_hint].digest() == *implementation.as_word()
     }
 
     /// Generic D availability remains legal after authentication, independent of package symbols.
@@ -200,9 +187,6 @@ impl FastProcessor {
             && let Some(owner) = &resume.loaded_owner
         {
             return Some(owner.clone());
-        }
-        if Self::has_materialized_root(resume.program_hint.mast_forest(), implementation) {
-            return Some(resume.program_hint.clone());
         }
         self.loaded_mast_forests
             .get(implementation.as_word())
@@ -222,13 +206,9 @@ impl FastProcessor {
             PendingKey::Entry(_) => None,
             PendingKey::Invoke(request) => request.source_node_id,
         };
-        let program_entry = pending.key() == resume.environment.descriptor().entry_key()
-            && loaded.same_owner(&resume.program_hint)
-            && Self::has_exact_program_entry(resume, implementation);
         Self::prepare_loaded_target(
             loaded,
             CodeRequest::Procedure { key: pending.key(), implementation },
-            program_entry.then_some((resume.entrypoint_hint, resume.entry_source_hint)),
             resume.package_debug_info.as_deref(),
             source,
             resume.source_aware,
@@ -424,7 +404,7 @@ impl FastProcessor {
             Some(ContinuationStack::for_root(
                 target.root,
                 implementation,
-                resume.environment.descriptor().entry_key(),
+                resume.target.entry_key(),
                 resume.source_aware,
                 target.source_node_id,
             )?)
@@ -453,8 +433,8 @@ impl FastProcessor {
                         .session
                         .prepare_entry(binding)
                         .map_err(ExecutionError::EnvironmentSession)?;
-                    let reservation = tracer
-                        .prepare_environment(&resume.environment.descriptor(), native.binding())?;
+                    let reservation =
+                        tracer.prepare_environment(&resume.target, native.binding())?;
                     self.publish_preflighted_code(&prepared)?;
                     native.commit();
                     self.caller_hash = *key.as_word();
@@ -567,8 +547,7 @@ impl FastProcessor {
             };
             preflight_root_end(&mut state, &resume.current_forest, &request)?
         };
-        let completion =
-            tracer.prepare_environment_completion(&resume.environment, &resume.session)?;
+        let completion = tracer.prepare_environment_completion(resume.target, &resume.session)?;
         let native = resume
             .session
             .prepare_root_end(request.implementation, request.row)

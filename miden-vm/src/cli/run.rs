@@ -93,7 +93,8 @@ impl RunCmd {
         let inputs = self.execution.admit()?;
         let execution_options = self
             .get_execution_options()?
-            .with_environment_trace_limits(inputs.trace_limits());
+            .with_environment_trace_limits(inputs.trace_limits())
+            .with_resolution_limits(inputs.resolution_limits());
         println!("===============================================================================");
         println!("Run program: {}", self.program_file.display());
         println!("-------------------------------------------------------------------------------");
@@ -178,7 +179,7 @@ fn run_program(
         libraries,
         params.kernel_file.as_deref(),
         naming,
-        inputs.environment().descriptor().entry_key(),
+        inputs.target().entry_key(),
     )?;
     let input_data = InputFile::read(&params.input_file, &params.program_file)?;
     let stack_inputs = input_data.parse_stack_inputs().map_err(Report::msg)?;
@@ -190,33 +191,14 @@ fn run_program(
         host = host.with_source_manager(source_manager);
     }
     load_program_libraries(&mut host, &loaded, libraries)?;
-    let program_hash = loaded.program.hash().into();
-    let debug_info = loaded.target.package().debug_info().map_err(Report::msg)?;
-    let entry_source = loaded.target.package().entrypoint_source_node();
     let processor = FastProcessor::new_with_options(stack_inputs, advice_inputs, exec_options)
         .map_err(Report::msg)?;
-    let witness = match (debug_info.as_ref(), entry_source) {
-        (Some(debug_info), Some(source_node)) => processor
-            .execute_for_proving_with_package_debug_info_at_source_node_sync(
-                &loaded.program,
-                inputs.environment(),
-                debug_info,
-                source_node,
-                &mut host,
-            ),
-        (Some(debug_info), None) => processor.execute_for_proving_with_package_debug_info_sync(
-            &loaded.program,
-            inputs.environment(),
-            debug_info,
-            &mut host,
-        ),
-        (None, _) => {
-            processor.execute_for_proving_sync(&loaded.program, inputs.environment(), &mut host)
-        },
-    }
-    .wrap_err("Failed to execute program")?;
+    let witness = processor
+        .execute_for_proving_sync(inputs.target(), &mut host)
+        .wrap_err("Failed to execute program")?;
     let (vm_witness, _) = witness.into_parts();
     let trace = build_trace(vm_witness, &canonical_budget(params.max_prover_memory))
         .wrap_err("Failed to build trace")?;
-    Ok((trace, program_hash))
+    let implementation = (*trace.entry_implementation().as_word()).into();
+    Ok((trace, implementation))
 }

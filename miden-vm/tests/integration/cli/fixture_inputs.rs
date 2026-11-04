@@ -25,7 +25,7 @@ use miden_mast_package::{
     interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile},
 };
 use miden_processor::EnvironmentWitnessRequest;
-use miden_utils_testing::librarytree::{FixtureEnvironment, NamedProgram, fixture_from_product};
+use miden_utils_testing::librarytree::{FixtureEnvironment, fixture_from_product};
 
 const CODEC_BYTES: u32 = 4 * 1024 * 1024;
 const CODEC_RECORDS: u32 = 100_000;
@@ -303,7 +303,7 @@ fn project(naming: &PackageSymbols, bindings: &[ProcedureName]) -> PackageSymbol
 }
 
 pub struct ProgramFixture {
-    pub named: NamedProgram,
+    pub named: (miden_mast_package::CodePackage, FixtureEnvironment),
     expected_descriptor: ExecutionTarget,
     source: NamingFile,
     artifact: NamingFile,
@@ -346,8 +346,8 @@ impl ProgramFixture {
             .unwrap();
         let local = project(product.naming(), &selection.bindings);
         let mut named = fixture_from_product(product, &[]);
-        named.environment = FixtureEnvironment::new(
-            named.naming.entry_key().unwrap(),
+        named.1 = FixtureEnvironment::new(
+            named.0.symbols().entry_key().unwrap(),
             std::iter::once(&local)
                 .chain(kernel.map(|kernel| &kernel.selected))
                 .chain(libraries.iter().map(|library| &library.selected)),
@@ -368,7 +368,7 @@ impl ProgramFixture {
     }
     fn finish(
         dir: &Path,
-        named: NamedProgram,
+        named: (miden_mast_package::CodePackage, FixtureEnvironment),
         source_choice: &str,
         kernel: Option<&LibraryFixture>,
         libraries: &[&LibraryFixture],
@@ -377,7 +377,7 @@ impl ProgramFixture {
         assert!(keys.len() <= 128, "explicit CLI fixture opening budget");
         let dir = directory(dir);
         let expected_naming = dir.join("target.naming");
-        let target = expected(&expected_naming, &named.naming);
+        let target = expected(&expected_naming, named.0.symbols());
         let kernel_choice =
             kernel.map(|kernel| expected(&dir.join("kernel.naming"), &kernel.naming));
         let library_choices = libraries
@@ -401,9 +401,9 @@ impl ProgramFixture {
             kernel_choice.as_deref(),
             &library_choices,
         );
-        let execution = named.environment.execution();
-        let descriptor = execution.descriptor();
-        let witness_source = named.environment.source();
+        let execution = named.1.resolution_limits();
+        let descriptor = named.1.target();
+        let witness_source = named.1.source();
         let mut openings = Vec::new();
         for key in keys {
             let witness = witness_source
@@ -467,7 +467,7 @@ impl ProgramFixture {
         }
     }
     pub fn write_package(&self, path: &Path) {
-        self.named.package.write_to_file(path).unwrap();
+        self.named.0.package().write_to_file(path).unwrap();
     }
     /// Verifier authority fixed by the fixture before any CLI output or proof is read.
     pub fn descriptor_args(&self) -> [String; 4] {
@@ -528,9 +528,9 @@ fn selected_fixture_files_admit_and_execute_without_cli_output() {
         .unwrap();
     let admitted = NamingInputs::read(&fixture.artifact.path, fixture.artifact.size)
         .unwrap()
-        .admit(NamingRole::Target, fixture.named.package.clone())
+        .admit(NamingRole::Target, fixture.named.0.package().clone())
         .unwrap();
-    assert_eq!(admitted.symbols(), &fixture.named.naming);
+    assert_eq!(admitted.symbols(), fixture.named.0.symbols());
 
     let openings = fixture
         .execution_args
@@ -540,7 +540,8 @@ fn selected_fixture_files_admit_and_execute_without_cli_output() {
         .unwrap();
     let execution = AdmittedExecutionInputs::read(
         openings,
-        fixture.named.environment.execution(),
+        fixture.named.1.target(),
+        fixture.named.1.resolution_limits(),
         miden_utils_testing::librarytree::trace_limits(),
         ExecutionInputLimits {
             max_file_bytes: OPENING_FILE_BYTES,
@@ -554,8 +555,14 @@ fn selected_fixture_files_admit_and_execute_without_cli_output() {
     )
     .unwrap();
     let mut host = DefaultHost::default().with_environment_source(execution.source());
+    host.load_library(fixture.named.0.clone()).unwrap();
     let output = FastProcessor::new(StackInputs::default())
-        .execute_sync(&fixture.named.program, execution.environment(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(execution.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(execution.target(), &mut host)
         .unwrap();
     assert_eq!(output.stack[0].as_canonical_u64(), 3);
 }

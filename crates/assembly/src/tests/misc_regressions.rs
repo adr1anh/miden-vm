@@ -36,7 +36,7 @@ end"#
     let some_proc = naming.binding(&Path::exec_path().join("some_proc")).unwrap().key();
     let main = naming.binding(&Path::exec_path().join("main")).unwrap().key();
     let program = context.assemble(module)?;
-    let forest = program.mast_forest();
+    let forest = program.package().mast_forest();
     let mut targets = forest
         .nodes()
         .iter()
@@ -54,12 +54,12 @@ end"#
     assert_eq!(targets, expected_targets);
 
     // The caller snapshot ends at EXEC.main; retain the locaddr/FMP regression in main's body.
-    assert_eq!(program.num_procedures(), 3);
+    assert_eq!(program.package().mast_forest().num_procedures(), 3);
     let main_root = forest
         .procedure_roots()
         .iter()
         .copied()
-        .find(|&root| root != program.entrypoint() && matches!(&forest[root], MastNode::Join(_)))
+        .find(|&root| root != entry_node(&program) && matches!(&forest[root], MastNode::Join(_)))
         .expect("main's runtime body should remain a procedure root");
     #[derive(Debug, PartialEq, Eq)]
     enum BodyStep {
@@ -97,7 +97,7 @@ end"#
         }),
         "some_proc's nop body should remain a procedure root",
     );
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 

@@ -147,7 +147,7 @@ pub trait Tracer {
     /// Stages the compact selected-opening snapshot before preparing native root completion.
     fn prepare_environment_completion(
         &mut self,
-        environment: &crate::ExecutionEnvironment,
+        target: ExecutionTarget,
         session: &crate::ResolutionSession,
     ) -> Result<Self::KeyedReservation, ExecutionError>;
 

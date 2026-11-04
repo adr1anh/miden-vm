@@ -85,25 +85,38 @@ mod tests;
 /// excluded allocations.
 ///
 /// # Example
-/// ```
-/// use miden_assembly::Assembler;
-/// use miden_processor::{DefaultHost, FastProcessor, StackInputs};
+/// ```no_run
+/// use miden_mast_package::CodePackage;
+/// use miden_processor::{
+///     DefaultHost, EnvironmentTraceLimits, ExecutionOptions, ExecutionTarget, FastProcessor,
+///     ResolutionLimits, StackInputs,
+/// };
 ///
-/// let program = Assembler::default()
-///     .assemble_program("program", "begin push.1 drop end")
-///     .unwrap()
-///     .unwrap_program();
-/// let mut host = DefaultHost::default();
-///
-/// let execution_witness = FastProcessor::new(StackInputs::default())
-///     .execute_for_proving_sync(&program, &mut host)
-///     .unwrap();
-/// let (vm_witness, _) = execution_witness.into_parts();
-/// let trace =
-///     miden_processor::trace::build_trace(vm_witness, &miden_vm_stark::memory::default_budget())
+/// // The caller authorizes the target, selects explicit budgets, and configures opening evidence.
+/// fn capture(
+///     target: ExecutionTarget,
+///     code: CodePackage,
+///     resolution_limits: ResolutionLimits,
+///     trace_limits: EnvironmentTraceLimits,
+///     mut host: DefaultHost,
+/// ) {
+///     host.load_library(code).unwrap();
+///     let options = ExecutionOptions::default()
+///         .with_resolution_limits(resolution_limits)
+///         .with_environment_trace_limits(trace_limits);
+///     let witness = FastProcessor::new(StackInputs::default())
+///         .with_options(options)
+///         .unwrap()
+///         .execute_for_proving_sync(target, &mut host)
 ///         .unwrap();
-///
-/// assert_eq!(*trace.entry_implementation().as_word(), program.hash());
+///     let (vm_witness, _) = witness.into_parts();
+///     let trace = miden_processor::trace::build_trace(
+///         vm_witness,
+///         &miden_vm_stark::memory::default_budget(),
+///     )
+///     .unwrap();
+///     assert_eq!(trace.execution_descriptor(), target);
+/// }
 /// ```
 #[instrument(name = "build_trace", skip_all)]
 pub fn build_trace(

@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo test -p miden-core --lib generate_fuzz_seeds -- --ignored --nocapture
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::vec::Vec;
 use std::println;
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
     deferred::{DEFERRED_AND_FRAME, Node, PrecompileWitness, PrecompileWitnessEntry, TRUE_DIGEST},
     mast::{BasicBlockNodeBuilder, CallNodeBuilder, ExecNodeBuilder, JoinNodeBuilder, MastForest},
     operations::Operation,
-    program::{KernelDescriptor, ProcedureKey, Program, StackInputs, StackOutputs},
+    program::{KernelDescriptor, ProcedureKey, StackInputs, StackOutputs},
     proof::{
         ExecutionProof, ExecutionProofCompatibility, HashFunction, PrecompileProof,
         PrecompileStatus, StarkProof, VmProof,
@@ -191,38 +191,6 @@ fn generate_fuzz_seeds() {
             "invalid_magic.bin",
             bytes,
         );
-    }
-
-    // Program seed
-    {
-        let mut forest = MastForest::new();
-        let block_id = BasicBlockNodeBuilder::new(vec![Operation::Add])
-            .add_to_forest(&mut forest)
-            .unwrap();
-        forest.make_root(block_id);
-        let program = Program::new(Arc::new(forest), block_id);
-        write_seed("program_deserialize", "minimal_program.bin", &program.to_bytes());
-    }
-
-    // Program seed with invalid duplicate-kernel payload.
-    {
-        let mut forest = MastForest::new();
-        let block_id = BasicBlockNodeBuilder::new(vec![Operation::Add])
-            .add_to_forest(&mut forest)
-            .unwrap();
-        forest.make_root(block_id);
-
-        let a: Word = [
-            Felt::new_unchecked(9),
-            Felt::new_unchecked(10),
-            Felt::new_unchecked(11),
-            Felt::new_unchecked(12),
-        ]
-        .into();
-        let kernel = KernelDescriptor::from_hashes_unchecked(vec![a, a]);
-        let program = Program::with_kernel(Arc::new(forest), block_id, kernel);
-
-        write_seed("program_deserialize", "program_with_duplicate_kernel.bin", &program.to_bytes());
     }
 
     // KernelDescriptor seed

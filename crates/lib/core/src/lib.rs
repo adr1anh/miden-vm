@@ -529,8 +529,8 @@ mod tests {
             "use supplied\nbegin exec.supplied::answer end",
             &[],
         );
-        assert!(caller.naming.callables().selected_implementation(binding.key()).is_none());
-        assert!(caller.program.mast_forest().nodes().iter().any(
+        assert!(caller.0.symbols().callables().selected_implementation(binding.key()).is_none());
+        assert!(caller.0.package().mast_forest().nodes().iter().any(
             |node| matches!(node, MastNode::Exec(exec) if exec.target() == binding.key()),
         ));
 
@@ -557,13 +557,13 @@ mod tests {
             let imported = Arc::new(file.read());
             imported.check_naming(&naming).unwrap();
             let environment = FixtureEnvironment::new(
-                caller.naming.entry_key().unwrap(),
-                [caller.naming.as_ref(), &naming],
+                caller.0.symbols().entry_key().unwrap(),
+                [caller.0.symbols().as_ref(), &naming],
             )
             .unwrap();
             let implementation = naming.callables().selected_implementation(binding.key()).unwrap();
-            let descriptor = environment.execution().descriptor();
-            assert_eq!(descriptor.entry_key(), caller.naming.entry_key().unwrap());
+            let descriptor = environment.target();
+            assert_eq!(descriptor.entry_key(), caller.0.symbols().entry_key().unwrap());
             if let Some((previous_implementation, previous_environment)) = previous {
                 assert_ne!(implementation, previous_implementation);
                 assert_ne!(descriptor.environment_root(), previous_environment);
@@ -572,15 +572,19 @@ mod tests {
 
             let mut host = DefaultHost::default()
                 .with_environment_source(environment.source())
+                .with_library(caller.0.clone())
+                .expect("caller code must load into the host")
                 .with_library(CodePackage::new(imported, Arc::new(naming.clone())).unwrap())
                 .unwrap();
             let output = FastProcessor::new_with_options(
                 StackInputs::default(),
                 AdviceInputs::default(),
-                ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+                ExecutionOptions::default()
+                    .with_resolution_limits(environment.resolution_limits())
+                    .with_environment_trace_limits(trace_limits()),
             )
             .unwrap()
-            .execute_sync(&caller.program, environment.execution(), &mut host)
+            .execute_sync(environment.target(), &mut host)
             .expect("the unchanged declaration-only caller must use the authorized supply");
             assert_eq!(output.stack.get_element(0), Some(Felt::from_u32(value)));
         }

@@ -10,12 +10,13 @@ use miden_core::{
     deferred::TRUE_DIGEST,
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::{Operation, opcodes},
-    program::{ExecutionClaim, Program, StackOutputs},
+    program::{ExecutionClaim, StackOutputs},
     proof::{ExecutionProof, HashFunction},
     utils::{Matrix, RowMajorMatrix},
 };
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 use miden_stark::verifier::VerifierError;
+use miden_utils_testing::librarytree::fixture_code;
 use miden_verifier::{StarkVerificationError, VerificationError, Verifier};
 use miden_vm_stark::prover::prove;
 
@@ -44,22 +45,23 @@ fn verifier_rejects_forged_overflow_pop_order() {
     let basic_block_id =
         BasicBlockNodeBuilder::new(operations).add_to_forest(&mut mast_forest).unwrap();
     mast_forest.make_root(basic_block_id);
-    let program = Program::new(mast_forest.into(), basic_block_id);
+    let program = fixture_code(mast_forest.into(), basic_block_id);
 
     // Top first: [16, 15, ..., 2, 1]. The two PUSH operations create overflow records for 1 and 2.
     let stack_values = (1..17).rev().map(Felt::new_unchecked).collect::<Vec<_>>();
     let stack_inputs = StackInputs::new(&stack_values).unwrap();
     let environment = crate::named_fixture::raw_environment(&program, "overflow-pointer");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(program).unwrap();
     let (trace, precompile_witness) = FastProcessor::new(stack_inputs)
         .with_options(
             miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits())
                 .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
         )
         .unwrap()
         .execute_and_build_trace_sync(
-            &program,
-            environment.execution(),
+            environment.target(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

@@ -29,22 +29,25 @@ use miden_core::{
 use miden_debug_types::{
     ByteIndex, ColumnNumber, LineNumber, Location, SourceFile, SourceSpan, Uri,
 };
-use miden_mast_package::debug_info::{
-    DebugFunctionInfo, DebugSourceAsmOp, DebugSourceInlineCall, DebugSourceNode, DebugSourceNodeId,
-    PackageDebugInfo, PackageDebugInfoBuilder,
+use miden_mast_package::{
+    CodePackage, PackageProcedureOccurrence, Section, SectionId,
+    debug_info::{
+        DebugFunctionInfo, DebugSourceAsmOp, DebugSourceInlineCall, DebugSourceNode,
+        DebugSourceNodeId, PackageDebugInfo, PackageDebugInfoBuilder,
+    },
 };
 use miden_processor::{
     BaseHost, CodeRequest, ContextId, Continuation, DebugRuntimeFrame, DebugRuntimeFrameKind,
-    EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionWitness, FastProcessor, Felt,
-    FutureMaybeSend, Host, InvocationTag, KeyedMode, LedgerLimits, LoadedMastForest, OpeningError,
-    OpeningLimits, OpeningResource, OpeningStep, ProcessorState, Program, ReplayReadLimits,
-    ResolutionWitness, SessionError, SessionLimits, SessionPhase, SessionResource, StackInputs,
-    SyncHost, Word,
+    EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest, ExecutionError,
+    ExecutionOptions, ExecutionWitness, FastProcessor, Felt, FutureMaybeSend, Host, InvocationTag,
+    KeyedMode, LedgerLimits, LoadedMastForest, OpeningError, OpeningLimits, OpeningResource,
+    OpeningStep, ProcessorState, ReplayReadLimits, ResolutionLimits, ResolutionWitness,
+    SessionError, SessionLimits, SessionPhase, SessionResource, StackInputs, SyncHost, Word,
     advice::AdviceMutation,
     event::{EventError, EventId},
     operation::OperationError,
 };
+use miden_utils_testing::librarytree::{fixture_code, fixture_entry_digest, fixture_entry_root};
 
 const OBSERVE: u32 = 0x8bad_f00d;
 const KEY_ADDR: u32 = 256;
@@ -79,12 +82,12 @@ fn join(forest: &mut MastForest, first: MastNodeId, second: MastNodeId) -> MastN
     JoinNodeBuilder::new([first, second]).add_to_forest(forest).unwrap()
 }
 
-fn finish_program(mut forest: MastForest, root: MastNodeId) -> Program {
+fn finish_program(mut forest: MastForest, root: MastNodeId) -> CodePackage {
     forest.make_root(root);
-    Program::new(Arc::new(forest), root)
+    fixture_code(Arc::new(forest), root)
 }
 
-fn body(operations: Vec<Operation>) -> Program {
+fn body(operations: Vec<Operation>) -> CodePackage {
     let mut forest = MastForest::new();
     let root = block(&mut forest, operations);
     finish_program(forest, root)
@@ -119,7 +122,7 @@ fn invocation(forest: &mut MastForest, mode: Mode, target: ProcedureKey) -> Mast
     .unwrap()
 }
 
-fn invocation_program(mode: Mode, target: ProcedureKey) -> Program {
+fn invocation_program(mode: Mode, target: ProcedureKey) -> CodePackage {
     let mut forest = MastForest::new();
     let root = invocation(&mut forest, mode, target);
     finish_program(forest, root)
@@ -181,14 +184,46 @@ impl EnvironmentFixture {
         })
     }
 
-    fn configuration(&self, entry: ProcedureKey) -> ExecutionEnvironment {
-        ExecutionEnvironment::new(
-            ExecutionTarget::new(entry, self.root),
-            opening_limits(),
-            ledger_limits(),
-            session_limits(),
-        )
+    fn target(&self, entry: ProcedureKey) -> ExecutionTarget {
+        ExecutionTarget::new(entry, self.root)
     }
+
+    fn resolution_limits(&self) -> ResolutionLimits {
+        resolution_limits()
+    }
+}
+
+fn resolution_limits() -> ResolutionLimits {
+    ResolutionLimits::new(opening_limits(), ledger_limits(), session_limits())
+}
+
+fn new_processor(inputs: StackInputs) -> FastProcessor {
+    FastProcessor::new(inputs)
+        .with_options(ExecutionOptions::default().with_resolution_limits(resolution_limits()))
+        .unwrap()
+}
+
+fn code_with_debug(code: &CodePackage, debug: &PackageDebugInfo) -> CodePackage {
+    let symbols = code.symbols().clone();
+    let mut package = (**code.package()).clone();
+    package.sections.retain(|section| section.id != SectionId::DEBUG_INFO);
+    package.sections.push(Section::new(
+        SectionId::DEBUG_INFO,
+        debug.to_bytes_with_standard_limits().unwrap(),
+    ));
+    let occurrences: Vec<_> = package
+        .procedure_occurrences()
+        .iter()
+        .map(|row| {
+            PackageProcedureOccurrence::new(
+                row.key(),
+                row.exec_node(),
+                debug.unique_source_root_for_exec_node(row.exec_node()).unwrap(),
+            )
+        })
+        .collect();
+    let package = package.with_procedure_occurrences(occurrences, &symbols).unwrap();
+    CodePackage::new(Arc::new(package), symbols).unwrap()
 }
 
 fn opening_limits() -> OpeningLimits {
@@ -262,11 +297,11 @@ struct CountingHost {
 }
 
 impl CountingHost {
-    fn new(environment: &EnvironmentFixture, programs: &[&Program]) -> Self {
+    fn new(environment: &EnvironmentFixture, programs: &[&CodePackage]) -> Self {
         let mut forests = BTreeMap::new();
         for program in programs {
-            let forest = LoadedMastForest::new(program.mast_forest().clone());
-            for digest in program.mast_forest().local_procedure_digests() {
+            let forest = LoadedMastForest::from_code_package((*program).clone());
+            for digest in program.package().mast_forest().local_procedure_digests() {
                 forests.insert(digest, forest.clone());
             }
         }
@@ -358,15 +393,15 @@ fn entry_authenticates_fixed_root_and_key_before_loading_authenticated_body() {
     let authenticated = body(vec![Operation::Push(felt(7)), Operation::Add]);
     let hint = body(vec![Operation::Push(felt(99)), Operation::Add]);
     let environment = EnvironmentFixture::new(&[
-        (&["app"], "entry", authenticated.hash()),
-        (&["app"], "other", hint.hash()),
+        (&["app"], "entry", fixture_entry_digest(&authenticated)),
+        (&["app"], "other", fixture_entry_digest(&hint)),
     ]);
-    let configuration = environment.configuration(entry);
+    let configuration = environment.target(entry);
 
     let mut wrong_key = CountingHost::new(&environment, &[&authenticated, &hint]);
     wrong_key.substitute_witness = Some(other);
-    let error = FastProcessor::new(StackInputs::default())
-        .execute_sync(&hint, configuration, &mut wrong_key)
+    let error = new_processor(StackInputs::default())
+        .execute_sync(configuration, &mut wrong_key)
         .unwrap_err();
     assert!(matches!(
         error,
@@ -377,15 +412,10 @@ fn entry_authenticates_fixed_root_and_key_before_loading_authenticated_body() {
     ));
     assert!(wrong_key.code_requests.borrow().is_empty());
 
-    let wrong_root = ExecutionEnvironment::new(
-        ExecutionTarget::new(entry, EnvironmentRoot::new(hint.hash())),
-        opening_limits(),
-        ledger_limits(),
-        session_limits(),
-    );
+    let wrong_root = ExecutionTarget::new(entry, EnvironmentRoot::new(fixture_entry_digest(&hint)));
     let mut host = CountingHost::new(&environment, &[&authenticated, &hint]);
-    let error = FastProcessor::new(StackInputs::default())
-        .execute_sync(&hint, wrong_root, &mut host)
+    let error = new_processor(StackInputs::default())
+        .execute_sync(wrong_root, &mut host)
         .unwrap_err();
     assert!(matches!(
         error,
@@ -397,13 +427,17 @@ fn entry_authenticates_fixed_root_and_key_before_loading_authenticated_body() {
     assert!(host.code_requests.borrow().is_empty());
 
     let mut host = CountingHost::new(&environment, &[&authenticated]);
-    let output = FastProcessor::new(StackInputs::default())
-        .execute_sync(&hint, configuration, &mut host)
+    let output = new_processor(StackInputs::default())
+        .execute_sync(configuration, &mut host)
         .unwrap();
-    assert_eq!(output.stack[0], felt(7), "Program is a supply hint, not entry authority");
+    assert_eq!(
+        output.stack[0],
+        felt(7),
+        "host code availability does not replace the expected entry target"
+    );
     assert_eq!(
         *host.code_requests.borrow(),
-        vec![procedure_request(entry, authenticated.hash())]
+        vec![procedure_request(entry, fixture_entry_digest(&authenticated))]
     );
     assert_eq!(
         host.witness_requests,
@@ -418,12 +452,12 @@ fn entry_authenticates_fixed_root_and_key_before_loading_authenticated_body() {
 #[test]
 fn available_implementation_never_substitutes_for_missing_key_evidence() {
     let hint = body(vec![Operation::Swap, Operation::Swap]);
-    let environment = EnvironmentFixture::new(&[(&[], "entry", hint.hash())]);
+    let environment = EnvironmentFixture::new(&[(&[], "entry", fixture_entry_digest(&hint))]);
     // Even choosing the bytes of an available D as K cannot enable digest dispatch.
-    let digest_shaped_key = ProcedureKey::new(hint.hash());
+    let digest_shaped_key = ProcedureKey::new(fixture_entry_digest(&hint));
     let mut host = CountingHost::new(&environment, &[&hint]);
-    let error = FastProcessor::new(StackInputs::default())
-        .execute_sync(&hint, environment.configuration(digest_shaped_key), &mut host)
+    let error = new_processor(StackInputs::default())
+        .execute_sync(environment.target(digest_shaped_key), &mut host)
         .unwrap_err();
     assert!(matches!(error, ExecutionError::EnvironmentWitnessUnavailable { key, .. }
         if key == digest_shaped_key));
@@ -444,15 +478,13 @@ fn same_body_aliases_preserve_exec_principal_and_establish_each_call_key() {
         let root = join(&mut forest, calls, returned);
         let program = finish_program(forest, root);
         let environment = EnvironmentFixture::new(&[
-            (&["app"], "entry", program.hash()),
-            (&["lib"], "a", callee.hash()),
-            (&["lib"], "b", callee.hash()),
+            (&["app"], "entry", fixture_entry_digest(&program)),
+            (&["lib"], "a", fixture_entry_digest(&callee)),
+            (&["lib"], "b", fixture_entry_digest(&callee)),
         ]);
-        let mut host = CountingHost::new(&environment, &[&callee]);
-        let mut processor = FastProcessor::new(StackInputs::default());
-        let mut resume = processor
-            .get_initial_resume_context(&program, environment.configuration(entry))
-            .unwrap();
+        let mut host = CountingHost::new(&environment, &[&program, &callee]);
+        let mut processor = new_processor(StackInputs::default());
+        let mut resume = processor.get_initial_resume_context(environment.target(entry)).unwrap();
         run_steps(&mut processor, &mut host, &mut resume);
         assert_eq!(host.observations.len(), 3);
         for (observation, alias) in host.observations[..2].iter().zip(aliases) {
@@ -476,9 +508,9 @@ fn same_body_aliases_preserve_exec_principal_and_establish_each_call_key() {
         assert_eq!(
             *host.code_requests.borrow(),
             vec![
-                procedure_request(entry, program.hash()),
-                procedure_request(aliases[0], callee.hash()),
-                procedure_request(aliases[1], callee.hash()),
+                procedure_request(entry, fixture_entry_digest(&program)),
+                procedure_request(aliases[0], fixture_entry_digest(&callee)),
+                procedure_request(aliases[1], fixture_entry_digest(&callee)),
             ]
         );
         assert_eq!(host.requests_for(aliases[0]), 1);
@@ -509,13 +541,12 @@ fn bounded_keyed_self_recursion_restores_frames_and_closes_entry_only_at_root_en
     let returned = block(&mut forest, operations);
     let root = join(&mut forest, recurse, returned);
     let program = finish_program(forest, root);
-    program.mast_forest().validate().unwrap();
-    let environment = EnvironmentFixture::new(&[(&["app"], "recursive", program.hash())]);
-    let mut host = CountingHost::new(&environment, &[]);
-    let mut processor = FastProcessor::new(StackInputs::new(&[felt(3)]).unwrap());
-    let mut resume = processor
-        .get_initial_resume_context(&program, environment.configuration(recursive))
-        .unwrap();
+    program.package().mast_forest().validate().unwrap();
+    let environment =
+        EnvironmentFixture::new(&[(&["app"], "recursive", fixture_entry_digest(&program))]);
+    let mut host = CountingHost::new(&environment, &[&program]);
+    let mut processor = new_processor(StackInputs::new(&[felt(3)]).unwrap());
+    let mut resume = processor.get_initial_resume_context(environment.target(recursive)).unwrap();
     let mut restored_before_root_end = false;
     for _ in 0..512 {
         if processor.step_sync(&mut host, &mut resume).unwrap() {
@@ -558,7 +589,7 @@ fn bounded_keyed_self_recursion_restores_frames_and_closes_entry_only_at_root_en
     assert_eq!(host.requests_for(recursive), 1, "recursive invocations reuse authenticated K");
     assert_eq!(
         *host.code_requests.borrow(),
-        vec![procedure_request(recursive, program.hash())],
+        vec![procedure_request(recursive, fixture_entry_digest(&program))],
         "recursive activations reuse the selected entry request"
     );
     let session = resume.resolution_session();
@@ -588,19 +619,19 @@ fn syscall_requires_fixed_root_namespace_before_code_lookup() {
         let target = key(path, "read_principal");
         let program = invocation_program(Mode::Syscall, target);
         let environment = EnvironmentFixture::new(&[
-            (&["app"], "entry", program.hash()),
-            (path, "read_principal", callee.hash()),
+            (&["app"], "entry", fixture_entry_digest(&program)),
+            (path, "read_principal", fixture_entry_digest(&callee)),
         ]);
-        let mut host = CountingHost::new(&environment, &[&callee]);
-        let error = FastProcessor::new(StackInputs::default())
-            .execute_sync(&program, environment.configuration(entry), &mut host)
+        let mut host = CountingHost::new(&environment, &[&program, &callee]);
+        let error = new_processor(StackInputs::default())
+            .execute_sync(environment.target(entry), &mut host)
             .unwrap_err();
         assert!(matches!(error, ExecutionError::EnvironmentSession(
             SessionError::UnauthorizedSyscall { expected, actual })
             if expected == Namespace::initial() && actual == namespace(path)));
         assert_eq!(
             *host.code_requests.borrow(),
-            vec![procedure_request(entry, program.hash())],
+            vec![procedure_request(entry, fixture_entry_digest(&program))],
             "a rejected syscall must not query target code"
         );
         assert!(host.observations.is_empty());
@@ -617,15 +648,13 @@ fn syscall_requires_fixed_root_namespace_before_code_lookup() {
     let user_body = finish_program(forest, root);
     let program = invocation_program(Mode::Call, user);
     let environment = EnvironmentFixture::new(&[
-        (&["app"], "entry", program.hash()),
-        (&["app"], "user", user_body.hash()),
-        (&kernel_path, "read_principal", callee.hash()),
+        (&["app"], "entry", fixture_entry_digest(&program)),
+        (&["app"], "user", fixture_entry_digest(&user_body)),
+        (&kernel_path, "read_principal", fixture_entry_digest(&callee)),
     ]);
-    let mut host = CountingHost::new(&environment, &[&user_body, &callee]);
-    let mut processor = FastProcessor::new(StackInputs::default());
-    let mut resume = processor
-        .get_initial_resume_context(&program, environment.configuration(entry))
-        .unwrap();
+    let mut host = CountingHost::new(&environment, &[&program, &user_body, &callee]);
+    let mut processor = new_processor(StackInputs::default());
+    let mut resume = processor.get_initial_resume_context(environment.target(entry)).unwrap();
     run_steps(&mut processor, &mut host, &mut resume);
     assert_eq!(host.observations.len(), 2);
     assert_eq!(host.observations[0].principal, user.into_word());
@@ -636,9 +665,9 @@ fn syscall_requires_fixed_root_namespace_before_code_lookup() {
     assert_eq!(
         *host.code_requests.borrow(),
         vec![
-            procedure_request(entry, program.hash()),
-            procedure_request(user, user_body.hash()),
-            procedure_request(target, callee.hash()),
+            procedure_request(entry, fixture_entry_digest(&program)),
+            procedure_request(user, fixture_entry_digest(&user_body)),
+            procedure_request(target, fixture_entry_digest(&callee)),
         ]
     );
 }
@@ -650,15 +679,15 @@ fn entry_and_ordinary_call_may_use_root_exports() {
     let callee = body(observe());
     let program = invocation_program(Mode::Call, target);
     let environment = EnvironmentFixture::new(&[
-        (&["app"], "entry", program.hash()),
-        (&kernel_path, "ordinary", callee.hash()),
+        (&["app"], "entry", fixture_entry_digest(&program)),
+        (&kernel_path, "ordinary", fixture_entry_digest(&callee)),
     ]);
-    for (entry, hint, expected_root) in
+    for (entry, _hint, expected_root) in
         [(target, &callee, true), (key(&["app"], "entry"), &program, false)]
     {
-        let mut host = CountingHost::new(&environment, &[&callee]);
-        let output = FastProcessor::new(StackInputs::default())
-            .execute_sync(hint, environment.configuration(entry), &mut host)
+        let mut host = CountingHost::new(&environment, &[&program, &callee]);
+        let output = new_processor(StackInputs::default())
+            .execute_sync(environment.target(entry), &mut host)
             .unwrap();
         assert_eq!(output.stack.get_word(0), Some(target.into_word()));
         assert_eq!(host.observations[0].context.is_root(), expected_root);
@@ -785,8 +814,13 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
     let aliases = [key(&[], "a"), key(&[], "b")];
     let callee = body(vec![Operation::Noop]);
     let mut callee_builder = PackageDebugInfoBuilder::default();
-    let callee_source =
-        source_node(&mut callee_builder, callee.entrypoint(), Vec::new(), 1, "callee::shared");
+    let callee_source = source_node(
+        &mut callee_builder,
+        fixture_entry_root(&callee),
+        Vec::new(),
+        1,
+        "callee::shared",
+    );
     callee_builder.add_root(callee_source);
     let callee_debug = *callee_builder.build();
     let budget = miden_vm_stark::memory::default_budget();
@@ -864,40 +898,45 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
         source_builder.add_root(source_root);
         let source_debug = *source_builder.build();
         let environment = EnvironmentFixture::new(&[
-            (&["app"], "entry", program.hash()),
-            (&[], "a", callee.hash()),
-            (&[], "b", callee.hash()),
+            (&["app"], "entry", fixture_entry_digest(&program)),
+            (&[], "a", fixture_entry_digest(&callee)),
+            (&[], "b", fixture_entry_digest(&callee)),
         ]);
-        let configuration = environment.configuration(entry);
-        let expected: Vec<_> = keys.into_iter().map(|key| (opcode, key, callee.hash())).collect();
+        let configuration = environment.target(entry);
+        let expected: Vec<_> = keys
+            .into_iter()
+            .map(|key| (opcode, key, fixture_entry_digest(&callee)))
+            .collect();
         let mut baseline = None;
         // A one-row fragment places a cut on both sides of every invocation and return.
         for fragment_size in [1, 3, 64] {
             let options = ExecutionOptions::default()
+                .with_resolution_limits(resolution_limits())
                 .with_environment_trace_limits(trace_limits())
                 .with_core_trace_fragment_size(fragment_size)
                 .unwrap();
-            let mut host = CountingHost::new(&environment, &[&callee]);
-            let witness = FastProcessor::new(StackInputs::default())
+            let mut host = CountingHost::new(&environment, &[&program, &callee]);
+            let witness = new_processor(StackInputs::default())
                 .with_options(options.clone())
                 .unwrap()
-                .execute_for_proving_sync(&program, configuration, &mut host)
+                .execute_for_proving_sync(configuration, &mut host)
                 .unwrap();
             assert_eq!(host.requests_for(aliases[0]), 1);
             assert_eq!(host.requests_for(aliases[1]), 1);
             assert_eq!(
                 *host.code_requests.borrow(),
                 vec![
-                    procedure_request(entry, program.hash()),
-                    procedure_request(aliases[0], callee.hash()),
-                    procedure_request(aliases[1], callee.hash()),
+                    procedure_request(entry, fixture_entry_digest(&program)),
+                    procedure_request(aliases[0], fixture_entry_digest(&callee)),
+                    procedure_request(aliases[1], fixture_entry_digest(&callee)),
                 ],
                 "repeated use of alias a reuses its selected request"
             );
             let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
             let restored = ExecutionWitness::read_from_bytes_with_limits(
                 &bytes,
-                &configuration,
+                configuration,
+                resolution_limits(),
                 trace_limits(),
                 read_limits(),
             )
@@ -932,34 +971,31 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
             }
             if fragment_size <= 3 {
                 for explicit_root in [false, true] {
-                    let mut host = CountingHost::new(&environment, &[&callee]);
+                    let mut host = CountingHost::new(&environment, &[&program, &callee]);
                     host.forests.insert(
-                        callee.hash(),
+                        fixture_entry_digest(&callee),
                         LoadedMastForest::with_package_debug_info(
-                            callee.mast_forest().clone(),
+                            callee.package().mast_forest().clone(),
                             Ok(Some(callee_debug.clone())),
                         ),
                     );
-                    let processor = FastProcessor::new(StackInputs::default())
+                    let processor = new_processor(StackInputs::default())
                         .with_options(options.clone())
                         .unwrap();
-                    let witness = if explicit_root {
-                        processor.execute_for_proving_with_package_debug_info_at_source_node_sync(
+                    let supplied = if explicit_root {
+                        LoadedMastForest::from_code_package(code_with_debug(
                             &program,
-                            configuration,
                             &source_debug,
-                            source_root,
-                            &mut host,
-                        )
+                        ))
                     } else {
-                        processor.execute_for_proving_with_package_debug_info_sync(
-                            &program,
-                            configuration,
-                            &source_debug,
-                            &mut host,
+                        LoadedMastForest::with_package_debug_info(
+                            program.package().mast_forest().clone(),
+                            Ok(Some(source_debug.clone())),
                         )
-                    }
-                    .unwrap();
+                    };
+                    host.forests.insert(fixture_entry_digest(&program), supplied);
+                    let witness =
+                        processor.execute_for_proving_sync(configuration, &mut host).unwrap();
                     let trace = build_trace(witness.into_parts().0, &budget).unwrap();
                     assert_native_core_bindings(&trace, entry, &expected);
                     assert_eq!(
@@ -970,13 +1006,12 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
             }
             #[cfg(feature = "std")]
             {
-                let (trace, precompile) = FastProcessor::new(StackInputs::default())
+                let (trace, precompile) = new_processor(StackInputs::default())
                     .with_options(options.clone())
                     .unwrap()
                     .execute_and_build_trace_sync(
-                        &program,
                         configuration,
-                        &mut CountingHost::new(&environment, &[&callee]),
+                        &mut CountingHost::new(&environment, &[&program, &callee]),
                         &budget,
                     )
                     .unwrap();
@@ -1006,40 +1041,42 @@ fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay(
     }
     let program = finish_program(forest, root);
     let environment = EnvironmentFixture::new(&[
-        (&["app"], "entry", program.hash()),
-        (&[], "shared", callee.hash()),
+        (&["app"], "entry", fixture_entry_digest(&program)),
+        (&[], "shared", fixture_entry_digest(&callee)),
     ]);
-    let configuration = environment.configuration(entry);
+    let configuration = environment.target(entry);
     let expected = [opcodes::EXEC, opcodes::SYSCALL, opcodes::CALL, opcodes::SYSCALL]
-        .map(|opcode| (opcode, target, callee.hash()));
+        .map(|opcode| (opcode, target, fixture_entry_digest(&callee)));
     let budget = miden_vm_stark::memory::default_budget();
     let mut baseline = None;
     // One-row fragments save a continuation at every invocation, callee entry and return row.
     for fragment_size in [1, 3, 64] {
         let options = ExecutionOptions::default()
+            .with_resolution_limits(resolution_limits())
             .with_environment_trace_limits(trace_limits())
             .with_core_trace_fragment_size(fragment_size)
             .unwrap();
-        let mut host = CountingHost::new(&environment, &[&callee]);
-        let witness = FastProcessor::new(StackInputs::default())
+        let mut host = CountingHost::new(&environment, &[&program, &callee]);
+        let witness = new_processor(StackInputs::default())
             .with_options(options.clone())
             .unwrap()
-            .execute_for_proving_sync(&program, configuration, &mut host)
+            .execute_for_proving_sync(configuration, &mut host)
             .unwrap();
         assert_eq!(host.requests_for(entry), 1);
         assert_eq!(host.requests_for(target), 1, "both tags must reuse the same opening");
         assert_eq!(
             *host.code_requests.borrow(),
             vec![
-                procedure_request(entry, program.hash()),
-                procedure_request(target, callee.hash()),
+                procedure_request(entry, fixture_entry_digest(&program)),
+                procedure_request(target, fixture_entry_digest(&callee)),
             ],
             "normal and syscall uses reuse the same selected request"
         );
         let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
         let restored = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &configuration,
+            configuration,
+            resolution_limits(),
             trace_limits(),
             read_limits(),
         )
@@ -1068,13 +1105,12 @@ fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay(
         }
         #[cfg(feature = "std")]
         if fragment_size == 1 {
-            let (trace, precompile) = FastProcessor::new(StackInputs::default())
+            let (trace, precompile) = new_processor(StackInputs::default())
                 .with_options(options)
                 .unwrap()
                 .execute_and_build_trace_sync(
-                    &program,
                     configuration,
-                    &mut CountingHost::new(&environment, &[&callee]),
+                    &mut CountingHost::new(&environment, &[&program, &callee]),
                     &budget,
                 )
                 .unwrap();
@@ -1104,29 +1140,33 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
     let caller_root = join(&mut caller_forest, caller_head, called);
     let program = finish_program(caller_forest, caller_root);
     let environment = EnvironmentFixture::new(&[
-        (&["app"], "entry", program.hash()),
-        (&["lib"], "child", callee.hash()),
+        (&["app"], "entry", fixture_entry_digest(&program)),
+        (&["lib"], "child", fixture_entry_digest(&callee)),
     ]);
-    let configuration = environment.configuration(entry);
-    let witness = FastProcessor::new(StackInputs::default())
-        .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+    let configuration = environment.target(entry);
+    let witness = new_processor(StackInputs::default())
+        .with_options(
+            ExecutionOptions::default()
+                .with_resolution_limits(resolution_limits())
+                .with_environment_trace_limits(trace_limits()),
+        )
         .unwrap()
         .execute_for_proving_sync(
-            &program,
             configuration,
-            &mut CountingHost::new(&environment, &[&callee]),
+            &mut CountingHost::new(&environment, &[&program, &callee]),
         )
         .unwrap();
     let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
-        &configuration,
+        configuration,
+        resolution_limits(),
         trace_limits(),
         read_limits(),
     )
     .expect("unmodified CALL evidence must pass bounded native revalidation");
     assert_eq!(restored.claim(), witness.claim());
-    assert_eq!(restored.execution_descriptor(), configuration.descriptor());
+    assert_eq!(restored.execution_descriptor(), configuration);
     let budget = miden_vm_stark::memory::default_budget();
     let original_trace = miden_processor::trace::build_trace(witness.into_parts().0, &budget)
         .expect("unmodified captured CALL evidence must build a trace");
@@ -1135,7 +1175,7 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
     assert_native_core_bindings(
         &restored_trace,
         entry,
-        &[(miden_core::operations::opcodes::CALL, target, callee.hash())],
+        &[(miden_core::operations::opcodes::CALL, target, fixture_entry_digest(&callee))],
     );
     assert_eq!(
         restored_trace.main_trace().clone_air_matrices(),
@@ -1146,7 +1186,7 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
     // unrelated serialized stack, sparse MAST or Controller layouts. All reads use caller limits.
     let mut prefix = vec![1, 0]; // CALL, normal Resolve
     target.write_into(&mut prefix);
-    ImplementationRoot::new(callee.hash()).write_into(&mut prefix);
+    ImplementationRoot::new(fixture_entry_digest(&callee)).write_into(&mut prefix);
     let offsets: Vec<_> = bytes
         .windows(prefix.len())
         .enumerate()
@@ -1168,7 +1208,8 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
     let rejects = |name: &str, bytes: &[u8], expected: Rejection| {
         let decoded = ExecutionWitness::read_from_bytes_with_limits(
             bytes,
-            &configuration,
+            configuration,
+            resolution_limits(),
             trace_limits(),
             read_limits(),
         );
@@ -1359,12 +1400,12 @@ fn dyn_shares_ram_fmp_and_principal_while_dyncall_uses_call_conventions() {
         let root = join(&mut forest, call, returned);
         let program = finish_program(forest, root);
         let environment = EnvironmentFixture::new(&[
-            (&["app"], "entry", program.hash()),
-            (&["lib"], "dynamic", callee.hash()),
+            (&["app"], "entry", fixture_entry_digest(&program)),
+            (&["lib"], "dynamic", fixture_entry_digest(&callee)),
         ]);
-        let mut host = CountingHost::new(&environment, &[&callee]);
-        let output = FastProcessor::new(StackInputs::default())
-            .execute_sync(&program, environment.configuration(entry), &mut host)
+        let mut host = CountingHost::new(&environment, &[&program, &callee]);
+        let output = new_processor(StackInputs::default())
+            .execute_sync(environment.target(entry), &mut host)
             .unwrap();
         let before = &host.observations[0];
         let after = &host.observations[1];
@@ -1415,14 +1456,12 @@ fn root_call_and_terminal_dyncall_restore_before_discharge_at_actual_entry_end()
             invocation_program(mode, target)
         };
         let environment = EnvironmentFixture::new(&[
-            (&["app"], "entry", program.hash()),
-            (&["lib"], "child", callee.hash()),
+            (&["app"], "entry", fixture_entry_digest(&program)),
+            (&["lib"], "child", fixture_entry_digest(&callee)),
         ]);
-        let mut host = CountingHost::new(&environment, &[&callee]);
-        let mut processor = FastProcessor::new(StackInputs::default());
-        let mut resume = processor
-            .get_initial_resume_context(&program, environment.configuration(entry))
-            .unwrap();
+        let mut host = CountingHost::new(&environment, &[&program, &callee]);
+        let mut processor = new_processor(StackInputs::default());
+        let mut resume = processor.get_initial_resume_context(environment.target(entry)).unwrap();
         for _ in 0..64 {
             assert!(!processor.step_sync(&mut host, &mut resume).unwrap());
             if resume.resolution_session().uses().count() == 1 {
@@ -1439,13 +1478,16 @@ fn root_call_and_terminal_dyncall_restore_before_discharge_at_actual_entry_end()
         assert_eq!(resume.resolution_session().uses().count(), 2);
         assert_eq!(resume.resolution_session().uses().last().unwrap().procedure_key(), entry);
 
-        let witness = FastProcessor::new(StackInputs::default())
-            .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+        let witness = new_processor(StackInputs::default())
+            .with_options(
+                ExecutionOptions::default()
+                    .with_resolution_limits(resolution_limits())
+                    .with_environment_trace_limits(trace_limits()),
+            )
             .unwrap()
             .execute_for_proving_sync(
-                &program,
-                environment.configuration(entry),
-                &mut CountingHost::new(&environment, &[&callee]),
+                environment.target(entry),
+                &mut CountingHost::new(&environment, &[&program, &callee]),
             )
             .unwrap();
         let trace = miden_processor::trace::build_trace(
@@ -1458,7 +1500,11 @@ fn root_call_and_terminal_dyncall_restore_before_discharge_at_actual_entry_end()
         } else {
             miden_core::operations::opcodes::DYNCALL
         };
-        assert_native_core_bindings(&trace, entry, &[(opcode, target, callee.hash())]);
+        assert_native_core_bindings(
+            &trace,
+            entry,
+            &[(opcode, target, fixture_entry_digest(&callee))],
+        );
         let main = trace.main_trace();
         let root_end = (0..main.core_height())
             .map(miden_processor::trace::RowIndex::from)
@@ -1481,16 +1527,14 @@ fn unavailable_witness_and_code_retries_keep_invocation_and_charge_once() {
     let callee = body(observe());
     let program = invocation_program(Mode::Call, target);
     let environment = EnvironmentFixture::new(&[
-        (&["app"], "entry", program.hash()),
-        (&["lib"], "child", callee.hash()),
+        (&["app"], "entry", fixture_entry_digest(&program)),
+        (&["lib"], "child", fixture_entry_digest(&callee)),
     ]);
-    let mut host = CountingHost::new(&environment, &[&callee]);
+    let mut host = CountingHost::new(&environment, &[&program, &callee]);
     host.unavailable_keys.insert(target);
-    host.unavailable_code.insert(callee.hash());
-    let mut processor = FastProcessor::new(StackInputs::default());
-    let mut resume = processor
-        .get_initial_resume_context(&program, environment.configuration(entry))
-        .unwrap();
+    host.unavailable_code.insert(fixture_entry_digest(&callee));
+    let mut processor = new_processor(StackInputs::default());
+    let mut resume = processor.get_initial_resume_context(environment.target(entry)).unwrap();
     for _ in 0..2 {
         assert!(matches!(processor.step_sync(&mut host, &mut resume),
             Err(ExecutionError::EnvironmentWitnessUnavailable { key, .. }) if key == target));
@@ -1500,31 +1544,35 @@ fn unavailable_witness_and_code_retries_keep_invocation_and_charge_once() {
         assert!(processor.state().ctx().is_root());
         assert_eq!(
             *host.code_requests.borrow(),
-            vec![procedure_request(entry, program.hash())],
+            vec![procedure_request(entry, fixture_entry_digest(&program))],
             "missing target evidence must not query target code"
         );
     }
     let retained = resume.continuation_stack().len();
     host.unavailable_keys.remove(&target);
     assert!(matches!(processor.step_sync(&mut host, &mut resume),
-        Err(ExecutionError::ProcedureNotFound { root_digest, .. }) if root_digest == callee.hash()));
+        Err(ExecutionError::ProcedureNotFound { root_digest, .. }) if root_digest == fixture_entry_digest(&callee)));
     assert_eq!(resume.continuation_stack().len(), retained);
     assert_eq!(resume.resolution_session().uses().count(), 0);
     assert_eq!(processor.state().clock().as_u32(), 0);
     assert_eq!(host.requests_for(target), 3);
     host.unavailable_code.clear();
     let unrelated = body(vec![Operation::Swap, Operation::Swap]);
-    host.forests
-        .insert(callee.hash(), LoadedMastForest::new(unrelated.mast_forest().clone()));
+    host.forests.insert(
+        fixture_entry_digest(&callee),
+        LoadedMastForest::new(unrelated.package().mast_forest().clone()),
+    );
     assert!(matches!(processor.step_sync(&mut host, &mut resume),
         Err(ExecutionError::OperationError {
             err: OperationError::MalformedMastForestInHost { root_digest }, ..
-        }) if root_digest == callee.hash()));
+        }) if root_digest == fixture_entry_digest(&callee)));
     assert_eq!(resume.continuation_stack().len(), retained);
     assert_eq!(resume.resolution_session().uses().count(), 0);
     assert_eq!(processor.state().clock().as_u32(), 0);
-    host.forests
-        .insert(callee.hash(), LoadedMastForest::new(callee.mast_forest().clone()));
+    host.forests.insert(
+        fixture_entry_digest(&callee),
+        LoadedMastForest::new(callee.package().mast_forest().clone()),
+    );
     run_steps(&mut processor, &mut host, &mut resume);
     assert_eq!(host.requests_for(entry), 1);
     assert_eq!(
@@ -1535,10 +1583,10 @@ fn unavailable_witness_and_code_retries_keep_invocation_and_charge_once() {
     assert_eq!(
         *host.code_requests.borrow(),
         vec![
-            procedure_request(entry, program.hash()),
-            procedure_request(target, callee.hash()),
-            procedure_request(target, callee.hash()),
-            procedure_request(target, callee.hash()),
+            procedure_request(entry, fixture_entry_digest(&program)),
+            procedure_request(target, fixture_entry_digest(&callee)),
+            procedure_request(target, fixture_entry_digest(&callee)),
+            procedure_request(target, fixture_entry_digest(&callee)),
         ]
     );
     assert_eq!(host.observations.len(), 1);
@@ -1549,10 +1597,43 @@ fn unavailable_witness_and_code_retries_keep_invocation_and_charge_once() {
 }
 
 #[test]
+fn missing_resolution_limits_reject_before_queries_without_publishing_identity() {
+    let entry = key(&[], "entry");
+    let code = body(observe());
+    let environment = EnvironmentFixture::new(&[(&[], "entry", fixture_entry_digest(&code))]);
+    let target = environment.target(entry);
+    let mut host = CountingHost::new(&environment, &[&code]);
+    let mut processor = FastProcessor::new(StackInputs::default());
+    assert!(matches!(
+        processor.get_initial_resume_context(target),
+        Err(ExecutionError::MissingResolutionLimits)
+    ));
+    assert!(host.witness_requests.is_empty());
+    assert!(host.code_requests.borrow().is_empty());
+    assert_eq!(processor.state().clock().as_u32(), 0);
+    processor = processor
+        .with_options(
+            ExecutionOptions::default().with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap();
+    let mut resume = processor.get_initial_resume_context(target).unwrap();
+    assert_eq!(*resume.target(), target);
+    assert_eq!(*resume.resolution_limits(), environment.resolution_limits());
+    assert!(resume.current_forest().procedure_roots().is_empty());
+    assert!(resume.debug_info().is_none());
+    run_steps(&mut processor, &mut host, &mut resume);
+    assert_eq!(host.requests_for(entry), 1);
+    assert_eq!(
+        *host.code_requests.borrow(),
+        vec![procedure_request(entry, fixture_entry_digest(&code))]
+    );
+}
+
+#[test]
 fn explicit_native_budgets_and_missing_trace_policy_fail_closed() {
     let entry = key(&[], "entry");
     let program = body(observe());
-    let environment = EnvironmentFixture::new(&[(&[], "entry", program.hash())]);
+    let environment = EnvironmentFixture::new(&[(&[], "entry", fixture_entry_digest(&program))]);
     for opening_budget in [true, false] {
         let opening = if opening_budget {
             OpeningLimits { max_nodes: 0, ..opening_limits() }
@@ -1564,15 +1645,21 @@ fn explicit_native_budgets_and_missing_trace_policy_fail_closed() {
         } else {
             SessionLimits { max_requests: 0, ..session_limits() }
         };
-        let configuration = ExecutionEnvironment::new(
-            ExecutionTarget::new(entry, environment.root),
-            opening,
-            ledger_limits(),
-            session,
-        );
+        let configuration = environment.target(entry);
+        let limits = ResolutionLimits::new(opening, ledger_limits(), session);
         let mut host = CountingHost::new(&environment, &[&program]);
-        let mut processor = FastProcessor::new(StackInputs::default());
-        let mut resume = processor.get_initial_resume_context(&program, configuration).unwrap();
+        let mut processor = new_processor(StackInputs::default())
+            .with_options(ExecutionOptions::default().with_resolution_limits(limits))
+            .unwrap();
+        let mut resume = processor.get_initial_resume_context(configuration).unwrap();
+        assert_eq!(*resume.target(), configuration);
+        assert_eq!(*resume.resolution_limits(), limits);
+        // Later options cannot replace the policy fixed by this resume context.
+        processor = processor
+            .with_options(ExecutionOptions::default().with_resolution_limits(resolution_limits()))
+            .unwrap();
+        assert_eq!(*resume.target(), configuration);
+        assert_eq!(*resume.resolution_limits(), limits);
         let error = processor.step_sync(&mut host, &mut resume).unwrap_err();
         if opening_budget {
             assert!(matches!(
@@ -1599,11 +1686,8 @@ fn explicit_native_budgets_and_missing_trace_policy_fail_closed() {
     }
     let mut host = CountingHost::new(&environment, &[&program]);
     assert!(matches!(
-        FastProcessor::new(StackInputs::default()).execute_for_proving_sync(
-            &program,
-            environment.configuration(entry),
-            &mut host,
-        ),
+        new_processor(StackInputs::default())
+            .execute_for_proving_sync(environment.target(entry), &mut host),
         Err(ExecutionError::MissingEnvironmentTraceLimits)
     ));
     assert!(host.witness_requests.is_empty());
@@ -1616,35 +1700,41 @@ fn replay_v6_roundtrip_uses_caller_authority_and_explicit_budgets() {
     let callee = body(observe());
     let program = invocation_program(Mode::Call, target);
     let environment = EnvironmentFixture::new(&[
-        (&[], "entry", program.hash()),
-        (&["lib"], "child", callee.hash()),
+        (&[], "entry", fixture_entry_digest(&program)),
+        (&["lib"], "child", fixture_entry_digest(&callee)),
     ]);
-    let configuration = environment.configuration(entry);
-    let mut host = CountingHost::new(&environment, &[&callee]);
-    let witness = FastProcessor::new(StackInputs::default())
-        .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+    let configuration = environment.target(entry);
+    let mut host = CountingHost::new(&environment, &[&program, &callee]);
+    let witness = new_processor(StackInputs::default())
+        .with_options(
+            ExecutionOptions::default()
+                .with_resolution_limits(resolution_limits())
+                .with_environment_trace_limits(trace_limits()),
+        )
         .unwrap()
-        .execute_for_proving_sync(&program, configuration, &mut host)
+        .execute_for_proving_sync(configuration, &mut host)
         .unwrap();
     let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
     assert_eq!(bytes[0], 6);
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
-        &configuration,
+        configuration,
+        resolution_limits(),
         trace_limits(),
         read_limits(),
     )
     .unwrap();
-    assert_eq!(restored.execution_descriptor(), configuration.descriptor());
+    assert_eq!(restored.execution_descriptor(), configuration);
     assert_eq!(restored.claim(), witness.claim());
     assert_eq!(restored.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
     for version in [3, 4, 5, 7] {
         assert!(
             ExecutionWitness::read_from_bytes_with_limits(
                 &[version],
-                &configuration,
+                configuration,
+                resolution_limits(),
                 trace_limits(),
-                read_limits(),
+                read_limits()
             )
             .unwrap_err()
             .to_string()
@@ -1658,34 +1748,37 @@ fn replay_v6_roundtrip_uses_caller_authority_and_explicit_budgets() {
     assert!(
         ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &configuration,
+            configuration,
+            resolution_limits(),
             trace_limits(),
-            too_small,
+            too_small
         )
         .is_err()
     );
-    let wrong_authority = environment.configuration(target);
+    let wrong_authority = environment.target(target);
     assert!(
         ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &wrong_authority,
+            wrong_authority,
+            resolution_limits(),
             trace_limits(),
-            read_limits(),
+            read_limits()
         )
         .is_err()
     );
     let changed_callee = body(vec![Operation::Noop]);
     let changed_environment = EnvironmentFixture::new(&[
-        (&[], "entry", program.hash()),
-        (&["lib"], "child", changed_callee.hash()),
+        (&[], "entry", fixture_entry_digest(&program)),
+        (&["lib"], "child", fixture_entry_digest(&changed_callee)),
     ]);
     assert_ne!(changed_environment.root, environment.root);
     assert!(
         ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &changed_environment.configuration(entry),
+            changed_environment.target(entry),
+            resolution_limits(),
             trace_limits(),
-            read_limits(),
+            read_limits()
         )
         .is_err()
     );
@@ -1752,16 +1845,15 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
     let entry = key(&[], "entry");
     let authenticated = body(observe());
     let hint = body(vec![Operation::Swap, Operation::Swap]);
-    let environment = EnvironmentFixture::new(&[(&[], "entry", authenticated.hash())]);
+    let environment =
+        EnvironmentFixture::new(&[(&[], "entry", fixture_entry_digest(&authenticated))]);
     let mut host = AsyncCodeHost {
-        inner: CountingHost::new(&environment, &[&authenticated]),
+        inner: CountingHost::new(&environment, &[&authenticated, &hint]),
         suspend_code: AtomicBool::new(true),
-        suspended_request: procedure_request(entry, authenticated.hash()),
+        suspended_request: procedure_request(entry, fixture_entry_digest(&authenticated)),
     };
-    let mut processor = FastProcessor::new(StackInputs::default());
-    let mut resume = processor
-        .get_initial_resume_context(&hint, environment.configuration(entry))
-        .unwrap();
+    let mut processor = new_processor(StackInputs::default());
+    let mut resume = processor.get_initial_resume_context(environment.target(entry)).unwrap();
     {
         let mut future = Box::pin(processor.step(&mut host, &mut resume));
         assert!(future.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
@@ -1770,7 +1862,7 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
     assert_eq!(host.inner.requests_for(entry), 1);
     assert_eq!(
         *host.inner.code_requests.borrow(),
-        vec![procedure_request(entry, authenticated.hash())]
+        vec![procedure_request(entry, fixture_entry_digest(&authenticated))]
     );
     assert_eq!(resume.resolution_session().phase(), SessionPhase::Unentered);
     assert_eq!(resume.resolution_session().uses().count(), 0);
@@ -1785,7 +1877,7 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
     assert_eq!(host.inner.requests_for(entry), 1);
     assert_eq!(
         *host.inner.code_requests.borrow(),
-        vec![procedure_request(entry, authenticated.hash()); 2]
+        vec![procedure_request(entry, fixture_entry_digest(&authenticated)); 2]
     );
     assert_eq!(host.inner.observations.len(), 1);
     assert_eq!(host.inner.observations[0].principal, entry.into_word());
@@ -1795,11 +1887,10 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
 struct SourceDynCallFixture {
     entry: ProcedureKey,
     target: ProcedureKey,
-    program: Program,
-    caller_debug: PackageDebugInfo,
+    program: CodePackage,
     dynamic_source: DebugSourceNodeId,
     returned_source: DebugSourceNodeId,
-    callee: Program,
+    callee: CodePackage,
     callee_debug: PackageDebugInfo,
     callee_source: DebugSourceNodeId,
     environment: EnvironmentFixture,
@@ -1845,7 +1936,7 @@ fn source_dyncall_fixture() -> SourceDynCallFixture {
     let mut builder = PackageDebugInfoBuilder::default();
     let callee_source = source_node(
         &mut builder,
-        callee.entrypoint(),
+        fixture_entry_root(&callee),
         Vec::new(),
         callee_op_end,
         "callee::dynamic",
@@ -1884,15 +1975,15 @@ fn source_dyncall_fixture() -> SourceDynCallFixture {
         source_node(&mut builder, root, vec![setup_source, tail_source], 1, "caller::entry");
     builder.add_root(root_source);
     let caller_debug = *builder.build();
+    let program = code_with_debug(&program, &caller_debug);
     let environment = EnvironmentFixture::new(&[
-        (&["app"], "entry", program.hash()),
-        (&["lib"], "dynamic", callee.hash()),
+        (&["app"], "entry", fixture_entry_digest(&program)),
+        (&["lib"], "dynamic", fixture_entry_digest(&callee)),
     ]);
     SourceDynCallFixture {
         entry,
         target,
         program,
-        caller_debug,
         dynamic_source,
         returned_source,
         callee,
@@ -1903,9 +1994,14 @@ fn source_dyncall_fixture() -> SourceDynCallFixture {
 }
 
 fn source_dyncall_processor() -> FastProcessor {
+    source_dyncall_processor_with_limits(resolution_limits())
+}
+
+fn source_dyncall_processor_with_limits(limits: ResolutionLimits) -> FastProcessor {
     let inputs = (1..=16).map(felt).collect::<Vec<_>>();
     let options = ExecutionOptions::new(Some(1024), 64, 64)
         .unwrap()
+        .with_resolution_limits(limits)
         .with_max_num_continuations(16)
         .with_max_stack_depth(64)
         .unwrap()
@@ -1913,9 +2009,7 @@ fn source_dyncall_processor() -> FastProcessor {
         // Covers the empty provider's retained allocation; supplied forests carry no advice.
         .with_max_advice_size_bytes(65_536)
         .with_max_hash_len_bytes(8192);
-    FastProcessor::new(StackInputs::new(&inputs).unwrap())
-        .with_options(options)
-        .unwrap()
+    new_processor(StackInputs::new(&inputs).unwrap()).with_options(options).unwrap()
 }
 
 fn reach_source_dyncall(
@@ -1939,19 +2033,12 @@ fn reach_source_dyncall(
             assert_eq!(host.inner.observations[0].principal, fixture.entry.into_word());
             assert_eq!(
                 *host.inner.code_requests.borrow(),
-                vec![procedure_request(fixture.entry, fixture.program.hash())],
+                vec![procedure_request(fixture.entry, fixture_entry_digest(&fixture.program))],
                 "reaching DYNCALL must not query target code"
             );
             return;
         }
-        assert!(
-            !poll_ready(processor.step_with_package_debug_info(
-                host,
-                resume,
-                &fixture.caller_debug,
-            ))
-            .unwrap()
-        );
+        assert!(!poll_ready(processor.step(host, resume)).unwrap());
     }
     panic!("bounded source fixture did not reach its retained DYNCALL");
 }
@@ -2003,10 +2090,7 @@ impl PendingSourceDynCall {
         assert_eq!(resume.next_source_node_id(), Some(fixture.dynamic_source));
         assert!(Arc::ptr_eq(&resume.debug_info().unwrap(), &self.debug));
         assert!(Arc::ptr_eq(resume.current_forest(), &self.forest));
-        assert_eq!(
-            resume.environment().descriptor(),
-            fixture.environment.configuration(fixture.entry).descriptor()
-        );
+        assert_eq!(*resume.target(), fixture.environment.target(fixture.entry));
         let session = resume.resolution_session();
         assert_eq!(session.phase(), SessionPhase::PendingEntry);
         // Private verified evidence and allocation capacity may survive preparation. Neither is
@@ -2024,32 +2108,25 @@ impl PendingSourceDynCall {
 #[test]
 fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use() {
     let fixture = source_dyncall_fixture();
-    let mut inner = CountingHost::new(&fixture.environment, &[]);
+    let mut inner = CountingHost::new(&fixture.environment, &[&fixture.program]);
     let supplied = LoadedMastForest::with_package_debug_info(
-        fixture.callee.mast_forest().clone(),
+        fixture.callee.package().mast_forest().clone(),
         Ok(Some(fixture.callee_debug.clone())),
     );
-    inner.forests.insert(fixture.callee.hash(), supplied.clone());
+    inner.forests.insert(fixture_entry_digest(&fixture.callee), supplied.clone());
     let mut host = AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(true),
-        suspended_request: procedure_request(fixture.target, fixture.callee.hash()),
+        suspended_request: procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
     };
     let mut processor = source_dyncall_processor();
     let mut resume = processor
-        .get_initial_resume_context(
-            &fixture.program,
-            fixture.environment.configuration(fixture.entry),
-        )
+        .get_initial_resume_context(fixture.environment.target(fixture.entry))
         .unwrap();
     reach_source_dyncall(&mut processor, &mut host, &mut resume, &fixture);
     let before = PendingSourceDynCall::capture(&processor, &resume);
     {
-        let mut future = Box::pin(processor.step_with_package_debug_info(
-            &mut host,
-            &mut resume,
-            &fixture.caller_debug,
-        ));
+        let mut future = Box::pin(processor.step(&mut host, &mut resume));
         assert!(future.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
     }
     before.assert_unchanged(&processor, &resume, &fixture);
@@ -2057,27 +2134,28 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
     assert_eq!(
         *host.inner.code_requests.borrow(),
         vec![
-            procedure_request(fixture.entry, fixture.program.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.entry, fixture_entry_digest(&fixture.program)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
         ]
     );
     host.suspend_code.store(false, Ordering::Relaxed);
-    host.inner.unavailable_code.insert(fixture.callee.hash());
+    host.inner.unavailable_code.insert(fixture_entry_digest(&fixture.callee));
     assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
-        Err(ExecutionError::ProcedureNotFound { root_digest, .. }) if root_digest == fixture.callee.hash()));
+        Err(ExecutionError::ProcedureNotFound { root_digest, .. }) if root_digest == fixture_entry_digest(&fixture.callee)));
     before.assert_unchanged(&processor, &resume, &fixture);
     host.inner.unavailable_code.clear();
     let unrelated = body(vec![Operation::Swap, Operation::Swap]);
-    host.inner
-        .forests
-        .insert(fixture.callee.hash(), LoadedMastForest::new(unrelated.mast_forest().clone()));
+    host.inner.forests.insert(
+        fixture_entry_digest(&fixture.callee),
+        LoadedMastForest::new(unrelated.package().mast_forest().clone()),
+    );
     assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
         Err(ExecutionError::OperationError {
             err: OperationError::MalformedMastForestInHost { root_digest }, ..
-        }) if root_digest == fixture.callee.hash()));
+        }) if root_digest == fixture_entry_digest(&fixture.callee)));
     before.assert_unchanged(&processor, &resume, &fixture);
     assert_eq!(host.inner.observations.len(), 1);
-    host.inner.forests.insert(fixture.callee.hash(), supplied);
+    host.inner.forests.insert(fixture_entry_digest(&fixture.callee), supplied);
     assert!(!poll_ready(processor.step(&mut host, &mut resume)).unwrap());
     let callee_context = processor.state().ctx();
     assert_eq!(callee_context, ContextId::from(before.clock + 1));
@@ -2094,13 +2172,13 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
         Some(FMP_INIT_VALUE)
     );
     assert_eq!(processor.state().get_mem_value(callee_context, VALUE_ADDR), None);
-    assert!(Arc::ptr_eq(resume.current_forest(), fixture.callee.mast_forest()));
+    assert!(Arc::ptr_eq(resume.current_forest(), fixture.callee.package().mast_forest()));
     assert_eq!(resume.next_source_node_id(), Some(fixture.callee_source));
     let debug = resume.debug_info().unwrap();
     assert!(!Arc::ptr_eq(&debug, &before.debug));
     assert_eq!(
         debug.source_node(fixture.callee_source).unwrap().exec_node,
-        fixture.callee.entrypoint()
+        fixture_entry_root(&fixture.callee)
     );
     assert_eq!(
         debug[debug
@@ -2162,11 +2240,11 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
     assert_eq!(
         *host.inner.code_requests.borrow(),
         vec![
-            procedure_request(fixture.entry, fixture.program.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.entry, fixture_entry_digest(&fixture.program)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
         ]
     );
     let session = resume.resolution_session();
@@ -2188,27 +2266,27 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
 #[test]
 fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
     let fixture = source_dyncall_fixture();
-    let mut inner = CountingHost::new(&fixture.environment, &[]);
+    let mut inner = CountingHost::new(&fixture.environment, &[&fixture.program]);
     inner.forests.insert(
-        fixture.callee.hash(),
+        fixture_entry_digest(&fixture.callee),
         LoadedMastForest::with_package_debug_info(
-            fixture.callee.mast_forest().clone(),
+            fixture.callee.package().mast_forest().clone(),
             Ok(Some(fixture.callee_debug.clone())),
         ),
     );
     let mut host = AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(false),
-        suspended_request: procedure_request(fixture.target, fixture.callee.hash()),
+        suspended_request: procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
     };
-    let mut processor = source_dyncall_processor();
-    let configuration = ExecutionEnvironment::new(
-        ExecutionTarget::new(fixture.entry, fixture.environment.root),
+    let configuration = fixture.environment.target(fixture.entry);
+    let limits = ResolutionLimits::new(
         opening_limits(),
         ledger_limits(),
         SessionLimits { max_requests: 1, ..session_limits() },
     );
-    let mut resume = processor.get_initial_resume_context(&fixture.program, configuration).unwrap();
+    let mut processor = source_dyncall_processor_with_limits(limits);
+    let mut resume = processor.get_initial_resume_context(configuration).unwrap();
     reach_source_dyncall(&mut processor, &mut host, &mut resume, &fixture);
     let before = PendingSourceDynCall::capture(&processor, &resume);
     assert!(matches!(
@@ -2224,8 +2302,8 @@ fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
     assert_eq!(
         *host.inner.code_requests.borrow(),
         vec![
-            procedure_request(fixture.entry, fixture.program.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.entry, fixture_entry_digest(&fixture.program)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
         ]
     );
     // A failed native preparation consumes its witness and invalidates this execution. It does
@@ -2239,8 +2317,8 @@ fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
     assert_eq!(
         *host.inner.code_requests.borrow(),
         vec![
-            procedure_request(fixture.entry, fixture.program.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.entry, fixture_entry_digest(&fixture.program)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
         ]
     );
     assert_eq!(host.inner.observations.len(), 1);
@@ -2250,9 +2328,9 @@ struct ModeMatrixFixture {
     entry: ProcedureKey,
     user: ProcedureKey,
     target: ProcedureKey,
-    program: Program,
+    program: CodePackage,
     debug: PackageDebugInfo,
-    callee: Program,
+    callee: CodePackage,
     callee_debug: PackageDebugInfo,
     // Entry setup, local user entry, target entry, user return, ENTRY return.
     points: [(MastNodeId, DebugSourceNodeId, &'static str); 5],
@@ -2282,7 +2360,7 @@ fn mode_matrix_fixture(mode: Mode, local_target: bool) -> ModeMatrixFixture {
         forest.make_root(root);
         root
     } else {
-        remote_callee.entrypoint()
+        fixture_entry_root(&remote_callee)
     };
     let mut user_ops = if matches!(mode, Mode::Dyn | Mode::DynCall) {
         dynamic_prefix(target)
@@ -2320,7 +2398,7 @@ fn mode_matrix_fixture(mode: Mode, local_target: bool) -> ModeMatrixFixture {
     let entry_root = join(&mut forest, entry_setup, entry_tail);
     let program = finish_program(forest, entry_root);
     let callee = if local_target {
-        Program::new(program.mast_forest().clone(), target_root)
+        fixture_code(program.package().mast_forest().clone(), target_root)
     } else {
         remote_callee
     };
@@ -2387,9 +2465,9 @@ fn mode_matrix_fixture(mode: Mode, local_target: bool) -> ModeMatrixFixture {
     let debug = *builder.build();
     let callee_debug = if local_target { debug.clone() } else { remote_debug };
     let environment = EnvironmentFixture::new(&[
-        (&["native_fixture"], "entry", program.hash()),
-        (&["native_fixture"], "user", program.mast_forest()[user_root].digest()),
-        (&[], "target", callee.hash()),
+        (&["native_fixture"], "entry", fixture_entry_digest(&program)),
+        (&["native_fixture"], "user", program.package().mast_forest()[user_root].digest()),
+        (&[], "target", fixture_entry_digest(&callee)),
     ]);
     ModeMatrixFixture {
         entry,
@@ -2410,21 +2488,29 @@ fn mode_matrix_fixture(mode: Mode, local_target: bool) -> ModeMatrixFixture {
     }
 }
 
-fn mode_matrix_host(fixture: &ModeMatrixFixture, local_target: bool) -> AsyncCodeHost {
-    let mut inner = CountingHost::new(&fixture.environment, &[]);
+fn mode_matrix_host(
+    fixture: &ModeMatrixFixture,
+    local_target: bool,
+    source_aware: bool,
+) -> AsyncCodeHost {
+    let source_code = source_aware.then(|| code_with_debug(&fixture.program, &fixture.debug));
+    let mut inner = CountingHost::new(
+        &fixture.environment,
+        &[source_code.as_ref().unwrap_or(&fixture.program)],
+    );
     if !local_target {
         inner.forests.insert(
-            fixture.callee.hash(),
+            fixture_entry_digest(&fixture.callee),
             LoadedMastForest::with_package_debug_info(
-                fixture.callee.mast_forest().clone(),
-                Ok(Some(fixture.callee_debug.clone())),
+                fixture.callee.package().mast_forest().clone(),
+                Ok(source_aware.then(|| fixture.callee_debug.clone())),
             ),
         );
     }
     AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(false),
-        suspended_request: procedure_request(fixture.target, fixture.callee.hash()),
+        suspended_request: procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
     }
 }
 
@@ -2518,20 +2604,17 @@ fn runtime_debug_frames_separate_real_modes_and_inline_sources_at_every_return_c
         fixture.callee_debug = runtime_debug_inline_info(
             fixture.callee_debug,
             fixture.points[2].1,
-            fixture.callee.hash(),
+            fixture_entry_digest(&fixture.callee),
         );
-        assert_ne!(fixture.target.into_word(), fixture.callee.hash());
+        assert_ne!(fixture.target.into_word(), fixture_entry_digest(&fixture.callee));
         let mut baseline = None;
         let mut other_execution = None::<(DebugRuntimeFrame, DebugRuntimeFrame)>;
         for source_aware in [false, true] {
             for asynchronous in [false, true] {
-                let mut host = mode_matrix_host(&fixture, false);
+                let mut host = mode_matrix_host(&fixture, false, source_aware);
                 let mut processor = source_dyncall_processor();
                 let mut resume = processor
-                    .get_initial_resume_context(
-                        &fixture.program,
-                        fixture.environment.configuration(fixture.entry),
-                    )
+                    .get_initial_resume_context(fixture.environment.target(fixture.entry))
                     .unwrap();
                 assert!(resume.debug_runtime_frames().is_empty());
                 let mut previous = Vec::<DebugRuntimeFrame>::new();
@@ -2561,11 +2644,14 @@ fn runtime_debug_frames_separate_real_modes_and_inline_sources_at_every_return_c
                         assert_eq!(target.kind(), DebugRuntimeFrameKind::Invoke(expected_mode));
                         assert_eq!(
                             target.resolved_implementation().into_word(),
-                            fixture.callee.hash()
+                            fixture_entry_digest(&fixture.callee)
                         );
                         assert_eq!(target.native_use_index(), Some(1));
                         if source_aware
-                            && Arc::ptr_eq(resume.current_forest(), fixture.callee.mast_forest())
+                            && Arc::ptr_eq(
+                                resume.current_forest(),
+                                fixture.callee.package().mast_forest(),
+                            )
                         {
                             let source = resume.next_source_node_id().unwrap();
                             assert_eq!(source, fixture.points[2].1);
@@ -2582,7 +2668,7 @@ fn runtime_debug_frames_separate_real_modes_and_inline_sources_at_every_return_c
                     }
                     let root_end = matches!(
                         resume.continuation_stack().peek_continuation(),
-                        Some(Continuation::FinishJoin(root)) if *root == fixture.program.entrypoint()
+                        Some(Continuation::FinishJoin(root)) if *root == fixture_entry_root(&fixture.program)
                     );
                     if root_end {
                         saw_root_end = true;
@@ -2591,7 +2677,7 @@ fn runtime_debug_frames_separate_real_modes_and_inline_sources_at_every_return_c
                         assert_eq!(frames[0].requested_key(), fixture.entry);
                         assert_eq!(
                             frames[0].resolved_implementation().into_word(),
-                            fixture.program.hash()
+                            fixture_entry_digest(&fixture.program)
                         );
                         assert_eq!(frames[0].native_use_index(), None);
                         let session = resume.resolution_session();
@@ -2611,26 +2697,20 @@ fn runtime_debug_frames_separate_real_modes_and_inline_sources_at_every_return_c
                             )
                         );
                     previous = frames;
-                    let complete = match (source_aware, asynchronous) {
-                        (false, false) => processor.step_sync(&mut host.inner, &mut resume),
-                        (false, true) => poll_ready(processor.step(&mut host, &mut resume)),
-                        (true, false) => processor.step_with_package_debug_info_sync(
-                            &mut host.inner,
-                            &mut resume,
-                            &fixture.debug,
-                        ),
-                        (true, true) => poll_ready(processor.step_with_package_debug_info(
-                            &mut host,
-                            &mut resume,
-                            &fixture.debug,
-                        )),
+                    let complete = if asynchronous {
+                        poll_ready(processor.step(&mut host, &mut resume))
+                    } else {
+                        processor.step_sync(&mut host.inner, &mut resume)
                     }
                     .unwrap();
                     if root_end {
                         assert!(complete, "actual root END discharges the final entry frame");
                         let entry = *resume.resolution_session().uses().next_back().unwrap();
                         assert_eq!(entry.procedure_key(), fixture.entry);
-                        assert_eq!(entry.implementation_root().into_word(), fixture.program.hash());
+                        assert_eq!(
+                            entry.implementation_root().into_word(),
+                            fixture_entry_digest(&fixture.program)
+                        );
                     }
                     if returning {
                         saw_return = true;
@@ -2673,25 +2753,22 @@ fn runtime_debug_frames_separate_real_modes_and_inline_sources_at_every_return_c
 #[test]
 fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancellation() {
     let fixture = source_dyncall_fixture();
-    let mut inner = CountingHost::new(&fixture.environment, &[]);
+    let mut inner = CountingHost::new(&fixture.environment, &[&fixture.program]);
     inner.forests.insert(
-        fixture.callee.hash(),
+        fixture_entry_digest(&fixture.callee),
         LoadedMastForest::with_package_debug_info(
-            fixture.callee.mast_forest().clone(),
+            fixture.callee.package().mast_forest().clone(),
             Ok(Some(fixture.callee_debug.clone())),
         ),
     );
     let mut host = AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(false),
-        suspended_request: procedure_request(fixture.target, fixture.callee.hash()),
+        suspended_request: procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
     };
     let mut processor = source_dyncall_processor();
     let mut resume = processor
-        .get_initial_resume_context(
-            &fixture.program,
-            fixture.environment.configuration(fixture.entry),
-        )
+        .get_initial_resume_context(fixture.environment.target(fixture.entry))
         .unwrap();
     reach_source_dyncall(&mut processor, &mut host, &mut resume, &fixture);
     let before = resume.debug_runtime_frames();
@@ -2702,7 +2779,7 @@ fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancel
         Err(ExecutionError::EnvironmentWitnessUnavailable { key, .. }) if key == fixture.target));
     assert_eq!(
         *host.inner.code_requests.borrow(),
-        vec![procedure_request(fixture.entry, fixture.program.hash())],
+        vec![procedure_request(fixture.entry, fixture_entry_digest(&fixture.program))],
         "missing target evidence must not query target code"
     );
     host.inner.unavailable_keys.clear();
@@ -2714,8 +2791,8 @@ fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancel
     assert_eq!(
         *host.inner.code_requests.borrow(),
         vec![
-            procedure_request(fixture.entry, fixture.program.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.entry, fixture_entry_digest(&fixture.program)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
         ]
     );
     let pending = resume.debug_runtime_frames();
@@ -2724,9 +2801,9 @@ fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancel
     assert_eq!(processor.state().clock(), clock);
     assert_eq!(resume.resolution_session().uses().count(), 0);
     host.suspend_code.store(false, Ordering::Relaxed);
-    host.inner.unavailable_code.insert(fixture.callee.hash());
+    host.inner.unavailable_code.insert(fixture_entry_digest(&fixture.callee));
     assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
-        Err(ExecutionError::ProcedureNotFound { root_digest, .. }) if root_digest == fixture.callee.hash()));
+        Err(ExecutionError::ProcedureNotFound { root_digest, .. }) if root_digest == fixture_entry_digest(&fixture.callee)));
     assert_eq!(
         runtime_debug_observation(&resume.debug_runtime_frames()),
         runtime_debug_observation(&before)
@@ -2738,8 +2815,11 @@ fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancel
     assert!(before[0].is_same_frame(&frames[0]));
     assert_eq!(frames[1].kind(), DebugRuntimeFrameKind::Invoke(KeyedMode::DynCall));
     assert_eq!(frames[1].requested_key(), fixture.target);
-    assert_ne!(frames[1].requested_key().into_word(), fixture.callee.hash());
-    assert_eq!(frames[1].resolved_implementation().into_word(), fixture.callee.hash());
+    assert_ne!(frames[1].requested_key().into_word(), fixture_entry_digest(&fixture.callee));
+    assert_eq!(
+        frames[1].resolved_implementation().into_word(),
+        fixture_entry_digest(&fixture.callee)
+    );
     assert_eq!(frames[1].invocation_row(), Some(clock));
     assert_eq!(frames[1].native_use_index(), Some(0));
     assert_runtime_debug_native_uses(&frames, &resume);
@@ -2750,10 +2830,10 @@ fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancel
     assert_eq!(
         *host.inner.code_requests.borrow(),
         vec![
-            procedure_request(fixture.entry, fixture.program.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
-            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.entry, fixture_entry_digest(&fixture.program)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
         ]
     );
 }
@@ -2770,19 +2850,21 @@ fn runtime_debug_frames_keep_cached_recursive_exec_activations_distinct() {
     let branch = SplitNodeBuilder::new([on_nonzero, on_zero]).add_to_forest(&mut forest).unwrap();
     let root = join(&mut forest, condition, branch);
     let program = finish_program(forest, root);
-    let environment =
-        EnvironmentFixture::new(&[(&["native_fixture"], "recursive_exec", program.hash())]);
-    assert_ne!(recursive.into_word(), program.hash());
+    let environment = EnvironmentFixture::new(&[(
+        &["native_fixture"],
+        "recursive_exec",
+        fixture_entry_digest(&program),
+    )]);
+    assert_ne!(recursive.into_word(), fixture_entry_digest(&program));
     for asynchronous in [false, true] {
         let mut host = AsyncCodeHost {
-            inner: CountingHost::new(&environment, &[]),
+            inner: CountingHost::new(&environment, &[&program]),
             suspend_code: AtomicBool::new(false),
-            suspended_request: procedure_request(recursive, program.hash()),
+            suspended_request: procedure_request(recursive, fixture_entry_digest(&program)),
         };
-        let mut processor = FastProcessor::new(StackInputs::new(&[felt(3)]).unwrap());
-        let mut resume = processor
-            .get_initial_resume_context(&program, environment.configuration(recursive))
-            .unwrap();
+        let mut processor = new_processor(StackInputs::new(&[felt(3)]).unwrap());
+        let mut resume =
+            processor.get_initial_resume_context(environment.target(recursive)).unwrap();
         let mut previous = Vec::<DebugRuntimeFrame>::new();
         let mut invocations = Vec::<DebugRuntimeFrame>::new();
         let mut maximum_depth = 0;
@@ -2795,7 +2877,10 @@ fn runtime_debug_frames_keep_cached_recursive_exec_activations_distinct() {
             }
             for frame in &frames {
                 assert_eq!(frame.requested_key(), recursive);
-                assert_eq!(frame.resolved_implementation().into_word(), program.hash());
+                assert_eq!(
+                    frame.resolved_implementation().into_word(),
+                    fixture_entry_digest(&program)
+                );
                 if let Some(index) = frame.native_use_index() {
                     assert_eq!(frame.kind(), DebugRuntimeFrameKind::Invoke(KeyedMode::Exec));
                     if index == invocations.len() {
@@ -2824,7 +2909,7 @@ fn runtime_debug_frames_keep_cached_recursive_exec_activations_distinct() {
         assert_eq!(host.inner.requests_for(recursive), 1);
         assert_eq!(
             *host.inner.code_requests.borrow(),
-            vec![procedure_request(recursive, program.hash())],
+            vec![procedure_request(recursive, fixture_entry_digest(&program))],
             "recursive EXEC activations reuse the selected entry request"
         );
         assert_eq!(resume.resolution_session().bindings()[0].counts().normal, 4);
@@ -2841,16 +2926,14 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
             let fixture = mode_matrix_fixture(mode, local_target);
             for source_aware in [false, true] {
                 for asynchronous in [false, true] {
-                    let mut host = mode_matrix_host(&fixture, local_target);
+                    let mut host = mode_matrix_host(&fixture, local_target, source_aware);
                     let mut processor = source_dyncall_processor();
                     let original = processor.state().get_stack_state();
                     let mut user_stack = (40..44).rev().map(felt).collect::<Vec<_>>();
                     user_stack.extend_from_slice(&original);
                     assert!(user_stack[16..].iter().all(|value| *value != felt(0)));
-                    let configuration = fixture.environment.configuration(fixture.entry);
-                    let mut resume = processor
-                        .get_initial_resume_context(&fixture.program, configuration)
-                        .unwrap();
+                    let configuration = fixture.environment.target(fixture.entry);
+                    let mut resume = processor.get_initial_resume_context(configuration).unwrap();
                     let mut seen = [false; 5];
                     let mut entry_debug = None;
                     let mut user_debug = None;
@@ -2860,9 +2943,9 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
                             {
                                 let target_owner = index == 2 && !local_target;
                                 let owner = if target_owner {
-                                    fixture.callee.mast_forest()
+                                    fixture.callee.package().mast_forest()
                                 } else {
-                                    fixture.program.mast_forest()
+                                    fixture.program.package().mast_forest()
                                 };
                                 if seen[index]
                                     || !Arc::ptr_eq(resume.current_forest(), owner)
@@ -2896,7 +2979,8 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
                                     0 => entry_debug = Some(debug.clone()),
                                     1 => user_debug = Some(debug.clone()),
                                     2 if target_owner => {
-                                        let supplied = host.inner.forests[&fixture.callee.hash()]
+                                        let supplied = host.inner.forests
+                                            [&fixture_entry_digest(&fixture.callee)]
                                             .package_debug_info()
                                             .unwrap()
                                             .unwrap();
@@ -2912,19 +2996,10 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
                                 seen[index] = true;
                             }
                         }
-                        let complete = match (source_aware, asynchronous) {
-                            (false, false) => processor.step_sync(&mut host.inner, &mut resume),
-                            (false, true) => poll_ready(processor.step(&mut host, &mut resume)),
-                            (true, false) => processor.step_with_package_debug_info_sync(
-                                &mut host.inner,
-                                &mut resume,
-                                &fixture.debug,
-                            ),
-                            (true, true) => poll_ready(processor.step_with_package_debug_info(
-                                &mut host,
-                                &mut resume,
-                                &fixture.debug,
-                            )),
+                        let complete = if asynchronous {
+                            poll_ready(processor.step(&mut host, &mut resume))
+                        } else {
+                            processor.step_sync(&mut host.inner, &mut resume)
                         }
                         .unwrap();
                         if complete {
@@ -3036,12 +3111,19 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
                     assert_eq!(
                         *host.inner.code_requests.borrow(),
                         vec![
-                            procedure_request(fixture.entry, fixture.program.hash()),
+                            procedure_request(
+                                fixture.entry,
+                                fixture_entry_digest(&fixture.program)
+                            ),
                             procedure_request(
                                 fixture.user,
-                                fixture.program.mast_forest()[fixture.points[1].0].digest(),
+                                fixture.program.package().mast_forest()[fixture.points[1].0]
+                                    .digest(),
                             ),
-                            procedure_request(fixture.target, fixture.callee.hash()),
+                            procedure_request(
+                                fixture.target,
+                                fixture_entry_digest(&fixture.callee)
+                            ),
                         ]
                     );
                     let session = resume.resolution_session();
@@ -3078,29 +3160,19 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
 #[test]
 fn source_async_host_call_event_error_invalidates_the_published_target() {
     let fixture = mode_matrix_fixture(Mode::Call, false);
-    let mut host = mode_matrix_host(&fixture, false);
+    let mut host = mode_matrix_host(&fixture, false, true);
     let mut processor = source_dyncall_processor();
     let mut resume = processor
-        .get_initial_resume_context(
-            &fixture.program,
-            fixture.environment.configuration(fixture.entry),
-        )
+        .get_initial_resume_context(fixture.environment.target(fixture.entry))
         .unwrap();
     for _ in 0..256 {
         if resume.resolution_session().uses().count() == 2 {
             break;
         }
-        assert!(
-            !poll_ready(processor.step_with_package_debug_info(
-                &mut host,
-                &mut resume,
-                &fixture.debug,
-            ))
-            .unwrap()
-        );
+        assert!(!poll_ready(processor.step(&mut host, &mut resume)).unwrap());
     }
     assert_eq!(resume.resolution_session().uses().count(), 2);
-    assert!(Arc::ptr_eq(resume.current_forest(), fixture.callee.mast_forest()));
+    assert!(Arc::ptr_eq(resume.current_forest(), fixture.callee.package().mast_forest()));
     let (target_exec, target_source, _) = fixture.points[2];
     assert_eq!(resume.next_source_node_id(), Some(target_source));
     let debug = resume.debug_info().unwrap();
@@ -3144,12 +3216,12 @@ fn source_async_host_call_event_error_invalidates_the_published_target() {
     assert_eq!(
         *host.inner.code_requests.borrow(),
         vec![
-            procedure_request(fixture.entry, fixture.program.hash()),
+            procedure_request(fixture.entry, fixture_entry_digest(&fixture.program)),
             procedure_request(
                 fixture.user,
-                fixture.program.mast_forest()[fixture.points[1].0].digest(),
+                fixture.program.package().mast_forest()[fixture.points[1].0].digest(),
             ),
-            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.target, fixture_entry_digest(&fixture.callee)),
         ]
     );
     let stack = processor.state().get_stack_state();
@@ -3164,7 +3236,7 @@ fn source_async_host_call_event_error_invalidates_the_published_target() {
         assert_eq!(processor.state().get_stack_state(), stack);
         assert_eq!(processor.state().clock(), clock);
         assert_eq!(processor.state().ctx(), target_context);
-        assert!(Arc::ptr_eq(resume.current_forest(), fixture.callee.mast_forest()));
+        assert!(Arc::ptr_eq(resume.current_forest(), fixture.callee.package().mast_forest()));
         assert!(Arc::ptr_eq(&resume.debug_info().unwrap(), &debug));
         assert_eq!(resume.resolution_session().uses().count(), 2);
         assert_eq!(host.inner.witness_requests.len(), requests);

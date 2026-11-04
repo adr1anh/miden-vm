@@ -41,17 +41,19 @@ pub fn run_precompile_program_with_stack(
     let program = assemble(assembler, "precompile_test", source, &[core_lib.naming()]);
 
     let mut host = DefaultHost::default()
-        .with_environment_source(program.environment.source())
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&core_lib)
         .expect("failed to load CoreLibrary into the host");
 
     let output = FastProcessor::new_with_options(
         stack_inputs,
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
     )
     .expect("processor construction")
-    .execute_sync(&program.program, program.environment.execution(), &mut host);
+    .execute_sync(program.1.target(), &mut host);
 
     if let Ok(output) = &output {
         assert!(output.advice.stack().is_empty(), "precompile wrappers must consume advice");
@@ -101,17 +103,19 @@ pub fn expect_precompile_trap_with_processor(source: &str) -> (ExecutionError, F
     let program = assemble(assembler, "precompile_test", source, &[core_lib.naming()]);
 
     let mut host = DefaultHost::default()
-        .with_environment_source(program.environment.source())
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&core_lib)
         .expect("failed to load CoreLibrary into the host");
     let mut processor = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
     )
     .expect("processor construction");
     let error = processor
-        .execute_mut_sync(&program.program, program.environment.execution(), &mut host)
+        .execute_mut_sync(program.1.target(), &mut host)
         .expect_err("expected precompile program to trap");
     (error, processor)
 }

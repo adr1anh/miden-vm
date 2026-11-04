@@ -196,19 +196,24 @@ fn execute(
             .chain(supplies.iter().map(|code| code.symbols().as_ref())),
     )
     .unwrap();
-    let program = resolved.code.package().try_into_program(resolved.code.symbols()).unwrap();
     let source = Arc::new(RecordingSource {
         inner: environment.source(),
         requested: Mutex::new(BTreeSet::new()),
     });
     let mut host = DefaultHost::default().with_environment_source(source.clone());
+    host.load_library(resolved.code.clone()).unwrap();
     if external_code {
         for code in supplies {
             host.load_library(code.clone()).unwrap();
         }
     }
     let output = FastProcessor::new(StackInputs::new(&[Felt::from_u32(1)]).unwrap())
-        .execute_sync(&program, environment.execution(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(environment.target(), &mut host)
         .expect("exact project selections and code must execute natively")
         .stack;
     let requested = source.requested.lock().unwrap();

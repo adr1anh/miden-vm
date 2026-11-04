@@ -7,21 +7,23 @@ use miden_assembly::{
     ast::{Module, ModuleKind},
     testing::FixtureNamespace,
 };
-use miden_core::{mast::MastForest, program::ImplementationRoot};
+use miden_core::program::ImplementationRoot;
 use miden_debug_types::DefaultSourceManager;
 use miden_mast_package::{
-    Package, PackageCallables, PackageSymbols, ProcedureName, TargetType, Version,
+    CodePackage, Package, PackageCallables, PackageProcedureOccurrence, PackageSymbols,
+    ProcedureName, TargetType, Version,
 };
 use miden_utils_testing::librarytree::FixtureEnvironment;
 
-use super::native_fixture_environment;
-use crate::{EnvironmentWitnessSource, ExecutionEnvironment, Program};
+use super::{fixture_entry_digest, fixture_entry_root, native_fixture_environment};
+use crate::{EnvironmentWitnessSource, ExecutionTarget, ResolutionLimits};
 
 pub(crate) struct NamedFixture {
     pub package: Arc<Package>,
     pub naming: PackageSymbols,
-    pub program: Program,
-    pub environment: ExecutionEnvironment,
+    pub code: CodePackage,
+    pub target: ExecutionTarget,
+    pub resolution_limits: ResolutionLimits,
     pub source: Arc<dyn EnvironmentWitnessSource>,
 }
 
@@ -77,16 +79,19 @@ pub(crate) fn named_package(
     naming: PackageSymbols,
     extra: &[&PackageSymbols],
 ) -> Result<NamedFixture, Report> {
-    let program = package.try_into_program(&naming)?;
-    let entry = naming.entry_key().expect("converted code has an explicit entry");
+    let code = CodePackage::new(package.clone(), Arc::new(naming.clone())).map_err(Report::msg)?;
+    let entry = naming
+        .entry_key()
+        .ok_or_else(|| Report::msg("named fixture code must have an explicit entry"))?;
     let fixture =
         FixtureEnvironment::new(entry, core::iter::once(&naming).chain(extra.iter().copied()))?;
-    let (environment, source) = native_fixture_environment(&fixture);
+    let (target, resolution_limits, source) = native_fixture_environment(&fixture);
     Ok(NamedFixture {
         package,
         naming,
-        program,
-        environment,
+        code,
+        target,
+        resolution_limits,
         source,
     })
 }
@@ -94,34 +99,47 @@ pub(crate) fn named_package(
 /// Names a synthetic forest using independently supplied bindings. Every retained root must be
 /// covered; no procedure key, home or target identity is reconstructed from its body digest.
 pub(crate) fn named_program(
-    program: Program,
+    code: CodePackage,
     entry: ProcedureName,
     targets: impl IntoIterator<Item = (ProcedureName, ImplementationRoot)>,
 ) -> Result<NamedFixture, Report> {
     let key = entry.key();
     let home = entry.namespace_plan().clone();
     let mut bindings = alloc::vec![entry];
-    let mut implementations = alloc::vec![(key, ImplementationRoot::new(program.hash()))];
+    let mut implementations =
+        alloc::vec![(key, ImplementationRoot::new(fixture_entry_digest(&code)))];
+    let supplied_entry = code
+        .package()
+        .procedure_occurrence(code.symbols().entry_key().expect("fixture code has an entry"))
+        .expect("fixture entry retains its exact occurrence");
+    let mut occurrences = alloc::vec![PackageProcedureOccurrence::new(
+        key,
+        fixture_entry_root(&code),
+        supplied_entry.source_node(),
+    )];
     for (binding, implementation) in targets {
+        if code.symbols().callables().selected_implementation(binding.key()) == Some(implementation)
+            && let Some(occurrence) = code.package().procedure_occurrence(binding.key())
+        {
+            occurrences.push(*occurrence);
+        }
         implementations.push((binding.key(), implementation));
         bindings.push(binding);
     }
     let callables = PackageCallables::new(bindings, [], implementations).map_err(Report::msg)?;
     let naming = PackageSymbols::new(home, callables, Some(key)).map_err(Report::msg)?;
-    let forest: Arc<MastForest> = program.mast_forest().clone();
-    let package = Package::create(
+    let mut package = Package::create(
         "processor-synthetic".into(),
         Version::new(0, 0, 0),
         TargetType::Executable,
-        forest,
+        code.package().mast_forest().clone(),
         [],
         [],
         &naming,
     )
     .map_err(Report::msg)?;
-    let mut fixture = named_package(Arc::new(package), naming, &[])?;
-    // Preserve legacy auxiliary Program data for its remaining transport tests. Authorization
-    // comes exclusively from the independently named environment above, never that data.
-    fixture.program = program;
-    Ok(fixture)
+    package.sections = code.package().sections.clone();
+    occurrences.sort_by_key(|row| row.key().as_word().as_bytes());
+    let package = package.with_procedure_occurrences(occurrences, &naming).map_err(Report::msg)?;
+    named_package(Arc::new(package), naming, &[])
 }

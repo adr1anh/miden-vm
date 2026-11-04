@@ -200,7 +200,7 @@ fn caller() {
     // remains its canonical key, even though the syscall implementation has a different digest.
     let bar_hash = build_bar_hash();
     let (program, ..) = test.compile().unwrap();
-    assert!(program.mast_forest().find_procedure_root(bar_hash).is_some());
+    assert!(program.package().mast_forest().find_procedure_root(bar_hash).is_some());
     assert_ne!(bar_key, bar_hash);
     test.expect_stack(&[
         bar_key[0].as_canonical_u64(),

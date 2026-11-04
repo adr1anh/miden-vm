@@ -353,7 +353,7 @@ fn simple_constant() -> TestResult {
     end"
     );
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -546,7 +546,7 @@ fn multiple_constants_push() -> TestResult {
     end"
     );
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -563,7 +563,7 @@ fn constant_numeric_expression() -> TestResult {
     "
     );
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -582,7 +582,7 @@ fn constant_alphanumeric_expression() -> TestResult {
     "
     );
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -599,7 +599,7 @@ fn constant_hexadecimal_value() -> TestResult {
     "
     );
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -616,7 +616,7 @@ fn constant_field_division() -> TestResult {
     "
     );
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -978,7 +978,7 @@ fn mem_operations_with_constants() -> TestResult {
         )
     );
     let expected_program = context.assemble(expected)?;
-    assert_eq!(expected_program.to_string(), program.to_string());
+    assert_eq!(render_entry(&expected_program), render_entry(&program));
     Ok(())
 }
 
@@ -1166,7 +1166,7 @@ fn const_word_from_string() -> TestResult {
     );
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
 
     Ok(())
 }
@@ -1204,7 +1204,7 @@ fn const_event_from_string() -> TestResult {
 
     let program1 = context.assemble(source1)?;
     let program2 = context.assemble(source2)?;
-    assert_eq!(program1.hash(), program2.hash());
+    assert_eq!(entry_digest(&program1), entry_digest(&program2));
 
     Ok(())
 }
@@ -1230,7 +1230,7 @@ fn test_push_word_slice() -> TestResult {
     );
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -1331,6 +1331,7 @@ fn link_time_const_evaluation_succeeds() -> TestResult {
 
     let program = context.assemble(program_source)?;
     let targets = program
+        .package()
         .mast_forest()
         .nodes()
         .iter()
@@ -1341,7 +1342,7 @@ fn link_time_const_evaluation_succeeds() -> TestResult {
         })
         .collect::<Vec<_>>();
     assert_eq!(targets, vec![target]);
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
 
     Ok(())
 }

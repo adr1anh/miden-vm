@@ -54,8 +54,14 @@ impl CompileCmd {
         compiled.package().check_naming(compiled.symbols()).map_err(Report::msg)?;
 
         // report program hash to user
-        let compiled_program = compiled.package().try_into_program(compiled.symbols())?;
-        let program_hash: [u8; 32] = compiled_program.hash().into();
+        compiled.package().check_executable_code(compiled.symbols())?;
+        let entry = compiled.symbols().entry_key().expect("checked executable entry");
+        let implementation = compiled
+            .symbols()
+            .callables()
+            .selected_implementation(entry)
+            .expect("checked executable implementation");
+        let program_hash: [u8; 32] = (*implementation.as_word()).into();
         println!("program hash is {}", hex::encode(program_hash));
 
         // write the compiled program into the specified path if one is provided; if the path is

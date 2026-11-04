@@ -26,7 +26,9 @@ use std::{sync::Arc, time::Duration};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use miden_event_handler_abi::ABI_VERSION;
-use miden_processor::{DefaultHost, FastProcessor, StackInputs, event::EventName};
+use miden_processor::{
+    DefaultHost, ExecutionOptions, FastProcessor, StackInputs, event::EventName,
+};
 use miden_utils_testing::Test;
 use miden_wasm_event_handlers::{WasmHandlerLimits, WasmHandlerModule};
 
@@ -141,16 +143,20 @@ fn processor_with_populated_memory() -> FastProcessor {
         limit = MEMORY_WORDS * 4,
     );
     let test = Test::new("bench_memory", &source, false);
-    let (program, ..) = test.compile().expect("the bench program assembles");
+    let (code, _) = test.compile().expect("the bench program assembles");
     let environment = test.fixture_environment().expect("fixture environment validates");
 
-    let mut processor = FastProcessor::new(StackInputs::default());
-    processor
-        .execute_mut_sync(
-            &program,
-            environment.execution(),
-            &mut DefaultHost::default().with_environment_source(environment.source()),
+    let mut host = DefaultHost::default()
+        .with_library(code)
+        .expect("the bench package loads")
+        .with_environment_source(environment.source());
+    let mut processor = FastProcessor::new(StackInputs::default())
+        .with_options(
+            ExecutionOptions::default().with_resolution_limits(environment.resolution_limits()),
         )
+        .expect("the bench options fit advice limits");
+    processor
+        .execute_mut_sync(environment.target(), &mut host)
         .expect("the bench program populates the memory");
     processor
 }

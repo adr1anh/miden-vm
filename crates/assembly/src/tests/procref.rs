@@ -72,7 +72,7 @@ fn procref_call() -> TestResult {
     for key in [bar_key, foo_key, baz_key] {
         expected.extend(key.as_word().iter().rev().copied().map(Operation::Push));
     }
-    let main_ops = program.mast_forest()[program.entrypoint()]
+    let main_ops = program.package().mast_forest()[entry_node(&program)]
         .unwrap_basic_block()
         .operations()
         .filter(|op| **op != Operation::Noop)
@@ -80,8 +80,8 @@ fn procref_call() -> TestResult {
         .collect::<Vec<_>>();
     assert_eq!(main_ops, expected);
     let aaa_ref = aaa_key.as_word().iter().rev().copied().map(Operation::Push).collect::<Vec<_>>();
-    assert!(program.mast_forest().procedure_roots().iter().any(|root| {
-        program.mast_forest()[*root].get_basic_block().is_some_and(|block| {
+    assert!(program.package().mast_forest().procedure_roots().iter().any(|root| {
+        program.package().mast_forest()[*root].get_basic_block().is_some_and(|block| {
             block
                 .operations()
                 .filter(|op| **op != Operation::Noop)
@@ -90,8 +90,8 @@ fn procref_call() -> TestResult {
                 == aaa_ref
         })
     }));
-    assert_eq!(program.num_procedures(), 5);
-    assert_all_nodes_reachable_from_roots(program.mast_forest());
+    assert_eq!(program.package().mast_forest().num_procedures(), 5);
+    assert_all_nodes_reachable_from_roots(program.package().mast_forest());
     Ok(())
 }
 

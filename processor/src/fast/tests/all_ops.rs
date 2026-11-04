@@ -117,10 +117,15 @@ fn test_basic_block(
 ) {
     let fixture = simple_program_with_ops(operations);
 
-    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
-    let fast_processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
+    let mut host = DefaultHost::default()
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
+    let fast_processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap();
     let fast_stack_outputs = fast_processor
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .execute_sync(fixture.target, &mut host)
         .map(|output| output.stack);
 
     // Make sure that we're not getting an output stack overflow error, as it indicates that

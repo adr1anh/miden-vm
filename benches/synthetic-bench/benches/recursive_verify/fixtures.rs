@@ -20,11 +20,13 @@ use miden_core::{
 use miden_core_lib::CoreLibrary;
 use miden_precompiles_stark::recursive::PvmRecursiveVerifierInputs;
 use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor};
-use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
+use miden_utils_testing::librarytree::{
+    FixtureEnvironment, assemble_fixture_program, trace_limits,
+};
 use miden_verifier::Verifier;
 use miden_vm::{
-    Assembler, ExecutionProof, PrecompileWitness, Prover, StackInputs, StackOutputs, prove_sync,
-    trace::build_trace,
+    Assembler, CodePackage, ExecutionProof, PrecompileWitness, Prover, StackInputs, StackOutputs,
+    prove_sync, trace::build_trace,
 };
 use miden_vm_precompiles_bench::{PrecompileFixture, PrecompileWorkload};
 use miden_vm_stark::recursive::RecursiveVerifierInputs;
@@ -39,13 +41,14 @@ use super::{
 const PVM_PROOF_CACHE_KEY_VERSION: &[u8] = b"miden-synthetic-recursive-pvm-proof-cache-v6-eidos";
 
 struct TxProgramFixture {
-    program: NamedProgram,
+    code: CodePackage,
+    environment: FixtureEnvironment,
     core_lib: CoreLibrary,
 }
 
 impl TxProgramFixture {
     fn host(&self) -> DefaultHost {
-        recursive_host(&self.program.environment, &self.core_lib)
+        recursive_host(&self.code, &self.environment, &self.core_lib)
     }
 }
 
@@ -311,16 +314,14 @@ fn print_tx_fixture_shape(fixture: &TxProgramFixture, stack_inputs: StackInputs,
     let processor = FastProcessor::new_with_options(
         stack_inputs,
         AdviceInputs::default(),
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_resolution_limits(fixture.environment.resolution_limits()),
     )
     .expect("transaction fixture advice should fit provider limits");
     let mut host = fixture.host();
     let witness = processor
-        .execute_for_proving_sync(
-            &fixture.program.program,
-            fixture.program.environment.execution(),
-            &mut host,
-        )
+        .execute_for_proving_sync(fixture.environment.target(), &mut host)
         .expect("execute transaction fixture");
     let (vm_witness, _) = witness.into_parts();
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget())
@@ -341,8 +342,13 @@ pub(super) fn load_tx_fixtures(
     let assembler = Assembler::default()
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("link core library");
-    let program = assemble_fixture_program(assembler, "tx_fixture", source, &[core_lib.naming()]);
-    let fixture = Arc::new(TxProgramFixture { program, core_lib: core_lib.clone() });
+    let (code, environment) =
+        assemble_fixture_program(assembler, "tx_fixture", source, &[core_lib.naming()]);
+    let fixture = Arc::new(TxProgramFixture {
+        code,
+        environment,
+        core_lib: core_lib.clone(),
+    });
 
     println!(
         "\n=== transaction proof fixtures\n    scenario={scenario} hash={:?} proof_cache={}",
@@ -360,7 +366,7 @@ pub(super) fn load_tx_fixtures(
             let stack_inputs = stack_inputs(&stack_values);
             let advice_inputs = AdviceInputs::default();
             let proof_cache_key = tx_proof_cache_key(
-                fixture.program.environment.execution().descriptor(),
+                fixture.environment.target(),
                 &stack_values,
                 &compatibility,
             );
@@ -369,7 +375,7 @@ pub(super) fn load_tx_fixtures(
                     config.tx_proof_cache_dir(),
                     proof_index,
                     proof_cache_key.as_str(),
-                    fixture.program.environment.execution().descriptor(),
+                    fixture.environment.target(),
                     stack_inputs,
                 ) {
                 (stack_outputs, proof, "hit")
@@ -377,12 +383,13 @@ pub(super) fn load_tx_fixtures(
                 let mut host = fixture.host();
                 let (stack_outputs, proof) = prove_sync(
                     &Prover::new().with_hash_fn(INNER_PROOF_HASH),
-                    &fixture.program.program,
-                    fixture.program.environment.execution(),
+                    fixture.environment.target(),
                     stack_inputs,
                     advice_inputs,
                     &mut host,
-                    ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+                    ExecutionOptions::default()
+                        .with_environment_trace_limits(trace_limits())
+                        .with_resolution_limits(fixture.environment.resolution_limits()),
                 )
                 .expect("prove transaction fixture");
                 assert!(
@@ -391,7 +398,7 @@ pub(super) fn load_tx_fixtures(
                      this benchmark expects precompile-free fixtures"
                 );
                 let claim = ExecutionClaim::new(
-                    fixture.program.environment.execution().descriptor(),
+                    fixture.environment.target(),
                     stack_inputs,
                     stack_outputs,
                 );
@@ -446,7 +453,7 @@ pub(super) fn recursive_proof_advice(
     expected_verifier: VerifierIdentity,
 ) -> RecursiveProofAdvice {
     let claim = ExecutionClaim::new(
-        fixture.fixture.program.environment.execution().descriptor(),
+        fixture.fixture.environment.target(),
         fixture.stack_inputs,
         fixture.stack_outputs,
     );

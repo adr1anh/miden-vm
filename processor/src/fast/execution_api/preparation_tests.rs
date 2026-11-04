@@ -12,8 +12,8 @@ use miden_core::{
 use miden_debug_types::{Location, SourceFile, SourceSpan};
 use miden_mast_package::{
     CallableProcedurePath, CodePackage, NamespacePath, Package, PackageCallables,
-    PackageDebugInfoError, PackageId, PackageProcedureOccurrence, PackageSymbols, ProcedureName,
-    TargetType, Version,
+    PackageDebugInfoError, PackageId, PackageProcedureOccurrence, PackageProcedureOccurrencesError,
+    PackageSymbols, ProcedureName, Section, SectionId, TargetType, Version,
     debug_info::{DebugSourceNode, PackageDebugInfoBuilder},
 };
 
@@ -206,7 +206,6 @@ fn preparation_resolves_actual_package_root_and_keeps_ambiguous_source_optional(
             },
             None,
             None,
-            None,
             true,
             &host,
         )
@@ -330,26 +329,74 @@ fn cache_retains_distinct_owners_and_preserves_first_loaded_fallback() {
     assert!(owners[1].same_owner(&second));
 }
 
+fn selected_package(
+    forest: Arc<MastForest>,
+    implementation: ImplementationRoot,
+) -> (ProcedureKey, Arc<PackageSymbols>, Package) {
+    let home = NamespacePath::new(vec![CanonicalLabel::text("fast-preparation-test").unwrap()]);
+    let path = CallableProcedurePath::from_semantic_components(vec!["selected".into()]).unwrap();
+    let procedure = ProcedureName::new(home.clone(), path).unwrap();
+    let key = procedure.key();
+    let mut bindings = vec![procedure];
+    let mut selected = vec![(key, implementation)];
+    for (index, &root) in forest.procedure_roots().iter().enumerate() {
+        let root_implementation = ImplementationRoot::new(forest[root].digest());
+        if root_implementation == implementation {
+            continue;
+        }
+        let path = CallableProcedurePath::from_semantic_components(vec![alloc::format!(
+            "retained_root_{index}"
+        )])
+        .unwrap();
+        let binding = ProcedureName::new(home.clone(), path).unwrap();
+        selected.push((binding.key(), root_implementation));
+        bindings.push(binding);
+    }
+    let symbols = Arc::new(
+        PackageSymbols::new(home, PackageCallables::new(bindings, [], selected).unwrap(), None)
+            .unwrap(),
+    );
+    let package = Package::create(
+        PackageId::from("selected"),
+        Version::new(1, 0, 0),
+        TargetType::Library,
+        forest,
+        [],
+        [],
+        &symbols,
+    )
+    .unwrap();
+    (key, symbols, package)
+}
+
 #[test]
-fn explicit_entry_source_survives_ambiguous_equal_body_sources() {
+fn exact_occurrence_source_survives_ambiguous_equal_body_sources() {
     let (forest, roots) = two_root_forest(AdviceMap::default());
     let root = roots[1];
-    let digest = forest[root].digest();
+    let implementation = ImplementationRoot::new(forest[root].digest());
     let mut debug = PackageDebugInfoBuilder::default();
     let first = debug.add_node(source_node(root)).unwrap();
     let selected = debug.add_node(source_node(root)).unwrap();
     debug.add_root(first);
     debug.add_root(selected);
-    let loaded = LoadedMastForest::with_package_debug_info(forest, Ok(Some(*debug.build())));
+    let (key, symbols, package) = selected_package(forest, implementation);
+    let mut package = package
+        .with_procedure_occurrences(
+            [PackageProcedureOccurrence::new(key, root, Some(selected))],
+            &symbols,
+        )
+        .unwrap();
+    package.sections.push(Section::new(
+        SectionId::DEBUG_INFO,
+        debug.build().to_bytes_with_standard_limits().unwrap(),
+    ));
+    let loaded =
+        LoadedMastForest::from_code_package(CodePackage::new(Arc::new(package), symbols).unwrap());
     let host = LoadedHost::new(loaded.clone());
 
     let prepared = FastProcessor::prepare_loaded_target(
         loaded,
-        CodeRequest::Procedure {
-            key: ProcedureKey::new(Word::from([ONE; 4])),
-            implementation: ImplementationRoot::new(digest),
-        },
-        Some((root, Some(selected))),
+        CodeRequest::Procedure { key, implementation },
         None,
         None,
         true,
@@ -363,27 +410,17 @@ fn explicit_entry_source_survives_ambiguous_equal_body_sources() {
 }
 
 #[test]
-fn explicit_root_mismatch_does_not_select_another_matching_body() {
+fn exact_occurrence_root_mismatch_is_rejected_before_code_supply() {
     let (forest, roots) = two_root_forest(AdviceMap::default());
-    let digest = forest[roots[1]].digest();
-    let loaded = LoadedMastForest::new(forest);
-    let host = LoadedHost::new(loaded.clone());
-    let result = FastProcessor::prepare_loaded_target(
-        loaded,
-        CodeRequest::Procedure {
-            key: ProcedureKey::new(Word::from([ONE; 4])),
-            implementation: ImplementationRoot::new(digest),
-        },
-        Some((roots[0], None)),
-        None,
-        None,
-        false,
-        &host,
+    let implementation = ImplementationRoot::new(forest[roots[1]].digest());
+    let (key, symbols, package) = selected_package(forest, implementation);
+    let result = package.with_procedure_occurrences(
+        [PackageProcedureOccurrence::new(key, roots[0], None)],
+        &symbols,
     );
-    assert!(matches!(result, Err(ExecutionError::OperationError {
-        err: OperationError::MalformedMastForestInHost { root_digest },
-        ..
-    }) if root_digest == digest));
+    assert!(matches!(result, Err(
+        PackageProcedureOccurrencesError::ImplementationMismatch { key: actual_key, node }
+    ) if actual_key == key && node == roots[0]));
 }
 
 #[test]
@@ -395,16 +432,9 @@ fn successful_raw_code_supply_memoizes_request_without_symbol_authority() {
         implementation: ImplementationRoot::new(forest[roots[1]].digest()),
     };
     let host = LoadedHost::new(loaded.clone());
-    let prepared = FastProcessor::prepare_loaded_target(
-        loaded.clone(),
-        request,
-        None,
-        None,
-        None,
-        false,
-        &host,
-    )
-    .unwrap();
+    let prepared =
+        FastProcessor::prepare_loaded_target(loaded.clone(), request, None, None, false, &host)
+            .unwrap();
     let mut processor = FastProcessor::new(StackInputs::default());
 
     let target = processor.publish_loaded_target(prepared).unwrap();

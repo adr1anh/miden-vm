@@ -352,7 +352,9 @@ fn run_program_with_handler(
     let named =
         crate::naming::assemble(assembler, "ed25519_test", source, &[library.naming().as_ref()]);
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&library)
         .unwrap();
     if let Some(handler) = handler {
@@ -365,10 +367,11 @@ fn run_program_with_handler(
         StackInputs::default(),
         AdviceInputs::default().with_stack(advice),
         ExecutionOptions::default()
+            .with_resolution_limits(named.1.resolution_limits())
             .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .unwrap()
-    .execute_sync(&named.program, named.environment.execution(), &mut host);
+    .execute_sync(named.1.target(), &mut host);
     if let Ok(output) = &output {
         assert!(output.advice.stack().is_empty(), "signature witness must be consumed");
     }

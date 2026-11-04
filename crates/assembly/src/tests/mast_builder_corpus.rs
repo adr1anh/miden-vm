@@ -109,18 +109,19 @@ fn mast_builder_acceptance_corpus() -> TestResult {
     Ok(())
 }
 
-fn append_program_acceptance_summary(output: &mut String, case_name: &str, program: &Program) {
-    let forest = program.mast_forest();
-    let serialized_program_len = program.to_bytes().len();
+fn append_program_acceptance_summary(output: &mut String, case_name: &str, program: &CodePackage) {
+    let forest = program.package().mast_forest();
+    let serialized_package_len = program.package().to_bytes().len();
     let serialized_forest_len = forest.to_bytes().len();
 
     writeln!(output, "=== {case_name} ===").unwrap();
-    writeln!(output, "program_hash={:?}", program.hash()).unwrap();
-    writeln!(output, "entrypoint={}", u32::from(program.entrypoint())).unwrap();
-    writeln!(output, "num_procedures={}", program.num_procedures()).unwrap();
+    writeln!(output, "program_hash={:?}", entry_digest(program)).unwrap();
+    writeln!(output, "entrypoint={}", u32::from(entry_node(program))).unwrap();
+    writeln!(output, "num_procedures={}", program.package().mast_forest().num_procedures())
+        .unwrap();
     writeln!(output, "num_nodes={}", forest.num_nodes()).unwrap();
     writeln!(output, "forest_commitment={:?}", forest.commitment()).unwrap();
-    writeln!(output, "serialized_program_len={serialized_program_len}").unwrap();
+    writeln!(output, "serialized_package_len={serialized_package_len}").unwrap();
     writeln!(output, "serialized_forest_len={serialized_forest_len}").unwrap();
 
     let roots = forest

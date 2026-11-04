@@ -340,15 +340,21 @@ fn mem_get_zero_fills_across_word_boundaries() {
         event = EVENT.as_str(),
     );
     let test = Test::new("wasm_handler_partial_word", &source, false);
-    let (program, ..) = test.compile().expect("program assembles");
+    let (code, ..) = test.compile().expect("program assembles");
     let environment = test.fixture_environment().expect("fixture environment validates");
 
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(code).unwrap();
     for (event, handler) in module.handlers() {
         host.register_handler(event, handler).expect("registration succeeds");
     }
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, environment.execution(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(environment.target(), &mut host)
         .expect("memory the program never wrote reads as zero, inside and outside a written word");
 }
 

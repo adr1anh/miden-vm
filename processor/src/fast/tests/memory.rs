@@ -10,16 +10,24 @@ fn test_memory_word_access_alignment() {
     // mloadw
     {
         let fixture = simple_program_with_ops(vec![Operation::MLoadW]);
-        host = host.with_environment_source(fixture.source.clone());
+        host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
 
         // loadw at address 40 is allowed
         FastProcessor::new(StackInputs::new(&[Felt::from_u32(40)]).unwrap())
-            .execute_sync(&fixture.program, fixture.environment, &mut host)
+            .with_options(
+                ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits),
+            )
+            .unwrap()
+            .execute_sync(fixture.target, &mut host)
             .unwrap();
 
         // but loadw at address 43 is not allowed
         let err = FastProcessor::new(StackInputs::new(&[Felt::from_u32(43)]).unwrap())
-            .execute_sync(&fixture.program, fixture.environment, &mut host)
+            .with_options(
+                ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits),
+            )
+            .unwrap()
+            .execute_sync(fixture.target, &mut host)
             .unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -30,16 +38,24 @@ fn test_memory_word_access_alignment() {
     // mstorew
     {
         let fixture = simple_program_with_ops(vec![Operation::MStoreW]);
-        host = host.with_environment_source(fixture.source.clone());
+        host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
 
         // storew at address 40 is allowed
         FastProcessor::new(StackInputs::new(&[Felt::from_u32(40)]).unwrap())
-            .execute_sync(&fixture.program, fixture.environment, &mut host)
+            .with_options(
+                ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits),
+            )
+            .unwrap()
+            .execute_sync(fixture.target, &mut host)
             .unwrap();
 
         // but storew at address 43 is not allowed
         let err = FastProcessor::new(StackInputs::new(&[Felt::from_u32(43)]).unwrap())
-            .execute_sync(&fixture.program, fixture.environment, &mut host)
+            .with_options(
+                ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits),
+            )
+            .unwrap()
+            .execute_sync(fixture.target, &mut host)
             .unwrap_err();
         assert_eq!(
             err.to_string(),
@@ -58,14 +74,16 @@ fn test_mloadw_success() {
 
     // load the contents of address 40
     {
-        let mut processor = FastProcessor::new(StackInputs::new(&[addr]).unwrap());
+        let fixture = simple_program_with_ops(vec![Operation::MLoadW]);
+        let mut processor = FastProcessor::new(StackInputs::new(&[addr]).unwrap())
+            .with_options(
+                ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits),
+            )
+            .unwrap();
         processor.memory.write_word(ctx, addr, dummy_clk, word_at_addr.into()).unwrap();
 
-        let fixture = simple_program_with_ops(vec![Operation::MLoadW]);
-        host = host.with_environment_source(fixture.source.clone());
-        let stack_outputs = processor
-            .execute_mut_sync(&fixture.program, fixture.environment, &mut host)
-            .unwrap();
+        host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
+        let stack_outputs = processor.execute_mut_sync(fixture.target, &mut host).unwrap();
 
         // Memory word[i] maps to stack position i (word[0] at top)
         assert_eq!(
@@ -76,14 +94,16 @@ fn test_mloadw_success() {
 
     // load the contents of address 100 (should yield the ZERO word)
     {
-        let mut processor = FastProcessor::new(StackInputs::new(&[Felt::from_u32(100)]).unwrap());
+        let fixture = simple_program_with_ops(vec![Operation::MLoadW]);
+        let mut processor = FastProcessor::new(StackInputs::new(&[Felt::from_u32(100)]).unwrap())
+            .with_options(
+                ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits),
+            )
+            .unwrap();
         processor.memory.write_word(ctx, addr, dummy_clk, word_at_addr.into()).unwrap();
 
-        let fixture = simple_program_with_ops(vec![Operation::MLoadW]);
-        host = host.with_environment_source(fixture.source.clone());
-        let stack_outputs = processor
-            .execute_mut_sync(&fixture.program, fixture.environment, &mut host)
-            .unwrap();
+        host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
+        let stack_outputs = processor.execute_mut_sync(fixture.target, &mut host).unwrap();
 
         assert_eq!(stack_outputs.get_num_elements(16), &vec![ZERO; 16]);
     }
@@ -100,6 +120,7 @@ fn test_mstorew_success() {
 
     // Store the word at address 40
     // Stack layout: [addr, word[0], word[1], word[2], word[3]] with addr at position 0 (top)
+    let fixture = simple_program_with_ops(vec![Operation::MStoreW]);
     let mut processor = FastProcessor::new(
         StackInputs::new(&[
             addr,
@@ -109,12 +130,11 @@ fn test_mstorew_success() {
             word_to_store[3],
         ])
         .unwrap(),
-    );
-    let fixture = simple_program_with_ops(vec![Operation::MStoreW]);
-    host = host.with_environment_source(fixture.source.clone());
-    processor
-        .execute_mut_sync(&fixture.program, fixture.environment, &mut host)
-        .unwrap();
+    )
+    .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+    .unwrap();
+    host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
+    processor.execute_mut_sync(fixture.target, &mut host).unwrap();
 
     // Ensure that the memory was correctly modified
     assert_eq!(processor.memory.read_word(ctx, addr, clk).unwrap(), word_to_store);
@@ -132,13 +152,15 @@ fn test_mstore_success(#[case] addr: u32, #[case] value_to_store: u32) {
     let value_to_store = Felt::from_u32(value_to_store);
 
     // Store the value at address - addr at top, value at position 1
-    let mut processor =
-        FastProcessor::new(StackInputs::new(&[Felt::from_u32(addr), value_to_store]).unwrap());
     let fixture = simple_program_with_ops(vec![Operation::MStore]);
-    host = host.with_environment_source(fixture.source.clone());
-    processor
-        .execute_mut_sync(&fixture.program, fixture.environment, &mut host)
-        .unwrap();
+    let mut processor =
+        FastProcessor::new(StackInputs::new(&[Felt::from_u32(addr), value_to_store]).unwrap())
+            .with_options(
+                ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits),
+            )
+            .unwrap();
+    host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
+    processor.execute_mut_sync(fixture.target, &mut host).unwrap();
 
     // Ensure that the memory was correctly modified
     let word_addr = addr - (addr % WORD_SIZE as u32);
@@ -159,18 +181,20 @@ fn test_mload_success(#[case] addr_to_access: u32) {
     let dummy_clk = 0_u32.into();
 
     // Initialize processor with a word at address 40
+    let fixture = simple_program_with_ops(vec![Operation::MLoad]);
     let mut processor =
-        FastProcessor::new(StackInputs::new(&[Felt::from_u32(addr_to_access)]).unwrap());
+        FastProcessor::new(StackInputs::new(&[Felt::from_u32(addr_to_access)]).unwrap())
+            .with_options(
+                ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits),
+            )
+            .unwrap();
     processor
         .memory
         .write_word(ctx, Felt::from_u32(addr_with_word), dummy_clk, word_at_addr.into())
         .unwrap();
 
-    let fixture = simple_program_with_ops(vec![Operation::MLoad]);
-    host = host.with_environment_source(fixture.source.clone());
-    let stack_outputs = processor
-        .execute_mut_sync(&fixture.program, fixture.environment, &mut host)
-        .unwrap();
+    host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
+    let stack_outputs = processor.execute_mut_sync(fixture.target, &mut host).unwrap();
 
     // Ensure that Operation::MLoad correctly reads the value on the stack
     assert_eq!(
@@ -190,10 +214,15 @@ fn test_mstream() {
     let ctx = 0_u32.into();
     let clk: RowIndex = 1_u32.into();
 
+    let fixture = simple_program_with_ops(vec![Operation::MStream]);
     let mut processor = {
         let mut stack_init = vec![ZERO; 16];
         stack_init[12] = Felt::from_u32(addr);
         FastProcessor::new(StackInputs::new(&stack_init).unwrap())
+            .with_options(
+                ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits),
+            )
+            .unwrap()
     };
     // Store values at addresses 40 and 44
     processor
@@ -205,11 +234,8 @@ fn test_mstream() {
         .write_word(ctx, Felt::from_u32(addr + 4), clk, word_at_addr_44)
         .unwrap();
 
-    let fixture = simple_program_with_ops(vec![Operation::MStream]);
-    host = host.with_environment_source(fixture.source.clone());
-    let stack_outputs = processor
-        .execute_mut_sync(&fixture.program, fixture.environment, &mut host)
-        .unwrap();
+    host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
+    let stack_outputs = processor.execute_mut_sync(fixture.target, &mut host).unwrap();
 
     // Word at addr 40 goes to positions 0-3, word at addr 44 goes to positions 4-7
     // word[0] at lowest position (top of stack)
@@ -279,16 +305,17 @@ fn test_memory_element_limit_enforced_during_execution() {
     end
     ";
     let fixture = named_source(program_source).expect("program should assemble");
-    host = host.with_environment_source(fixture.source.clone());
+    host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
 
     // A limit of 3 words' worth of elements is exceeded by the 4th distinct word write.
     let options = ExecutionOptions::default().with_max_memory_elements(3 * WORD_SIZE);
-    let processor =
-        FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
-            .unwrap();
-    let err = processor
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
-        .unwrap_err();
+    let processor = FastProcessor::new_with_options(
+        StackInputs::default(),
+        AdviceInputs::default(),
+        options.with_resolution_limits(fixture.resolution_limits),
+    )
+    .unwrap();
+    let err = processor.execute_sync(fixture.target, &mut host).unwrap_err();
     assert_matches!(
         err,
         ExecutionError::MemoryError {
@@ -299,12 +326,13 @@ fn test_memory_element_limit_enforced_during_execution() {
 
     // A limit of 4 words' worth of elements accommodates every distinct word the program writes to.
     let options = ExecutionOptions::default().with_max_memory_elements(4 * WORD_SIZE);
-    let mut processor =
-        FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
-            .unwrap();
-    processor
-        .execute_mut_sync(&fixture.program, fixture.environment, &mut host)
-        .unwrap();
+    let mut processor = FastProcessor::new_with_options(
+        StackInputs::default(),
+        AdviceInputs::default(),
+        options.with_resolution_limits(fixture.resolution_limits),
+    )
+    .unwrap();
+    processor.execute_mut_sync(fixture.target, &mut host).unwrap();
     assert_eq!(processor.memory.num_accessed_words(), 4);
 }
 
@@ -323,14 +351,14 @@ fn test_memory_element_limit_enforced_via_with_options() {
     end
     ";
     let fixture = named_source(program_source).expect("program should assemble");
-    host = host.with_environment_source(fixture.source.clone());
+    host = host.with_environment_source(fixture.source).with_library(fixture.code).unwrap();
 
     // The limit is configured through the `new(...).with_options(...)` builder chain.
     let options = ExecutionOptions::default().with_max_memory_elements(3 * WORD_SIZE);
-    let processor = FastProcessor::new(StackInputs::default()).with_options(options).unwrap();
-    let err = processor
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
-        .unwrap_err();
+    let processor = FastProcessor::new(StackInputs::default())
+        .with_options(options.with_resolution_limits(fixture.resolution_limits))
+        .unwrap();
+    let err = processor.execute_sync(fixture.target, &mut host).unwrap_err();
     assert_matches!(
         err,
         ExecutionError::MemoryError {

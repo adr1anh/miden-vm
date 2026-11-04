@@ -26,8 +26,8 @@ pub use miden_assembly_syntax::{
 };
 #[cfg(feature = "testing")]
 use miden_assembly_syntax::{ast::Form, debuginfo::SourceFile};
-use miden_core::program::{CanonicalLabel, Program};
-use miden_mast_package::{NamespacePath, Package, PackageId, PackageSymbols};
+use miden_core::program::CanonicalLabel;
+use miden_mast_package::{CodePackage, NamespacePath, Package, PackageId, PackageSymbols};
 #[cfg(feature = "std")]
 use miden_project::TargetType;
 
@@ -107,19 +107,23 @@ pub fn fixture_package_naming(package: &Package) -> Result<PackageSymbols, Repor
 }
 
 /// Selects fixture executable code without reconstructing environment or kernel authority.
-pub fn fixture_program(package: &Package) -> Program {
+pub fn fixture_program(package: &Package) -> CodePackage {
     let naming =
         fixture_package_naming(package).expect("fixture must use an explicitly allowed home");
-    package.unwrap_program(&naming)
+    package
+        .check_executable_code(&naming)
+        .expect("fixture must supply executable code");
+    CodePackage::new(Arc::new(package.clone()), Arc::new(naming))
+        .expect("fixture code and symbols must belong together")
 }
 
 /// Chaining convenience restricted to the explicit assembly fixture home convention.
 pub trait FixtureProgram {
-    fn fixture_program(&self) -> Program;
+    fn fixture_program(&self) -> CodePackage;
 }
 
 impl FixtureProgram for Package {
-    fn fixture_program(&self) -> Program {
+    fn fixture_program(&self) -> CodePackage {
         fixture_program(self)
     }
 }
@@ -519,12 +523,12 @@ impl TestContext {
         Ok(())
     }
 
-    /// Compile a [Program] from `source` using the [Assembler] constructed by this context.
+    /// Compile a [CodePackage] from `source` using the [Assembler] constructed by this context.
     ///
     /// NOTE: Any modules added by, e.g. `add_module`, will be available to the executable
     /// module represented in `source`.
     #[track_caller]
-    pub fn assemble(&self, source: impl Parse) -> Result<Program, Report> {
+    pub fn assemble(&self, source: impl Parse) -> Result<CodePackage, Report> {
         let module = self.parse_module(source)?;
         if !module.is_executable() {
             return Err(Report::msg(
@@ -536,7 +540,7 @@ impl TestContext {
         let assembler = fixture_namespace.configure(self.assembler(), [&*module])?;
         assembler
             .assemble_executable_modules("test".into(), module, [])?
-            .into_program(self.assembler.emit_debug_info)
+            .into_code_package(self.assembler.emit_debug_info)
     }
 
     /// Compile a library package from `modules` using the [Assembler] constructed by this context.

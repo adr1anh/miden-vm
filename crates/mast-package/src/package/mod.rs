@@ -1343,49 +1343,26 @@ impl Package {
         Ok(())
     }
 
-    /// Selects the code/source hint for this package's explicitly named executable entry.
+    /// Checks that this package supplies an explicitly named executable entry.
     ///
-    /// Requires the exact canonical metadata retained by compilation or obtained through
-    /// [`Self::validate_symbols`] with current caller policy. A target tag, source path, body root
-    /// or embedded kernel never supplies a missing key or execution authority. The returned
-    /// legacy `Program` carries available code; execution still requires a caller-authorized
-    /// descriptor and authenticated K-to-D opening. Kernel code can be supplied independently
-    /// by a host.
-    pub fn try_into_program(
-        &self,
-        naming: &PackageSymbols,
-    ) -> Result<miden_core::program::Program, Report> {
-        use miden_core::program::Program;
-
-        self.check_naming(naming).map_err(Report::msg)?;
+    /// Symbols must be retained from compilation or admitted with current caller policy. This
+    /// checks code integrity only: execution takes the caller's independent target and loads code
+    /// through the host after authenticating its entry binding.
+    pub fn check_executable_code(&self, symbols: &PackageSymbols) -> Result<(), Report> {
+        self.check_naming(symbols).map_err(Report::msg)?;
         if !self.is_program() {
             return Err(Report::msg(format!(
-                "cannot convert package of type {} to executable code",
+                "package of type {} does not supply executable code",
                 self.kind
             )));
         }
-        let key = naming
+        let key = symbols
             .entry_key()
             .ok_or_else(|| Report::msg("executable code candidate has no explicit entry key"))?;
-        let implementation = naming.callables().selected_implementation(key).ok_or_else(|| {
+        symbols.callables().selected_implementation(key).ok_or_else(|| {
             Report::msg("explicit executable entry has no selected implementation")
         })?;
-        // Identity/implementation selection above is complete. A matching manifest node merely
-        // preserves the selected source occurrence when equal-D roots have distinct debug frames.
-        let entrypoint = self
-            .manifest
-            .entrypoint()
-            .and_then(|path| self.get_procedure_node_by_path(&path))
-            .or_else(|| self.mast.find_procedure_root(implementation.into_word()))
-            .ok_or_else(|| {
-                Report::msg("explicit executable entry has no retained procedure root")
-            })?;
-        Ok(Program::new(self.mast.clone(), entrypoint))
-    }
-
-    /// Panicking convenience for [`Self::try_into_program`] with explicitly supplied metadata.
-    pub fn unwrap_program(&self, naming: &PackageSymbols) -> miden_core::program::Program {
-        self.try_into_program(naming).unwrap_or_else(|err| panic!("{err}"))
+        Ok(())
     }
 
     /// Decodes the [`EventHandlerSection`] of this package, if present.
@@ -1989,7 +1966,7 @@ mod tests {
         let naming = first
             .validate_symbols(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
             .unwrap();
-        assert!(first.try_into_program(&naming).is_err());
+        assert!(first.check_executable_code(&naming).is_err());
         assert!(first.check_kernel_code(&naming).is_err());
         assert_eq!(first.interface_commitment().unwrap(), second.interface_commitment().unwrap());
         assert_ne!(first.mast_forest_commitment(), second.mast_forest_commitment());
@@ -3111,8 +3088,13 @@ mod tests {
         let naming = executable
             .validate_symbols(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
             .unwrap();
-        let program = executable.try_into_program(&naming).unwrap();
-        assert_eq!(program.entrypoint(), entrypoint_node);
+        executable.check_executable_code(&naming).unwrap();
+        let key = naming.entry_key().unwrap();
+        assert_eq!(
+            naming.callables().selected_implementation(key).unwrap().into_word(),
+            executable.mast_forest()[entrypoint_node].digest(),
+        );
+        assert_eq!(executable.entrypoint_source_node(), Some(source_node));
     }
 
     #[test]

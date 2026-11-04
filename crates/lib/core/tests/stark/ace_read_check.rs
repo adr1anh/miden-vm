@@ -366,6 +366,8 @@ pub(super) fn execute_and_check(test: &Test, proof_stream: &[u64], claim: &[u64]
     let environment = test.fixture_environment().expect("the verifier fixture must be named");
     let mut host = DefaultHost::default()
         .with_environment_source(environment.source())
+        .with_library(program)
+        .expect("fixture code must load into the host")
         .with_library(&CoreLibrary::default())
         .unwrap();
     for (event, handler) in &test.trace_handlers {
@@ -374,12 +376,11 @@ pub(super) fn execute_and_check(test: &Test, proof_stream: &[u64], claim: &[u64]
     let mut processor = FastProcessor::new_with_options(
         test.stack_inputs,
         test.advice_inputs.clone(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(environment.resolution_limits()),
     )
     .unwrap();
     let mut verifier_context = None;
-    let mut resume =
-        processor.get_initial_resume_context(&program, environment.execution()).unwrap();
+    let mut resume = processor.get_initial_resume_context(environment.target()).unwrap();
     loop {
         let complete = processor
             .step_sync(&mut host, &mut resume)

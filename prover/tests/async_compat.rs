@@ -18,13 +18,15 @@ use named_source::named_source;
 struct YieldingAsyncHost {
     event_calls: usize,
     environment: Arc<dyn EnvironmentWitnessSource>,
+    code: LoadedMastForest,
 }
 
 impl YieldingAsyncHost {
-    fn new(environment: &FixtureEnvironment) -> Self {
+    fn new(environment: &FixtureEnvironment, code: miden_assembly::CodePackage) -> Self {
         Self {
             event_calls: 0,
             environment: environment.source(),
+            code: LoadedMastForest::from_code_package(code),
         }
     }
 }
@@ -53,7 +55,7 @@ impl Host for YieldingAsyncHost {
         &self,
         _request: miden_processor::CodeRequest,
     ) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
-        async { None }
+        async { Some(self.code.clone()) }
     }
 
     fn on_event(
@@ -75,7 +77,7 @@ fn verify_generated_proof(claim: &ExecutionClaim, proof: &ExecutionProof) {
     assert!(outcome.is_complete());
 }
 
-fn simple_program() -> (miden_processor::Program, FixtureEnvironment) {
+fn simple_program() -> (miden_assembly::CodePackage, FixtureEnvironment) {
     named_source(
         r#"
             begin
@@ -92,27 +94,30 @@ async fn async_and_sync_execution_witnesses_prove_equivalently() {
     let (program, environment) = simple_program();
     let stack_inputs = StackInputs::new(&[Felt::new_unchecked(0), Felt::new_unchecked(1)]).unwrap();
     let advice_inputs = AdviceInputs::default();
-    let execution_options =
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits());
+    let execution_options = ExecutionOptions::default()
+        .with_resolution_limits(environment.resolution_limits())
+        .with_environment_trace_limits(trace_limits());
 
     let mut sync_host = DefaultHost::default().with_environment_source(environment.source());
+    sync_host.load_library(program.clone()).unwrap();
     let sync_witness = FastProcessor::new_with_options(
         stack_inputs,
         advice_inputs.clone(),
         execution_options.clone(),
     )
     .unwrap()
-    .execute_for_proving_sync(&program, environment.execution(), &mut sync_host)
+    .execute_for_proving_sync(environment.target(), &mut sync_host)
     .unwrap();
     let sync_claim = sync_witness.claim();
     let sync_outputs = *sync_claim.stack_outputs();
     let sync_proof = Prover::new().prove_full(sync_witness).unwrap();
 
     let mut async_host = DefaultHost::default().with_environment_source(environment.source());
+    async_host.load_library(program.clone()).unwrap();
     let async_witness =
         FastProcessor::new_with_options(stack_inputs, advice_inputs, execution_options)
             .unwrap()
-            .execute_for_proving(&program, environment.execution(), &mut async_host)
+            .execute_for_proving(environment.target(), &mut async_host)
             .await
             .unwrap();
     let async_claim = async_witness.claim();
@@ -130,14 +135,16 @@ async fn proving_supports_witnesses_from_async_only_host_events() {
     let event_id = event_name.to_event_id().as_u64();
     let (program, environment) = named_source(&format!("begin push.{event_id} emit drop end"));
 
-    let mut host = YieldingAsyncHost::new(&environment);
+    let mut host = YieldingAsyncHost::new(&environment, program.clone());
     let witness = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_resolution_limits(environment.resolution_limits())
+            .with_environment_trace_limits(trace_limits()),
     )
     .unwrap()
-    .execute_for_proving(&program, environment.execution(), &mut host)
+    .execute_for_proving(environment.target(), &mut host)
     .await
     .expect("async execution should succeed");
     let claim = witness.claim();

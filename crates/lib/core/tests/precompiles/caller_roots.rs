@@ -530,17 +530,19 @@ fn manual_hashes_reject_forged_digest_advice() {
             &[library.naming()],
         );
         let mut host = DefaultHost::default()
-            .with_environment_source(program.environment.source())
+            .with_environment_source(program.1.source())
+            .with_library(program.0.clone())
+            .expect("fixture code must load into the host")
             .with_library(&library)
             .unwrap();
         assert!(host.replace_handler(event, handler).unwrap());
         let error = FastProcessor::new_with_options(
             StackInputs::default(),
             AdviceInputs::default(),
-            ExecutionOptions::default(),
+            ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
         )
         .unwrap()
-        .execute_sync(&program.program, program.environment.execution(), &mut host)
+        .execute_sync(program.1.target(), &mut host)
         .unwrap_err();
         assert!(
             matches!(error,ExecutionError::DeferredError { ref err, .. } if matches!(err.root(),PrecompileError::AssertionFailed)),

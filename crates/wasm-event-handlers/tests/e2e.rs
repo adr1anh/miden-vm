@@ -67,16 +67,20 @@ fn program_verifies_advice_from_a_packaged_wasm_handler() {
         package.event_handlers().expect("source section decodes"),
     );
 
-    let code = CodePackage::new(decoded.clone(), Arc::new(naming.clone()))
-        .expect("roundtrip retains exact symbols");
+    let code =
+        CodePackage::new(decoded, Arc::new(naming)).expect("roundtrip retains exact symbols");
     let library = host_library_from_package(&code, WasmHandlerLimits::default())
         .expect("handlers load from the package");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
 
-    let program = decoded.try_into_program(&naming).expect("roundtrip retains exact naming");
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, environment.execution(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(environment.target(), &mut host)
         .expect("the handler's advice satisfies the in-VM check");
 }
 
@@ -116,7 +120,6 @@ fn packaged_handler_reads_vm_memory() {
         )],
     };
     let package = (*package).with_event_handlers(&section).expect("section attaches");
-    let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
     let code = CodePackage::new(Arc::new(package), Arc::new(naming))
         .expect("package retains exact symbols");
@@ -126,7 +129,12 @@ fn packaged_handler_reads_vm_memory() {
     host.load_library(library).expect("handlers register");
 
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, environment.execution(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(environment.target(), &mut host)
         .expect("the batch memory read matches what the program wrote");
 }
 
@@ -216,16 +224,20 @@ fn rust_guest_fixture_end_to_end() {
         package.event_handlers().expect("source section decodes"),
     );
 
-    let code = CodePackage::new(decoded.clone(), Arc::new(naming.clone()))
-        .expect("roundtrip retains exact symbols");
+    let code =
+        CodePackage::new(decoded, Arc::new(naming)).expect("roundtrip retains exact symbols");
     let library = host_library_from_package(&code, WasmHandlerLimits::default())
         .expect("handlers load from the package");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
 
-    let program = decoded.try_into_program(&naming).expect("roundtrip retains exact naming");
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, environment.execution(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(environment.target(), &mut host)
         .expect("the Rust handler's advice satisfies the in-VM check");
 }
 
@@ -268,7 +280,6 @@ fn rust_guest_merges_words() {
 
     let (package, naming, environment) = named_package("rust_guest_merge", &source);
     let package = (*package).with_event_handlers(&section).expect("section attaches");
-    let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
     let code = CodePackage::new(Arc::new(package), Arc::new(naming))
         .expect("package retains exact symbols");
@@ -278,7 +289,12 @@ fn rust_guest_merges_words() {
     host.load_library(library).expect("handlers register");
 
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, environment.execution(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(environment.target(), &mut host)
         .expect("the handler's digest matches the natively computed merge");
 }
 
@@ -297,7 +313,6 @@ fn rust_guest_panic_reaches_the_host() {
             end"#,
     );
     let package = (*package).with_event_handlers(&section).expect("section attaches");
-    let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
     let code = CodePackage::new(Arc::new(package), Arc::new(naming))
         .expect("package retains exact symbols");
@@ -307,7 +322,12 @@ fn rust_guest_panic_reaches_the_host() {
     host.load_library(library).expect("handlers register");
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, environment.execution(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(environment.target(), &mut host)
         .expect_err("the handler panics");
 
     // The guest's message sits in the error source chain, below the processor's event context.
@@ -365,12 +385,18 @@ fn rust_guest_imports_stay_inside_the_abi() {
 #[test]
 fn program_fails_without_the_packaged_handlers() {
     let (package, naming, environment) = assemble_package_with_handlers();
-    let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
     // A host that ignores the package's handlers cannot serve the event.
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    let code = CodePackage::new(Arc::new(package), Arc::new(naming)).unwrap();
+    host.load_library(code).unwrap();
     let err = FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, environment.execution(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(environment.target(), &mut host)
         .expect_err("the event has no handler");
     assert!(err.to_string().contains("event"), "unexpected error: {err}");
 }

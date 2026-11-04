@@ -9,6 +9,10 @@ mod test_host;
 #[cfg(test)]
 pub(crate) use fixture::{native_fixture_environment, native_replay_budget, native_trace_limits};
 #[cfg(test)]
+pub(crate) use miden_utils_testing::librarytree::{
+    fixture_code, fixture_entry_digest, fixture_entry_root,
+};
+#[cfg(test)]
 pub(crate) use named::{NamedFixture, named_module, named_package, named_program, named_source};
 pub use test_host::{ProcessorStateSnapshot, TestHost};
 

@@ -7,13 +7,13 @@ use std::{
 use miden_core_lib::CoreLibrary;
 use miden_utils_testing::librarytree::{self, FixtureEnvironment, assemble_fixture_program};
 use miden_vm::{
-    Assembler, DefaultHost, ExecutionOptions, ExecutionOutput, ExecutionProof, ExecutionWitness,
-    FastProcessor, HashFunction, Program, Prover, StackInputs, StackOutputs, Verifier, VmTrace,
+    Assembler, CodePackage, DefaultHost, ExecutionOptions, ExecutionOutput, ExecutionProof,
+    ExecutionWitness, FastProcessor, HashFunction, Prover, StackInputs, StackOutputs, Verifier,
+    VmTrace,
     advice::AdviceInputs,
     assembly::{
         DefaultSourceManager, Path as LibraryPath,
         ast::{Module, ModuleKind},
-        package::debug_info::{DebugSourceNodeId, PackageDebugInfo},
     },
     internal::InputFile,
     trace,
@@ -43,13 +43,10 @@ const PROGRAM_RELATIVE_PATH: &str = "miden-vm/masm-examples/hashing/blake3_1to1/
 
 #[derive(Clone)]
 pub struct Blake3Fixture {
-    pub program: Program,
+    pub code: CodePackage,
     pub environment: FixtureEnvironment,
     pub stack_inputs: StackInputs,
     pub advice_inputs: AdviceInputs,
-    pub debug_info: Option<PackageDebugInfo>,
-    pub entrypoint_source_node: Option<DebugSourceNodeId>,
-    source_manager: Arc<DefaultSourceManager>,
 }
 
 impl Blake3Fixture {
@@ -75,18 +72,14 @@ impl Blake3Fixture {
                 core_lib.naming().clone(),
             )
             .expect("failed to load core library");
-        let named = assemble_fixture_program(assembler, "program", ast, &[core_lib.naming()]);
-        let debug_info = named.package.debug_info().expect("failed to read Blake3 debug info");
-        let entrypoint_source_node = named.package.entrypoint_source_node();
+        let (code, environment) =
+            assemble_fixture_program(assembler, "program", ast, &[core_lib.naming()]);
 
         Self {
-            program: named.program,
-            environment: named.environment,
+            code,
+            environment,
             stack_inputs: input_file.parse_stack_inputs().expect("failed to parse stack inputs"),
             advice_inputs: input_file.parse_advice_inputs().expect("failed to parse advice inputs"),
-            debug_info,
-            entrypoint_source_node,
-            source_manager,
         }
     }
 }
@@ -112,9 +105,10 @@ pub fn default_host() -> DefaultHost {
 }
 
 fn host_for_fixture(fixture: &Blake3Fixture) -> DefaultHost<DefaultSourceManager> {
-    default_host()
-        .with_source_manager(fixture.source_manager.clone())
-        .with_environment_source(fixture.environment.source())
+    let mut host = default_host().with_environment_source(fixture.environment.source());
+    host.load_library(fixture.code.clone())
+        .expect("failed to load Blake3 benchmark package");
+    host
 }
 
 pub fn execute_for_proving(fixture: &Blake3Fixture) -> ExecutionWitness {
@@ -122,31 +116,12 @@ pub fn execute_for_proving(fixture: &Blake3Fixture) -> ExecutionWitness {
     let processor = FastProcessor::new_with_options(
         fixture.stack_inputs,
         fixture.advice_inputs.clone(),
-        execution_options(),
+        execution_options().with_resolution_limits(fixture.environment.resolution_limits()),
     )
     .expect("processor advice inputs should fit advice map limits");
-    match (fixture.debug_info.as_ref(), fixture.entrypoint_source_node) {
-        (Some(debug_info), Some(entrypoint_source_node)) => processor
-            .execute_for_proving_with_package_debug_info_at_source_node_sync(
-                &fixture.program,
-                fixture.environment.execution(),
-                debug_info,
-                entrypoint_source_node,
-                &mut host,
-            )
-            .expect("failed to execute Blake3 benchmark"),
-        (Some(debug_info), None) => processor
-            .execute_for_proving_with_package_debug_info_sync(
-                &fixture.program,
-                fixture.environment.execution(),
-                debug_info,
-                &mut host,
-            )
-            .expect("failed to execute Blake3 benchmark"),
-        (None, _) => processor
-            .execute_for_proving_sync(&fixture.program, fixture.environment.execution(), &mut host)
-            .expect("failed to execute Blake3 benchmark"),
-    }
+    processor
+        .execute_for_proving_sync(fixture.environment.target(), &mut host)
+        .expect("failed to execute Blake3 benchmark")
 }
 
 pub fn execute_program(fixture: &Blake3Fixture) -> ExecutionOutput {
@@ -154,11 +129,11 @@ pub fn execute_program(fixture: &Blake3Fixture) -> ExecutionOutput {
     let processor = FastProcessor::new_with_options(
         fixture.stack_inputs,
         fixture.advice_inputs.clone(),
-        execution_options(),
+        execution_options().with_resolution_limits(fixture.environment.resolution_limits()),
     )
     .expect("processor advice inputs should fit advice map limits");
     processor
-        .execute_sync(&fixture.program, fixture.environment.execution(), &mut host)
+        .execute_sync(fixture.environment.target(), &mut host)
         .expect("failed to execute Blake3 benchmark")
 }
 

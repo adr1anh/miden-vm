@@ -217,18 +217,16 @@ pub fn assert_named_package(package: &Package, naming: &PackageSymbols) {
                 .any(|(_, selected)| { selected.into_word() == mast[root].digest() })
         );
     }
-    let program = package.try_into_program(naming);
+    let executable = package.check_executable_code(naming);
     if package.is_program() && naming.entry_key().is_some() {
-        let program = program.expect("an explicit admitted entry must select retained code");
+        executable.expect("an explicit admitted entry must select retained code");
         let key = naming.entry_key().unwrap();
-        assert_eq!(
-            program.hash(),
-            naming.callables().selected_implementation(key).unwrap().into_word()
-        );
-        assert_eq!(program.mast_forest(), mast);
-        assert!(mast.is_procedure_root(program.entrypoint()));
+        let implementation = naming.callables().selected_implementation(key).unwrap();
+        assert!(mast.procedure_roots().iter().any(|&root| {
+            mast.is_procedure_root_with_exact_digest(root, implementation.into_word())
+        }));
     } else {
-        assert!(program.is_err());
+        assert!(executable.is_err());
     }
     let has_exports = package.manifest.exports().any(|export| export.as_procedure().is_some());
     assert_eq!(package.check_kernel_code(naming).is_ok(), package.is_kernel() && has_exports);

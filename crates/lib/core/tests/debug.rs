@@ -40,9 +40,13 @@ fn execute_sync(
     host: &mut impl SyncHost,
     options: ExecutionOptions,
 ) -> Result<ExecutionOutput, ExecutionError> {
-    let processor = FastProcessor::new_with_options(stack_inputs, advice_inputs, options)
-        .expect("failed to construct FastProcessor");
-    processor.execute_sync(&named.program, named.environment.execution(), host)
+    let processor = FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        options.with_resolution_limits(named.1.resolution_limits()),
+    )
+    .expect("failed to construct FastProcessor");
+    processor.execute_sync(named.1.target(), host)
 }
 
 /// A [`fmt::Write`] that appends into a shared, thread-safe string buffer.
@@ -82,7 +86,9 @@ fn run(source: &str, advice: AdviceInputs) -> (String, ExecutionOutput) {
     let host_lib = HostLibrary::new(core_lib.code_package().clone())
         .set_handlers(debug_handlers_with_writer(SharedBuf(buf.clone())));
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -116,7 +122,9 @@ fn run_with_default_core_handlers(source: &str, advice: AdviceInputs) -> Executi
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&core_lib)
         .expect("failed to load core library handlers");
 
@@ -302,7 +310,9 @@ fn print_mem_rejects_out_of_bounds_range_end() {
     let host_lib = HostLibrary::new(core_lib.code_package().clone())
         .set_handlers(debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))));
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -342,7 +352,9 @@ fn print_mem_rejects_oversized_range() {
     let host_lib = HostLibrary::new(core_lib.code_package().clone())
         .set_handlers(debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))));
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -382,7 +394,9 @@ fn print_mem_rejects_full_range() {
     let host_lib = HostLibrary::new(core_lib.code_package().clone())
         .set_handlers(debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))));
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -584,7 +598,9 @@ fn debug_handlers_compose_with_default_core_handlers() {
     handlers.extend(advice_debug_handlers());
     let host_lib = HostLibrary::new(core_lib.code_package().clone()).set_handlers(handlers);
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -651,7 +667,9 @@ fn noop_debug_handlers_run_print_stack_without_output() {
     let host_lib =
         HostLibrary::new(core_lib.code_package().clone()).set_handlers(noop_debug_handlers());
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 

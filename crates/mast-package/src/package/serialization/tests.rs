@@ -307,7 +307,7 @@ fn private_only_code_package_roundtrips_without_public_exports() {
                 assert_eq!(decoded.commitment(), package.commitment());
                 let naming = fixture_naming(fixture_home(), kind, decoded.mast_forest(), &[]);
                 decoded.check_naming(&naming).unwrap();
-                assert!(decoded.try_into_program(&naming).is_err());
+                assert!(decoded.check_executable_code(&naming).is_err());
                 assert!(decoded.check_kernel_code(&naming).is_err());
             }
         }

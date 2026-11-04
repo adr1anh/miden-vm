@@ -30,14 +30,16 @@ use miden_core::{
         MastForest, MastNodeExt, OP_BATCH_SIZE, SplitNodeBuilder,
     },
     operations::{Operation, opcodes},
-    program::{CanonicalLabel, ImplementationRoot, Program, StackInputs},
+    program::{CanonicalLabel, ImplementationRoot, StackInputs},
 };
-use miden_mast_package::{CallableProcedurePath, NamespacePath, ProcedureName};
+use miden_mast_package::{CallableProcedurePath, CodePackage, NamespacePath, ProcedureName};
 
 use crate::{
     AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor, ProcessorState,
     event::{NoopEventHandler, TraceError},
-    test_utils::{NamedFixture, named_program, native_trace_limits},
+    test_utils::{
+        NamedFixture, fixture_code, fixture_entry_digest, named_program, native_trace_limits,
+    },
     trace::{VmTrace, build_trace, chiplets::LibraryTrace},
 };
 
@@ -93,7 +95,7 @@ fn test_basic_block_one_group_decoding() {
 
         (
             basic_block,
-            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+            synthetic_fixture(fixture_code(mast_forest.into(), basic_block_id), []),
         )
     };
 
@@ -108,7 +110,7 @@ fn test_basic_block_one_group_decoding() {
     check_op_decoding(&trace, 5, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
     check_hasher_state(
         &trace,
         vec![
@@ -149,7 +151,7 @@ fn test_basic_block_small_decoding() {
 
         (
             basic_block,
-            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+            synthetic_fixture(fixture_code(mast_forest.into(), basic_block_id), []),
         )
     };
 
@@ -170,7 +172,7 @@ fn test_basic_block_small_decoding() {
     check_op_decoding(&trace, 8, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
 
     check_hasher_state(
         &trace,
@@ -215,7 +217,7 @@ fn test_basic_block_small_with_emit_decoding() {
 
         (
             basic_block,
-            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+            synthetic_fixture(fixture_code(mast_forest.into(), basic_block_id), []),
         )
     };
 
@@ -235,7 +237,7 @@ fn test_basic_block_small_with_emit_decoding() {
     check_op_decoding(&trace, 8, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
     check_hasher_state(
         &trace,
         vec![
@@ -282,7 +284,7 @@ fn test_basic_block_small_with_emit_trace_decoding() {
 
         (
             basic_block,
-            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+            synthetic_fixture(fixture_code(mast_forest.into(), basic_block_id), []),
         )
     };
 
@@ -301,7 +303,7 @@ fn test_basic_block_small_with_emit_trace_decoding() {
     check_op_decoding(&trace, 9, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
     check_hasher_state(
         &trace,
         vec![
@@ -355,7 +357,7 @@ fn test_basic_block_decoding() {
 
         (
             basic_block,
-            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+            synthetic_fixture(fixture_code(mast_forest.into(), basic_block_id), []),
         )
     };
     let (trace, trace_len) = build_trace_helper(&[], &program);
@@ -386,7 +388,7 @@ fn test_basic_block_decoding() {
     check_op_decoding(&trace, 18, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
     check_hasher_state(
         &trace,
         vec![
@@ -465,7 +467,7 @@ fn test_basic_block_with_respan_decoding() {
 
         (
             basic_block,
-            synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), []),
+            synthetic_fixture(fixture_code(mast_forest.into(), basic_block_id), []),
         )
     };
     let (trace, trace_len) = build_trace_helper(&[], &program);
@@ -502,7 +504,7 @@ fn test_basic_block_with_respan_decoding() {
     check_op_decoding(&trace, 23, ZERO, opcodes::HALT, 0, 0, 0);
 
     // --- check hasher state columns -------------------------------------------------------------
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
 
     check_hasher_state(
         &trace,
@@ -567,7 +569,7 @@ fn test_join_node_decoding() {
         (
             basic_block1,
             basic_block2,
-            synthetic_fixture(Program::new(mast_forest.into(), join_node_id), []),
+            synthetic_fixture(fixture_code(mast_forest.into(), join_node_id), []),
         )
     };
 
@@ -605,7 +607,7 @@ fn test_join_node_decoding() {
     assert_eq!(EMPTY_WORD, get_hasher_state2(&trace, 6));
 
     // at the end of the program, the hasher state is set to the hash of the entire program
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
     assert_eq!(program_hash, get_hasher_state1(&trace, 7));
     assert_eq!(Word::from([ZERO, ZERO, ZERO, ONE]), get_hasher_state2(&trace, 7));
 
@@ -643,7 +645,7 @@ fn test_split_node_true_decoding() {
         (
             basic_block1,
             basic_block2,
-            synthetic_fixture(Program::new(mast_forest.into(), split_node_id), []),
+            synthetic_fixture(fixture_code(mast_forest.into(), split_node_id), []),
         )
     };
 
@@ -671,7 +673,7 @@ fn test_split_node_true_decoding() {
     assert_eq!(EMPTY_WORD, get_hasher_state2(&trace, 3));
 
     // at the end of the program, the hasher state is set to the hash of the entire program
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
     assert_eq!(program_hash, get_hasher_state1(&trace, 4));
     assert_eq!(Word::from([ZERO, ZERO, ZERO, ONE]), get_hasher_state2(&trace, 4));
 
@@ -706,7 +708,7 @@ fn test_split_node_false_decoding() {
         (
             basic_block1,
             basic_block2,
-            synthetic_fixture(Program::new(mast_forest.into(), split_node_id), []),
+            synthetic_fixture(fixture_code(mast_forest.into(), split_node_id), []),
         )
     };
 
@@ -734,7 +736,7 @@ fn test_split_node_false_decoding() {
     assert_eq!(EMPTY_WORD, get_hasher_state2(&trace, 3));
 
     // at the end of the program, the hasher state is set to the hash of the entire program
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
     assert_eq!(program_hash, get_hasher_state1(&trace, 4));
     assert_eq!(Word::from([ZERO, ZERO, ZERO, ONE]), get_hasher_state2(&trace, 4));
 
@@ -763,7 +765,7 @@ fn test_loop_node_decoding() {
             LoopNodeBuilder::new(loop_body_id).add_to_forest(&mut mast_forest).unwrap();
         mast_forest.make_root(loop_node_id);
 
-        (loop_body, synthetic_fixture(Program::new(mast_forest.into(), loop_node_id), []))
+        (loop_body, synthetic_fixture(fixture_code(mast_forest.into(), loop_node_id), []))
     };
 
     // Input [0]: do-while LOOP enters the body unconditionally; after the Pad+Drop net-zero body,
@@ -796,7 +798,7 @@ fn test_loop_node_decoding() {
 
     // the hash of the program is located in the last END row; this row should also have is_loop
     // flag set to ONE
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
     assert_eq!(program_hash, get_hasher_state1(&trace, 5));
     assert_eq!(Word::from([ZERO, ONE, ZERO, ONE]), get_hasher_state2(&trace, 5));
 
@@ -822,7 +824,7 @@ fn test_loop_node_repeat_decoding() {
             LoopNodeBuilder::new(loop_body_id).add_to_forest(&mut mast_forest).unwrap();
         mast_forest.make_root(loop_node_id);
 
-        (loop_body, synthetic_fixture(Program::new(mast_forest.into(), loop_node_id), []))
+        (loop_body, synthetic_fixture(fixture_code(mast_forest.into(), loop_node_id), []))
     };
 
     // Input [1, 0]: do-while LOOP enters the body unconditionally; Pad+Drop is net-zero, so the
@@ -872,7 +874,7 @@ fn test_loop_node_repeat_decoding() {
 
     // the hash of the program is located in the last END row; this row should also have is_loop
     // flag set to ONE
-    let program_hash = program.program.hash();
+    let program_hash = fixture_entry_digest(&program.code);
     assert_eq!(program_hash, get_hasher_state1(&trace, 10));
     assert_eq!(Word::from([ZERO, ONE, ZERO, ONE]), get_hasher_state2(&trace, 10));
 
@@ -960,7 +962,7 @@ fn test_call_decoding() {
     mast_forest.make_root(program_root_node_id);
 
     let program = synthetic_fixture(
-        Program::new(mast_forest.into(), program_root_node_id),
+        fixture_code(mast_forest.into(), program_root_node_id),
         [
             (fixture_binding("foo", false), ImplementationRoot::new(foo_root.digest())),
             (fixture_binding("bar", false), ImplementationRoot::new(bar_root_node.digest())),
@@ -1267,7 +1269,7 @@ fn test_syscall_decoding() {
     mast_forest.make_root(program_root_node_id);
 
     let program = synthetic_fixture(
-        Program::new(mast_forest.into(), program_root_node_id),
+        fixture_code(mast_forest.into(), program_root_node_id),
         [
             (fixture_binding("foo", true), ImplementationRoot::new(foo_root.digest())),
             (fixture_binding("bar", false), ImplementationRoot::new(bar_root_node.digest())),
@@ -1535,7 +1537,7 @@ fn test_dyn_node_decoding() {
     mast_forest.make_root(program_root_node_id);
 
     let program = synthetic_fixture(
-        Program::new(mast_forest.into(), program_root_node_id),
+        fixture_code(mast_forest.into(), program_root_node_id),
         [(fixture_binding("foo", false), ImplementationRoot::new(foo_root_node.digest()))],
     );
 
@@ -1647,7 +1649,7 @@ fn u32div_sets_all_user_op_helpers() {
             .unwrap();
         mast_forest.make_root(basic_block_id);
 
-        synthetic_fixture(Program::new(mast_forest.into(), basic_block_id), [])
+        synthetic_fixture(fixture_code(mast_forest.into(), basic_block_id), [])
     };
     let dividend = u32::MAX - 1;
     let divisor = 1_000_003;
@@ -1688,12 +1690,14 @@ fn build_trace_helper(stack_inputs: &[u64], program: &NamedFixture) -> (DecoderT
         StackInputs::new(&stack_inputs).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     host.register_handler(EMIT_EVENT, Arc::new(NoopEventHandler)).unwrap();
     host.register_trace_handler(
         TRACE_EVENT,
@@ -1701,9 +1705,7 @@ fn build_trace_helper(stack_inputs: &[u64], program: &NamedFixture) -> (DecoderT
     )
     .unwrap();
 
-    let execution_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
-        .unwrap();
+    let execution_witness = processor.execute_for_proving_sync(program.target, &mut host).unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
     let library_prefix = LibraryTrace::new(&vm_witness.trace_replay().resolution_session)
         .unwrap()
@@ -1731,16 +1733,16 @@ fn build_call_trace_helper(program: &NamedFixture) -> (SystemTrace, DecoderTrace
         StackInputs::default(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
 
-    let execution_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
-        .unwrap();
+    let execution_witness = processor.execute_for_proving_sync(program.target, &mut host).unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
     let library_prefix = LibraryTrace::new(&vm_witness.trace_replay().resolution_session)
         .unwrap()
@@ -1988,7 +1990,7 @@ fn fixture_binding(name: &str, kernel: bool) -> ProcedureName {
 }
 
 fn synthetic_fixture(
-    program: Program,
+    program: CodePackage,
     targets: impl IntoIterator<Item = (ProcedureName, ImplementationRoot)>,
 ) -> NamedFixture {
     named_program(program, fixture_binding("entry", false), targets).unwrap()

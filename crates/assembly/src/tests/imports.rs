@@ -50,11 +50,12 @@ fn imported_reexport_targets(
 }
 
 fn assert_imported_runtime_targets(
-    program: &Program,
+    program: &CodePackage,
     expected_exec: &[ProcedureKey],
     expected_call: &[ProcedureKey],
 ) {
     let exec = program
+        .package()
         .mast_forest()
         .nodes()
         .iter()
@@ -64,6 +65,7 @@ fn assert_imported_runtime_targets(
         })
         .collect::<BTreeSet<_>>();
     let call = program
+        .package()
         .mast_forest()
         .nodes()
         .iter()
@@ -123,7 +125,7 @@ fn program_with_one_import_and_hex_call() -> TestResult {
     let program = context.assemble(source)?;
 
     assert_imported_runtime_targets(&program, &[target], &[target]);
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -239,7 +241,7 @@ fn program_with_reexported_proc_in_same_library() -> TestResult {
     );
     let program = context.assemble(source)?;
     assert_imported_runtime_targets(&program, &targets, &[]);
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -302,7 +304,7 @@ fn program_with_reexported_custom_alias_in_same_library() -> TestResult {
     );
     let program = context.assemble(source)?;
     assert_imported_runtime_targets(&program, &targets, &[]);
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -375,7 +377,7 @@ fn program_with_reexported_proc_in_another_library() -> TestResult {
     let program = context.assemble(source)?;
 
     assert_imported_runtime_targets(&program, &targets, &[]);
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
 
     // We also want to assert that exports from the referenced module do not leak
     let mut context = TestContext::default();
@@ -455,7 +457,7 @@ fn module_alias() -> TestResult {
 
     let program = context.assemble(source)?;
     assert_imported_runtime_targets(&program, &[target], &[]);
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
 
     // --- invalid module alias -----------------------------------------------
     let source = source_file!(

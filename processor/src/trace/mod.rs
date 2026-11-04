@@ -2,7 +2,7 @@ use alloc::{format, vec::Vec};
 
 use miden_core::{
     deferred::{Digest, TRUE_DIGEST},
-    program::ExecutionClaim,
+    program::{ExecutionClaim, ExecutionTarget},
     serde::{
         BudgetedReader, ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable,
         SliceReader,
@@ -10,7 +10,7 @@ use miden_core::{
 };
 
 use crate::{
-    EnvironmentTraceLimits, ExecutionEnvironment, StackInputs, StackOutputs, fast::ExecutionOutput,
+    EnvironmentTraceLimits, ResolutionLimits, StackInputs, StackOutputs, fast::ExecutionOutput,
 };
 
 pub(crate) mod utils;
@@ -103,14 +103,15 @@ impl ExecutionWitness {
     }
 
     /// Returns the execution target authenticated by the replay.
-    pub fn execution_descriptor(&self) -> crate::ExecutionTarget {
+    pub fn execution_descriptor(&self) -> ExecutionTarget {
         self.vm.trace.environment.descriptor()
     }
 
     /// Reads replay v6 using caller authority and explicit transport/revalidation budgets.
     pub fn read_from_bytes_with_limits(
         bytes: &[u8],
-        environment: &ExecutionEnvironment,
+        target: ExecutionTarget,
+        resolution_limits: ResolutionLimits,
         trace_limits: EnvironmentTraceLimits,
         read_limits: ReplayReadLimits,
     ) -> Result<Self, DeserializationError> {
@@ -121,7 +122,13 @@ impl ExecutionWitness {
         }
         let budget = bytes.len().saturating_mul(EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER);
         let mut reader = BudgetedReader::new(SliceReader::new(bytes), budget);
-        let witness = Self::read_with_limits(&mut reader, environment, trace_limits, read_limits)?;
+        let witness = Self::read_with_limits(
+            &mut reader,
+            target,
+            resolution_limits,
+            trace_limits,
+            read_limits,
+        )?;
         if reader.has_more_bytes() {
             return Err(DeserializationError::InvalidValue(
                 "extra bytes after execution witness payload".into(),
@@ -205,7 +212,8 @@ impl ExecutionWitness {
 impl ExecutionWitness {
     fn read_with_limits<R: ByteReader>(
         source: &mut R,
-        environment: &ExecutionEnvironment,
+        target: ExecutionTarget,
+        resolution_limits: ResolutionLimits,
         trace_limits: EnvironmentTraceLimits,
         read_limits: ReplayReadLimits,
     ) -> Result<Self, DeserializationError> {
@@ -216,7 +224,13 @@ impl ExecutionWitness {
                  {EXECUTION_WITNESS_WIRE_VERSION})"
             )));
         }
-        let vm = VmWitness::read_with_limits(source, environment, trace_limits, read_limits)?;
+        let vm = VmWitness::read_with_limits(
+            source,
+            target,
+            resolution_limits,
+            trace_limits,
+            read_limits,
+        )?;
         let precompile = match source.read_u8()? {
             0 => {
                 if vm.precompile_root != TRUE_DIGEST {
@@ -334,14 +348,21 @@ impl VmWitness {
 impl VmWitness {
     fn read_with_limits<R: ByteReader>(
         source: &mut R,
-        environment: &ExecutionEnvironment,
+        target: ExecutionTarget,
+        resolution_limits: ResolutionLimits,
         trace_limits: EnvironmentTraceLimits,
         read_limits: ReplayReadLimits,
     ) -> Result<Self, DeserializationError> {
         let witness = Self {
             stack_inputs: StackInputs::read_from(source)?,
             stack_outputs: StackOutputs::read_from(source)?,
-            trace: TraceReplay::read_with_limits(source, environment, trace_limits, read_limits)?,
+            trace: TraceReplay::read_with_limits(
+                source,
+                target,
+                resolution_limits,
+                trace_limits,
+                read_limits,
+            )?,
             precompile_root: Digest::read_from(source)?,
         };
         witness
@@ -393,16 +414,17 @@ mod wire_tests {
 
     #[test]
     fn witness_claim_retains_target_and_authenticated_implementation() {
-        let WitnessFixture { witness, environment } = deferred_witness();
+        let WitnessFixture { witness, target, resolution_limits } = deferred_witness();
         let claim = witness.claim();
         let implementation = witness.vm.trace.entry_implementation().unwrap();
         assert_ne!(claim.entry_key().as_word(), implementation.as_word());
-        assert_eq!(claim.execution_descriptor(), environment.descriptor());
+        assert_eq!(claim.execution_descriptor(), target);
 
         let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
         let restored = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &environment,
+            target,
+            resolution_limits,
             trace_limits(),
             read_limits(),
         )
@@ -413,18 +435,13 @@ mod wire_tests {
         // The expected key comes from the caller even when code with this digest is available.
         let wrong_target = ExecutionTarget::new(
             ProcedureKey::new(implementation.into_word()),
-            environment.descriptor().environment_root(),
-        );
-        let wrong_environment = crate::ExecutionEnvironment::new(
-            wrong_target,
-            environment.opening_limits(),
-            environment.ledger_limits(),
-            environment.session_limits(),
+            target.environment_root(),
         );
         assert!(
             ExecutionWitness::read_from_bytes_with_limits(
                 &bytes,
-                &wrong_environment,
+                wrong_target,
+                resolution_limits,
                 trace_limits(),
                 read_limits(),
             )
@@ -435,7 +452,8 @@ mod wire_tests {
         assert!(
             ExecutionWitness::read_from_bytes_with_limits(
                 &legacy,
-                &environment,
+                target,
+                resolution_limits,
                 trace_limits(),
                 read_limits(),
             )
@@ -445,7 +463,7 @@ mod wire_tests {
 
     #[test]
     fn witness_wire_accepts_large_minimally_encoded_continuation_stack() {
-        let WitnessFixture { mut witness, environment } = deferred_witness();
+        let WitnessFixture { mut witness, target, resolution_limits } = deferred_witness();
         let continuation = &mut witness
             .vm
             .trace_replay_mut()
@@ -463,7 +481,8 @@ mod wire_tests {
         let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
         let restored = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &environment,
+            target,
+            resolution_limits,
             trace_limits(),
             read_limits(),
         )
@@ -500,7 +519,7 @@ mod wire_tests {
         #[case] expected_error: &str,
         #[values(0, 7)] lane: usize,
     ) {
-        let WitnessFixture { mut witness, environment } = aead_stream_witness();
+        let WitnessFixture { mut witness, target, resolution_limits } = aead_stream_witness();
         let replay = &mut witness.vm.trace_replay_mut().bitwise_replay;
         let mut tampered = false;
         for entry in core::mem::take(replay) {
@@ -521,7 +540,8 @@ mod wire_tests {
         let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
         let witness = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &environment,
+            target,
+            resolution_limits,
             trace_limits(),
             read_limits(),
         )
@@ -537,11 +557,12 @@ mod wire_tests {
 
     #[test]
     fn witness_wire_rejects_precompile_witness_with_true_root() {
-        let WitnessFixture { witness, environment } = deferred_witness();
+        let WitnessFixture { witness, target, resolution_limits } = deferred_witness();
         let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
         let restored = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &environment,
+            target,
+            resolution_limits,
             trace_limits(),
             read_limits(),
         )
@@ -558,7 +579,8 @@ mod wire_tests {
         let tampered_bytes = tampered.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
         let err = ExecutionWitness::read_from_bytes_with_limits(
             &tampered_bytes,
-            &environment,
+            target,
+            resolution_limits,
             trace_limits(),
             read_limits(),
         )
@@ -572,7 +594,8 @@ mod wire_tests {
         assert!(
             ExecutionWitness::read_from_bytes_with_limits(
                 &bytes,
-                &environment,
+                target,
+                resolution_limits,
                 trace_limits(),
                 read_limits(),
             )
@@ -582,11 +605,12 @@ mod wire_tests {
 
     #[test]
     fn witness_wire_rejects_missing_precompile_witness() {
-        let WitnessFixture { witness, environment } = deferred_witness();
+        let WitnessFixture { witness, target, resolution_limits } = deferred_witness();
         let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
         let restored = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &environment,
+            target,
+            resolution_limits,
             trace_limits(),
             read_limits(),
         )
@@ -599,7 +623,8 @@ mod wire_tests {
         let stripped_bytes = stripped.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
         let err = ExecutionWitness::read_from_bytes_with_limits(
             &stripped_bytes,
-            &environment,
+            target,
+            resolution_limits,
             trace_limits(),
             read_limits(),
         )

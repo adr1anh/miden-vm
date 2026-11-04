@@ -4,7 +4,7 @@ use miden_assembly::{
     Assembler, DefaultSourceManager, Linkage,
     diagnostics::{IntoDiagnostic, Report, WrapErr},
 };
-use miden_core::program::{ProcedureKey, Program};
+use miden_core::program::ProcedureKey;
 use miden_core_lib::CoreLibrary;
 use miden_mast_package::{EventHandlerSection, Package};
 use miden_processor::{DefaultHost, HostLibrary};
@@ -15,8 +15,7 @@ use crate::cli::data::{Libraries, ProgramFile};
 
 /// Returns the `Package` read from a `.masp` package file.
 ///
-/// The callers extract the program with [`Package::try_into_program`] and register the package
-/// with [`load_package_with_handlers`].
+/// Callers validate its symbols and register checked code with [`load_package_with_handlers`].
 pub fn get_masp_package(path: &Path) -> Result<Arc<Package>, Report> {
     Package::deserialize_from_file(path)
         .into_diagnostic()
@@ -91,7 +90,6 @@ pub fn load_program_libraries(
 
 /// Code with its exact retained/admitted inventory and optional independent kernel inventory.
 pub struct LoadedProgram {
-    pub program: Program,
     pub target: CodePackage,
     pub kernel: Option<CodePackage>,
     pub source_manager: Option<Arc<DefaultSourceManager>>,
@@ -186,8 +184,8 @@ pub fn load_program(
     if let Some(kernel) = &kernel {
         kernel.package().check_kernel_code(kernel.symbols())?;
     }
-    let program = target.package().try_into_program(target.symbols())?;
-    Ok(LoadedProgram { program, target, kernel, source_manager })
+    target.package().check_executable_code(target.symbols())?;
+    Ok(LoadedProgram { target, kernel, source_manager })
 }
 
 fn extension(path: &Path) -> String {

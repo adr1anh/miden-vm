@@ -3,15 +3,22 @@
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use miden_core::program::{
-    CanonicalLabel, EnvNode, EnvironmentBuildLimits, EnvironmentBuilder, EnvironmentRoot,
-    ExecutionTarget, ImplementationRoot, Namespace, ProcedureKey, ValidatedEnvironment,
+use miden_core::{
+    Word,
+    mast::{MastForest, MastNodeExt, MastNodeId},
+    program::{
+        CanonicalLabel, EnvNode, EnvironmentBuildLimits, EnvironmentBuilder, EnvironmentRoot,
+        ExecutionTarget, ImplementationRoot, Namespace, ProcedureKey, ValidatedEnvironment,
+    },
 };
-use miden_mast_package::{PackageSymbols, ProcedureName};
+use miden_mast_package::{
+    CallableProcedurePath, CodePackage, NamespacePath, Package, PackageCallables,
+    PackageProcedureOccurrence, PackageSymbols, ProcedureName, TargetType, Version,
+};
 use miden_processor::{
     EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, ExecutionEnvironment, LedgerLimits, OpeningError, OpeningLimits,
-    OpeningResource, OpeningStep, ResolutionWitness, SessionLimits,
+    EnvironmentWitnessSource, LedgerLimits, OpeningError, OpeningLimits, OpeningResource,
+    OpeningStep, ResolutionLimits, ResolutionWitness, SessionLimits,
 };
 
 use super::Report;
@@ -33,13 +40,76 @@ const FIXTURE_OPENING_LIMITS: OpeningLimits = OpeningLimits {
 };
 type FixturePath = Vec<(EnvironmentRoot, Option<usize>)>;
 
-/// A fixture owner's exact code, canonical inventory and locally authorized finite environment.
-#[derive(Clone)]
-pub struct NamedProgram {
-    pub program: miden_core::program::Program,
-    pub environment: FixtureEnvironment,
-    pub package: Arc<miden_mast_package::Package>,
-    pub naming: Arc<PackageSymbols>,
+/// Names every retained root under the explicit raw-test convention, independently of its digest.
+///
+/// The selected root is `raw-fixture/entry`; the other retained roots use `helper_<index>` labels.
+/// Exact occurrence rows preserve distinct roots even when they have equal implementation digests.
+/// This supplies checked code only. Tests still select their target, finite resolution policies
+/// and witness source separately; no kernel or production home authority is implied.
+pub fn fixture_code(forest: Arc<MastForest>, root: MastNodeId) -> CodePackage {
+    assert!(
+        forest.is_procedure_root(root),
+        "fixture entry must be a retained procedure root"
+    );
+    let home = NamespacePath::new(alloc::vec![
+        CanonicalLabel::text("raw-fixture").expect("fixed fixture home is valid"),
+    ]);
+    let mut bindings = Vec::new();
+    let mut implementations = Vec::new();
+    let mut occurrences = Vec::new();
+    let mut entry = None;
+    for (index, &node) in forest.procedure_roots().iter().enumerate() {
+        let label = if node == root {
+            "entry".into()
+        } else {
+            alloc::format!("helper_{index}")
+        };
+        let path = CallableProcedurePath::from_semantic_components(alloc::vec![label])
+            .expect("fixed fixture procedure label is valid");
+        let binding =
+            ProcedureName::new(home.clone(), path).expect("fixed fixture procedure name is valid");
+        let key = binding.key();
+        if node == root {
+            entry = Some(key);
+        }
+        bindings.push(binding);
+        implementations.push((key, ImplementationRoot::new(forest[node].digest())));
+        occurrences.push(PackageProcedureOccurrence::new(key, node, None));
+    }
+    let callables = PackageCallables::new(bindings, [], implementations)
+        .expect("raw fixture labels must be unique");
+    let symbols = Arc::new(
+        PackageSymbols::new(home, callables, entry).expect("fixture entry must be declared"),
+    );
+    let package = Package::create(
+        "raw-fixture".into(),
+        Version::new(0, 0, 0),
+        TargetType::Executable,
+        forest,
+        [],
+        [],
+        &symbols,
+    )
+    .expect("fixture symbols must cover every retained root");
+    occurrences.sort_by_key(|row| row.key().as_word().as_bytes());
+    let package = package
+        .with_procedure_occurrences(occurrences, &symbols)
+        .expect("fixture occurrences must identify their exact retained roots");
+    CodePackage::new(Arc::new(package), symbols).expect("fixture package must match its symbols")
+}
+
+/// Inspects the fixture's exact entry occurrence without selecting the first root with its digest.
+pub fn fixture_entry_root(code: &CodePackage) -> MastNodeId {
+    let key = code.symbols().entry_key().expect("fixture code must have an explicit entry");
+    code.package()
+        .procedure_occurrence(key)
+        .expect("fixture entry must retain an exact occurrence")
+        .exec_node()
+}
+
+/// Inspects the implementation digest of the fixture's exact entry occurrence.
+pub fn fixture_entry_digest(code: &CodePackage) -> Word {
+    code.package().mast_forest()[fixture_entry_root(code)].digest()
 }
 
 /// Selects the source-test naming convention for local definitions in the same parsing context.
@@ -51,7 +121,7 @@ pub fn assemble_fixture_program(
     name: &str,
     source: impl miden_assembly::Parse,
     imports: &[&PackageSymbols],
-) -> NamedProgram {
+) -> (CodePackage, FixtureEnvironment) {
     let root = source
         .parse(assembler.warnings_as_errors(), assembler.source_manager())
         .expect("fixture source must parse");
@@ -73,7 +143,7 @@ pub fn assemble_fixture_program(
 pub fn fixture_from_product(
     product: miden_assembly::AssemblyProduct,
     imports: &[&PackageSymbols],
-) -> NamedProgram {
+) -> (CodePackage, FixtureEnvironment) {
     try_fixture_from_product(product, imports)
         .expect("fixture product and selections must form a valid named execution environment")
 }
@@ -82,18 +152,15 @@ pub fn fixture_from_product(
 pub fn try_fixture_from_product(
     product: miden_assembly::AssemblyProduct,
     imports: &[&PackageSymbols],
-) -> Result<NamedProgram, Report> {
-    let naming = Arc::new(product.naming().clone());
+) -> Result<(CodePackage, FixtureEnvironment), Report> {
+    let naming = product.naming();
     let entry = naming
         .entry_key()
         .ok_or_else(|| Report::msg("fixture program must have an explicit entry"))?;
-    let environment = FixtureEnvironment::new(
-        entry,
-        core::iter::once(naming.as_ref()).chain(imports.iter().copied()),
-    )?;
-    let package: Arc<miden_mast_package::Package> = product.into_artifact(true)?.into();
-    let program = package.try_into_program(&naming)?;
-    Ok(NamedProgram { program, environment, package, naming })
+    let environment =
+        FixtureEnvironment::new(entry, core::iter::once(naming).chain(imports.iter().copied()))?;
+    let code = product.into_code_package(true)?;
+    Ok((code, environment))
 }
 
 /// A test owner's selected canonical naming/code bindings and their complete local environment.
@@ -105,7 +172,8 @@ pub fn try_fixture_from_product(
 pub struct FixtureEnvironment {
     environment: Arc<ValidatedEnvironment>,
     paths: Arc<BTreeMap<ProcedureKey, FixturePath>>,
-    execution: ExecutionEnvironment,
+    target: ExecutionTarget,
+    resolution_limits: ResolutionLimits,
 }
 
 impl FixtureEnvironment {
@@ -269,8 +337,7 @@ impl FixtureEnvironment {
         for path in paths.values() {
             preflight_path(&environment, path, FIXTURE_OPENING_LIMITS).map_err(Report::msg)?;
         }
-        let execution = ExecutionEnvironment::new(
-            ExecutionTarget::new(entry, root),
+        let resolution_limits = ResolutionLimits::new(
             FIXTURE_OPENING_LIMITS,
             LedgerLimits {
                 max_occurrences: 262_144,
@@ -291,13 +358,19 @@ impl FixtureEnvironment {
         Ok(Self {
             environment,
             paths: Arc::new(paths),
-            execution,
+            target: ExecutionTarget::new(entry, root),
+            resolution_limits,
         })
     }
 
-    /// Returns the selected entry/root and this helper's finite resolution policies.
-    pub fn execution(&self) -> ExecutionEnvironment {
-        self.execution
+    /// Returns the fixture owner's independently selected entry and environment root.
+    pub fn target(&self) -> ExecutionTarget {
+        self.target
+    }
+
+    /// Returns this helper's explicit finite resolution policies.
+    pub fn resolution_limits(&self) -> ResolutionLimits {
+        self.resolution_limits
     }
 
     /// Returns the complete locally constructed environment, including mounted fragments.
@@ -576,26 +649,24 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn shared_source_fixture_retains_exact_artifact_names_and_executes() {
-        let fixture = assemble_fixture_program(
+        let (code, environment) = assemble_fixture_program(
             miden_assembly::Assembler::default(),
             "shared_fixture",
             "proc helper push.5 end begin exec.helper swap drop end",
             &[],
         );
-        fixture.package.check_naming(&fixture.naming).unwrap();
-        let execution = fixture.environment.execution();
-        let entry = fixture.naming.entry_key().unwrap();
-        assert_eq!(execution.descriptor().entry_key(), entry);
-        assert_ne!(entry.into_word(), fixture.program.hash());
-        let implementation = fixture.naming.callables().selected_implementation(entry).unwrap();
-        assert_eq!(implementation.into_word(), fixture.program.hash());
+        code.package().check_naming(code.symbols()).unwrap();
+        let target = environment.target();
+        let entry = code.symbols().entry_key().unwrap();
+        assert_eq!(target.entry_key(), entry);
+        let implementation = code.symbols().callables().selected_implementation(entry).unwrap();
+        assert_ne!(entry.into_word(), implementation.into_word());
         let request = EnvironmentWitnessRequest {
-            root: execution.descriptor().environment_root(),
+            root: target.environment_root(),
             key: entry,
-            limits: execution.opening_limits(),
+            limits: environment.resolution_limits().opening_limits(),
         };
-        let resolved = fixture
-            .environment
+        let resolved = environment
             .source()
             .get(request)
             .unwrap()
@@ -603,12 +674,18 @@ mod tests {
             .verify(request.root, entry, request.limits)
             .unwrap();
         assert_eq!(resolved.implementation_root(), implementation);
-        let mut host = miden_processor::DefaultHost::default()
-            .with_environment_source(fixture.environment.source());
-        let output =
-            miden_processor::FastProcessor::new(miden_core::program::StackInputs::default())
-                .execute_sync(&fixture.program, execution, &mut host)
-                .unwrap();
+        let mut host =
+            miden_processor::DefaultHost::default().with_environment_source(environment.source());
+        host.load_library(code).unwrap();
+        let output = miden_processor::FastProcessor::new_with_options(
+            miden_core::program::StackInputs::default(),
+            miden_core::advice::AdviceInputs::default(),
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(target, &mut host)
+        .unwrap();
         assert_eq!(output.stack.get_element(0), Some(Felt::from_u32(5)));
     }
 
@@ -707,7 +784,7 @@ mod tests {
             let request = EnvironmentWitnessRequest {
                 root: environment.root(),
                 key,
-                limits: fixture.execution().opening_limits(),
+                limits: fixture.resolution_limits().opening_limits(),
             };
             let witness = fixture.source().get(request).unwrap().unwrap();
             if let Some(branch) = branch {
@@ -773,7 +850,7 @@ mod tests {
         let request = EnvironmentWitnessRequest {
             root: fixture.validated_environment().root(),
             key,
-            limits: fixture.execution().opening_limits(),
+            limits: fixture.resolution_limits().opening_limits(),
         };
         let witness = fixture.source().get(request).unwrap().unwrap();
         assert_eq!(
@@ -868,7 +945,7 @@ mod tests {
             let request = EnvironmentWitnessRequest {
                 root: fixture.environment.root(),
                 key,
-                limits: fixture.execution().opening_limits(),
+                limits: fixture.resolution_limits().opening_limits(),
             };
             fixture
                 .source()
@@ -896,7 +973,7 @@ mod tests {
         let request = EnvironmentWitnessRequest {
             root: fixture.environment.root(),
             key: first.entry_key().unwrap(),
-            limits: fixture.execution().opening_limits(),
+            limits: fixture.resolution_limits().opening_limits(),
         };
         assert!(
             source

@@ -140,7 +140,8 @@ impl ProveCmd {
         let inputs = self.execution.admit()?;
         let execution_options = self
             .get_execution_options()?
-            .with_environment_trace_limits(inputs.trace_limits());
+            .with_environment_trace_limits(inputs.trace_limits())
+            .with_resolution_limits(inputs.resolution_limits());
         let verification_limits = execution_options.verification_precompile_limits().clone();
         println!("===============================================================================");
         println!("Prove program: {}", self.program_file.display());
@@ -153,7 +154,7 @@ impl ProveCmd {
             &libraries,
             self.kernel_file.as_deref(),
             &naming,
-            inputs.environment().descriptor().entry_key(),
+            inputs.target().entry_key(),
         )?;
         let input_data = InputFile::read(&self.input_file, &self.program_file)?;
         let mut host = DefaultHost::default().with_environment_source(inputs.source());
@@ -161,12 +162,11 @@ impl ProveCmd {
             host = host.with_source_manager(source_manager);
         }
         load_program_libraries(&mut host, &loaded, &libraries)?;
-        let package_debug_info = loaded.target.package().debug_info().map_err(Report::msg)?;
-        let entrypoint_source_node = loaded.target.package().entrypoint_source_node();
-        let program = loaded.program;
-
-        let program_hash: [u8; 32] = program.hash().into();
-        println!("Proving program with hash {}...", hex::encode(program_hash));
+        println!(
+            "Proving entry {} in environment {}...",
+            inputs.target().entry_key().as_word(),
+            inputs.target().environment_root().as_word()
+        );
         let now = Instant::now();
 
         // fetch the stack and program inputs from the arguments
@@ -181,28 +181,9 @@ impl ProveCmd {
         let processor =
             FastProcessor::new_with_options(stack_inputs, advice_inputs, execution_options)
                 .map_err(|err| Report::msg(format!("{err}")))?;
-        let witness = match (package_debug_info.as_ref(), entrypoint_source_node) {
-            (Some(debug_info), Some(entrypoint_source_node_id)) => processor
-                .execute_for_proving_with_package_debug_info_at_source_node_sync(
-                    &program,
-                    inputs.environment(),
-                    debug_info,
-                    entrypoint_source_node_id,
-                    &mut host,
-                )
-                .wrap_err("Failed to execute program")?,
-            (Some(debug_info), None) => processor
-                .execute_for_proving_with_package_debug_info_sync(
-                    &program,
-                    inputs.environment(),
-                    debug_info,
-                    &mut host,
-                )
-                .wrap_err("Failed to execute program")?,
-            (None, _) => processor
-                .execute_for_proving_sync(&program, inputs.environment(), &mut host)
-                .wrap_err("Failed to execute program")?,
-        };
+        let witness = processor
+            .execute_for_proving_sync(inputs.target(), &mut host)
+            .wrap_err("Failed to execute program")?;
         let stack_outputs = *witness.claim().stack_outputs();
         let prover = self.prover(hash_fn, verification_limits);
         let proof = if self.complete || !self.deferred {

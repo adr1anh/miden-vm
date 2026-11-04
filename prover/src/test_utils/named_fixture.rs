@@ -6,16 +6,17 @@ use miden_assembly::{
     Assembler,
     ast::{Module, ModuleKind},
     package::{
-        CallableProcedurePath, NamespacePath, PackageCallables, PackageSymbols, ProcedureName,
+        CallableProcedurePath, CodePackage, NamespacePath, PackageCallables, PackageSymbols,
+        ProcedureName,
     },
     testing::FixtureNamespace,
 };
-use miden_core::program::{CanonicalLabel, ImplementationRoot, ProcedureKey, Program};
+use miden_core::program::{CanonicalLabel, ImplementationRoot, ProcedureKey};
 use miden_debug_types::DefaultSourceManager;
-use miden_utils_testing::librarytree::FixtureEnvironment;
+use miden_utils_testing::librarytree::{FixtureEnvironment, fixture_entry_digest};
 
 pub(crate) struct NamedSource {
-    pub program: Program,
+    pub code: CodePackage,
     pub naming: PackageSymbols,
     pub environment: FixtureEnvironment,
 }
@@ -47,16 +48,17 @@ pub(crate) fn named_source(source: &str) -> NamedSource {
         .assemble_executable_modules("prover-security-fixture".into(), root, [])
         .expect("fixture source must compile");
     let naming = product.naming().clone();
-    let package = product.into_artifact(true).expect("fixture package must retain naming");
-    let program = package.try_into_program(&naming).expect("fixture entry must select code");
+    let code = product
+        .into_code_package(true)
+        .expect("fixture package must retain exact metadata");
     let environment = FixtureEnvironment::new(naming.entry_key().unwrap(), [&naming])
         .expect("fixture environment must validate");
-    NamedSource { program, naming, environment }
+    NamedSource { code, naming, environment }
 }
 
 /// Selects a standalone synthetic entry under an explicit test-owned home. The caller supplies
 /// its name; its body supplies only D. These raw forests contain no runtime invocation targets.
-pub(crate) fn raw_environment(program: &Program, entry_name: &str) -> FixtureEnvironment {
+pub(crate) fn raw_environment(code: &CodePackage, entry_name: &str) -> FixtureEnvironment {
     let home = NamespacePath::new(alloc::vec![
         CanonicalLabel::text("miden-prover-security-fixtures").unwrap(),
     ]);
@@ -66,9 +68,12 @@ pub(crate) fn raw_environment(program: &Program, entry_name: &str) -> FixtureEnv
     )
     .unwrap();
     let key = entry.key();
-    let callables =
-        PackageCallables::new([entry], [], [(key, ImplementationRoot::new(program.hash()))])
-            .unwrap();
+    let callables = PackageCallables::new(
+        [entry],
+        [],
+        [(key, ImplementationRoot::new(fixture_entry_digest(code)))],
+    )
+    .unwrap();
     let naming = PackageSymbols::new(home, callables, Some(key)).unwrap();
     FixtureEnvironment::new(key, [&naming]).expect("synthetic fixture environment must validate")
 }

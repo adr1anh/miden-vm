@@ -115,9 +115,10 @@ fn test_context_names_entrypoints_and_all_linked_source_helpers() -> Result<(), 
     context
         .add_module("namespace helpers pub proc run push.1 end proc unused_helper push.2 end")?;
     let program = context.assemble("use helpers begin exec.helpers::run end")?;
-    assert_eq!(program.mast_forest().procedure_roots().len(), 3);
+    assert_eq!(program.package().mast_forest().procedure_roots().len(), 3);
     assert!(
         program
+            .package()
             .mast_forest()
             .nodes()
             .iter()
@@ -174,6 +175,7 @@ fn imported_fixtures_require_explicit_metadata_and_preserve_equal_body_keys() ->
         "use {first as chosen, second} from imported begin exec.chosen exec.second end",
     )?;
     let keys = program
+        .package()
         .mast_forest()
         .nodes()
         .iter()

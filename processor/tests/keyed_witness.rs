@@ -6,6 +6,7 @@
 
 use std::{
     future::Future,
+    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
@@ -20,12 +21,16 @@ use miden_core::{
     program::{CanonicalLabel, Namespace},
     serde::DeserializationError,
 };
-use miden_mast_package::debug_info::{DebugSourceAsmOp, DebugSourceNode, PackageDebugInfoBuilder};
+use miden_mast_package::{
+    CodePackage, PackageProcedureOccurrence, Section, SectionId,
+    debug_info::{DebugSourceAsmOp, DebugSourceNode, PackageDebugInfoBuilder},
+};
 use miden_processor::{
     self as processor, EnvironmentTraceLimits, ExecutionError, ExecutionOptions, ExecutionWitness,
-    FastProcessor, Felt, ONE, ReplayReadLimits, StackInputs, ZERO,
+    FastProcessor, Felt, LoadedMastForest, ONE, ReplayReadLimits, StackInputs, ZERO,
     trace::{KeyedReplayError, ReplayResource, RowIndex, build_trace},
 };
+use miden_utils_testing::librarytree::fixture_entry_root;
 
 #[path = "common/keyed_witness.rs"]
 mod common;
@@ -38,7 +43,7 @@ use common::{
 /// This fixture contains one authenticated Mast pair and the complete required Library PAD pairs.
 fn assert_single_mast_prefix(
     trace: &processor::trace::VmTrace,
-    environment: processor::ExecutionEnvironment,
+    target: processor::ExecutionTarget,
 ) {
     let main = trace.main_trace();
     let rows: Vec<_> = (0..main.chiplets_height())
@@ -63,7 +68,7 @@ fn assert_single_mast_prefix(
         }
     }
     let label = CanonicalLabel::text("entry").unwrap().commitment().into_word().into_elements();
-    let descriptor = environment.descriptor();
+    let descriptor = target;
     let a = main.chiplet_cols(RowIndex::from(0)).library();
     let b = main.chiplet_cols(RowIndex::from(1)).library();
     assert_eq!(a.x, label);
@@ -124,7 +129,7 @@ fn completed_entry_prefix_registers_compressions_once_before_exact_budget_admiss
     let budget = miden_vm_stark::memory::default_budget();
     let (vm, _) = fixture.witness.into_parts();
     let trace = build_trace(vm, &budget).expect("completed entry should materialize its prefix");
-    assert_single_mast_prefix(&trace, fixture.environment);
+    assert_single_mast_prefix(&trace, fixture.target);
     // One span compression plus Mast and Procedure framing: the write traversal adds no requests.
     assert_eq!(trace.trace_len_summary().eidos_compression_count(), 3);
     let (_, _, eidos, _) = trace.main_trace().clone_air_matrices();
@@ -144,7 +149,8 @@ fn completed_entry_prefix_registers_compressions_once_before_exact_budget_admiss
     let estimated = budget.prover_peak_bytes(trace.trace_len_summary().padded_heights()).unwrap();
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
-        &fixture.environment,
+        fixture.target,
+        fixture.resolution_limits,
         trace_limits(),
         read_limits(),
     )
@@ -232,12 +238,13 @@ fn poll_ready<T>(future: impl Future<Output = T>) -> T {
 fn completed_witness_source_and_async_paths_rebuild_the_same_native_trace() {
     let operations = vec![Operation::Push(Felt::new_unchecked(7)), Operation::Drop];
     let mut fixture = execution_fixture(operations.clone());
+    let root = fixture_entry_root(&fixture.code);
     let mut builder = PackageDebugInfoBuilder::default();
     let context = builder.add_string("fixture::entry");
     let operation = builder.add_string("push.7 drop");
     let source = builder
         .add_node(DebugSourceNode {
-            exec_node: fixture.program.entrypoint(),
+            exec_node: root,
             children: Vec::new(),
             op_start: 0,
             op_end: u32::try_from(operations.len()).unwrap(),
@@ -248,58 +255,55 @@ fn completed_witness_source_and_async_paths_rebuild_the_same_native_trace() {
         .unwrap();
     builder.add_root(source);
     let debug = builder.build();
+    let symbols = fixture.code.symbols().clone();
+    let mut package = (**fixture.code.package()).clone();
+    package.sections.push(Section::new(
+        SectionId::DEBUG_INFO,
+        debug.to_bytes_with_standard_limits().unwrap(),
+    ));
+    let package = package
+        .with_procedure_occurrences(
+            [PackageProcedureOccurrence::new(fixture.target.entry_key(), root, Some(source))],
+            &symbols,
+        )
+        .unwrap();
+    let source_code = CodePackage::new(Arc::new(package), symbols).unwrap();
+    let source_host = |exact| {
+        let mut host = execution_fixture(operations.clone()).host;
+        *host.mast_forest_store_mut() = Default::default();
+        let loaded = if exact {
+            LoadedMastForest::from_code_package(source_code.clone())
+        } else {
+            LoadedMastForest::with_package_debug_info(
+                fixture.code.package().mast_forest().clone(),
+                Ok(Some((*debug).clone())),
+            )
+        };
+        host.mast_forest_store_mut().insert_loaded(loaded);
+        host
+    };
+    let target = fixture.target;
+    let resolution_limits = fixture.resolution_limits;
     let processor = || {
         FastProcessor::new(StackInputs::default())
-            .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+            .with_options(
+                ExecutionOptions::default()
+                    .with_resolution_limits(resolution_limits)
+                    .with_environment_trace_limits(trace_limits()),
+            )
             .unwrap()
     };
-    let plain = processor()
-        .execute_for_proving_sync(&fixture.program, fixture.environment, &mut fixture.host)
-        .unwrap();
-    let asynchronous = poll_ready(processor().execute_for_proving(
-        &fixture.program,
-        fixture.environment,
-        &mut execution_fixture(operations.clone()).host,
-    ))
+    let plain = processor().execute_for_proving_sync(target, &mut fixture.host).unwrap();
+    let asynchronous = poll_ready(
+        processor().execute_for_proving(target, &mut execution_fixture(operations.clone()).host),
+    )
     .unwrap();
-    let source_derived = processor()
-        .execute_for_proving_with_package_debug_info_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug,
-            &mut execution_fixture(operations.clone()).host,
-        )
-        .unwrap();
-    let source_explicit = processor()
-        .execute_for_proving_with_package_debug_info_at_source_node_sync(
-            &fixture.program,
-            fixture.environment,
-            &debug,
-            source,
-            &mut execution_fixture(operations.clone()).host,
-        )
-        .unwrap();
-    let mut witnesses = vec![plain, asynchronous, source_derived, source_explicit];
-    #[cfg(feature = "testing")]
-    {
+    let mut witnesses = vec![plain, asynchronous];
+    for exact in [false, true] {
+        witnesses
+            .push(processor().execute_for_proving_sync(target, &mut source_host(exact)).unwrap());
         witnesses.push(
-            poll_ready(processor().execute_for_proving_with_package_debug_info(
-                &fixture.program,
-                fixture.environment,
-                &debug,
-                &mut execution_fixture(operations.clone()).host,
-            ))
-            .unwrap(),
-        );
-        witnesses.push(
-            poll_ready(processor().execute_for_proving_with_package_debug_info_at_source_node(
-                &fixture.program,
-                fixture.environment,
-                &debug,
-                source,
-                &mut execution_fixture(operations).host,
-            ))
-            .unwrap(),
+            poll_ready(processor().execute_for_proving(target, &mut source_host(exact))).unwrap(),
         );
     }
     let bytes = witnesses[0].to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
@@ -307,7 +311,8 @@ fn completed_witness_source_and_async_paths_rebuild_the_same_native_trace() {
     let claim = witnesses[0].claim();
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
-        &fixture.environment,
+        target,
+        resolution_limits,
         trace_limits(),
         read_limits(),
     )
@@ -316,14 +321,14 @@ fn completed_witness_source_and_async_paths_rebuild_the_same_native_trace() {
     let mut traces = Vec::new();
     for witness in witnesses {
         assert_eq!(witness.claim(), claim);
-        assert_eq!(witness.execution_descriptor(), fixture.environment.descriptor());
+        assert_eq!(witness.execution_descriptor(), target);
         assert_eq!(witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
         let (vm, precompile) = witness.into_parts();
         assert!(precompile.is_none());
         traces.push(build_trace(vm, &miden_vm_stark::memory::default_budget()).unwrap());
     }
     for trace in &traces {
-        assert_single_mast_prefix(trace, fixture.environment);
+        assert_single_mast_prefix(trace, target);
     }
     for trace in &traces[1..] {
         assert_eq!(trace.public_inputs(), traces[0].public_inputs());
@@ -341,10 +346,12 @@ fn completed_witness_retained_limits_admit_exact_boundaries_and_reject_less() {
         let mut fixture = execution_fixture(vec![Operation::Push(ONE), Operation::Drop]);
         FastProcessor::new(StackInputs::default())
             .with_options(
-                ExecutionOptions::default().with_environment_trace_limits(retained_limit(limit)),
+                ExecutionOptions::default()
+                    .with_resolution_limits(fixture.resolution_limits)
+                    .with_environment_trace_limits(retained_limit(limit)),
             )
             .unwrap()
-            .execute_for_proving_sync(&fixture.program, fixture.environment, &mut fixture.host)
+            .execute_for_proving_sync(fixture.target, &mut fixture.host)
     };
     let capture_minimum =
         minimum_retained_limit(|limit| retained_capture_admits(execute(limit), limit));
@@ -361,7 +368,9 @@ fn completed_witness_retained_limits_admit_exact_boundaries_and_reject_less() {
         ),
         "unexpected capture error: {error}"
     );
-    let environment = execution_fixture(vec![Operation::Push(ONE), Operation::Drop]).environment;
+    let policy = execution_fixture(vec![Operation::Push(ONE), Operation::Drop]);
+    let target = policy.target;
+    let resolution_limits = policy.resolution_limits;
     let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
     let export_minimum = minimum_retained_limit(|limit| {
         retained_export_admits(
@@ -385,7 +394,8 @@ fn completed_witness_retained_limits_admit_exact_boundaries_and_reject_less() {
     let read = |limit| {
         ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &environment,
+            target,
+            resolution_limits,
             retained_limit(limit),
             read_limits(),
         )
@@ -396,7 +406,7 @@ fn completed_witness_retained_limits_admit_exact_boundaries_and_reject_less() {
         .expect_err("insufficient retained read storage must not publish a witness");
     assert!(error.to_string().contains("RetainedBytes"), "unexpected read error: {error}");
     assert_eq!(restored.claim(), witness.claim());
-    assert_eq!(restored.execution_descriptor(), environment.descriptor());
+    assert_eq!(restored.execution_descriptor(), target);
     let restored_export_minimum = minimum_retained_limit(|limit| {
         retained_export_admits(
             restored.to_bytes_with_limits(retained_limit(limit), read_limits()),
@@ -445,18 +455,20 @@ fn witness_wire_limits_accept_exact_size_and_reject_one_byte_less() {
     assert_eq!(fixture.witness.to_bytes_with_limits(trace_limits(), exact).unwrap(), bytes);
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
-        &fixture.environment,
+        fixture.target,
+        fixture.resolution_limits,
         trace_limits(),
         exact,
     )
     .unwrap();
-    assert_eq!(restored.execution_descriptor(), fixture.environment.descriptor());
+    assert_eq!(restored.execution_descriptor(), fixture.target);
     let below = ReplayReadLimits { max_wire_bytes: bytes.len() - 1, ..exact };
     assert!(fixture.witness.to_bytes_with_limits(trace_limits(), below).is_err());
     assert!(
         ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &fixture.environment,
+            fixture.target,
+            fixture.resolution_limits,
             trace_limits(),
             below,
         )
@@ -472,7 +484,8 @@ fn witness_wire_rejects_unsupported_version() {
     assert!(
         ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &fixture.environment,
+            fixture.target,
+            fixture.resolution_limits,
             trace_limits(),
             read_limits(),
         )
@@ -484,7 +497,8 @@ fn witness_wire_rejects_unsupported_version() {
         bytes[0] = version;
         let error = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
-            &fixture.environment,
+            fixture.target,
+            fixture.resolution_limits,
             trace_limits(),
             read_limits(),
         )
@@ -500,7 +514,8 @@ fn witness_wire_rejects_trailing_bytes() {
     bytes.push(0);
     let error = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
-        &fixture.environment,
+        fixture.target,
+        fixture.resolution_limits,
         trace_limits(),
         read_limits(),
     )
@@ -517,13 +532,14 @@ fn deferred_witness_round_trip_preserves_claim_descriptor_and_precompile() {
     let bytes = fixture.witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
-        &fixture.environment,
+        fixture.target,
+        fixture.resolution_limits,
         trace_limits(),
         read_limits(),
     )
     .expect("deferred witness should round trip");
     assert_eq!(restored.claim(), fixture.witness.claim());
-    assert_eq!(restored.execution_descriptor(), fixture.environment.descriptor());
+    assert_eq!(restored.execution_descriptor(), fixture.target);
     assert!(restored.has_precompiles());
     assert_eq!(restored.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
     let (vm, precompile) = restored.into_parts();
@@ -543,21 +559,22 @@ fn aead_stream_witness_round_trip_rebuilds_the_same_native_trace() {
 
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
-        &fixture.environment,
+        fixture.target,
+        fixture.resolution_limits,
         trace_limits(),
         read_limits(),
     )
     .expect("AEAD witness should round trip");
     assert_eq!(restored.claim(), claim);
-    assert_eq!(restored.execution_descriptor(), fixture.environment.descriptor());
+    assert_eq!(restored.execution_descriptor(), fixture.target);
     assert_eq!(restored.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
     let (restored_vm, restored_precompile) = restored.into_parts();
     assert!(restored_precompile.is_none());
     let restored_trace = build_trace(restored_vm, &miden_vm_stark::memory::default_budget())
         .expect("restored native trace should build");
 
-    assert_single_mast_prefix(&original_trace, fixture.environment);
-    assert_single_mast_prefix(&restored_trace, fixture.environment);
+    assert_single_mast_prefix(&original_trace, fixture.target);
+    assert_single_mast_prefix(&restored_trace, fixture.target);
     assert_eq!(restored_trace.public_inputs(), original_trace.public_inputs());
     assert_eq!(restored_trace.trace_len_summary(), original_trace.trace_len_summary());
     assert_eq!(
@@ -616,7 +633,8 @@ fn memory_write_helpers_survive_native_trace_materialization() {
     let bytes = fixture.witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
-        &fixture.environment,
+        fixture.target,
+        fixture.resolution_limits,
         trace_limits(),
         read_limits(),
     )
@@ -630,7 +648,7 @@ fn memory_write_helpers_survive_native_trace_materialization() {
     let main = trace.main_trace();
 
     // The semantic classifier includes Memory rows with e1=1 in shared c22.
-    assert_single_mast_prefix(&trace, fixture.environment);
+    assert_single_mast_prefix(&trace, fixture.target);
     let memory_rows: Vec<_> = (0..main.chiplets_height())
         .map(RowIndex::from)
         .filter(|&row| main.is_memory_row(row))

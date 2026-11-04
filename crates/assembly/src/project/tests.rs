@@ -2743,7 +2743,12 @@ fn executable_packages_preserve_kernel_distribution_with_code_only_program_conve
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     let round_tripped_program = fixture_program(&round_tripped_package);
-    assert!(round_tripped_program.kernel().is_empty());
+    assert!(
+        round_tripped_program
+            .package()
+            .check_executable_code(round_tripped_program.symbols())
+            .is_ok()
+    );
     assert_embedded_kernel_preserved(&round_tripped_package, kernel_package);
 }
 
@@ -2780,7 +2785,12 @@ fn executable_packages_preserve_transitive_kernel_distribution_with_code_only_co
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     let round_tripped_program = fixture_program(&round_tripped_package);
-    assert!(round_tripped_program.kernel().is_empty());
+    assert!(
+        round_tripped_program
+            .package()
+            .check_executable_code(round_tripped_program.symbols())
+            .is_ok()
+    );
     assert_embedded_kernel_preserved(&round_tripped_package, kernel_package);
 }
 
@@ -2858,7 +2868,12 @@ fn preassembled_libraries_prefer_store_kernel_over_embedded_copy() {
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     let round_tripped_program = fixture_program(&round_tripped_package);
-    assert!(round_tripped_program.kernel().is_empty());
+    assert!(
+        round_tripped_program
+            .package()
+            .check_executable_code(round_tripped_program.symbols())
+            .is_ok()
+    );
     assert_embedded_kernel_preserved(&round_tripped_package, kernel_package);
 }
 
@@ -2967,7 +2982,12 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     let round_tripped_program = fixture_program(&round_tripped_package);
-    assert!(round_tripped_program.kernel().is_empty());
+    assert!(
+        round_tripped_program
+            .package()
+            .check_executable_code(round_tripped_program.symbols())
+            .is_ok()
+    );
     assert_embedded_kernel_preserved(&round_tripped_package, kernel_package);
 }
 
@@ -3104,7 +3124,8 @@ fn embedded_kernel_package_must_match_runtime_dependency() {
     embedded_kernel_package.version = "2.0.0".parse().unwrap();
     embedded_kernel_section.data = embedded_kernel_package.to_bytes().into();
 
-    assert!(fixture_program(&round_tripped_package).kernel().is_empty());
+    let code = fixture_program(&round_tripped_package);
+    assert!(code.package().check_executable_code(code.symbols()).is_ok());
     let error = round_tripped_package
         .try_embedded_kernel_package()
         .expect_err("mismatched embedded kernel metadata should be rejected independently");
@@ -3127,7 +3148,8 @@ fn executable_code_conversion_does_not_require_embedded_kernel_code() {
         .expect("serialized executable package should round-trip");
     round_tripped_package.sections.retain(|section| section.id != SectionId::KERNEL);
 
-    assert!(fixture_program(&round_tripped_package).kernel().is_empty());
+    let code = fixture_program(&round_tripped_package);
+    assert!(code.package().check_executable_code(code.symbols()).is_ok());
     assert!(round_tripped_package.kernel_runtime_dependency().unwrap().is_some());
     assert!(
         round_tripped_package

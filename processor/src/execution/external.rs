@@ -137,7 +137,7 @@ mod tests {
         Felt,
         mast::{BasicBlockNodeBuilder, ExternalNodeBuilder, MastForest},
         operations::Operation,
-        program::{ImplementationRoot, Program},
+        program::ImplementationRoot,
     };
     use miden_mast_package::debug_info::DebugSourceNodeId;
 
@@ -159,13 +159,12 @@ mod tests {
 
         let caller_source_node_id = DebugSourceNodeId::from(0);
         let mut current_forest = Arc::new(current_forest);
-        let program = Program::new(current_forest.clone(), external_id);
         let new_mast_forest = Arc::new(loaded_forest);
         let caller_loaded_owner = LoadedMastForest::new(current_forest.clone());
         let target_loaded_owner = LoadedMastForest::new(new_mast_forest.clone());
         let mut loaded_owner = Some(caller_loaded_owner.clone());
         let mut continuation_stack =
-            ContinuationStack::new_with_source_node_id(&program, caller_source_node_id);
+            ContinuationStack::new_with_source_node_id(external_id, caller_source_node_id);
         let mut tracer = NoopTracer;
         let mut package_debug_info = None;
         let mut inline_call_contexts = Vec::new();

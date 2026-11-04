@@ -16,14 +16,13 @@ use miden_core::{
     Felt, Word,
     events::EventId,
     field::PrimeField64,
-    mast::{MastNode, MastNodeExt},
+    mast::{MastNode, MastNodeExt, MastNodeId},
     operations::{AssemblyOp, Operation},
-    program::Program,
     serde::{Deserializable, Serializable},
 };
 use miden_mast_package::{
-    MastForest, Package, PackageExport, PackageModule, PackageSubmodule, ProcedureExport,
-    TargetType,
+    CodePackage, MastForest, Package, PackageExport, PackageModule, PackageSubmodule,
+    ProcedureExport, TargetType,
 };
 use miden_project::Linkage;
 
@@ -44,6 +43,36 @@ use crate::{
 };
 
 type TestResult = Result<(), Report>;
+
+/// Inspects the compiler's exact entry occurrence, independently from execution authority.
+fn entry_node(code: &CodePackage) -> MastNodeId {
+    let key = code.symbols().entry_key().expect("fixture has an explicit entry key");
+    let occurrence = code
+        .package()
+        .procedure_occurrence(key)
+        .expect("compiled fixture retains its exact entry occurrence");
+    let implementation = code.symbols().callables().selected_implementation(key).unwrap();
+    let node = occurrence.exec_node();
+    assert!(
+        code.package()
+            .mast_forest()
+            .is_procedure_root_with_exact_digest(node, implementation.into_word(),)
+    );
+    node
+}
+
+fn entry_digest(code: &CodePackage) -> Word {
+    code.package().mast_forest()[entry_node(code)].digest()
+}
+
+/// Renders the executable entry body with the existing MAST pretty printer.
+fn render_entry(code: &CodePackage) -> String {
+    use miden_core::prettier::{const_text, indent, nl};
+
+    let forest = code.package().mast_forest();
+    let entry = forest[entry_node(code)].to_pretty_print(forest);
+    (indent(4, const_text("begin") + nl() + entry.render()) + nl() + const_text("end")).to_string()
+}
 
 fn assert_all_nodes_reachable_from_roots(forest: &MastForest) {
     let mut reachable = BTreeSet::new();

@@ -1,10 +1,11 @@
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 
 use miden_core::{
     Felt, ZERO,
     mast::error_code_from_msg,
     program::{MIN_STACK_DEPTH, StackInputs},
 };
+use miden_mast_package::CodePackage;
 use proptest::prelude::*;
 
 use super::{
@@ -12,7 +13,7 @@ use super::{
     op_u32sub, op_u32xor,
 };
 use crate::{
-    DefaultHost, ExecutionError,
+    DefaultHost, ExecutionError, ExecutionOptions,
     execution::operations::execute_op,
     fast::{FastProcessor, NoopTracer},
     operation::{Operation, OperationError},
@@ -207,10 +208,21 @@ fn test_op_u32assert2_assembled_err_msg_lookup() {
     ))
     .expect("program should assemble");
 
-    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
-    let processor = FastProcessor::new(StackInputs::default());
+    let mut host = DefaultHost::default()
+        .with_environment_source(fixture.source)
+        .with_library(
+            CodePackage::new(
+                Arc::new((*fixture.package).clone().without_debug_info().unwrap()),
+                Arc::new(fixture.naming),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap();
     let exec_err = processor
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .execute_sync(fixture.target, &mut host)
         .expect_err("expected u32 assertion failure");
 
     // Unwrap the OperationError from the ExecutionError wrapper.
@@ -222,7 +234,7 @@ fn test_op_u32assert2_assembled_err_msg_lookup() {
     match op_err {
         OperationError::U32AssertionFailed { err_code, err_msg, ref invalid_values } => {
             assert_eq!(err_code, error_code_from_msg(expected_message));
-            assert!(err_msg.is_none(), "package debug text is not carried by MastForest");
+            assert!(err_msg.is_none(), "stripped package omits debug text");
             assert!(!invalid_values.is_empty(), "at least one invalid value should be reported");
         },
         other => panic!("expected U32AssertionFailed, got {other:?}"),
@@ -239,9 +251,20 @@ fn test_u32assert_err_wrapper_assembled() {
         named_source(&format!(r#"begin push.4294967296 u32assert.err="{expected_message}" end"#))
             .expect("program should assemble");
 
-    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let mut host = DefaultHost::default()
+        .with_environment_source(fixture.source)
+        .with_library(
+            CodePackage::new(
+                Arc::new((*fixture.package).clone().without_debug_info().unwrap()),
+                Arc::new(fixture.naming),
+            )
+            .unwrap(),
+        )
+        .unwrap();
     let exec_err = FastProcessor::new(StackInputs::default())
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
+        .execute_sync(fixture.target, &mut host)
         .expect_err("expected u32 assertion failure");
 
     let op_err = match exec_err {
@@ -251,7 +274,7 @@ fn test_u32assert_err_wrapper_assembled() {
     match op_err {
         OperationError::U32AssertionFailed { err_code, err_msg, ref invalid_values } => {
             assert_eq!(err_code, error_code_from_msg(expected_message));
-            assert!(err_msg.is_none(), "package debug text is not carried by MastForest");
+            assert!(err_msg.is_none(), "stripped package omits debug text");
             assert!(!invalid_values.is_empty(), "at least one invalid value expected");
         },
         other => panic!("expected U32AssertionFailed, got {other:?}"),
@@ -270,9 +293,20 @@ fn test_u32assertw_err_wrapper_assembled() {
     ))
     .expect("program should assemble");
 
-    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let mut host = DefaultHost::default()
+        .with_environment_source(fixture.source)
+        .with_library(
+            CodePackage::new(
+                Arc::new((*fixture.package).clone().without_debug_info().unwrap()),
+                Arc::new(fixture.naming),
+            )
+            .unwrap(),
+        )
+        .unwrap();
     let exec_err = FastProcessor::new(StackInputs::default())
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
+        .execute_sync(fixture.target, &mut host)
         .expect_err("expected u32 assertion failure");
 
     let op_err = match exec_err {
@@ -282,7 +316,7 @@ fn test_u32assertw_err_wrapper_assembled() {
     match op_err {
         OperationError::U32AssertionFailed { err_code, err_msg, ref invalid_values } => {
             assert_eq!(err_code, error_code_from_msg(expected_message));
-            assert!(err_msg.is_none(), "package debug text is not carried by MastForest");
+            assert!(err_msg.is_none(), "stripped package omits debug text");
             assert!(!invalid_values.is_empty(), "at least one invalid value expected");
         },
         other => panic!("expected U32AssertionFailed, got {other:?}"),

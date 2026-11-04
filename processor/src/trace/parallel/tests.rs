@@ -16,10 +16,10 @@ use miden_core::{
         SplitNodeBuilder,
     },
     operations::{Operation, opcodes},
-    program::{CanonicalLabel, ImplementationRoot, Program, StackInputs},
+    program::{CanonicalLabel, ImplementationRoot, StackInputs},
     utils::RowMajorMatrix,
 };
-use miden_mast_package::{CallableProcedurePath, NamespacePath, ProcedureName};
+use miden_mast_package::{CallableProcedurePath, CodePackage, NamespacePath, ProcedureName};
 use miden_stark::lookup::build_logup_aux_trace;
 use miden_utils_testing::get_column_name;
 use pretty_assertions::assert_eq;
@@ -29,7 +29,7 @@ use super::*;
 use crate as processor;
 use crate::{
     AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor,
-    test_utils::{NamedFixture, named_package, named_program, native_trace_limits},
+    test_utils::{NamedFixture, fixture_code, named_package, named_program, native_trace_limits},
     trace::trace_state::MemoryReadsReplay,
 };
 
@@ -327,15 +327,17 @@ fn test_trace_generation_at_fragment_boundaries(
             StackInputs::new(stack_inputs).unwrap(),
             AdviceInputs::default(),
             ExecutionOptions::default()
+                .with_resolution_limits(program.resolution_limits)
                 .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(fragment_size)
                 .unwrap(),
         )
         .expect("processor advice inputs should fit advice map limits");
         let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+        host.load_library(program.code.clone()).unwrap();
         host.mast_forest_store_mut().insert(create_simple_library());
         let vm_witness = processor
-            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .execute_for_proving_sync(program.target, &mut host)
             .unwrap()
             .into_parts()
             .0;
@@ -347,15 +349,17 @@ fn test_trace_generation_at_fragment_boundaries(
             StackInputs::new(stack_inputs).unwrap(),
             AdviceInputs::default(),
             ExecutionOptions::default()
+                .with_resolution_limits(program.resolution_limits)
                 .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
                 .unwrap(),
         )
         .expect("processor advice inputs should fit advice map limits");
         let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+        host.load_library(program.code.clone()).unwrap();
         host.mast_forest_store_mut().insert(create_simple_library());
         let vm_witness = processor
-            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .execute_for_proving_sync(program.target, &mut host)
             .unwrap()
             .into_parts()
             .0;
@@ -403,11 +407,8 @@ fn test_trace_generation_at_fragment_boundaries(
     assert_eq!(trace_from_fragments.stack_outputs(), trace_from_single_fragment.stack_outputs(),);
 
     // Verify both trace paths preserve the authenticated descriptor supplied by the fixture.
-    assert_eq!(trace_from_fragments.execution_descriptor(), program.environment.descriptor());
-    assert_eq!(
-        trace_from_single_fragment.execution_descriptor(),
-        program.environment.descriptor(),
-    );
+    assert_eq!(trace_from_fragments.execution_descriptor(), program.target);
+    assert_eq!(trace_from_single_fragment.execution_descriptor(), program.target,);
     assert_eq!(trace_from_fragments.public_inputs(), trace_from_single_fragment.public_inputs());
 
     // Verify code/debug metadata and trace length summary match.
@@ -558,16 +559,18 @@ fn test_partial_last_fragment_exists_for_h0_inversion_path() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     host.mast_forest_store_mut().insert(create_simple_library());
 
     let vm_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .execute_for_proving_sync(program.target, &mut host)
         .unwrap()
         .into_parts()
         .0;
@@ -599,15 +602,17 @@ fn miri_repro_uninitialized_tail_read_during_h0_inversion() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     host.mast_forest_store_mut().insert(create_simple_library());
     let vm_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .execute_for_proving_sync(program.target, &mut host)
         .unwrap()
         .into_parts()
         .0;
@@ -653,7 +658,7 @@ fn join_program() -> NamedFixture {
         .unwrap();
     program.make_root(root_join_node);
 
-    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
+    synthetic_fixture(fixture_code(Arc::new(program), root_join_node), [])
 }
 
 /// (join (
@@ -688,7 +693,7 @@ fn split_program() -> NamedFixture {
     };
 
     program.make_root(root_join_node);
-    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
+    synthetic_fixture(fixture_code(Arc::new(program), root_join_node), [])
 }
 
 /// (join (
@@ -719,7 +724,7 @@ fn loop_program() -> NamedFixture {
     };
 
     program.make_root(root_join_node);
-    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
+    synthetic_fixture(fixture_code(Arc::new(program), root_join_node), [])
 }
 
 /// (loop (loop (block pad drop)))
@@ -738,7 +743,7 @@ fn nested_loop_program() -> NamedFixture {
     let outer_loop = LoopNodeBuilder::new(inner_loop).add_to_forest(&mut program).unwrap();
 
     program.make_root(outer_loop);
-    synthetic_fixture(Program::new(Arc::new(program), outer_loop), [])
+    synthetic_fixture(fixture_code(Arc::new(program), outer_loop), [])
 }
 
 /// (join (
@@ -768,7 +773,7 @@ fn call_program() -> NamedFixture {
     program.make_root(target);
     let target_root = ImplementationRoot::new(program[target].digest());
     synthetic_fixture(
-        Program::new(Arc::new(program), root_join_node),
+        fixture_code(Arc::new(program), root_join_node),
         [(fixture_binding("call", false), target_root)],
     )
 }
@@ -802,7 +807,7 @@ fn syscall_program() -> NamedFixture {
     program.make_root(root_join_node);
 
     synthetic_fixture(
-        Program::new(Arc::new(program), root_join_node),
+        fixture_code(Arc::new(program), root_join_node),
         [(fixture_binding("syscall", true), kernel_proc_root)],
     )
 }
@@ -829,7 +834,7 @@ fn basic_block_program_small() -> NamedFixture {
     };
 
     program.make_root(root_join_node);
-    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
+    synthetic_fixture(fixture_code(Arc::new(program), root_join_node), [])
 }
 
 /// (join (
@@ -856,7 +861,7 @@ fn basic_block_program_multiple_batches() -> NamedFixture {
     };
 
     program.make_root(root_join_node);
-    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
+    synthetic_fixture(fixture_code(Arc::new(program), root_join_node), [])
 }
 
 /// (join (
@@ -897,7 +902,7 @@ fn dyn_program() -> NamedFixture {
 
     let target_root = ImplementationRoot::new(program[target].digest());
     synthetic_fixture(
-        Program::new(Arc::new(program), root_join_node),
+        fixture_code(Arc::new(program), root_join_node),
         [(fixture_binding("dynamic", false), target_root)],
     )
 }
@@ -940,7 +945,7 @@ fn dyncall_program() -> NamedFixture {
 
     let target_root = ImplementationRoot::new(program[target].digest());
     synthetic_fixture(
-        Program::new(Arc::new(program), root_join_node),
+        fixture_code(Arc::new(program), root_join_node),
         [(fixture_binding("dynamic", false), target_root)],
     )
 }
@@ -970,7 +975,7 @@ fn external_program() -> NamedFixture {
     };
 
     program.make_root(root_join_node);
-    synthetic_fixture(Program::new(Arc::new(program), root_join_node), [])
+    synthetic_fixture(fixture_code(Arc::new(program), root_join_node), [])
 }
 
 /// Verifies that `build_trace` returns `Err` (instead of panicking) when a
@@ -987,14 +992,16 @@ fn test_build_trace_returns_err_on_empty_memory_reads_replay() {
         StackInputs::new(stack_inputs).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     let mut vm_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .execute_for_proving_sync(program.target, &mut host)
         .unwrap()
         .into_parts()
         .0;
@@ -1025,14 +1032,16 @@ fn test_build_trace_returns_err_on_bad_node_id_in_hasher_replay() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     let mut vm_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .execute_for_proving_sync(program.target, &mut host)
         .unwrap()
         .into_parts()
         .0;
@@ -1107,17 +1116,19 @@ fn test_build_trace_returns_err_on_invalid_mast_forest_id(
         StackInputs::new(stack_inputs).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     if load_library {
         host.mast_forest_store_mut().insert(create_simple_library());
     }
     let mut vm_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .execute_for_proving_sync(program.target, &mut host)
         .unwrap()
         .into_parts()
         .0;
@@ -1229,26 +1240,26 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
                 .add_to_forest(&mut forest)
                 .unwrap();
             forest.make_root(root);
-            synthetic_fixture(Program::new(Arc::new(forest), root), [])
+            synthetic_fixture(fixture_code(Arc::new(forest), root), [])
         } else {
             join_program()
         };
-        let environment = program.environment;
+        let target = program.target;
+        let resolution_limits = program.resolution_limits;
         let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+        host.load_library(program.code.clone()).unwrap();
         let processor = FastProcessor::new_with_options(
             StackInputs::new(DEFAULT_STACK).unwrap(),
             AdviceInputs::default(),
             ExecutionOptions::default()
+                .with_resolution_limits(program.resolution_limits)
                 .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(fragment_size)
                 .unwrap(),
         )
         .unwrap();
-        let VmWitness { trace, .. } = processor
-            .execute_for_proving_sync(&program.program, environment, &mut host)
-            .unwrap()
-            .into_parts()
-            .0;
+        let VmWitness { trace, .. } =
+            processor.execute_for_proving_sync(target, &mut host).unwrap().into_parts().0;
         let read_limits = crate::trace::ReplayReadLimits {
             max_wire_bytes: 16 * 1024 * 1024,
             max_validation_peak_bytes: 1536 * 1024 * 1024,
@@ -1263,7 +1274,8 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
         );
         let restored = TraceReplay::read_with_limits(
             &mut reader,
-            &environment,
+            target,
+            resolution_limits,
             native_trace_limits(),
             read_limits,
         )
@@ -1465,14 +1477,16 @@ fn test_build_trace_corner_cases(
             // precheck (based on `fragment_size`, not the actual padded height) from dominating
             // the exact byte-budget boundary this test targets.
             ExecutionOptions::default()
+                .with_resolution_limits(program.resolution_limits)
                 .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(MIN_TRACE_LEN)
                 .unwrap(),
         )
         .expect("processor advice inputs should fit advice map limits");
         let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+        host.load_library(program.code.clone()).unwrap();
         processor
-            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .execute_for_proving_sync(program.target, &mut host)
             .unwrap()
             .into_parts()
             .0
@@ -1526,12 +1540,15 @@ fn test_build_trace_accepts_small_program_at_default_fragment_size() {
         let processor = FastProcessor::new_with_options(
             StackInputs::new(DEFAULT_STACK).unwrap(),
             AdviceInputs::default(),
-            ExecutionOptions::default().with_environment_trace_limits(native_trace_limits()),
+            ExecutionOptions::default()
+                .with_resolution_limits(program.resolution_limits)
+                .with_environment_trace_limits(native_trace_limits()),
         )
         .expect("processor advice inputs should fit advice map limits");
         let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+        host.load_library(program.code.clone()).unwrap();
         processor
-            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .execute_for_proving_sync(program.target, &mut host)
             .unwrap()
             .into_parts()
             .0
@@ -1572,14 +1589,16 @@ fn test_build_trace_returns_err_on_fragment_size_overflow() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     let mut vm_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .execute_for_proving_sync(program.target, &mut host)
         .unwrap()
         .into_parts()
         .0;
@@ -1609,14 +1628,16 @@ fn test_build_trace_returns_err_when_eidos_compression_trace_exceeds_budget() {
             StackInputs::new(stack_inputs).unwrap(),
             AdviceInputs::default(),
             ExecutionOptions::default()
+                .with_resolution_limits(program.resolution_limits)
                 .with_environment_trace_limits(native_trace_limits())
                 .with_core_trace_fragment_size(MIN_TRACE_LEN)
                 .unwrap(),
         )
         .expect("processor advice inputs should fit advice map limits");
         let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+        host.load_library(program.code.clone()).unwrap();
         processor
-            .execute_for_proving_sync(&program.program, program.environment, &mut host)
+            .execute_for_proving_sync(program.target, &mut host)
             .unwrap()
             .into_parts()
             .0
@@ -1688,14 +1709,16 @@ fn test_build_trace_returns_err_on_inconsistent_continuation(
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(4)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     let mut vm_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .execute_for_proving_sync(program.target, &mut host)
         .unwrap()
         .into_parts()
         .0;
@@ -1723,14 +1746,16 @@ fn test_build_trace_returns_err_on_empty_core_trace_contexts() {
         StackInputs::new(DEFAULT_STACK).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(MAX_FRAGMENT_SIZE)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     let mut vm_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .execute_for_proving_sync(program.target, &mut host)
         .unwrap()
         .into_parts()
         .0;
@@ -1764,15 +1789,17 @@ fn build_trace_for_program(
         StackInputs::new(stack_inputs).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(fragment_size)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
+    host.load_library(program.code.clone()).unwrap();
     host.mast_forest_store_mut().insert(create_simple_library());
     let vm_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
+        .execute_for_proving_sync(program.target, &mut host)
         .unwrap()
         .into_parts()
         .0;
@@ -1908,7 +1935,7 @@ fn fixture_binding(name: &str, kernel: bool) -> ProcedureName {
 }
 
 fn synthetic_fixture(
-    program: Program,
+    program: CodePackage,
     targets: impl IntoIterator<Item = (ProcedureName, ImplementationRoot)>,
 ) -> NamedFixture {
     let fixture = named_program(program, fixture_binding("entry", false), targets).unwrap();
@@ -1918,7 +1945,7 @@ fn synthetic_fixture(
         .unwrap();
     forest.make_root(root);
     let external =
-        named_program(Program::new(Arc::new(forest), root), fixture_binding("external", false), [])
+        named_program(fixture_code(Arc::new(forest), root), fixture_binding("external", false), [])
             .unwrap();
     named_package(fixture.package, fixture.naming, &[&external.naming]).unwrap()
 }

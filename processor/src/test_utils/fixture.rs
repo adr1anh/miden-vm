@@ -6,20 +6,19 @@ use miden_utils_testing::{librarytree::FixtureEnvironment, processor as dependen
 
 use crate::{
     EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, ExecutionEnvironment, LedgerLimits, OpeningLimits, OpeningStep,
-    ResolutionWitness, SessionLimits,
+    EnvironmentWitnessSource, ExecutionTarget, LedgerLimits, OpeningLimits, OpeningStep,
+    ResolutionLimits, ResolutionWitness, SessionLimits,
 };
 
 /// Preserves the fixture's core descriptor, native policies and bounded witness source.
 pub(crate) fn native_fixture_environment(
     fixture: &FixtureEnvironment,
-) -> (ExecutionEnvironment, Arc<dyn EnvironmentWitnessSource>) {
-    let execution = fixture.execution();
-    let opening = execution.opening_limits();
-    let ledger = execution.ledger_limits();
-    let session = execution.session_limits();
-    let environment = ExecutionEnvironment::new(
-        execution.descriptor(),
+) -> (ExecutionTarget, ResolutionLimits, Arc<dyn EnvironmentWitnessSource>) {
+    let limits = fixture.resolution_limits();
+    let opening = limits.opening_limits();
+    let ledger = limits.ledger_limits();
+    let session = limits.session_limits();
+    let limits = ResolutionLimits::new(
         OpeningLimits {
             max_nodes: opening.max_nodes,
             max_depth: opening.max_depth,
@@ -44,7 +43,7 @@ pub(crate) fn native_fixture_environment(
             max_prepare_peak_bytes: session.max_prepare_peak_bytes,
         },
     );
-    (environment, Arc::new(FixtureSource(fixture.source())))
+    (fixture.target(), limits, Arc::new(FixtureSource(fixture.source())))
 }
 
 struct FixtureSource(Arc<dyn dependency_processor::EnvironmentWitnessSource>);

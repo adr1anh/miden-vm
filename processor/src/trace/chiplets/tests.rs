@@ -10,15 +10,15 @@ use miden_air_definitions::vm::trace::{
     },
 };
 use miden_core::{
-    Felt, ONE, Word, ZERO,
+    Felt, ONE, ZERO,
     mast::{BasicBlockNodeBuilder, CallNodeBuilder, MastForest, MastNodeExt},
-    program::{ImplementationRoot, Program, StackInputs},
+    program::{ImplementationRoot, StackInputs},
 };
 
 use crate::{
-    AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor, KernelDescriptor,
+    AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor,
     operation::Operation,
-    test_utils::native_trace_limits,
+    test_utils::{fixture_code, native_trace_limits},
     trace::tests::{trace_binding, trace_named_program},
 };
 
@@ -45,7 +45,7 @@ fn hasher_chiplet_trace() {
     // Total: 2 controller rows padded to the chiplet alignment boundary.
     let stack = [2, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0];
     let operations = vec![Operation::Compress];
-    let (chiplets_trace, _trace_len) = build_trace(&stack, operations, KernelDescriptor::default());
+    let (chiplets_trace, _trace_len) = build_trace(&stack, operations);
 
     let controller_rows = 2 * CONTROLLER_ROWS_PER_HASHER_OP; // span hash + Compress
     let hasher_len = hasher_trace_len(controller_rows);
@@ -60,7 +60,7 @@ fn bitwise_chiplet_trace() {
     // This produces: 1 span hash controller row, then 1 bitwise row.
     let stack = [4, 8];
     let operations = vec![Operation::U32xor];
-    let (chiplets_trace, _trace_len) = build_trace(&stack, operations, KernelDescriptor::default());
+    let (chiplets_trace, _trace_len) = build_trace(&stack, operations);
 
     let controller_rows = CONTROLLER_ROWS_PER_HASHER_OP; // span hash only
     let hasher_len = hasher_trace_len(controller_rows);
@@ -78,7 +78,7 @@ fn memory_chiplet_trace() {
     let addr = Felt::from_u32(4);
     let stack = [1, 2, 3, 4];
     let operations = vec![Operation::Push(addr), Operation::MStoreW];
-    let (chiplets_trace, _trace_len) = build_trace(&stack, operations, KernelDescriptor::default());
+    let (chiplets_trace, _trace_len) = build_trace(&stack, operations);
 
     let controller_rows = CONTROLLER_ROWS_PER_HASHER_OP;
     let hasher_len = hasher_trace_len(controller_rows);
@@ -104,8 +104,7 @@ fn stacked_chiplet_trace() {
         Operation::MStoreW,
         Operation::Compress,
     ];
-    let kernel = build_kernel();
-    let (chiplets_trace, _trace_len) = build_trace(&stack, ops, kernel);
+    let (chiplets_trace, _trace_len) = build_trace(&stack, ops);
 
     let controller_rows = 2 * CONTROLLER_ROWS_PER_HASHER_OP; // span hash + Compress
     let hasher_len = hasher_trace_len(controller_rows);
@@ -121,7 +120,7 @@ fn stacked_chiplet_trace() {
     let bitwise_end = bitwise_start + OP_CYCLE_LEN;
     validate_bitwise_trace(&chiplets_trace, bitwise_start, bitwise_end);
 
-    // Kernel descriptors carry no physical authority band. Global padding follows Bitwise.
+    // Global padding follows Bitwise.
     let padding_start = bitwise_end;
     let trace_rows = chiplets_trace[0].len();
     validate_padding(&chiplets_trace, padding_start, trace_rows);
@@ -129,13 +128,6 @@ fn stacked_chiplet_trace() {
 
 #[test]
 fn regression_trace_build_does_not_panic_when_first_memory_access_clk_is_zero() {
-    let processor = FastProcessor::new_with_options(
-        StackInputs::default(),
-        AdviceInputs::default(),
-        ExecutionOptions::default().with_environment_trace_limits(native_trace_limits()),
-    )
-    .unwrap();
-
     // A CALL entrypoint records the callee frame pointer write before the processor clock is
     // incremented, so the first memory access is captured at clk = 0.
     let program = {
@@ -151,13 +143,21 @@ fn regression_trace_build_does_not_panic_when_first_memory_access_clk_is_zero() 
         let entry = CallNodeBuilder::new(callee_binding.key()).add_to_forest(&mut forest).unwrap();
         forest.make_root(entry);
 
-        trace_named_program(Program::new(forest.into(), entry), [(callee_binding, implementation)])
+        trace_named_program(fixture_code(forest.into(), entry), [(callee_binding, implementation)])
     };
 
+    let processor = FastProcessor::new_with_options(
+        StackInputs::default(),
+        AdviceInputs::default(),
+        ExecutionOptions::default()
+            .with_resolution_limits(program.resolution_limits)
+            .with_environment_trace_limits(native_trace_limits()),
+    )
+    .unwrap();
+
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
-    let execution_witness = processor
-        .execute_for_proving_sync(&program.program, program.environment, &mut host)
-        .unwrap();
+    host.load_library(program.code.clone()).unwrap();
+    let execution_witness = processor.execute_for_proving_sync(program.target, &mut host).unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
 
     let _trace =
@@ -167,41 +167,31 @@ fn regression_trace_build_does_not_panic_when_first_memory_access_clk_is_zero() 
 // HELPER FUNCTIONS
 // ================================================================================================
 
-fn build_kernel() -> KernelDescriptor {
-    let proc_hash1 = Word::from([1_u32, 0, 1, 0]);
-    let proc_hash2 = Word::from([1_u32, 1, 1, 1]);
-    KernelDescriptor::new(&[proc_hash1, proc_hash2]).unwrap()
-}
-
-fn build_trace(
-    stack_inputs: &[u64],
-    operations: Vec<Operation>,
-    kernel: KernelDescriptor,
-) -> (ChipletsTrace, usize) {
+fn build_trace(stack_inputs: &[u64], operations: Vec<Operation>) -> (ChipletsTrace, usize) {
     let stack_inputs: Vec<Felt> = stack_inputs.iter().map(|v| Felt::new_unchecked(*v)).collect();
+    let program = {
+        let mut mast_forest = MastForest::new();
+        let basic_block_id =
+            BasicBlockNodeBuilder::new(operations).add_to_forest(&mut mast_forest).unwrap();
+        mast_forest.make_root(basic_block_id);
+        fixture_code(mast_forest.into(), basic_block_id)
+    };
+
+    let fixture = trace_named_program(program, []);
     let processor = FastProcessor::new_with_options(
         StackInputs::new(&stack_inputs).unwrap(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(fixture.resolution_limits)
             .with_environment_trace_limits(native_trace_limits())
             .with_core_trace_fragment_size(1 << 10)
             .unwrap(),
     )
     .expect("processor advice inputs should fit advice map limits");
 
-    let program = {
-        let mut mast_forest = MastForest::new();
-        let basic_block_id =
-            BasicBlockNodeBuilder::new(operations).add_to_forest(&mut mast_forest).unwrap();
-        mast_forest.make_root(basic_block_id);
-        Program::with_kernel(mast_forest.into(), basic_block_id, kernel)
-    };
-
-    let fixture = trace_named_program(program, []);
     let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
-    let execution_witness = processor
-        .execute_for_proving_sync(&fixture.program, fixture.environment, &mut host)
-        .unwrap();
+    host.load_library(fixture.code.clone()).unwrap();
+    let execution_witness = processor.execute_for_proving_sync(fixture.target, &mut host).unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
     let trace =
         crate::trace::build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap();

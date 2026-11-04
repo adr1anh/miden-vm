@@ -20,7 +20,7 @@ use crate::{
     operations::Operation,
     program::{
         CanonicalLabel, EnvNode, EnvironmentBuildError, EnvironmentBuildLimits, EnvironmentBuilder,
-        ImplementationRoot, KernelDescriptor, LabelCommitment, Namespace, ProcedureKey, Program,
+        ImplementationRoot, KernelDescriptor, LabelCommitment, Namespace, ProcedureKey,
         ValidatedEnvironment,
     },
 };
@@ -956,29 +956,6 @@ impl Arbitrary for AdviceMap {
 
         prop::collection::vec((key, value), 0..=10)
             .prop_map(|entries| AdviceMap::from(entries.into_iter().collect::<BTreeMap<_, _>>()))
-            .boxed()
-    }
-}
-
-impl Arbitrary for Program {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    /// Generates a program whose entrypoint is a single basic block.
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        any_with::<BasicBlockNode>(BasicBlockNodeParams { max_ops_len: 4, ..Default::default() })
-            .prop_map(|node| {
-                let mut builder = DenseMastForestBuilder::new();
-                let node_id = builder
-                    .push_node(node.to_builder(&MastForest::new()))
-                    .expect("Failed to add node");
-                builder.mark_root(node_id);
-                let (forest, remapping) =
-                    builder.build_with_id_map().expect("generated program forest should be valid");
-                let entrypoint = remapping.get(node_id).expect("entrypoint should be retained");
-
-                Program::new(Arc::new(forest), entrypoint)
-            })
             .boxed()
     }
 }

@@ -6,8 +6,8 @@ use miden_core::{
     proof::{ExecutionProof, HashFunction, PrecompileProof, PrecompileStatus, VmProof},
 };
 use miden_processor::{
-    ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionWitness, FastProcessor,
-    PrecompileWitness, Program, StackInputs, StackOutputs, SyncHost, VmWitness,
+    ExecutionError, ExecutionOptions, ExecutionTarget, ExecutionWitness, FastProcessor,
+    PrecompileWitness, StackInputs, StackOutputs, SyncHost, VmWitness,
     advice::AdviceInputs,
     trace::{VmTrace, build_trace},
 };
@@ -236,8 +236,8 @@ impl Prover {
 ///
 /// This FastProcessor-backed orchestration function preserves the optimized overlapped
 /// execution/trace-building path. Proving policy belongs on [`Prover`].
-/// The caller supplies the authorized execution descriptor and finite native opening/session
-/// policies in `environment`; code and proving options never manufacture those inputs.
+/// The caller supplies the authorized execution target and finite resolution policies through
+/// `execution_options`; host code and lookup evidence never manufacture that authority.
 ///
 /// When enabled in `execution_options`, the processor may build the hasher chiplet alongside
 /// execution. A caller with no separate Rayon worker uses compact buffered replay. Both cases use
@@ -245,8 +245,7 @@ impl Prover {
 #[tracing::instrument(name = "prove_program_sync", skip_all)]
 pub fn prove_sync(
     prover: &Prover,
-    program: &Program,
-    environment: ExecutionEnvironment,
+    target: ExecutionTarget,
     stack_inputs: StackInputs,
     advice_inputs: AdviceInputs,
     host: &mut impl SyncHost,
@@ -262,8 +261,7 @@ pub fn prove_sync(
         let (trace, precompile) = {
             let _span = tracing::info_span!("execute_miden_vm").entered();
             processor.execute_and_build_trace_sync(
-                program,
-                environment,
+                target,
                 host,
                 &miden_vm_stark::memory::canonical_budget(prover.max_prover_memory_bytes()),
             )?
@@ -277,7 +275,7 @@ pub fn prove_sync(
 
     let witness = {
         let _span = tracing::info_span!("execute_miden_vm").entered();
-        processor.execute_for_proving_sync(program, environment, host)?
+        processor.execute_for_proving_sync(target, host)?
     };
     let stack_outputs = *witness.claim().stack_outputs();
     let proof = prover.prove_full(witness).map_err(ProverError::into_execution_error)?;

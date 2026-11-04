@@ -13,14 +13,14 @@ pub use miden_core::{
     Word,
     advice::AdviceInputs,
     deferred::{PrecompileLimits, PrecompileWitness},
-    program::{ExecutionClaim, InputError, Program, StackInputs, StackOutputs},
+    program::{ExecutionClaim, ExecutionTarget, InputError, StackInputs, StackOutputs},
     proof::{ExecutionProof, HashFunction, PrecompileProof, PrecompileStatus, StarkProof, VmProof},
     serde::DeserializationError,
 };
 pub use miden_precompiles_stark::prover::PrecompileProvingError;
 pub use miden_processor::{
-    ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionOutput, ExecutionWitness,
-    FutureMaybeSend, Host, SyncHost, VmWitness,
+    ExecutionError, ExecutionOptions, ExecutionOutput, ExecutionWitness, FutureMaybeSend, Host,
+    ResolutionLimits, SyncHost, VmWitness,
 };
 pub use prover::{Prover, ProverError, prove_sync};
 

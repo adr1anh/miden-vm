@@ -773,7 +773,8 @@ fn procref() -> Result<(), Report> {
     );
     assert_eq!(
         named
-            .naming
+            .0
+            .symbols()
             .callables()
             .selected_implementation(local_foo_key)
             .expect("local foo must retain its implementation"),

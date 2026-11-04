@@ -27,11 +27,12 @@ use miden_core::{
     advice::AdviceInputs,
     mast::{BasicBlockNodeBuilder, DenseMastForestBuilder},
     operations::{Operation, opcodes},
-    program::{Program, StackOutputs},
+    program::StackOutputs,
     utils::{Matrix, RowMajorMatrix},
 };
 use miden_crypto::merkle::{MerklePath, store::MerkleStore};
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
+use miden_utils_testing::librarytree::fixture_code;
 
 use crate::repro_harness::{ReproTrace, core_row_mut};
 
@@ -93,21 +94,22 @@ fn build_fixture() -> Fixture {
     let root = builder.push_node(BasicBlockNodeBuilder::new(operations)).unwrap();
     builder.mark_root(root);
     let (forest, mapping) = builder.build_with_id_map().unwrap();
-    let program = Program::new(forest.into(), mapping.get(root).unwrap());
+    let program = fixture_code(forest.into(), mapping.get(root).unwrap());
 
     let environment = crate::named_fixture::raw_environment(&program, "mrupdate-sibling-level");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(program).unwrap();
     let (trace, precompile_witness) = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default().with_merkle_store(store))
         .unwrap()
         .with_options(
             miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits())
                 .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
         )
         .unwrap()
         .execute_and_build_trace_sync(
-            &program,
-            environment.execution(),
+            environment.target(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

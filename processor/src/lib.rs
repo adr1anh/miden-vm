@@ -68,7 +68,7 @@ pub use errors::{
     procedure_not_found_with_package_source_context,
 };
 pub use execution_options::{
-    EnvironmentTraceLimits, ExecutionEnvironment, ExecutionOptions, ExecutionOptionsError,
+    EnvironmentTraceLimits, ExecutionOptions, ExecutionOptionsError, ResolutionLimits,
 };
 pub use executor::ProgramExecutor;
 pub use fast::{
@@ -85,7 +85,7 @@ pub use host::{
 pub use miden_core::{
     EMPTY_WORD, Felt, ONE, WORD_SIZE, Word, ZERO, crypto, field, mast,
     program::{
-        ExecutionClaim, ExecutionTarget, InputError, KernelDescriptor, MIN_STACK_DEPTH, Program,
+        ExecutionClaim, ExecutionTarget, InputError, KernelDescriptor, MIN_STACK_DEPTH,
         StackInputs, StackOutputs,
     },
     serde, utils,

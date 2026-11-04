@@ -554,16 +554,17 @@ fn run_insert_mem_with_max_value_elements_and_repeats(
         &source,
         &[],
     );
-    host = host.with_environment_source(named.environment.source());
+    host = host.with_environment_source(named.1.source()).with_code(named.0.clone());
     let felt_bytes = Word::SERIALIZED_SIZE / Word::NUM_ELEMENTS;
     let base_store_bytes = MerkleStore::default().num_internal_nodes() * 3 * Word::SERIALIZED_SIZE;
     let map_entry_bytes = Word::SERIALIZED_SIZE + max_value_elements * felt_bytes;
-    let options =
-        ExecutionOptions::default().with_max_advice_size_bytes(base_store_bytes + map_entry_bytes);
+    let options = ExecutionOptions::default()
+        .with_resolution_limits(named.1.resolution_limits())
+        .with_max_advice_size_bytes(base_store_bytes + map_entry_bytes);
 
     FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
         .map_err(ExecutionError::advice_error_no_context)?
-        .execute_sync(&named.program, named.environment.execution(), &mut host)?;
+        .execute_sync(named.1.target(), &mut host)?;
     Ok(())
 }
 
@@ -588,14 +589,15 @@ fn run_insert_mem_after_empty_insertion(range_len: u32) -> Result<(), ExecutionE
         &source,
         &[],
     );
-    host = host.with_environment_source(named.environment.source());
+    host = host.with_environment_source(named.1.source()).with_code(named.0.clone());
     let base_store_bytes = MerkleStore::default().num_internal_nodes() * 3 * Word::SERIALIZED_SIZE;
     let options = ExecutionOptions::default()
+        .with_resolution_limits(named.1.resolution_limits())
         .with_max_advice_size_bytes(base_store_bytes + Word::SERIALIZED_SIZE);
 
     FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
         .map_err(ExecutionError::advice_error_no_context)?
-        .execute_sync(&named.program, named.environment.execution(), &mut host)?;
+        .execute_sync(named.1.target(), &mut host)?;
     Ok(())
 }
 
@@ -622,11 +624,13 @@ fn run_conflicting_insert(max_advice_size_bytes: usize) -> Result<(), ExecutionE
         source,
         &[],
     );
-    host = host.with_environment_source(named.environment.source());
-    let options = ExecutionOptions::default().with_max_advice_size_bytes(max_advice_size_bytes);
+    host = host.with_environment_source(named.1.source()).with_code(named.0.clone());
+    let options = ExecutionOptions::default()
+        .with_resolution_limits(named.1.resolution_limits())
+        .with_max_advice_size_bytes(max_advice_size_bytes);
 
     FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
         .map_err(ExecutionError::advice_error_no_context)?
-        .execute_sync(&named.program, named.environment.execution(), &mut host)?;
+        .execute_sync(named.1.target(), &mut host)?;
     Ok(())
 }

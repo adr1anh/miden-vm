@@ -292,17 +292,19 @@ fn sha512_hash_bytes_mem_rejects_a_forged_upper_digest_half() {
         &[library.naming()],
     );
     let mut host = DefaultHost::default()
-        .with_environment_source(program.environment.source())
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&library)
         .unwrap();
     assert!(host.replace_handler(SHA512_DIGEST_EVENT_NAME, handler).unwrap());
     let result = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
     )
     .unwrap()
-    .execute_sync(&program.program, program.environment.execution(), &mut host);
+    .execute_sync(program.1.target(), &mut host);
     assert!(result.is_err(), "the second SHA-512 output chunk must be authenticated");
 }
 
@@ -376,17 +378,19 @@ fn sha256_hash_bytes_mem_rejects_a_forged_digest() {
         &[library.naming()],
     );
     let mut host = DefaultHost::default()
-        .with_environment_source(program.environment.source())
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&library)
         .unwrap();
     assert!(host.replace_handler(SHA256_DIGEST_EVENT_NAME, handler).unwrap());
     let result = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
     )
     .unwrap()
-    .execute_sync(&program.program, program.environment.execution(), &mut host);
+    .execute_sync(program.1.target(), &mut host);
     assert!(result.is_err(), "a forged SHA-256 digest must fail the deferred assertion");
 }
 

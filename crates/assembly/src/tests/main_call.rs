@@ -129,6 +129,7 @@ end
     assembler.compile_and_statically_link_all([account_code1, account_code2])?;
     let program = assembler.assemble_program("main", main)?.fixture_program();
     let targets = program
+        .package()
         .mast_forest()
         .nodes()
         .iter()
@@ -143,8 +144,8 @@ end
         .collect::<BTreeSet<_>>();
     assert_eq!(targets.len(), 4);
     assert_eq!(targets, keys.into_iter().collect());
-    assert_eq!(program.num_procedures(), 5);
-    assert_all_nodes_reachable_from_roots(program.mast_forest());
+    assert_eq!(program.package().mast_forest().num_procedures(), 5);
+    assert_all_nodes_reachable_from_roots(program.package().mast_forest());
 
     Ok(())
 }

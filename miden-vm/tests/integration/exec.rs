@@ -23,19 +23,20 @@ fn advice_map_loaded_before_execution() {
     let source_manager = Arc::new(DefaultSourceManager::default());
     let named =
         assemble_fixture_program(Assembler::new(source_manager.clone()), "program", source, &[]);
-    let program_without_advice_map = named.program;
+    let program_without_advice_map = named.0;
 
     // Test `FastProcessor::execute_sync` fails if no advice map provided with the program
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager.clone())
-        .with_environment_source(named.environment.source());
+        .with_environment_source(named.1.source());
+    host.load_library(program_without_advice_map.clone()).unwrap();
     match FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(named.1.resolution_limits()),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&program_without_advice_map, named.environment.execution(), &mut host)
+    .execute_sync(named.1.target(), &mut host)
     {
         Ok(_) => panic!("Expected error"),
         Err(e) => {
@@ -53,19 +54,28 @@ fn advice_map_loaded_before_execution() {
     let key = Word::new([ONE, ONE, ONE, ONE]);
     let value = vec![ONE, ONE];
 
-    let program_with_advice_map =
-        program_without_advice_map.with_advice_map(AdviceMap::from_iter([(key, value)]));
+    let package = program_without_advice_map
+        .package()
+        .as_ref()
+        .clone()
+        .with_advice_map(AdviceMap::from_iter([(key, value)]));
+    let program_with_advice_map = miden_mast_package::CodePackage::new(
+        Arc::new(package),
+        program_without_advice_map.symbols().clone(),
+    )
+    .unwrap();
 
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(named.environment.source());
+        .with_environment_source(named.1.source());
+    host.load_library(program_with_advice_map).unwrap();
     FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(named.1.resolution_limits()),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&program_with_advice_map, named.environment.execution(), &mut host)
+    .execute_sync(named.1.target(), &mut host)
     .unwrap();
 }
 
@@ -131,12 +141,17 @@ fn canonical_deferred_ecdsa4_keccak100_example_executes() {
     );
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
         .with_library(&core_lib)
         .expect("core library must load into the host");
 
-    FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
-        .expect("processor initialization must succeed")
-        .execute_sync(&named.program, named.environment.execution(), &mut host)
-        .expect("canonical deferred ECDSA/Keccak example must execute");
+    host.load_library(named.0.clone()).unwrap();
+    FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        ExecutionOptions::default().with_resolution_limits(named.1.resolution_limits()),
+    )
+    .expect("processor initialization must succeed")
+    .execute_sync(named.1.target(), &mut host)
+    .expect("canonical deferred ECDSA/Keccak example must execute");
 }

@@ -18,9 +18,9 @@ use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceSpan};
 
 use super::{EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource};
 use crate::{
-    BaseHost, DefaultHost, ExecutionEnvironment, FutureMaybeSend, Host, LedgerLimits,
-    LoadedMastForest, OpeningError, OpeningLimits, OpeningStep, ProcessorState, ResolutionWitness,
-    SessionLimits, SyncHost, advice::AdviceMutation, event::EventError,
+    BaseHost, DefaultHost, FutureMaybeSend, Host, LedgerLimits, LoadedMastForest, OpeningError,
+    OpeningLimits, OpeningStep, ProcessorState, ResolutionLimits, ResolutionWitness, SessionLimits,
+    SyncHost, advice::AdviceMutation, event::EventError,
 };
 
 #[test]
@@ -51,12 +51,12 @@ fn configuration_preserves_explicit_authority_and_limits() {
         ledger: LedgerLimits,
         session: SessionLimits,
     ) -> (ExecutionTarget, OpeningLimits, LedgerLimits, SessionLimits) {
-        let environment = ExecutionEnvironment::new(descriptor, opening, ledger, session);
+        let limits = ResolutionLimits::new(opening, ledger, session);
         (
-            environment.descriptor(),
-            environment.opening_limits(),
-            environment.ledger_limits(),
-            environment.session_limits(),
+            descriptor,
+            limits.opening_limits(),
+            limits.ledger_limits(),
+            limits.session_limits(),
         )
     }
 

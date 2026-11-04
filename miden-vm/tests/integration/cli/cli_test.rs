@@ -190,7 +190,7 @@ fn cli_compile_emits_package_with_independently_expected_naming() {
     cmd.assert().success();
 
     let package = Package::deserialize_from_file(&output).unwrap();
-    package.check_naming(&inputs.named.naming).unwrap();
+    package.check_naming(inputs.named.0.symbols()).unwrap();
     assert_eq!(fs::read(&sidecar).unwrap(), fs::read(&inputs.expected_naming).unwrap());
     inputs.command(working_dir.path(), "run", &output).assert().success();
 
@@ -203,7 +203,7 @@ fn cli_compile_emits_package_with_independently_expected_naming() {
     cmd.assert().success();
     Package::deserialize_from_file(&second)
         .unwrap()
-        .check_naming(&inputs.named.naming)
+        .check_naming(inputs.named.0.symbols())
         .unwrap();
     assert_eq!(fs::read(&sidecar).unwrap(), previous_sidecar);
     assert!(!second.with_extension("naming").exists());
@@ -855,13 +855,15 @@ fn run_loads_a_masp_whose_kernel_shares_the_handler_section() {
     let program_path = working_dir.path().join("prog.masm");
     fs::write(&program_path, "begin push.1 drop end").unwrap();
     let mut inputs = ProgramFixture::new(working_dir.path(), &program_path, Some(&kernel), &[]);
-    let mut package = inputs.named.package.as_ref().clone();
+    let mut package = inputs.named.0.package().as_ref().clone();
     package
         .attach_event_handlers(&section)
         .expect("the executable package takes the section");
 
     let package_path = working_dir.path().join("prog.masp");
-    inputs.named.package = Arc::new(package);
+    inputs.named.0 =
+        miden_mast_package::CodePackage::new(Arc::new(package), inputs.named.0.symbols().clone())
+            .unwrap();
     inputs.write_package(&package_path);
     fs::write(working_dir.path().join("prog.inputs"), r#"{"operand_stack":[]}"#).unwrap();
 

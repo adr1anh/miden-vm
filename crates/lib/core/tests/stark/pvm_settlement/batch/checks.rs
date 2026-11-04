@@ -72,10 +72,11 @@ async fn batch_root_and_response_checks() {
         stack_inputs,
         advice_inputs.clone(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.1.resolution_limits())
             .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .unwrap()
-    .execute_for_proving(&program.program, program.environment.execution(), &mut host)
+    .execute_for_proving(program.1.target(), &mut host)
     .await
     .expect("batch settlement failed");
     let precompile_proof = host.precompile_proof.take().unwrap();
@@ -122,27 +123,32 @@ async fn batch_root_and_response_checks() {
         .with_map([(wrong_commitment, Word::words_as_elements(&commitments).to_vec())]);
     authorize_settlement_vm(&core_lib, &program, &wrong_advice);
     let mut host = DefaultHost::default()
-        .with_environment_source(program.environment.source())
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&core_lib)
         .unwrap();
     let error = FastProcessor::new_with_options(
         wrong_batch_input,
         wrong_advice,
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
     )
     .unwrap()
-    .execute_sync(&program.program, program.environment.execution(), &mut host)
+    .execute_sync(program.1.target(), &mut host)
     .expect_err("accepted a claim list with the wrong public hash");
     assert_failed_assertion(error);
 
     // Three valid claims must fail the even-count requirement.
     let (stack_inputs, advice_inputs) = batch_inputs(&core_lib, &[(&plain, &plain_claim); 3]);
     authorize_settlement_vm(&core_lib, &program, &advice_inputs);
-    let error =
-        FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
-            .unwrap()
-            .execute_sync(&program.program, program.environment.execution(), &mut host)
-            .expect_err("accepted an odd number of claims");
+    let error = FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
+    )
+    .unwrap()
+    .execute_sync(program.1.target(), &mut host)
+    .expect_err("accepted an odd number of claims");
     assert_failed_assertion(error);
 
     // With only TRUE roots, the batch needs no PVM proof. This host has no request handler.
@@ -152,25 +158,30 @@ async fn batch_root_and_response_checks() {
         stack_inputs,
         advice_inputs,
         ExecutionOptions::default()
+            .with_resolution_limits(program.1.resolution_limits())
             .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .unwrap()
-    .execute_for_proving_sync(&program.program, program.environment.execution(), &mut host)
+    .execute_for_proving_sync(program.1.target(), &mut host)
     .expect("a batch with no deferred work requested a PVM proof");
     assert!(!witness.has_precompiles());
 }
 
 fn prove_without_precompiles() -> (ExecutionProof, ExecutionClaim) {
     let program = assemble(Assembler::default(), "no_precompiles", "begin push.7 drop end", &[]);
-    let mut host = DefaultHost::default().with_environment_source(program.environment.source());
+    let mut host = DefaultHost::default()
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host");
     let witness = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
         ExecutionOptions::default()
+            .with_resolution_limits(program.1.resolution_limits())
             .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .unwrap()
-    .execute_for_proving_sync(&program.program, program.environment.execution(), &mut host)
+    .execute_for_proving_sync(program.1.target(), &mut host)
     .unwrap();
     let claim = witness.claim();
     let proof = Prover::new().with_hash_fn(HashFunction::Eidos).prove(witness).unwrap();
@@ -187,13 +198,15 @@ fn assert_rejects_pvm_response(
     authorize_settlement_vm(core_lib, program, &advice_inputs);
     let profile = core_lib.pvm_recursive_verifier_profile().unwrap();
     let expected_verifier = profile.identity();
-    let environment = program.environment.clone();
+    let environment = program.1.clone();
     let response = PvmRecursiveVerifierInputs::for_request(expected_verifier, proof).unwrap();
     let response_root = response.claim_commitment();
     let requests = Arc::new(AtomicUsize::new(0));
     let handler_requests = Arc::clone(&requests);
     let mut host = DefaultHost::default()
-        .with_environment_source(program.environment.source())
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(core_lib)
         .unwrap();
     host.register_handler(
@@ -216,11 +229,14 @@ fn assert_rejects_pvm_response(
         }),
     )
     .unwrap();
-    let error =
-        FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
-            .unwrap()
-            .execute_sync(&program.program, program.environment.execution(), &mut host)
-            .expect_err("accepted a PVM proof of different deferred work");
+    let error = FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
+    )
+    .unwrap()
+    .execute_sync(program.1.target(), &mut host)
+    .expect_err("accepted a PVM proof of different deferred work");
     assert_eq!(requests.load(Ordering::Relaxed), 1, "MASM did not receive the PVM response");
     assert_failed_assertion(error);
 }

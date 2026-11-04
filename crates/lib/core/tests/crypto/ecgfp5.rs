@@ -621,9 +621,9 @@ fn callable_from_a_kernel_procedure() {
             .assemble_library_modules("kernel".into(), kernel, [], TargetType::Kernel)
             .unwrap();
         let kernel_naming = kernel_product.naming().clone();
-        let kernel = Arc::from(kernel_product.into_artifact(true).unwrap());
+        let kernel = kernel_product.into_code_package(true).unwrap();
         let assembler =
-            Assembler::with_kernel(source_manager, Arc::clone(&kernel), kernel_naming.clone())
+            Assembler::with_kernel(source_manager, kernel.package().clone(), kernel_naming.clone())
                 .unwrap();
         let named = crate::naming::assemble(
             assembler,
@@ -638,21 +638,25 @@ fn callable_from_a_kernel_procedure() {
         );
         let inputs = StackInputs::new(commitment.as_elements()).unwrap();
         let mut host = DefaultHost::default()
-            .with_environment_source(named.environment.source())
+            .with_environment_source(named.1.source())
+            .with_library(named.0.clone())
+            .expect("fixture code must load into the host")
             .with_library(&core)
             .unwrap();
-        host.mast_forest_store_mut().insert(kernel.mast_forest().clone());
+        host.load_library(kernel).unwrap();
         let witness =
             FastProcessor::new(inputs)
                 .with_options(
-                    ExecutionOptions::default().with_environment_trace_limits(
-                        miden_utils_testing::librarytree::trace_limits(),
-                    ),
+                    ExecutionOptions::default()
+                        .with_resolution_limits(named.1.resolution_limits())
+                        .with_environment_trace_limits(
+                            miden_utils_testing::librarytree::trace_limits(),
+                        ),
                 )
                 .unwrap()
                 .with_advice(advice)
                 .unwrap()
-                .execute_for_proving_sync(&named.program, named.environment.execution(), &mut host)
+                .execute_for_proving_sync(named.1.target(), &mut host)
                 .unwrap();
         let expected: Vec<_> =
             expected(&secret, &public_key).into_iter().map(Felt::new_unchecked).collect();

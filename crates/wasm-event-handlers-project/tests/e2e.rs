@@ -75,7 +75,6 @@ fn a_project_build_ships_a_working_wasm_handler() {
         decoded.event_handlers().expect("roundtrip section decodes"),
         package.event_handlers().expect("source section decodes"),
     );
-    let program = decoded.try_into_program(naming).expect("exact fixture naming selects code");
     let environment = FixtureEnvironment::new(
         naming.entry_key().expect("fixture entry is named"),
         [naming.as_ref()],
@@ -90,7 +89,12 @@ fn a_project_build_ships_a_working_wasm_handler() {
     host.load_library(library).expect("the handlers register");
 
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, environment.execution(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(environment.target(), &mut host)
         .expect("the handler's advice satisfies the in-VM check");
 }
 

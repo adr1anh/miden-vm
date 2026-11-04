@@ -3,7 +3,7 @@ use std::{hint::black_box, sync::Arc};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use miden_core_lib::CoreLibrary;
 use miden_processor::{ExecutionOptions, FastProcessor, advice::AdviceInputs};
-use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
+use miden_utils_testing::librarytree::{assemble_fixture_program, trace_limits};
 use miden_vm::{
     Assembler, DefaultHost, StackInputs, assembly::DefaultSourceManager, internal::InputFile,
 };
@@ -60,7 +60,7 @@ fn program_execution_for_trace(c: &mut Criterion) {
                         )
                         .expect("failed to load core library");
 
-                    let fixture: NamedProgram = assemble_fixture_program(
+                    let (code, environment) = assemble_fixture_program(
                         assembler,
                         "program",
                         source.as_str(),
@@ -74,30 +74,26 @@ fn program_execution_for_trace(c: &mut Criterion) {
                                 .with_source_manager(source_manager.clone())
                                 .with_library(&core_lib)
                                 .unwrap()
-                                .with_environment_source(fixture.environment.source());
+                                .with_library(code.clone())
+                                .unwrap()
+                                .with_environment_source(environment.source());
 
                             let processor = FastProcessor::new_with_options(
                                 stack_inputs,
                                 advice_inputs.clone(),
                                 ExecutionOptions::default()
+                                    .with_resolution_limits(environment.resolution_limits())
                                     .with_environment_trace_limits(trace_limits())
                                     .with_core_trace_fragment_size(TRACE_FRAGMENT_SIZE)
                                     .unwrap(),
                             )
                             .expect("processor advice inputs should fit advice map limits");
 
-                            (
-                                host,
-                                fixture.program.clone(),
-                                fixture.environment.execution(),
-                                processor,
-                            )
+                            (host, environment.target(), processor)
                         },
-                        |(mut host, program, environment, processor)| async move {
-                            let out = processor
-                                .execute_for_proving(&program, environment, &mut host)
-                                .await
-                                .unwrap();
+                        |(mut host, target, processor)| async move {
+                            let out =
+                                processor.execute_for_proving(target, &mut host).await.unwrap();
                             black_box(out);
                         },
                         BatchSize::SmallInput,

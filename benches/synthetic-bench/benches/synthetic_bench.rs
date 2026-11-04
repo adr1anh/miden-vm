@@ -24,14 +24,15 @@ use std::{collections::BTreeSet, hint::black_box, path::PathBuf, sync::Arc, time
 
 use codspeed_criterion_compat as criterion;
 use criterion::{BatchSize, Criterion, SamplingMode, criterion_group, criterion_main};
-use miden_core::program::ExecutionClaim;
+use miden_core::program::{ExecutionClaim, ExecutionTarget};
 use miden_processor::{
-    DefaultHost, ExecutionEnvironment, ExecutionOptions, FastProcessor, StackInputs,
-    advice::AdviceInputs,
+    DefaultHost, ExecutionOptions, FastProcessor, StackInputs, advice::AdviceInputs,
 };
-use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
+use miden_utils_testing::librarytree::{
+    FixtureEnvironment, assemble_fixture_program, trace_limits,
+};
 use miden_vm::{
-    Assembler, ExecutionProof, HashFunction, Program, Prover, StackOutputs, Verifier,
+    Assembler, CodePackage, ExecutionProof, HashFunction, Prover, StackOutputs, Verifier,
     assembly::DefaultSourceManager, prove_sync,
 };
 use miden_vm_synthetic_bench::{
@@ -104,47 +105,41 @@ fn env_u64(name: &str, default: u64) -> u64 {
 
 /// Builds the per-iteration inputs shared by the `exec` and `trace_prep` axes.
 fn processor_inputs(
-    fixture: &NamedProgram,
-    source_manager: Arc<DefaultSourceManager>,
-) -> (DefaultHost, Program, ExecutionEnvironment, FastProcessor) {
-    let host = fixture_host(fixture, source_manager);
+    code: &CodePackage,
+    environment: &FixtureEnvironment,
+) -> (DefaultHost, ExecutionTarget, FastProcessor) {
+    let host = fixture_host(code, environment);
     let processor = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        execution_options(),
+        execution_options(environment),
     )
     .expect("processor advice inputs should fit advice map limits");
-    (host, fixture.program.clone(), fixture.environment.execution(), processor)
+    (host, environment.target(), processor)
 }
 
-fn fixture_host(fixture: &NamedProgram, source_manager: Arc<DefaultSourceManager>) -> DefaultHost {
-    DefaultHost::default()
-        .with_source_manager(source_manager)
-        .with_environment_source(fixture.environment.source())
+fn fixture_host(code: &CodePackage, environment: &FixtureEnvironment) -> DefaultHost {
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(code.clone()).expect("load synthetic benchmark package");
+    host
 }
 
-fn execution_options() -> ExecutionOptions {
-    ExecutionOptions::default().with_environment_trace_limits(trace_limits())
+fn execution_options(environment: &FixtureEnvironment) -> ExecutionOptions {
+    ExecutionOptions::default()
+        .with_environment_trace_limits(trace_limits())
+        .with_resolution_limits(environment.resolution_limits())
 }
 
 fn execute_and_prove(
     prover: &Prover,
-    program: &Program,
-    environment: ExecutionEnvironment,
+    target: ExecutionTarget,
     stack_inputs: StackInputs,
     advice_inputs: AdviceInputs,
     host: &mut DefaultHost,
+    options: ExecutionOptions,
 ) -> (StackOutputs, ExecutionProof) {
-    prove_sync(
-        prover,
-        program,
-        environment,
-        stack_inputs,
-        advice_inputs,
-        host,
-        execution_options(),
-    )
-    .expect("execute and prove program")
+    prove_sync(prover, target, stack_inputs, advice_inputs, host, options)
+        .expect("execute and prove program")
 }
 
 fn synthetic_bench(c: &mut Criterion) {
@@ -255,7 +250,7 @@ fn bench_one_scenario(
     println!("\n=== verification\n{}", synthesized.report);
 
     let source_manager = Arc::new(DefaultSourceManager::default());
-    let fixture = assemble_fixture_program(
+    let (code, environment) = assemble_fixture_program(
         Assembler::new(source_manager.clone()),
         "program",
         source.as_str(),
@@ -278,18 +273,11 @@ fn bench_one_scenario(
         group.bench_function("exec", |b| {
             b.iter_batched_ref(
                 || {
-                    let (host, program, environment, processor) =
-                        processor_inputs(&fixture, source_manager.clone());
-                    (host, program, environment, Some(processor))
+                    let (host, target, processor) = processor_inputs(&code, &environment);
+                    (host, target, Some(processor))
                 },
-                |(host, program, environment, processor)| {
-                    black_box(
-                        processor
-                            .take()
-                            .unwrap()
-                            .execute_sync(program, *environment, host)
-                            .expect("exec"),
-                    )
+                |(host, target, processor)| {
+                    black_box(processor.take().unwrap().execute_sync(*target, host).expect("exec"))
                 },
                 BatchSize::PerIteration,
             );
@@ -300,16 +288,15 @@ fn bench_one_scenario(
         group.bench_function("trace_prep", |b| {
             b.iter_batched_ref(
                 || {
-                    let (host, program, environment, processor) =
-                        processor_inputs(&fixture, source_manager.clone());
-                    (host, program, environment, Some(processor))
+                    let (host, target, processor) = processor_inputs(&code, &environment);
+                    (host, target, Some(processor))
                 },
-                |(host, program, environment, processor)| {
+                |(host, target, processor)| {
                     black_box(
                         processor
                             .take()
                             .unwrap()
-                            .execute_for_proving_sync(program, *environment, host)
+                            .execute_for_proving_sync(*target, host)
                             .expect("trace_prep"),
                     )
                 },
@@ -322,25 +309,19 @@ fn bench_one_scenario(
         group.bench_function("prove", |b| {
             b.iter_batched_ref(
                 || {
-                    let host = fixture_host(&fixture, source_manager.clone());
+                    let host = fixture_host(&code, &environment);
                     let stack = StackInputs::default();
                     let advice = AdviceInputs::default();
-                    (
-                        host,
-                        fixture.program.clone(),
-                        fixture.environment.execution(),
-                        Some(stack),
-                        Some(advice),
-                    )
+                    (host, environment.target(), Some(stack), Some(advice))
                 },
-                |(host, program, environment, stack, advice)| {
+                |(host, target, stack, advice)| {
                     black_box(execute_and_prove(
                         &prover,
-                        program,
-                        *environment,
+                        *target,
                         stack.take().unwrap(),
                         advice.take().unwrap(),
                         host,
+                        execution_options(&environment),
                     ))
                 },
                 BatchSize::PerIteration,
@@ -349,20 +330,17 @@ fn bench_one_scenario(
     }
 
     if axes.contains("verify") {
-        let mut host = fixture_host(&fixture, source_manager.clone());
+        let mut host = fixture_host(&code, &environment);
         let (stack_outputs, proof) = execute_and_prove(
             &prover,
-            &fixture.program,
-            fixture.environment.execution(),
+            environment.target(),
             StackInputs::default(),
             AdviceInputs::default(),
             &mut host,
+            execution_options(&environment),
         );
-        let claim = ExecutionClaim::new(
-            fixture.environment.execution().descriptor(),
-            StackInputs::default(),
-            stack_outputs,
-        );
+        let claim =
+            ExecutionClaim::new(environment.target(), StackInputs::default(), stack_outputs);
         group.bench_function("verify", |b| {
             b.iter(|| {
                 let outcome = Verifier::new().verify(&claim, &proof).expect("verify");

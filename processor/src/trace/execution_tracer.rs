@@ -6,7 +6,7 @@ use miden_air_definitions::vm::trace::chiplets::hasher::{
 use miden_core::{
     FMP_ADDR, FMP_INIT_VALUE,
     operations::Operation,
-    program::ProcedureKey,
+    program::{ExecutionTarget, ProcedureKey},
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
 };
 
@@ -27,8 +27,8 @@ use super::{
     utils::split_u32_into_u16,
 };
 use crate::{
-    AceError, ContextId, EMPTY_WORD, EnvironmentTraceLimits, ExecutionEnvironment, ExecutionError,
-    FastProcessor, Felt, MIN_STACK_DEPTH, ONE, ResolutionSession, RowIndex, SessionBinding, Word,
+    AceError, ContextId, EMPTY_WORD, EnvironmentTraceLimits, ExecutionError, FastProcessor, Felt,
+    MIN_STACK_DEPTH, ONE, ResolutionLimits, ResolutionSession, RowIndex, SessionBinding, Word,
     ZERO,
     continuation_stack::{Continuation, ContinuationStack},
     crypto::merkle::MerklePath,
@@ -175,7 +175,8 @@ impl TraceReplay {
 impl TraceReplay {
     pub(crate) fn read_with_limits<R: ByteReader>(
         source: &mut R,
-        environment: &ExecutionEnvironment,
+        target: ExecutionTarget,
+        resolution_limits: ResolutionLimits,
         trace_limits: EnvironmentTraceLimits,
         read_limits: ReplayReadLimits,
     ) -> Result<Self, DeserializationError> {
@@ -236,7 +237,8 @@ impl TraceReplay {
         let mut environment_replay = environment_replay;
         let resolution_session = environment_replay
             .revalidate(
-                environment,
+                target,
+                resolution_limits,
                 &mut core_trace_contexts,
                 trace_limits,
                 read_limits,
@@ -373,7 +375,7 @@ fn validate_mast_forest_id(
 #[derive(Debug)]
 pub struct ExecutionTracer {
     trace_limits: EnvironmentTraceLimits,
-    entry: Option<(miden_core::program::ExecutionTarget, SessionBinding)>,
+    entry: Option<(ExecutionTarget, SessionBinding)>,
     environment: Option<EnvironmentReplay>,
     keyed: KeyedReplay,
     keyed_events: usize,
@@ -980,7 +982,7 @@ pub struct ExecutionTraceReservation(ExecutionTraceReservationKind);
 // trace preparation's checked resource reservations. Its bounded stack footprint is deliberate.
 #[allow(clippy::large_enum_variant)]
 enum ExecutionTraceReservationKind {
-    Entry(miden_core::program::ExecutionTarget, SessionBinding),
+    Entry(ExecutionTarget, SessionBinding),
     Completion,
     Event {
         record: PreparedKeyedRecord,
@@ -1000,13 +1002,13 @@ impl Tracer for ExecutionTracer {
 
     fn prepare_environment(
         &mut self,
-        descriptor: &miden_core::program::ExecutionTarget,
+        descriptor: &ExecutionTarget,
         entry: SessionBinding,
     ) -> Result<Self::KeyedReservation, ExecutionError> {
         if self.entry.is_some() || entry.procedure_key() != descriptor.entry_key() {
             return Err(ExecutionError::InvalidExecutionState);
         }
-        let bytes = size_of::<miden_core::program::ExecutionTarget>()
+        let bytes = size_of::<ExecutionTarget>()
             .checked_add(size_of::<SessionBinding>())
             .ok_or(ExecutionError::InvalidExecutionState)?;
         for (resource, limit) in [
@@ -1031,14 +1033,13 @@ impl Tracer for ExecutionTracer {
         let ExecutionTraceReservationKind::Entry(descriptor, entry) = reservation.0 else {
             unreachable!("entry reservation kind");
         };
-        self.keyed_retained_bytes =
-            size_of::<miden_core::program::ExecutionTarget>() + size_of::<SessionBinding>();
+        self.keyed_retained_bytes = size_of::<ExecutionTarget>() + size_of::<SessionBinding>();
         self.entry = Some((descriptor, entry));
     }
 
     fn prepare_environment_completion(
         &mut self,
-        environment: &ExecutionEnvironment,
+        target: ExecutionTarget,
         session: &ResolutionSession,
     ) -> Result<Self::KeyedReservation, ExecutionError> {
         if self.keyed_reservation_pending || self.pending_keyed.is_some() || self.keyed_invalidated
@@ -1047,7 +1048,7 @@ impl Tracer for ExecutionTracer {
         }
         self.pending_environment = None;
         let (descriptor, entry) = self.entry.ok_or(ExecutionError::InvalidExecutionState)?;
-        if descriptor != environment.descriptor() || self.environment.is_some() {
+        if descriptor != target || self.environment.is_some() {
             return Err(ExecutionError::InvalidExecutionState);
         }
         let staged = EnvironmentReplay::prepare_capture(
@@ -2278,10 +2279,11 @@ mod serialization_tests {
     fn read_context(context: &TraceReplay) -> Result<TraceReplay, DeserializationError> {
         let mut payload = Vec::new();
         context.write_payload(&mut payload);
-        let environment = execution_fixture(vec![Operation::Noop]).environment;
+        let fixture = execution_fixture(vec![Operation::Noop]);
         TraceReplay::read_with_limits(
             &mut SliceReader::new(&payload),
-            &environment,
+            fixture.target,
+            fixture.resolution_limits,
             trace_limits(),
             read_limits(),
         )
@@ -2342,11 +2344,11 @@ mod serialization_tests {
     #[test]
     fn validated_replay_requires_matching_completed_native_owner() {
         let mut trace = valid_trace_generation_context();
-        let environment = execution_fixture(vec![Operation::Noop]).environment;
+        let fixture = execution_fixture(vec![Operation::Noop]);
         trace.resolution_session = ResolutionSession::new(
-            environment.descriptor(),
-            environment.ledger_limits(),
-            environment.session_limits(),
+            fixture.target,
+            fixture.resolution_limits.ledger_limits(),
+            fixture.resolution_limits.session_limits(),
         );
         assert!(trace.require_validated().is_err());
 
@@ -2365,8 +2367,8 @@ mod serialization_tests {
     #[test]
     fn root_end_retains_native_capacities_and_admits_its_keyed_record_before_commit() {
         let original = valid_trace_generation_context();
-        let environment = execution_fixture(vec![Operation::Noop]).environment;
-        let descriptor = environment.descriptor();
+        let fixture = execution_fixture(vec![Operation::Noop]);
+        let descriptor = fixture.target;
         let binding = crate::ResolutionWitness {
             path: vec![crate::OpeningStep {
                 node: original.resolution_session.ledger().occurrences()[0].node().clone(),
@@ -2376,13 +2378,13 @@ mod serialization_tests {
         .verify(
             descriptor.environment_root(),
             descriptor.entry_key(),
-            environment.opening_limits(),
+            fixture.resolution_limits.opening_limits(),
         )
         .unwrap();
         let mut session = ResolutionSession::new(
             descriptor,
-            environment.ledger_limits(),
-            environment.session_limits(),
+            fixture.resolution_limits.ledger_limits(),
+            fixture.resolution_limits.session_limits(),
         );
         session.prepare_entry(binding).unwrap().commit();
         let before = session.counters();
@@ -2441,9 +2443,44 @@ mod serialization_tests {
     }
 
     #[test]
+    fn explicit_zero_resolution_limits_revoke_replay_trust() {
+        let fixture = execution_fixture(vec![Operation::Noop]);
+        for policy in 0..3 {
+            let mut opening = fixture.resolution_limits.opening_limits();
+            let mut ledger = fixture.resolution_limits.ledger_limits();
+            let mut session = fixture.resolution_limits.session_limits();
+            match policy {
+                0 => opening.max_nodes = 0,
+                1 => ledger.max_occurrences = 0,
+                2 => session.max_cached_keys = 0,
+                _ => unreachable!(),
+            }
+            let mut trace = valid_trace_generation_context();
+            assert!(
+                trace
+                    .environment
+                    .revalidate(
+                        fixture.target,
+                        ResolutionLimits::new(opening, ledger, session),
+                        &mut trace.core_trace_contexts,
+                        trace_limits(),
+                        read_limits(),
+                        trace.fragment_size,
+                    )
+                    .is_err()
+            );
+            assert!(trace.require_validated().is_err());
+            assert!(trace.environment.require_validated().is_err());
+            for fragment in &trace.core_trace_contexts {
+                assert!(fragment.replay.keyed.require_validated().is_err());
+            }
+        }
+    }
+
+    #[test]
     fn retained_native_read_rejection_revokes_replay_trust() {
         let mut trace = valid_trace_generation_context();
-        let environment = execution_fixture(vec![Operation::Noop]).environment;
+        let fixture = execution_fixture(vec![Operation::Noop]);
         let mut raw = trace.environment.retained_bytes().unwrap();
         for fragment in &trace.core_trace_contexts {
             raw += fragment.replay.keyed.retained_bytes().unwrap();
@@ -2454,7 +2491,8 @@ mod serialization_tests {
             trace
                 .environment
                 .revalidate(
-                    &environment,
+                    fixture.target,
+                    fixture.resolution_limits,
                     &mut trace.core_trace_contexts,
                     limits,
                     read_limits(),

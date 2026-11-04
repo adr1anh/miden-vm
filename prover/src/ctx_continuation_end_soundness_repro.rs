@@ -40,10 +40,10 @@ use miden_core::{
     Felt,
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::{Operation, opcodes},
-    program::Program,
     proof::{ExecutionProof, PrecompileStatus},
 };
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
+use miden_utils_testing::librarytree::fixture_code;
 use miden_verifier::Verifier;
 
 use crate::repro_harness::{CoreMode, ReproTrace, core_row_mut};
@@ -87,21 +87,22 @@ fn build_basic_harness() -> (ReproTrace, BasicRows) {
     let basic_block_id =
         BasicBlockNodeBuilder::new(operations).add_to_forest(&mut mast_forest).unwrap();
     mast_forest.make_root(basic_block_id);
-    let program = Program::new(mast_forest.into(), basic_block_id);
+    let program = fixture_code(mast_forest.into(), basic_block_id);
     let environment = crate::named_fixture::raw_environment(&program, "continuation-end");
 
     let stack_values = (1..17).rev().map(Felt::new_unchecked).collect::<Vec<_>>();
     let stack_inputs = StackInputs::new(&stack_values).unwrap();
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(program).unwrap();
     let (trace, precompile_witness) = FastProcessor::new(stack_inputs)
         .with_options(
             miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits())
                 .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
         )
         .unwrap()
         .execute_and_build_trace_sync(
-            &program,
-            environment.execution(),
+            environment.target(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )
@@ -214,15 +215,16 @@ fn check_alias_principal_exchange(after_continuation: bool) {
     });
     assert_eq!(implementations[0], implementations[1], "the aliases must select equal D");
     let mut host = DefaultHost::default().with_environment_source(fixture.environment.source());
+    host.load_library(fixture.code.clone()).unwrap();
     let (trace, precompile) = FastProcessor::new(StackInputs::default())
         .with_options(
             miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(fixture.environment.resolution_limits())
                 .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
         )
         .unwrap()
         .execute_and_build_trace_sync(
-            &fixture.program,
-            fixture.environment.execution(),
+            fixture.environment.target(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )
@@ -319,19 +321,20 @@ fn build_call_harness() -> (ReproTrace, CallRows) {
         end
     ";
     let fixture = crate::named_fixture::named_source(source);
-    let program = fixture.program;
+    let program = fixture.code;
     let environment = fixture.environment;
 
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(program).unwrap();
     let (trace, precompile_witness) = FastProcessor::new(StackInputs::default())
         .with_options(
             miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits())
                 .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
         )
         .unwrap()
         .execute_and_build_trace_sync(
-            &program,
-            environment.execution(),
+            environment.target(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )
