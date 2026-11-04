@@ -526,7 +526,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
-| 15 API/CLI closure | in-progress | Names `652e1780c`; ProgramInfo `b3877191e`; package `77bbd95a7`; producer `f8e052482`; base `f4350360d` | Independent reviews; six-crate3772 pass then final affected615; strict11-crate all-target custom Clippy; prior1427 and authority fixture | Immutable CodePackage/host-owned execution, Program retirement, resolution options, downstream runtime/no_std and remaining PR15 acceptance pending |
+| 15 API/CLI closure | in-progress | Owner `954377d10`; projects `3ff730b5a`; host `cf1043490`; consumers `50c27f59f`; CLI `49151a5b4`; prior SHAs below; base `f4350360d` | Independent reviews; ownership3126+focused2; strict14-crate all-target custom Clippy; production no_std10 with graph audit; earlier3772+615 and cache2 | Keyed host source/code dispatch, target-only execution/Program retirement, resolution options, remaining assembler/public migration and all final PR15 gates pending |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
@@ -3382,3 +3382,38 @@ Next: immutable checked CodePackage association, keyed host code/source ownershi
 execution and Program retirement with explicit resolution policies. This is ordinary implementation
 within the approved PR15 card, not a new authority model. All remaining PR15, PR15a/16, inherited
 guest/fuzz/performance/final gates and the general goal/M1 remain open. No push or GitHub PR.
+
+
+### PR15 checked package ownership qualification, 4 November 2026
+
+Signed `954377d10` introduces immutable CodePackage association, reusing exact symbol/code/occurrence
+checks and explicit profile/context/shared-budget admission. `3ff730b5a` returns checked containers
+from project assembly and seals only after postprocessors; dependency conflicts, home checks and
+cache validation remain. `cf1043490` retains whole owners through private HostLibrary/LoadedMastForest
+and Wasm loading, preserving handler rollback and debug errors. Explicit raw witness insertion
+remains separate from ordinary checked package loading and grants no execution authority.
+
+`50c27f59f` migrates the core-library owner/build, CLI admission and public facade, cached test
+local/kernel/import owners and affected consumers. The unchanged full Package commitment covers
+forest advice and all metadata/debug sections; independent review and source audit found no stale
+cache identity gap. Low-level assembler linking and public CompiledTest remain transitional until
+the target-only execution cutover; do not claim Program is retired.
+
+The selected ownership runtime scope ran3127:3126 passed, with one existing filename-substring
+assertion broken by diagnostic wrapping under the longer workspace TMPDIR. Test-only `49151a5b4`
+checks complete inferred filenames after removing display continuations while retaining failure
+and missing-file cause assertions; both affected run/prove cases pass. All3127 therefore have
+passing scoped evidence, not a fresh whole3127 rerun. Scope includes checked-pair/profile/budget,
+project/processor/source/replay/cache, core-lib owner/debug, Wasm guest/handler limits and selected
+CLI/witness/deferred paths. Logs: `pr15-code-package-checks.log`, `pr15-code-package-cli-final.log`.
+
+Final14-crate all-target strict custom Clippy passes in `pr15-code-package-clippy-final.log`.
+Ten production roots compile with defaults off and required prover features; their normal graph
+contains no std (`pr15-code-package-no-std{,-features}.log`). Host build dependencies remain separate
+under resolver3; no bare-metal/cross-target or new relation-regeneration claim. All five commits
+verify signatures. Current tree contains only untracked scratch.
+
+Next: keyed host code/source requests before removing Program entry hints, then caller-target-only
+execution, resolution limits in ExecutionOptions and complete public/assembler consumer migration.
+Digest-only storage is still present; ownership alone does not solve equal-D source dispatch.
+General goal/M1 and PR15a/16/inherited final qualification remain active. No GitHub PR or push.
