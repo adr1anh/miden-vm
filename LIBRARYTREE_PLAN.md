@@ -289,12 +289,13 @@ Replace root-only verification flags and implicit Program/kernel reconstruction 
 | `LibraryImport` | `LibraryRef`, with explicit `latest(base, id)` / `revision(base, id, revision)` helpers |
 | `Pinned(revision)` | `Revision(revision)`; exact code-hash pins remain a separate concept |
 | `admit_naming` | `validate_symbols`, retaining explicit profile/context/codec limits |
+| `EnvironmentWitnessSource` | `EnvironmentSource`: untrusted opening retrieval; caller-root/key authentication remains mandatory |
 
 Keep `ProcedureKey`, `EnvironmentRoot` and `ExecutionClaim`. Keep package code and checked symbols together so ordinary linking does not require separately pairing package and naming. Rust names do not change canonical Latest/Pinned labels, encodings or hashes. Source version, runtime revision and selected implementation remain distinct under D5.
 
 **User-approved execution shape, 4 November 2026:** load package code through the host and call `execute_sync(target, &mut host)`. Retire `Program` and legacy `ProgramInfo`, remove their conversions, and add no replacement forest-plus-entry wrapper. Keep package code, checked symbols, advice and source metadata together. Preserve exact source occurrences, private entry metadata and internal step/resume state. The caller supplies the expected entry key/environment root; host-loaded code and lookup evidence do not supply authority.
 
-**Proposed; settle before the affected cleanup:** `EnvironmentSource` is the latest suggestion for the untrusted lookup-evidence trait; neither that spelling nor `LookupProofProvider` is selected.
+**User-approved source trait name, 4 November 2026:** use `EnvironmentSource` for untrusted opening retrieval. Every returned opening must still authenticate against the caller's expected root and key. This Rust API rename does not change witness formats, codecs, resource policies or authority.
 
 **Acceptance:** migrate affected assembler/package/project, host/processor, prove/verify, CLI, examples, docs and supported no_std callers consistently. The caller still supplies expected K_entry/R_E; untrusted code/evidence never supplies authority or fallback. Preserve D3/D5/D6/D8, fixed-N0 syscalls, canonical codecs, every explicit resource budget, replay/source identity and all existing PR15/security/final gates. Retain negative binding/evidence tests and run/prove/verify coverage; do not mark a rename as implementation or acceptance evidence. PR15a remains AIR/Chiplets cleanup, not a duplicate API card.
 
