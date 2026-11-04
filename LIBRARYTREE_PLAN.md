@@ -529,7 +529,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
 | 15 API/CLI closure | implemented-awaiting-validation | Final source `a99264137`; checked links/CLI `ba651f64d`; review `8ba05fd00`; prior SHAs below; base `f4350360d` | Independent reviews; fresh combined runtime/CLI/witness/proof/flow3,179; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumers; six compiled doctests; standalone fuzz2 typechecks; earlier scoped evidence below | PR15 functional acceptance passes; PR15a/16 and inherited guest/security/fuzz/performance/final gates remain |
 | 15a AIR/Chiplets cleanup | implemented-awaiting-validation | Counter/rebinding `7d51bff1b`; review `cffb3f279`; base `1afb98f50` | Independent reviews; fresh combined3,615; MAIN/ext/lookup capture and generated/recursive parity; actual heights; strict14; production no_std10; clean post-commit generation/check; PVM constants/277756-byte fixture; root-stability policy | PR15a functional/artifact acceptance passes; inherited PR16 guest/security/fuzz/performance/final gates remain |
-| 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
+| 16 Qualification | in-progress | Opening base `91011b897` | PR15a source/artifact qualification inherited; no new final campaign evidence yet | Close actual fuzz/tooling/measurement/adversarial gaps and all required final commands on the post-cleanup relation |
 
 ## Implementation evidence
 
@@ -3628,3 +3628,15 @@ passes its policy tests (`pr15a-root-stability-policy.log`). Final review descri
 is committed separately. PR15a may advance linearly to PR16 while its ledger state retains the
 inherited final gates. General goal/M1 and PR16 guest/security/fuzz/performance/final qualification
 remain active. No PR, push or publication.
+
+
+### PR16 opening boundary, 4 November 2026
+
+Local `adr1anh/librarytree-16-qualification` starts from clean PR15a closeout `91011b897`.
+Reuse the qualified source/relation and compiled drift binaries; preserve all existing acceptance.
+First close concrete qualification-tool gaps: align fuzz recipes/docs/CI with registered targets,
+run actual bounded mutation on the eight changed bins, and extend the existing registered real VM
+proof harness with measured LibraryTree cases. Source-only/deterministic replay and configured
+memory limits are not substitutes for mutation/measurement. Bounded inherited-adversarial audit
+will identify remaining concrete controls before one coherent final private-prover/full-suite build.
+No new policy or external Protocol integration is selected. General goal/M1 remain active; no PR/push.
