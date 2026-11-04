@@ -741,7 +741,7 @@ impl Assembler {
         };
 
         let callables = self.pending_callables(
-            &mast_forest_builder,
+            &mut mast_forest_builder,
             exports.values().filter_map(|export| match export {
                 PendingPackageExport::Procedure(export) => Some((export.path.clone(), export.key)),
                 _ => None,
@@ -752,8 +752,11 @@ impl Assembler {
         }
         let (mast_forest, node_id_by_ref, debug_info, source_id_by_ref) =
             mast_forest_builder.build()?.into_parts_with_debug_info();
-        let (callables, callable_sources) =
-            callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
+        let product::FinalizedCallables {
+            callables,
+            sources: callable_sources,
+            occurrences: procedure_occurrences,
+        } = callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
         let exports = exports
             .into_iter()
             .map(|(path, export)| {
@@ -773,6 +776,7 @@ impl Assembler {
             kind,
             callables,
             callable_sources,
+            procedure_occurrences,
         )
     }
 
@@ -1274,12 +1278,12 @@ impl Assembler {
             .expect("compiled entrypoint has a callable binding")
             .key();
         let entry_path = namespace.join(ast::ProcedureName::MAIN_PROC_NAME).into();
-        let callables = self.pending_callables(&mast_forest_builder, [(entry_path, entry_key)])?;
+        let callables =
+            self.pending_callables(&mut mast_forest_builder, [(entry_path, entry_key)])?;
 
         let (mast_forest, node_id_by_ref, debug_info, source_id_by_ref) =
             mast_forest_builder.build()?.into_parts_with_debug_info();
-        let (callables, callable_sources) =
-            callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
+        let callables = callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
         let entry_node_id = *node_id_by_ref.get(&entry_node_ref).ok_or_else(|| {
             Report::msg(format!("entrypoint ref {entry_node_ref} was not finalized"))
         })?;
@@ -1295,7 +1299,6 @@ impl Assembler {
             entry_source_id,
             kernel_package,
             callables,
-            callable_sources,
             entry_key,
         )
     }
@@ -1310,6 +1313,7 @@ impl Assembler {
         kind: TargetType,
         callables: miden_mast_package::PackageCallables,
         callable_sources: product::CallableSources,
+        procedure_occurrences: Vec<miden_mast_package::PackageProcedureOccurrence>,
     ) -> Result<AssemblyProduct, Report> {
         #[cfg(feature = "std")]
         if self.emit_debug_info
@@ -1337,7 +1341,9 @@ impl Assembler {
                 None,
                 &naming,
             )
-            .map_err(Report::msg)?,
+            .map_err(Report::msg)?
+            .with_procedure_occurrences(procedure_occurrences, &naming)
+            .into_diagnostic()?,
         );
         Ok(AssemblyProduct::new(package, None, debug_info, naming, callable_sources))
     }
@@ -1346,6 +1352,7 @@ impl Assembler {
         self.linker
             .static_libraries()
             .map(|lib| {
+                lib.package.check_procedure_occurrences(lib.naming()).into_diagnostic()?;
                 let debug_info = match lib.package.debug_info() {
                     Ok(debug_info) => debug_info,
                     Err(PackageDebugInfoError::UntrustedSections) => None,
@@ -1370,8 +1377,7 @@ impl Assembler {
         entrypoint: MastNodeId,
         entrypoint_source_id: Option<DebugSourceNodeId>,
         kernel: Option<Arc<Package>>,
-        callables: miden_mast_package::PackageCallables,
-        callable_sources: product::CallableSources,
+        callables: product::FinalizedCallables,
         entry_key: ProcedureKey,
     ) -> Result<AssemblyProduct, Report> {
         #[cfg(feature = "std")]
@@ -1379,6 +1385,11 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
+        let product::FinalizedCallables {
+            callables,
+            sources: callable_sources,
+            occurrences: procedure_occurrences,
+        } = callables;
         let naming = PackageSymbols::new(
             self.namespace_inputs
                 .into_namespace_plan()
@@ -1403,7 +1414,9 @@ impl Assembler {
                 None,
                 &naming,
             )
-            .map_err(Report::msg)?,
+            .map_err(Report::msg)?
+            .with_procedure_occurrences(procedure_occurrences, &naming)
+            .into_diagnostic()?,
         );
 
         Ok(AssemblyProduct::new(package, kernel, debug_info, naming, callable_sources))

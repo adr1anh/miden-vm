@@ -72,6 +72,51 @@ enum StaticRootLookup {
 }
 
 impl MastForestBuilder {
+    /// Remaps only explicitly supplied package occurrences whose static inventories were retained.
+    /// Neither digest lookup nor a source-visible alias establishes a callable's occurrence.
+    pub(crate) fn retained_static_procedure_occurrences(
+        &mut self,
+    ) -> Result<Vec<(miden_core::program::ProcedureKey, MastNodeRef, Option<SourceNodeRef>)>, Report>
+    {
+        let mut occurrences = Vec::new();
+        for forest_idx in 0..self.statically_linked_source_forests.len() {
+            if !self.retained_static_inventories.iter().any(|(index, _)| *index == forest_idx) {
+                continue;
+            }
+            for occurrence in self.statically_linked_procedure_occurrences[forest_idx].clone() {
+                let source_root_id = occurrence.exec_node();
+                let root_id = self
+                    .statically_linked_root_map
+                    .map_root(forest_idx, &source_root_id)
+                    .ok_or_else(|| {
+                        Report::msg("static callable occurrence has no merged procedure root")
+                    })?;
+                let imported_source = occurrence.source_node().and_then(|source_id| {
+                    self.statically_linked_source_uses.get(&(forest_idx, source_id)).copied()
+                });
+                let (root_use, source_ref) = if let Some(root_use) = imported_source {
+                    (root_use, Some(root_use.source_ref()))
+                } else {
+                    let root_ref =
+                        self.copy_statically_linked_subtree_contents_ref(StaticLinkedRoot {
+                            root_id,
+                            source: None,
+                        })?;
+                    let root_use = self
+                        .latest_node_use(root_ref)
+                        .expect("copied static code has a source occurrence");
+                    // Preserve code supply without importing previously unselected source
+                    // provenance just to populate optional occurrence metadata. Equal-D roots
+                    // do not select another callable's source occurrence.
+                    (root_use, None)
+                };
+                self.record_procedure_root_use(root_use);
+                occurrences.push((occurrence.key(), root_use.node_ref(), source_ref));
+            }
+        }
+        Ok(occurrences)
+    }
+
     /// Creates a complete [`PendingMastNodeDraft`] for a node imported from a statically
     /// linked forest, including indexed assembly ops and debug variable metadata.
     fn pending_draft_for_statically_linked_source(
@@ -534,12 +579,16 @@ impl MastForestBuilder {
                 }
                 let tables =
                     self.import_static_debug_tables(source.forest_idx, &package_debug_info)?;
-                return self.copy_package_debug_source_subtree_ref(
+                let root_use = self.copy_package_debug_source_subtree_use(
+                    source.forest_idx,
                     source_forest.as_ref(),
                     &package_debug_info,
                     &tables,
                     source_debug_root_id,
-                );
+                )?;
+                self.latest_source_ref_by_node_ref
+                    .insert(root_use.node_ref(), root_use.source_ref());
+                return Ok(root_use.node_ref());
             }
         }
 
@@ -655,18 +704,25 @@ impl MastForestBuilder {
         Ok(tables)
     }
 
-    fn copy_package_debug_source_subtree_ref(
+    fn copy_package_debug_source_subtree_use(
         &mut self,
+        forest_idx: usize,
         source_forest: &MastForest,
         package_debug_info: &PackageDebugInfo,
         tables: &DebugInfoTableRemapping,
         source_root_id: DebugSourceNodeId,
-    ) -> Result<MastNodeRef, Report> {
+    ) -> Result<MastNodeUse, Report> {
         let mut node_uses_by_source_id = BTreeMap::new();
         let mut pending = vec![(source_root_id, false)];
 
         while let Some((source_node_id, children_copied)) = pending.pop() {
             if node_uses_by_source_id.contains_key(&source_node_id) {
+                continue;
+            }
+            if let Some(node_use) =
+                self.statically_linked_source_uses.get(&(forest_idx, source_node_id))
+            {
+                node_uses_by_source_id.insert(source_node_id, *node_use);
                 continue;
             }
 
@@ -755,16 +811,18 @@ impl MastForestBuilder {
         // If merging later prunes those execution nodes, finalization leaves the declaration's
         // source_node absent rather than attributing the definition to a caller's aggregate.
         self.copy_available_function_sources(
+            forest_idx,
             source_forest,
             package_debug_info,
             tables,
             &node_uses_by_source_id,
         )?;
-        Ok(node_uses_by_source_id[&source_root_id].node_ref())
+        Ok(node_uses_by_source_id[&source_root_id])
     }
 
     fn copy_available_function_sources(
         &mut self,
+        forest_idx: usize,
         source_forest: &MastForest,
         debug: &PackageDebugInfo,
         tables: &DebugInfoTableRemapping,
@@ -840,6 +898,12 @@ impl MastForestBuilder {
                 )?;
                 source_refs.insert(source, source_ref);
             }
+        }
+        for (source, source_ref) in source_refs {
+            self.statically_linked_source_uses.insert(
+                (forest_idx, source),
+                MastNodeUse::new(exec_refs[&debug[source].exec_node], source_ref),
+            );
         }
         Ok(())
     }
