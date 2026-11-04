@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use miden_core::{
     Felt, Word,
-    program::{ExecutionClaim, proof_request_key},
+    program::{ExecutionClaim, VerifierIdentity, proof_request_key},
     proof::ExecutionProof,
 };
 use miden_vm_stark::recursive::RecursiveVerifierInputs;
@@ -30,7 +30,7 @@ pub struct VerifierData {
     pub proof_stream: Vec<u64>,
     pub store: MerkleStore,
     pub advice_map: Vec<(Word, Vec<Felt>)>,
-    /// Commitment to the execution claim (the content address the proof is registered under).
+    /// Commitment to the execution claim supplied to the verifier.
     pub claim_commitment: Word,
 }
 
@@ -50,14 +50,15 @@ impl VerifierData {
 ///
 /// Production construction always creates a request package. This test adapter extracts that
 /// package's proof stream back onto the advice stack so low-level verifier tests can invoke
-/// `vm::verify_proof` without also exercising request lookup.
+/// `vm::verify_proof` without also exercising request lookup. The fixture owner supplies the
+/// expected verifier identity independently of the proof.
 pub fn generate_advice_inputs(
-    verifier_root: Word,
+    expected_verifier: VerifierIdentity,
     proof: &ExecutionProof,
     claim: &ExecutionClaim,
 ) -> Result<VerifierData, RecursiveVerifierInputsError> {
-    let mut data = generate_request_inputs(verifier_root, proof, claim)?;
-    let request_key = proof_request_key(verifier_root, data.claim_commitment);
+    let mut data = generate_request_inputs(expected_verifier, proof, claim)?;
+    let request_key = proof_request_key(expected_verifier, data.claim_commitment);
     let request_index = data
         .advice_map
         .iter()
@@ -68,13 +69,15 @@ pub fn generate_advice_inputs(
     Ok(data)
 }
 
-/// Builds [`VerifierData`] with the proof registered under the verifier and claim commitments.
+/// Builds [`VerifierData`] with the proof registered under the expected verifier identity and claim
+/// commitment. The fixture owner selects that identity independently of the proof; this encodes
+/// advice without authorizing the identity's configuration or verifying the proof.
 pub fn generate_request_inputs(
-    verifier_root: Word,
+    expected_verifier: VerifierIdentity,
     proof: &ExecutionProof,
     claim: &ExecutionClaim,
 ) -> Result<VerifierData, RecursiveVerifierInputsError> {
-    let inputs = RecursiveVerifierInputs::for_request(verifier_root, proof, claim)?;
+    let inputs = RecursiveVerifierInputs::for_request(expected_verifier, proof, claim)?;
     Ok(verifier_data(inputs, claim))
 }
 

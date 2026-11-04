@@ -105,6 +105,18 @@ fn typed_commitment_preserves_its_word() {
 }
 
 #[test]
+fn opaque_identity_transport_preserves_canonical_word_without_deriving_authority() {
+    let value = word([1, 2, 3, 4]);
+    let identity = VerifierIdentity::new(value);
+    assert_eq!(identity.into_word(), value);
+    assert_eq!(identity.to_bytes(), value.to_bytes());
+    assert_eq!(VerifierIdentity::read_from_bytes(&value.to_bytes()).unwrap(), identity);
+    assert_eq!(VerifierIdentity::min_serialized_size(), Word::min_serialized_size());
+    assert!(VerifierIdentity::read_from_bytes(&value.to_bytes()[..31]).is_err());
+    assert!(VerifierIdentity::read_from_bytes(&[u8::MAX; 32]).is_err());
+}
+
+#[test]
 fn identity_matches_frozen_vector_and_exact_field_order() {
     let relation_id = word([1, 2, 3, 4]);
     let entry = ProcedureKey::new(word([5, 6, 7, 8]));

@@ -37,12 +37,14 @@ miden_crypto::eidos_domain_registry! {
                 description: "Miden VM execution-claim commitment.",
                 schema: "param0 = 40; param1 = 0; param2 = 0; payload = entry procedure key || environment root || stack inputs || stack outputs",
             }
+            // Version 1 addressed requests by an implementation root. Its tag is retired;
+            // version 2 binds the expected relation, entry key, and configuration identity.
             pub PROOF_REQUEST: ProofRequestDomain {
                 local_id: 0x0002,
-                version: DomainVersion::numbered(1),
+                version: DomainVersion::numbered(2),
                 encoding: FeltSequence,
                 description: "Miden VM recursive-proof request key.",
-                schema: "param0 = 8; param1 = 0; param2 = 0; payload = claim commitment || verifier root",
+                schema: "param0 = 8; param1 = 0; param2 = 0; payload = claim commitment || expected verifier identity; verifier identity commits relation identity || verifier entry key || verifier configuration commitment",
             }
             pub DEFERRED_AND: DeferredAndDomain {
                 local_id: 0x0003,
