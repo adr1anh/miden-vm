@@ -499,7 +499,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Fifteen request K/D failures at PR14; three cost gates closed at PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Full PR14 typed identity/request/compatibility closure and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
-| 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
+| 14 Recursive verifier | in progress | Base `52e914a9a`; opening source uncommitted | Bounded source/API review only; no PR14 build/test pass claimed | Typed request/profile/fragment/consumer integration, fresh compatibility identities, recursive/adversarial/generation checks and inherited gates |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
@@ -3083,3 +3083,21 @@ All source is committed and signatures verify. PR13 remains implemented-awaiting
 global D-indexed diagnostic variants and inherited debug/security/counterfactual/guest/fuzz/performance/
 final gates stay open. PR14 owns the fifteen request identity failures and final verifier/configuration
 compatibility qualification. No M1/general-goal completion, PR or push.
+
+
+### PR14 opening checkpoint, 4 November 2026
+
+Revalidated branch `adr1anh/librarytree-14-recursive-verifier`, HEAD/base
+`52e914a9a007b37fdedeec93c74dc19439366e88`. PR13's final description is committed;
+PR14 source remains uncommitted. Requestv2 selects exactly C[4]||V[4] under domain0x01000202,
+with owner-supplied typed VerifierIdentity rather than D/procref K. Direct verifier stacks stay
+unchanged; outer consumers supply V without embedding it in the committed core fragment.
+Production configuration uses existing config3, the actual complete core fragment at fixed N0,
+and package static advice plus the relation's ACE subset. Derivation alone grants no authority.
+
+Bounded agents own core/native/MASM source, production profile review, actual-fragment fixture
+support and separate consumer groups. Root centralizes guarded checks using the existing shared
+cache after source/API alignment; no PR14 compilation or test result is claimed. Strict PVM advice
+snapshot capture, qualified compatibility identities, remaining consumers and PR14 acceptance
+remain pending. Old compatibility constants/whitelists are untouched. All inherited security,
+counterfactual, debug, guest, fuzz, performance and final gates remain; no PR/push or goal closure.
