@@ -735,11 +735,77 @@ mod tests {
 mod completed_session_tests {
     use super::*;
     use crate as processor;
-    use crate::{ExecutionOptions, SessionPhase};
+    use crate::{ExecutionOptions, SessionError, SessionPhase};
 
     #[allow(dead_code)]
     mod common {
         include!("../../tests/common/keyed_witness.rs");
+    }
+
+    #[test]
+    fn stopped_trace_cannot_become_a_proving_witness_before_root_end() {
+        for stop_after in [1, 2] {
+            let common::ExecutionFixture {
+                code: _,
+                target,
+                resolution_limits,
+                mut host,
+            } = common::execution_fixture(vec![miden_core::operations::Operation::Noop; 3]);
+            let mut processor = FastProcessor::new(StackInputs::default())
+                .with_options(
+                    ExecutionOptions::default()
+                        .with_resolution_limits(resolution_limits)
+                        .with_environment_trace_limits(common::trace_limits()),
+                )
+                .unwrap();
+            let mut tracer =
+                ExecutionTracer::new(64, MIN_STACK_DEPTH, common::trace_limits()).unwrap();
+            let mut resume = processor.new_resume_context(target).unwrap();
+
+            for _ in 0..stop_after {
+                assert!(
+                    !processor
+                        .drive_sync(&mut host, &mut tracer, &StepStopper, &mut resume)
+                        .unwrap()
+                );
+            }
+            assert!(!resume.is_complete());
+            assert_eq!(resume.session.phase(), SessionPhase::PendingEntry);
+            assert_eq!(resume.session.bindings().len(), 1);
+            assert!(matches!(
+                resume.session.finalize(),
+                Err(SessionError::InvalidPhase {
+                    expected: SessionPhase::Completed,
+                    actual: SessionPhase::PendingEntry,
+                })
+            ));
+
+            // Valid outputs and authenticated entry metadata do not complete a stopped
+            // execution. The production witness constructor requires the actual root END.
+            let stack = processor.current_stack_outputs().unwrap();
+            let output = processor.into_execution_output(stack).unwrap();
+            let error = FastProcessor::execution_witness_from_parts(
+                StackInputs::default(),
+                output,
+                resume.session,
+                tracer,
+            )
+            .unwrap_err();
+            // A completed environment replay has not been published before root END.
+            assert!(matches!(error, ExecutionError::InvalidExecutionState), "{error:?}");
+        }
+
+        // The same code reaches the supported witness/export path after its root END.
+        let common::WitnessFixture { witness, target, .. } = common::execution_witness(
+            vec![miden_core::operations::Operation::Noop; 3],
+            StackInputs::default(),
+        );
+        assert_eq!(witness.execution_descriptor(), target);
+        assert!(
+            witness
+                .to_bytes_with_limits(common::trace_limits(), common::read_limits())
+                .is_ok()
+        );
     }
 
     #[test]

@@ -398,6 +398,61 @@ fn cli_verify_binds_caller_descriptor_and_public_io_without_execution_evidence()
         .stdout(predicate::str::contains("Proof status:").not());
 }
 
+#[test]
+fn cli_prove_verify_supports_every_transcript_hash() {
+    use miden_vm::{ExecutionProof, HashFunction};
+
+    let working_dir = TempDir::new().unwrap();
+    let program_path = working_dir.path().join("transcript.masm");
+    fs::write(&program_path, "begin push.7 drop end").unwrap();
+    fs::write(program_path.with_extension("inputs"), r#"{"operand_stack":[]}"#).unwrap();
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
+    let expected = inputs.named.1.target();
+    let implementation = inputs
+        .named
+        .0
+        .symbols()
+        .callables()
+        .selected_implementation(expected.entry_key())
+        .unwrap();
+
+    for (name, hash) in [
+        ("blake3-256", HashFunction::Blake3_256),
+        ("keccak", HashFunction::Keccak),
+        ("eidos", HashFunction::Eidos),
+    ] {
+        inputs
+            .command(working_dir.path(), "prove", &program_path)
+            .args(["--hasher", name])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!(
+                "Entry key: {}",
+                expected.entry_key().as_word()
+            )))
+            .stdout(predicate::str::contains(format!(
+                "Environment root: {}",
+                expected.environment_root().as_word()
+            )))
+            .stdout(predicate::str::contains(format!(
+                "Entry implementation: {}",
+                implementation.as_word()
+            )))
+            .stdout(predicate::str::contains("Proof status: complete"));
+
+        let proof = ExecutionProof::read_from_bytes(
+            &fs::read(program_path.with_extension("proof")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(proof.vm().proof.hash_fn(), hash, "CLI transcript selection: {name}");
+        inputs
+            .verify_command(working_dir.path(), program_path.with_extension("proof"))
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Proof status: complete"));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn atomic_artifact_writes_preserve_existing_files_on_io_failure() {

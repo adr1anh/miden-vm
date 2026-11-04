@@ -1194,6 +1194,9 @@ where
         return Ok(None);
     };
     let continuation = continuation.clone();
+    // Return preflight can fail before the continuation is popped. Use its exact source occurrence
+    // even when this execution state was just recreated after a stop.
+    state.current_source_node_id = source;
     let mut length = state.continuation_stack.len() - 1;
     let prepared_return = prepare_end_return(state, current_forest, &continuation)?;
     match &continuation {
@@ -1208,7 +1211,6 @@ where
                 ExecutionError::Internal("loop transition cannot consume its stack condition")
             })?;
             if state.processor.stack().get(0) == crate::ONE {
-                state.current_source_node_id = source;
                 state.child_source_node_id(0)?;
                 state.continuation_stack.prepare_push(2)?;
                 length = length
