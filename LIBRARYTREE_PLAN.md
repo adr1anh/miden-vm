@@ -527,7 +527,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
-| 15 API/CLI closure | in-progress | Target-only `10345ccf0`; API docs `5a658b95d`; keyed loader `972cc889e`; prior SHAs below; base `f4350360d` | Independent reviews; fresh runtime3,142; public-input/async28; prove/seed2; deterministic seed replay2; six compiled doctests; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumer packages | Checked-owner assembler link migration, CLI diagnostic/bounded-input audit and all remaining PR15/15a/16 final gates pending |
+| 15 API/CLI closure | in-progress | Checked linking/CLI/source trait `ba651f64d`; API docs `225aafe07`; target-only `10345ccf0`; prior SHAs below; base `f4350360d` | Independent reviews; fresh runtime3,146; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumer packages; six compiled doctests; standalone fuzz2 typechecks; earlier public-input/async28, prove/seed2 and deterministic seed replay2 | Complete PR15 proof-roundtrip/negative acceptance audit; PR15a/16 and inherited final gates remain |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
@@ -3500,3 +3500,36 @@ public mutable split package/symbol owners; preserve project postprocessor-befor
 Audit CLI K_entry/R_E/actual-D diagnostics and bounded proof input, then complete the active card's
 remaining acceptance. General goal/M1, PR15a/16 and inherited final/security gates remain active.
 No PR or push.
+
+
+### PR15 checked linking, CLI and source-trait qualification, 4 November 2026
+
+Signed `ba651f64d` retains immutable CodePackage owners through ordinary assembler/kernel linking
+and project runtime dependencies. LinkLibrary exposes read-only inspection without a mutable split
+package/symbol escape. Kernel conflict/kind/route/capacity validation precedes publication; provider
+and project postprocessor-before-seal order remains. Callers across test utilities, processor, VM,
+core library, guest helpers, benchmarks and Wycheproof migrate to the same owner. Exact source
+occurrences, advice and symbols remain together; no profile/home/Latest policy is inferred.
+
+The approved EnvironmentSource spelling replaces the former public trait without an alias or
+codec/resource/authority change. Requests still return untrusted openings that must authenticate
+against the caller's expected root/key. CLI run/prove distinguish expected K_entry, R_E and actual
+entry D; compiler inspection labels its selected implementation separately. Proof-file reads use
+the existing bounded regular-file reader before decoding, with an explicit configurable whole-
+transport cap (default512MiB), checked platform conversion and preserved zero. Negative tests
+separate decoder failures from size/open failures. Atomic output and proof/precompile policies stay.
+Signed README follow-up `225aafe07` documents these APIs and limits separately from implementation.
+
+Fresh runtime scope passes3,146/3,146, with1,233 outside-filter tests skipped
+(`pr15-checked-link-runtime.log`). Strict14-crate all-target custom Clippy passes
+(`pr15-checked-link-clippy-next.log`). Ten production no_std roots compile and their normal graphs
+are std-free (`pr15-checked-link-no-std{,-features}.log`); four extra benchmark/Wycheproof consumers
+pass all-target typechecks (`pr15-checked-link-extra-consumers.log`). Six compile-only doctests pass;
+seven preexisting ignores include the two additional core-library examples
+(`pr15-checked-link-doctests.log`). Both affected standalone fuzz binaries typecheck
+(`pr15-checked-link-fuzz-bins.log`); no mutation campaign is claimed. Pinned rustfmt checks all85
+changed Rust files and diff whitespace checks pass. Independent bounded linking/CLI review reports
+no material finding. Earlier target-only proving/seed evidence above remains scoped, not a fresh
+whole proof matrix. Complete the PR15 run/prove/verify/transcript/stopped/deferred/negative acceptance
+audit before branch closeout. PR15a/16, inherited security/fuzz/performance gates and general goal/M1
+remain active. No GitHub PR or push.
