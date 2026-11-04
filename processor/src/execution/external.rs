@@ -6,7 +6,8 @@ use miden_mast_package::debug_info::{DebugSourceNodeId, PackageDebugInfo};
 use crate::{
     BreakReason,
     continuation_stack::{Continuation, ContinuationStack, SourceInlineCallContext},
-    execution::InternalBreakReason,
+    execution::{InternalBreakReason, LoadedTarget},
+    host::LoadedMastForest,
     mast::{ExecutableMastForest, MastNodeExt, MastNodeId},
     operation::OperationError,
     option_map_break_reason,
@@ -52,15 +53,13 @@ where
 
 /// Function to be called after [`InternalBreakReason::LoadMastForestFromExternal`] is handled. See
 /// the documentation of that enum variant for more details.
-pub fn finish_load_mast_forest_from_external<F, T>(
-    resolved_node_id_new_forest: MastNodeId,
-    new_mast_forest: F,
-    new_package_debug_info: Option<Arc<PackageDebugInfo>>,
-    new_source_node_id: Option<DebugSourceNodeId>,
+pub(crate) fn finish_load_mast_forest_from_external<F, T>(
+    target: LoadedTarget<F>,
     inline_call_context: Option<SourceInlineCallContext>,
     external_origin: (MastNodeId, Option<DebugSourceNodeId>),
     current_forest: &mut F,
     current_package_debug_info: &mut Option<Arc<PackageDebugInfo>>,
+    current_loaded_owner: &mut Option<LoadedMastForest>,
     inline_call_contexts: &mut Vec<Option<SourceInlineCallContext>>,
     continuation_stack: &mut ContinuationStack<F>,
     tracer: &mut T,
@@ -69,6 +68,14 @@ where
     F: ExecutableMastForest + Clone,
     T: Tracer<Forest = F>,
 {
+    let LoadedTarget {
+        root: resolved_node_id_new_forest,
+        forest: new_mast_forest,
+        package_debug_info: new_package_debug_info,
+        loaded_owner: new_loaded_owner,
+        source_node_id: new_source_node_id,
+        ..
+    } = target;
     let (external_node_id_old_forest, old_source_node_id) = external_origin;
     let old_forest = current_forest as &F;
     let external_node_old_forest = option_map_break_reason(
@@ -100,6 +107,7 @@ where
     continuation_stack.push_enter_forest_with_package_debug_info(
         old_forest.clone(),
         old_package_debug_info,
+        current_loaded_owner.clone(),
         inline_context_depth,
         old_source_node_id,
     );
@@ -113,6 +121,7 @@ where
     // Update the current forest to the new MAST forest.
     *current_forest = new_mast_forest;
     *current_package_debug_info = new_package_debug_info;
+    *current_loaded_owner = new_loaded_owner;
 
     // Note that executing an External node does not end the clock cycle, so we do not finalize the
     // clock cycle here.
@@ -128,7 +137,7 @@ mod tests {
         Felt,
         mast::{BasicBlockNodeBuilder, ExternalNodeBuilder, MastForest},
         operations::Operation,
-        program::Program,
+        program::{ImplementationRoot, Program},
     };
     use miden_mast_package::debug_info::DebugSourceNodeId;
 
@@ -152,27 +161,37 @@ mod tests {
         let mut current_forest = Arc::new(current_forest);
         let program = Program::new(current_forest.clone(), external_id);
         let new_mast_forest = Arc::new(loaded_forest);
+        let caller_loaded_owner = LoadedMastForest::new(current_forest.clone());
+        let target_loaded_owner = LoadedMastForest::new(new_mast_forest.clone());
+        let mut loaded_owner = Some(caller_loaded_owner.clone());
         let mut continuation_stack =
             ContinuationStack::new_with_source_node_id(&program, caller_source_node_id);
         let mut tracer = NoopTracer;
         let mut package_debug_info = None;
         let mut inline_call_contexts = Vec::new();
 
+        let target = LoadedTarget {
+            implementation: ImplementationRoot::new(new_mast_forest[target_id].digest()),
+            root: target_id,
+            forest: new_mast_forest,
+            package_debug_info: None,
+            loaded_owner: Some(target_loaded_owner.clone()),
+            source_node_id: None,
+        };
         let result = finish_load_mast_forest_from_external(
-            target_id,
-            new_mast_forest,
-            None,
-            None,
+            target,
             None,
             (external_id, None),
             &mut current_forest,
             &mut package_debug_info,
+            &mut loaded_owner,
             &mut inline_call_contexts,
             &mut continuation_stack,
             &mut tracer,
         );
 
         assert_matches!(result, ControlFlow::Continue(()));
+        assert_eq!(loaded_owner, Some(target_loaded_owner));
         assert!(inline_call_contexts.is_empty());
         assert_matches!(
             continuation_stack.pop_continuation_with_source_node_id(),
@@ -180,7 +199,8 @@ mod tests {
         );
         assert_matches!(
             continuation_stack.pop_continuation_with_source_node_id(),
-            Some((Continuation::EnterForest { .. }, None))
+            Some((Continuation::EnterForest { loaded_owner: Some(owner), .. }, None))
+                if owner == caller_loaded_owner
         );
         assert_matches!(
             continuation_stack.pop_continuation_with_source_node_id(),

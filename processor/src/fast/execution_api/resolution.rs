@@ -120,6 +120,30 @@ impl FastProcessor {
         Ok(())
     }
 
+    /// Reject impossible entry demands before code supply without consuming pending evidence.
+    fn preflight_pending_entry(
+        &mut self,
+        resume: &mut ResumeContext,
+    ) -> Result<(), ExecutionError> {
+        let pending = resume.pending.as_ref().expect("pending resolution");
+        if !matches!(pending.request, PendingKey::Entry(_)) {
+            return Ok(());
+        }
+        let result = match pending.binding.as_ref().expect("authenticated pending binding") {
+            PendingBinding::Verified(binding) => resume
+                .session
+                .preflight_entry(binding)
+                .map_err(ExecutionError::EnvironmentSession),
+            PendingBinding::Cached(_) => {
+                Err(ExecutionError::Internal("entry cannot use an unentered cache"))
+            },
+        };
+        if result.is_err() {
+            self.invalidate(resume);
+        }
+        result
+    }
+
     fn has_materialized_root(forest: &MastForest, implementation: ImplementationRoot) -> bool {
         forest.procedure_roots().iter().any(|root| {
             let node = &forest[*root];
@@ -127,7 +151,45 @@ impl FastProcessor {
         })
     }
 
-    /// Available code is considered only after the pending key has authenticated its D.
+    /// Exact occurrences are selected only after the pending key has authenticated its D.
+    fn exact_code_candidate(
+        &self,
+        resume: &ResumeContext,
+        request: CodeRequest,
+    ) -> Option<LoadedMastForest> {
+        let key = request.key()?;
+        let implementation = request.implementation();
+        if let Some(owner) = &resume.loaded_owner
+            && owner.materialized_procedure_occurrence(key, implementation).is_some()
+        {
+            return Some(owner.clone());
+        }
+        if let Some(owner) =
+            self.loaded_mast_forests.get(implementation.as_word()).and_then(|owners| {
+                owners.iter().find(|owner| {
+                    owner.materialized_procedure_occurrence(key, implementation).is_some()
+                })
+            })
+        {
+            return Some(owner.clone());
+        }
+        if key == resume.environment.descriptor().entry_key()
+            && resume.entry_source_hint.is_some()
+            && Self::has_exact_program_entry(resume, implementation)
+        {
+            return Some(resume.program_hint.clone());
+        }
+        None
+    }
+
+    fn has_exact_program_entry(resume: &ResumeContext, implementation: ImplementationRoot) -> bool {
+        let forest = resume.program_hint.mast_forest();
+        forest.procedure_roots().contains(&resume.entrypoint_hint)
+            && !forest[resume.entrypoint_hint].is_external()
+            && forest[resume.entrypoint_hint].digest() == *implementation.as_word()
+    }
+
+    /// Generic D availability remains legal after authentication, independent of package symbols.
     fn local_code_candidate(
         &self,
         resume: &ResumeContext,
@@ -135,16 +197,17 @@ impl FastProcessor {
     ) -> Option<LoadedMastForest> {
         if matches!(resume.pending.as_ref()?.request, PendingKey::Invoke(_))
             && Self::has_materialized_root(&resume.current_forest, implementation)
+            && let Some(owner) = &resume.loaded_owner
         {
-            return Some(LoadedMastForest::with_package_debug_info(
-                resume.current_forest.clone(),
-                Ok(resume.package_debug_info.as_deref().cloned()),
-            ));
+            return Some(owner.clone());
         }
         if Self::has_materialized_root(resume.program_hint.mast_forest(), implementation) {
             return Some(resume.program_hint.clone());
         }
-        self.loaded_mast_forests.get(implementation.as_word()).cloned()
+        self.loaded_mast_forests
+            .get(implementation.as_word())
+            .and_then(|owners| owners.first())
+            .cloned()
     }
 
     fn prepare_pending_code(
@@ -154,39 +217,23 @@ impl FastProcessor {
         implementation: ImplementationRoot,
         host: &impl BaseHost,
     ) -> Result<PreparedLoadedTarget, ExecutionError> {
-        let source = match resume.pending.as_ref().expect("pending resolution").request {
+        let pending = resume.pending.as_ref().expect("pending resolution").request;
+        let source = match pending {
             PendingKey::Entry(_) => None,
             PendingKey::Invoke(request) => request.source_node_id,
         };
-        let mut prepared = Self::prepare_loaded_target(
+        let program_entry = pending.key() == resume.environment.descriptor().entry_key()
+            && loaded.same_owner(&resume.program_hint)
+            && Self::has_exact_program_entry(resume, implementation);
+        Self::prepare_loaded_target(
             loaded,
-            *implementation.as_word(),
-            true,
+            CodeRequest::Procedure { key: pending.key(), implementation },
+            program_entry.then_some((resume.entrypoint_hint, resume.entry_source_hint)),
             resume.package_debug_info.as_deref(),
             source,
             resume.source_aware,
             host,
-        )?;
-        if matches!(
-            resume.pending.as_ref().expect("pending resolution").request,
-            PendingKey::Entry(_)
-        ) && Arc::ptr_eq(
-            prepared.loaded_mast_forest.mast_forest(),
-            resume.program_hint.mast_forest(),
-        ) && prepared.root_id == resume.entrypoint_hint
-            && let Some(source) = resume.entry_source_hint
-        {
-            let debug = prepared.package_debug_info.as_ref().ok_or(ExecutionError::Internal(
-                "program entry source has no owning debug package",
-            ))?;
-            if debug.source_node(source).is_none_or(|node| node.exec_node != prepared.root_id) {
-                return Err(ExecutionError::Internal(
-                    "program entry source does not match the resolved root",
-                ));
-            }
-            prepared.source_node_id = Some(source);
-        }
-        Ok(prepared)
+        )
     }
 
     fn publish_preflighted_code(
@@ -199,11 +246,12 @@ impl FastProcessor {
             self.advice.prepare_extend_map(forest.advice_map()).map_exec_err()?.commit();
             self.merged_mast_forests.insert(commitment);
         }
-        if prepared.cache_on_publish {
-            Self::cache_loaded_mast_forest(
-                &mut self.loaded_mast_forests,
-                &prepared.loaded_mast_forest,
-            );
+        Self::cache_loaded_mast_forest(&mut self.loaded_mast_forests, &prepared.loaded_mast_forest);
+        // A successful request memo records availability only. The authenticated binding and
+        // syscall mode have already been checked before either cache is consulted.
+        if prepared.request.key().is_some() {
+            self.loaded_code_requests
+                .insert(prepared.request, prepared.loaded_mast_forest.clone());
         }
         Ok(())
     }
@@ -253,10 +301,22 @@ impl FastProcessor {
             Self::retain_verified_witness(resume, request, witness)?;
         }
         Self::authorize_pending_mode(resume)?;
+        self.preflight_pending_entry(resume)?;
         let implementation = Self::pending_implementation(resume);
+        let request = CodeRequest::Procedure {
+            key: resume.pending.as_ref().expect("pending resolution").request.key(),
+            implementation,
+        };
         let loaded = self
-            .local_code_candidate(resume, implementation)
-            .or_else(|| host.get_mast_forest(implementation.as_word()))
+            .exact_code_candidate(resume, request)
+            .or_else(|| self.loaded_code_requests.get(&request).cloned())
+            .or_else(|| {
+                Self::select_code_offer(
+                    request,
+                    host.get_mast_forest(request),
+                    self.local_code_candidate(resume, implementation),
+                )
+            })
             .ok_or_else(|| Self::pending_code_not_found(resume, implementation, host))?;
         let prepared = self.prepare_pending_code(resume, loaded, implementation, host)?;
         self.finish_pending(host, tracer, stopper, resume, implementation, prepared)
@@ -286,14 +346,24 @@ impl FastProcessor {
             Self::retain_verified_witness(resume, request, witness)?;
         }
         Self::authorize_pending_mode(resume)?;
+        self.preflight_pending_entry(resume)?;
         let implementation = Self::pending_implementation(resume);
-        let loaded = match self.local_code_candidate(resume, implementation) {
-            Some(loaded) => loaded,
-            None => host
-                .get_mast_forest(implementation.as_word())
-                .await
-                .ok_or_else(|| Self::pending_code_not_found(resume, implementation, host))?,
+        let request = CodeRequest::Procedure {
+            key: resume.pending.as_ref().expect("pending resolution").request.key(),
+            implementation,
         };
+        let loaded = match self
+            .exact_code_candidate(resume, request)
+            .or_else(|| self.loaded_code_requests.get(&request).cloned())
+        {
+            Some(loaded) => Some(loaded),
+            None => Self::select_code_offer(
+                request,
+                host.get_mast_forest(request).await,
+                self.local_code_candidate(resume, implementation),
+            ),
+        }
+        .ok_or_else(|| Self::pending_code_not_found(resume, implementation, host))?;
         let prepared = self.prepare_pending_code(resume, loaded, implementation, host)?;
         self.finish_pending(host, tracer, stopper, resume, implementation, prepared)
     }
@@ -318,6 +388,7 @@ impl FastProcessor {
             root: prepared.root_id,
             forest: prepared.loaded_mast_forest.mast_forest().clone(),
             package_debug_info: prepared.package_debug_info.clone(),
+            loaded_owner: Some(prepared.loaded_mast_forest.clone()),
             source_node_id: prepared.source_node_id,
         };
         let invocation = if let PendingKey::Invoke(request) = request {
@@ -328,6 +399,7 @@ impl FastProcessor {
                 tracer,
                 stopper,
                 source_debug_info: resume.package_debug_info.clone(),
+                loaded_owner: &mut resume.loaded_owner,
                 current_source_node_id: request.source_node_id,
                 inline_call_contexts: &mut resume.inline_call_contexts,
             };
@@ -389,6 +461,7 @@ impl FastProcessor {
                     tracer.commit_environment(reservation);
                     resume.current_forest = target.forest;
                     resume.package_debug_info = target.package_debug_info;
+                    resume.loaded_owner = target.loaded_owner;
                     resume.continuation_stack = entry_stack.expect("prepared entry stack");
                     resume.pending = None;
                     Ok(ControlFlow::Continue(()))
@@ -442,6 +515,7 @@ impl FastProcessor {
                         tracer,
                         stopper,
                         source_debug_info: resume.package_debug_info.clone(),
+                        loaded_owner: &mut resume.loaded_owner,
                         current_source_node_id: request.source_node_id,
                         inline_call_contexts: &mut resume.inline_call_contexts,
                     };
@@ -487,6 +561,7 @@ impl FastProcessor {
                 tracer,
                 stopper,
                 source_debug_info: resume.package_debug_info.clone(),
+                loaded_owner: &mut resume.loaded_owner,
                 current_source_node_id: request.source_node_id,
                 inline_call_contexts: &mut resume.inline_call_contexts,
             };
@@ -524,6 +599,7 @@ impl FastProcessor {
             tracer,
             stopper,
             source_debug_info: resume.package_debug_info.clone(),
+            loaded_owner: &mut resume.loaded_owner,
             current_source_node_id: request.source_node_id,
             inline_call_contexts: &mut resume.inline_call_contexts,
         };
@@ -578,6 +654,7 @@ impl FastProcessor {
                         Continuation::EnterForest {
                             forest,
                             package_debug_info,
+                            loaded_owner,
                             inline_context_depth,
                         },
                         _,
@@ -587,6 +664,7 @@ impl FastProcessor {
                     };
                     resume.current_forest = forest;
                     resume.package_debug_info = package_debug_info;
+                    resume.loaded_owner = loaded_owner;
                     resume.inline_call_contexts.truncate(inline_context_depth);
                 }
                 if resume.continuation_stack.len() == 0 {
@@ -633,6 +711,7 @@ impl FastProcessor {
                 tracer,
                 stopper,
                 &mut resume.package_debug_info,
+                &mut resume.loaded_owner,
                 &mut resume.inline_call_contexts,
             ) {
                 ControlFlow::Continue(()) => return self.completed(resume),
@@ -686,7 +765,7 @@ impl FastProcessor {
                         source_node_id,
                         resume.source_aware,
                     );
-                    let (root, forest, debug, source) = match loaded {
+                    let target = match loaded {
                         Ok(loaded) => loaded,
                         Err(error) => {
                             let error = maybe_use_caller_error_context(
@@ -700,14 +779,12 @@ impl FastProcessor {
                         },
                     };
                     if let ControlFlow::Break(reason) = finish_load_mast_forest_from_external(
-                        root,
-                        forest,
-                        debug,
-                        source,
+                        target,
                         inline,
                         (external_node_id, source_node_id),
                         &mut resume.current_forest,
                         &mut resume.package_debug_info,
+                        &mut resume.loaded_owner,
                         &mut resume.inline_call_contexts,
                         &mut resume.continuation_stack,
                         tracer,
@@ -746,6 +823,7 @@ impl FastProcessor {
                 tracer,
                 stopper,
                 &mut resume.package_debug_info,
+                &mut resume.loaded_owner,
                 &mut resume.inline_call_contexts,
             ) {
                 ControlFlow::Continue(()) => return self.completed(resume),
@@ -807,7 +885,7 @@ impl FastProcessor {
                             resume.source_aware,
                         )
                         .await;
-                    let (root, forest, debug, source) = match loaded {
+                    let target = match loaded {
                         Ok(loaded) => loaded,
                         Err(error) => {
                             let error = maybe_use_caller_error_context(
@@ -823,14 +901,12 @@ impl FastProcessor {
                     self.invalid_execution = false;
                     resume.lifecycle = ExecutionLifecycle::Active;
                     if let ControlFlow::Break(reason) = finish_load_mast_forest_from_external(
-                        root,
-                        forest,
-                        debug,
-                        source,
+                        target,
                         inline,
                         (external_node_id, source_node_id),
                         &mut resume.current_forest,
                         &mut resume.package_debug_info,
+                        &mut resume.loaded_owner,
                         &mut resume.inline_call_contexts,
                         &mut resume.continuation_stack,
                         tracer,

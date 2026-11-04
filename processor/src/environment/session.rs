@@ -273,6 +273,14 @@ impl ResolutionSession {
         Some((index, self.state.uses[index]))
     }
 
+    /// Checks entry admission without consuming its verified binding or reserving storage.
+    pub(crate) fn preflight_entry(&self, binding: &ResolvedBinding) -> Result<(), SessionError> {
+        require_phase(self.state.phase, SessionPhase::Unentered)?;
+        check_binding(self.descriptor, self.descriptor.entry_key(), binding)?;
+        check_keys(1, self.limits)?;
+        check_requests(0, 1, self.limits)
+    }
+
     /// Stages entry authentication and a separately owned normal entry demand/use-record capacity.
     ///
     /// Inspect the binding before transferring it so subsequent host/code preflights can proceed
@@ -282,10 +290,7 @@ impl ResolutionSession {
         &mut self,
         binding: ResolvedBinding,
     ) -> Result<PreparedEntry<'_>, SessionError> {
-        require_phase(self.state.phase, SessionPhase::Unentered)?;
-        check_binding(self.descriptor, self.descriptor.entry_key(), &binding)?;
-        check_keys(1, self.limits)?;
-        check_requests(0, 1, self.limits)?;
+        self.preflight_entry(&binding)?;
         let metadata = BindingMetadata::from_binding(&binding);
         let available = ledger_peak_available(&self.state, self.limits)?;
         let opening = self.ledger.prepare_with_peak_limit(binding, available)?;

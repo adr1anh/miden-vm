@@ -206,6 +206,8 @@ impl ReplayProcessor {
         let host = &mut NoopHost;
         let stopper = &ReplayStopper;
         let mut package_debug_info = None;
+        // Loaded package owners are native state and never enter replay projections.
+        let mut loaded_owner = None;
         let mut inline_call_contexts = Vec::new();
 
         while let ControlFlow::Break(internal_break_reason) = execute_impl_noop_host(
@@ -216,6 +218,7 @@ impl ReplayProcessor {
             tracer,
             stopper,
             &mut package_debug_info,
+            &mut loaded_owner,
             &mut inline_call_contexts,
         ) {
             match internal_break_reason {
@@ -247,6 +250,7 @@ impl ReplayProcessor {
                             )?
                             .clone(),
                             package_debug_info: None,
+                            loaded_owner: None,
                             source_node_id: None,
                         };
                         let mut state = crate::execution::ExecutionState {
@@ -256,6 +260,7 @@ impl ReplayProcessor {
                             tracer: &mut *tracer,
                             stopper,
                             source_debug_info: None,
+                            loaded_owner: &mut loaded_owner,
                             current_source_node_id: request.source_node_id,
                             inline_call_contexts: &mut inline_call_contexts,
                         };
@@ -325,6 +330,7 @@ impl ReplayProcessor {
                             tracer: &mut *tracer,
                             stopper,
                             source_debug_info: None,
+                            loaded_owner: &mut loaded_owner,
                             current_source_node_id: request.source_node_id,
                             inline_call_contexts: &mut inline_call_contexts,
                         };
@@ -376,14 +382,19 @@ impl ReplayProcessor {
                         // Only transparent forest restorations may follow the authenticated END.
                         // Apply them without starting another clock cycle, then finish replay.
                         while let Some(continuation) = state.continuation_stack.pop_continuation() {
-                            let Continuation::EnterForest { forest, inline_context_depth, .. } =
-                                continuation
+                            let Continuation::EnterForest {
+                                forest,
+                                loaded_owner: owner,
+                                inline_context_depth,
+                                ..
+                            } = continuation
                             else {
                                 unreachable!(
                                     "root completion checked every remaining continuation"
                                 );
                             };
                             *current_forest = forest;
+                            *state.loaded_owner = owner;
                             state.inline_call_contexts.truncate(inline_context_depth);
                         }
                         Ok(ControlFlow::Continue(()))
@@ -410,7 +421,7 @@ impl ReplayProcessor {
                 },
                 InternalBreakReason::LoadMastForestFromExternal {
                     external_node_id,
-                    procedure_hash: _,
+                    procedure_hash,
                     source_node_id: _,
                 } => {
                     // load mast forest from replay
@@ -430,14 +441,21 @@ impl ReplayProcessor {
                     // Finish loading the MAST forest from the External node, as per the sans-IO
                     // contract.
                     finish_load_mast_forest_from_external(
-                        root_id,
-                        new_forest,
-                        None,
-                        None,
+                        crate::execution::LoadedTarget {
+                            implementation: miden_core::program::ImplementationRoot::new(
+                                procedure_hash,
+                            ),
+                            root: root_id,
+                            forest: new_forest,
+                            package_debug_info: None,
+                            loaded_owner: None,
+                            source_node_id: None,
+                        },
                         None,
                         (external_node_id, None),
                         current_forest,
                         &mut package_debug_info,
+                        &mut loaded_owner,
                         &mut inline_call_contexts,
                         continuation_stack,
                         tracer,

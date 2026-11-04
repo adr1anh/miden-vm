@@ -24,6 +24,7 @@ use crate::{
 #[derive(Debug)]
 pub struct ResumeContext {
     pub(crate) current_forest: Arc<MastForest>,
+    pub(crate) loaded_owner: Option<LoadedMastForest>,
     pub(crate) continuation_stack: ContinuationStack<Arc<MastForest>>,
     pub(crate) package_debug_info: Option<Arc<PackageDebugInfo>>,
     pub(crate) inline_call_contexts: Vec<Option<SourceInlineCallContext>>,

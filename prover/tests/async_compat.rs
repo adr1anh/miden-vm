@@ -6,7 +6,7 @@ use miden_debug_types::{Location, SourceFile, SourceSpan};
 use miden_processor::{
     BaseHost, DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest,
     EnvironmentWitnessSource, ExecutionOptions, FastProcessor, Felt, FutureMaybeSend, Host,
-    LoadedMastForest, ProcessorState, ResolutionWitness, Word,
+    LoadedMastForest, ProcessorState, ResolutionWitness,
     advice::AdviceMutation,
     event::{EventError, EventName},
 };
@@ -51,7 +51,7 @@ impl Host for YieldingAsyncHost {
 
     fn get_mast_forest(
         &self,
-        _node_digest: &Word,
+        _request: miden_processor::CodeRequest,
     ) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
         async { None }
     }

@@ -4,7 +4,7 @@ use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceManage
 
 use crate::{
     BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
-    LoadedMastForest, ProcessorState, ResolutionWitness, SyncHost, Word, advice::AdviceMutation,
+    LoadedMastForest, ProcessorState, ResolutionWitness, SyncHost, advice::AdviceMutation,
     event::EventError,
 };
 
@@ -73,7 +73,7 @@ impl SyncHost for NonTracingTestHost {
         }
     }
 
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, _request: crate::CodeRequest) -> Option<LoadedMastForest> {
         // This host only runs self-contained programs; external MAST forests are not resolved.
         None
     }

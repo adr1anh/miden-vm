@@ -2,7 +2,7 @@ use alloc::{sync::Arc, vec::Vec};
 use core::future::Future;
 
 use miden_core::{
-    Felt, Word,
+    Felt,
     advice::{AdviceMap, AdviceStack},
     crypto::merkle::InnerNodeInfo,
     events::{EventId, EventName},
@@ -26,7 +26,7 @@ pub use environment_source::{
 };
 
 mod mast_forest_store;
-pub use mast_forest_store::{LoadedMastForest, MastForestStore, MemMastForestStore};
+pub use mast_forest_store::{CodeRequest, LoadedMastForest, MastForestStore, MemMastForestStore};
 
 // ADVICE MAP MUTATIONS
 // ================================================================================================
@@ -133,9 +133,11 @@ pub trait SyncHost: BaseHost {
         Ok(None)
     }
 
-    /// Returns MAST forest corresponding to the specified digest, or None if the MAST forest for
-    /// this digest could not be found in this host.
-    fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest>;
+    /// Supplies code and owned metadata for a keyed procedure or structural external request.
+    ///
+    /// This request is not an authority token. The processor authenticates procedure bindings
+    /// before requesting code and independently checks the returned implementation and root.
+    fn get_mast_forest(&self, request: CodeRequest) -> Option<LoadedMastForest>;
 
     /// Handles the event emitted from the VM and provides advice mutations to be applied to
     /// the advice provider.
@@ -186,10 +188,14 @@ pub trait Host: BaseHost {
         async move { Ok(None) }
     }
 
-    /// Returns MAST forest corresponding to the specified digest, or None if the MAST forest for
-    /// this digest could not be found in this host.
-    fn get_mast_forest(&self, node_digest: &Word)
-    -> impl FutureMaybeSend<Option<LoadedMastForest>>;
+    /// Supplies code and owned metadata for a keyed procedure or structural external request.
+    ///
+    /// This request is not an authority token. The processor authenticates procedure bindings
+    /// before requesting code and independently checks the returned implementation and root.
+    fn get_mast_forest(
+        &self,
+        request: CodeRequest,
+    ) -> impl FutureMaybeSend<Option<LoadedMastForest>>;
 
     /// Handles the event emitted from the VM and provides advice mutations to be applied to
     /// the advice provider.
@@ -242,9 +248,9 @@ where
 
     fn get_mast_forest(
         &self,
-        node_digest: &Word,
+        request: CodeRequest,
     ) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
-        let result = SyncHost::get_mast_forest(self, node_digest);
+        let result = SyncHost::get_mast_forest(self, request);
         async move { result }
     }
 

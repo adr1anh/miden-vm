@@ -353,9 +353,9 @@ impl Host for PvmSettlementHost {
 
     fn get_mast_forest(
         &self,
-        node_digest: &Word,
+        request: miden_processor::CodeRequest,
     ) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
-        let forest = SyncHost::get_mast_forest(&self.inner, node_digest);
+        let forest = SyncHost::get_mast_forest(&self.inner, request);
         async move { forest }
     }
 

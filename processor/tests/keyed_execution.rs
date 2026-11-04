@@ -34,7 +34,7 @@ use miden_mast_package::debug_info::{
     PackageDebugInfo, PackageDebugInfoBuilder,
 };
 use miden_processor::{
-    BaseHost, ContextId, Continuation, DebugRuntimeFrame, DebugRuntimeFrameKind,
+    BaseHost, CodeRequest, ContextId, Continuation, DebugRuntimeFrame, DebugRuntimeFrameKind,
     EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
     ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionWitness, FastProcessor, Felt,
     FutureMaybeSend, Host, InvocationTag, KeyedMode, LedgerLimits, LoadedMastForest, OpeningError,
@@ -62,6 +62,13 @@ fn namespace(path: &[&str]) -> Namespace {
 
 fn key(path: &[&str], export: &str) -> ProcedureKey {
     namespace(path).procedure_key(CanonicalLabel::text(export).unwrap().commitment())
+}
+
+fn procedure_request(key: ProcedureKey, implementation: Word) -> CodeRequest {
+    CodeRequest::Procedure {
+        key,
+        implementation: ImplementationRoot::new(implementation),
+    }
 }
 
 fn block(forest: &mut MastForest, operations: Vec<Operation>) -> MastNodeId {
@@ -246,7 +253,7 @@ struct CountingHost {
     environment: EnvironmentFixture,
     forests: BTreeMap<Word, LoadedMastForest>,
     witness_requests: Vec<EnvironmentWitnessRequest>,
-    code_requests: RefCell<Vec<Word>>,
+    code_requests: RefCell<Vec<CodeRequest>>,
     unavailable_keys: BTreeSet<ProcedureKey>,
     unavailable_code: BTreeSet<Word>,
     substitute_witness: Option<ProcedureKey>,
@@ -299,12 +306,13 @@ impl SyncHost for CountingHost {
         Ok(self.environment.witness(self.substitute_witness.unwrap_or(request.key)))
     }
 
-    fn get_mast_forest(&self, digest: &Word) -> Option<LoadedMastForest> {
-        self.code_requests.borrow_mut().push(*digest);
-        if self.unavailable_code.contains(digest) {
+    fn get_mast_forest(&self, request: CodeRequest) -> Option<LoadedMastForest> {
+        let digest = request.implementation().into_word();
+        self.code_requests.borrow_mut().push(request);
+        if self.unavailable_code.contains(&digest) {
             None
         } else {
-            self.forests.get(digest).cloned()
+            self.forests.get(&digest).cloned()
         }
     }
 
@@ -393,7 +401,10 @@ fn entry_authenticates_fixed_root_and_key_before_loading_authenticated_body() {
         .execute_sync(&hint, configuration, &mut host)
         .unwrap();
     assert_eq!(output.stack[0], felt(7), "Program is a supply hint, not entry authority");
-    assert_eq!(*host.code_requests.borrow(), vec![authenticated.hash()]);
+    assert_eq!(
+        *host.code_requests.borrow(),
+        vec![procedure_request(entry, authenticated.hash())]
+    );
     assert_eq!(
         host.witness_requests,
         vec![EnvironmentWitnessRequest {
@@ -462,7 +473,14 @@ fn same_body_aliases_preserve_exec_principal_and_establish_each_call_key() {
         if matches!(mode, Mode::Call) {
             assert_ne!(host.observations[0].context, host.observations[1].context);
         }
-        assert_eq!(*host.code_requests.borrow(), vec![callee.hash()]);
+        assert_eq!(
+            *host.code_requests.borrow(),
+            vec![
+                procedure_request(entry, program.hash()),
+                procedure_request(aliases[0], callee.hash()),
+                procedure_request(aliases[1], callee.hash()),
+            ]
+        );
         assert_eq!(host.requests_for(aliases[0]), 1);
         assert_eq!(host.requests_for(aliases[1]), 1);
         let bindings = resume.resolution_session().bindings();
@@ -538,9 +556,10 @@ fn bounded_keyed_self_recursion_restores_frames_and_closes_entry_only_at_root_en
             .all(|observation| observation.principal == recursive.into_word())
     );
     assert_eq!(host.requests_for(recursive), 1, "recursive invocations reuse authenticated K");
-    assert!(
-        host.code_requests.borrow().is_empty(),
-        "all activations use the authenticated local D"
+    assert_eq!(
+        *host.code_requests.borrow(),
+        vec![procedure_request(recursive, program.hash())],
+        "recursive activations reuse the selected entry request"
     );
     let session = resume.resolution_session();
     assert_eq!(session.phase(), SessionPhase::Completed);
@@ -579,7 +598,11 @@ fn syscall_requires_fixed_root_namespace_before_code_lookup() {
         assert!(matches!(error, ExecutionError::EnvironmentSession(
             SessionError::UnauthorizedSyscall { expected, actual })
             if expected == Namespace::initial() && actual == namespace(path)));
-        assert!(host.code_requests.borrow().is_empty());
+        assert_eq!(
+            *host.code_requests.borrow(),
+            vec![procedure_request(entry, program.hash())],
+            "a rejected syscall must not query target code"
+        );
         assert!(host.observations.is_empty());
     }
     let kernel_path = [];
@@ -610,7 +633,14 @@ fn syscall_requires_fixed_root_namespace_before_code_lookup() {
     assert_eq!(host.observations[1].principal, user.into_word());
     assert!(!host.observations[1].context.is_root());
     assert!(processor.state().ctx().is_root());
-    assert_eq!(*host.code_requests.borrow(), vec![user_body.hash(), callee.hash()]);
+    assert_eq!(
+        *host.code_requests.borrow(),
+        vec![
+            procedure_request(entry, program.hash()),
+            procedure_request(user, user_body.hash()),
+            procedure_request(target, callee.hash()),
+        ]
+    );
 }
 
 #[test]
@@ -855,7 +885,15 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
                 .unwrap();
             assert_eq!(host.requests_for(aliases[0]), 1);
             assert_eq!(host.requests_for(aliases[1]), 1);
-            assert_eq!(*host.code_requests.borrow(), vec![callee.hash()]);
+            assert_eq!(
+                *host.code_requests.borrow(),
+                vec![
+                    procedure_request(entry, program.hash()),
+                    procedure_request(aliases[0], callee.hash()),
+                    procedure_request(aliases[1], callee.hash()),
+                ],
+                "repeated use of alias a reuses its selected request"
+            );
             let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
             let restored = ExecutionWitness::read_from_bytes_with_limits(
                 &bytes,
@@ -990,7 +1028,14 @@ fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay(
             .unwrap();
         assert_eq!(host.requests_for(entry), 1);
         assert_eq!(host.requests_for(target), 1, "both tags must reuse the same opening");
-        assert_eq!(*host.code_requests.borrow(), vec![callee.hash()]);
+        assert_eq!(
+            *host.code_requests.borrow(),
+            vec![
+                procedure_request(entry, program.hash()),
+                procedure_request(target, callee.hash()),
+            ],
+            "normal and syscall uses reuse the same selected request"
+        );
         let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
         let restored = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
@@ -1453,6 +1498,11 @@ fn unavailable_witness_and_code_retries_keep_invocation_and_charge_once() {
         assert_eq!(resume.resolution_session().phase(), SessionPhase::PendingEntry);
         assert_eq!(processor.state().clock().as_u32(), 0);
         assert!(processor.state().ctx().is_root());
+        assert_eq!(
+            *host.code_requests.borrow(),
+            vec![procedure_request(entry, program.hash())],
+            "missing target evidence must not query target code"
+        );
     }
     let retained = resume.continuation_stack().len();
     host.unavailable_keys.remove(&target);
@@ -1482,7 +1532,15 @@ fn unavailable_witness_and_code_retries_keep_invocation_and_charge_once() {
         3,
         "verified pending binding survives D unavailability"
     );
-    assert_eq!(*host.code_requests.borrow(), vec![callee.hash(), callee.hash(), callee.hash()]);
+    assert_eq!(
+        *host.code_requests.borrow(),
+        vec![
+            procedure_request(entry, program.hash()),
+            procedure_request(target, callee.hash()),
+            procedure_request(target, callee.hash()),
+            procedure_request(target, callee.hash()),
+        ]
+    );
     assert_eq!(host.observations.len(), 1);
     assert_eq!(resume.resolution_session().uses().count(), 2);
     let counters = resume.resolution_session().counters();
@@ -1636,6 +1694,7 @@ fn replay_v6_roundtrip_uses_caller_authority_and_explicit_budgets() {
 struct AsyncCodeHost {
     inner: CountingHost,
     suspend_code: AtomicBool,
+    suspended_request: CodeRequest,
 }
 
 impl BaseHost for AsyncCodeHost {
@@ -1656,9 +1715,13 @@ impl Host for AsyncCodeHost {
         async move { candidate }
     }
 
-    fn get_mast_forest(&self, digest: &Word) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
-        let candidate = SyncHost::get_mast_forest(&self.inner, digest);
-        let suspend = self.suspend_code.load(Ordering::Relaxed);
+    fn get_mast_forest(
+        &self,
+        request: CodeRequest,
+    ) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
+        let candidate = SyncHost::get_mast_forest(&self.inner, request);
+        let suspend =
+            self.suspend_code.load(Ordering::Relaxed) && request == self.suspended_request;
         async move {
             if suspend {
                 pending::<()>().await;
@@ -1693,6 +1756,7 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
     let mut host = AsyncCodeHost {
         inner: CountingHost::new(&environment, &[&authenticated]),
         suspend_code: AtomicBool::new(true),
+        suspended_request: procedure_request(entry, authenticated.hash()),
     };
     let mut processor = FastProcessor::new(StackInputs::default());
     let mut resume = processor
@@ -1701,9 +1765,13 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
     {
         let mut future = Box::pin(processor.step(&mut host, &mut resume));
         assert!(future.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
-        // Drop the in-flight driver while the D-indexed host lookup is suspended.
+        // Drop the in-flight driver while the authenticated entry code lookup is suspended.
     }
     assert_eq!(host.inner.requests_for(entry), 1);
+    assert_eq!(
+        *host.inner.code_requests.borrow(),
+        vec![procedure_request(entry, authenticated.hash())]
+    );
     assert_eq!(resume.resolution_session().phase(), SessionPhase::Unentered);
     assert_eq!(resume.resolution_session().uses().count(), 0);
     assert_eq!(processor.state().clock().as_u32(), 0);
@@ -1717,7 +1785,7 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
     assert_eq!(host.inner.requests_for(entry), 1);
     assert_eq!(
         *host.inner.code_requests.borrow(),
-        vec![authenticated.hash(), authenticated.hash()]
+        vec![procedure_request(entry, authenticated.hash()); 2]
     );
     assert_eq!(host.inner.observations.len(), 1);
     assert_eq!(host.inner.observations[0].principal, entry.into_word());
@@ -1869,7 +1937,11 @@ fn reach_source_dyncall(
             );
             assert_eq!(host.inner.observations.len(), 1);
             assert_eq!(host.inner.observations[0].principal, fixture.entry.into_word());
-            assert!(host.inner.code_requests.borrow().is_empty());
+            assert_eq!(
+                *host.inner.code_requests.borrow(),
+                vec![procedure_request(fixture.entry, fixture.program.hash())],
+                "reaching DYNCALL must not query target code"
+            );
             return;
         }
         assert!(
@@ -1961,6 +2033,7 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
     let mut host = AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(true),
+        suspended_request: procedure_request(fixture.target, fixture.callee.hash()),
     };
     let mut processor = source_dyncall_processor();
     let mut resume = processor
@@ -1981,7 +2054,13 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
     }
     before.assert_unchanged(&processor, &resume, &fixture);
     assert_eq!(host.inner.requests_for(fixture.target), 1);
-    assert_eq!(*host.inner.code_requests.borrow(), vec![fixture.callee.hash()]);
+    assert_eq!(
+        *host.inner.code_requests.borrow(),
+        vec![
+            procedure_request(fixture.entry, fixture.program.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+        ]
+    );
     host.suspend_code.store(false, Ordering::Relaxed);
     host.inner.unavailable_code.insert(fixture.callee.hash());
     assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
@@ -2080,7 +2159,16 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
     );
     assert_eq!(host.inner.requests_for(fixture.entry), 1);
     assert_eq!(host.inner.requests_for(fixture.target), 1, "verified K survives each D retry");
-    assert_eq!(*host.inner.code_requests.borrow(), vec![fixture.callee.hash(); 4]);
+    assert_eq!(
+        *host.inner.code_requests.borrow(),
+        vec![
+            procedure_request(fixture.entry, fixture.program.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+        ]
+    );
     let session = resume.resolution_session();
     assert_eq!(session.uses().count(), 2);
     assert_eq!(session.counters().committed_requests, 2);
@@ -2111,6 +2199,7 @@ fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
     let mut host = AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(false),
+        suspended_request: procedure_request(fixture.target, fixture.callee.hash()),
     };
     let mut processor = source_dyncall_processor();
     let configuration = ExecutionEnvironment::new(
@@ -2132,7 +2221,13 @@ fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
     ));
     before.assert_unchanged(&processor, &resume, &fixture);
     assert_eq!(host.inner.requests_for(fixture.target), 1);
-    assert_eq!(*host.inner.code_requests.borrow(), vec![fixture.callee.hash()]);
+    assert_eq!(
+        *host.inner.code_requests.borrow(),
+        vec![
+            procedure_request(fixture.entry, fixture.program.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+        ]
+    );
     // A failed native preparation consumes its witness and invalidates this execution. It does
     // not turn the rejected request into a retryable host/code-supply failure.
     assert!(matches!(
@@ -2141,7 +2236,13 @@ fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
     ));
     before.assert_unchanged(&processor, &resume, &fixture);
     assert_eq!(host.inner.requests_for(fixture.target), 1);
-    assert_eq!(host.inner.code_requests.borrow().len(), 1);
+    assert_eq!(
+        *host.inner.code_requests.borrow(),
+        vec![
+            procedure_request(fixture.entry, fixture.program.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+        ]
+    );
     assert_eq!(host.inner.observations.len(), 1);
 }
 
@@ -2323,6 +2424,7 @@ fn mode_matrix_host(fixture: &ModeMatrixFixture, local_target: bool) -> AsyncCod
     AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(false),
+        suspended_request: procedure_request(fixture.target, fixture.callee.hash()),
     }
 }
 
@@ -2582,6 +2684,7 @@ fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancel
     let mut host = AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(false),
+        suspended_request: procedure_request(fixture.target, fixture.callee.hash()),
     };
     let mut processor = source_dyncall_processor();
     let mut resume = processor
@@ -2597,12 +2700,24 @@ fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancel
     host.inner.unavailable_keys.insert(fixture.target);
     assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
         Err(ExecutionError::EnvironmentWitnessUnavailable { key, .. }) if key == fixture.target));
+    assert_eq!(
+        *host.inner.code_requests.borrow(),
+        vec![procedure_request(fixture.entry, fixture.program.hash())],
+        "missing target evidence must not query target code"
+    );
     host.inner.unavailable_keys.clear();
     host.suspend_code.store(true, Ordering::Relaxed);
     {
         let mut future = Box::pin(processor.step(&mut host, &mut resume));
         assert!(future.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
     }
+    assert_eq!(
+        *host.inner.code_requests.borrow(),
+        vec![
+            procedure_request(fixture.entry, fixture.program.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+        ]
+    );
     let pending = resume.debug_runtime_frames();
     assert_eq!(runtime_debug_observation(&pending), runtime_debug_observation(&before));
     assert!(before[0].is_same_frame(&pending[0]));
@@ -2632,6 +2747,15 @@ fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancel
     assert!(resume.debug_runtime_frames().is_empty());
     assert_eq!(resume.resolution_session().uses().count(), 2);
     assert_eq!(host.inner.requests_for(fixture.target), 2);
+    assert_eq!(
+        *host.inner.code_requests.borrow(),
+        vec![
+            procedure_request(fixture.entry, fixture.program.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+            procedure_request(fixture.target, fixture.callee.hash()),
+        ]
+    );
 }
 
 #[test]
@@ -2653,6 +2777,7 @@ fn runtime_debug_frames_keep_cached_recursive_exec_activations_distinct() {
         let mut host = AsyncCodeHost {
             inner: CountingHost::new(&environment, &[]),
             suspend_code: AtomicBool::new(false),
+            suspended_request: procedure_request(recursive, program.hash()),
         };
         let mut processor = FastProcessor::new(StackInputs::new(&[felt(3)]).unwrap());
         let mut resume = processor
@@ -2697,7 +2822,11 @@ fn runtime_debug_frames_keep_cached_recursive_exec_activations_distinct() {
         assert_eq!(maximum_depth, 4);
         assert_eq!(invocations.len(), 3);
         assert_eq!(host.inner.requests_for(recursive), 1);
-        assert!(host.inner.code_requests.borrow().is_empty());
+        assert_eq!(
+            *host.inner.code_requests.borrow(),
+            vec![procedure_request(recursive, program.hash())],
+            "recursive EXEC activations reuse the selected entry request"
+        );
         assert_eq!(resume.resolution_session().bindings()[0].counts().normal, 4);
         assert_eq!(resume.resolution_session().uses().count(), 4);
         assert!(processor.state().ctx().is_root());
@@ -2906,11 +3035,14 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
                     );
                     assert_eq!(
                         *host.inner.code_requests.borrow(),
-                        if local_target {
-                            Vec::new()
-                        } else {
-                            vec![fixture.callee.hash()]
-                        }
+                        vec![
+                            procedure_request(fixture.entry, fixture.program.hash()),
+                            procedure_request(
+                                fixture.user,
+                                fixture.program.mast_forest()[fixture.points[1].0].digest(),
+                            ),
+                            procedure_request(fixture.target, fixture.callee.hash()),
+                        ]
                     );
                     let session = resume.resolution_session();
                     assert_eq!(session.phase(), SessionPhase::Completed);
@@ -3009,7 +3141,17 @@ fn source_async_host_call_event_error_invalidates_the_published_target() {
     assert_eq!(host.inner.observations[2].value, None);
     assert_eq!(host.inner.observations[2].fmp, Some(FMP_INIT_VALUE));
     assert_eq!(host.inner.witness_requests.len(), 3);
-    assert_eq!(*host.inner.code_requests.borrow(), vec![fixture.callee.hash()]);
+    assert_eq!(
+        *host.inner.code_requests.borrow(),
+        vec![
+            procedure_request(fixture.entry, fixture.program.hash()),
+            procedure_request(
+                fixture.user,
+                fixture.program.mast_forest()[fixture.points[1].0].digest(),
+            ),
+            procedure_request(fixture.target, fixture.callee.hash()),
+        ]
+    );
     let stack = processor.state().get_stack_state();
     let clock = processor.state().clock();
     let requests = host.inner.witness_requests.len();

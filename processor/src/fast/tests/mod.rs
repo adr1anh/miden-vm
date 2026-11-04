@@ -4,7 +4,7 @@ use alloc::{
     sync::Arc,
     vec,
 };
-use core::{assert_matches, cell::Cell, str::FromStr};
+use core::{assert_matches, cell::RefCell, str::FromStr};
 
 use miden_air_definitions::vm::trace::MIN_TRACE_LEN;
 use miden_assembly::{
@@ -2327,7 +2327,7 @@ struct MalformedExternalHost {
 
 struct CountingMastForestHost {
     mast_forests: Vec<LoadedMastForest>,
-    lookup_count: Cell<usize>,
+    code_requests: RefCell<Vec<CodeRequest>>,
     environment_source: Option<Arc<dyn crate::EnvironmentWitnessSource>>,
 }
 
@@ -2335,13 +2335,9 @@ impl CountingMastForestHost {
     fn new(mast_forests: impl IntoIterator<Item = Arc<MastForest>>) -> Self {
         Self {
             mast_forests: mast_forests.into_iter().map(LoadedMastForest::new).collect(),
-            lookup_count: Cell::new(0),
+            code_requests: RefCell::new(Vec::new()),
             environment_source: None,
         }
-    }
-
-    fn lookup_count(&self) -> usize {
-        self.lookup_count.get()
     }
 }
 
@@ -2368,11 +2364,16 @@ impl SyncHost for CountingMastForestHost {
         self.environment_source.as_ref().map_or(Ok(None), |source| source.get(request))
     }
 
-    fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest> {
-        self.lookup_count.set(self.lookup_count.get() + 1);
+    fn get_mast_forest(&self, request: CodeRequest) -> Option<LoadedMastForest> {
+        self.code_requests.borrow_mut().push(request);
         self.mast_forests
             .iter()
-            .find(|loaded| loaded.mast_forest().find_procedure_root(*node_digest).is_some())
+            .find(|loaded| {
+                loaded
+                    .mast_forest()
+                    .find_procedure_root(request.implementation().into_word())
+                    .is_some()
+            })
             .cloned()
     }
 
@@ -2419,7 +2420,7 @@ impl SyncHost for MalformedExternalHost {
         self.environment_source.as_ref().map_or(Ok(None), |source| source.get(request))
     }
 
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, _request: CodeRequest) -> Option<LoadedMastForest> {
         Some(self.loaded_mast_forest.clone())
     }
 
@@ -2456,7 +2457,19 @@ fn caches_all_procedures_and_advice_from_a_loaded_mast_forest() {
         )
         .unwrap();
 
-    assert_eq!(host.lookup_count(), 1);
+    assert_eq!(
+        host.code_requests.borrow().as_slice(),
+        &[
+            CodeRequest::Procedure {
+                key: program.environment.descriptor().entry_key(),
+                implementation: ImplementationRoot::new(program.program.hash()),
+            },
+            CodeRequest::External {
+                implementation: ImplementationRoot::new(procedure_digests[0])
+            },
+        ],
+        "entry is queried once and the second structural root is served from the cached forest",
+    );
     assert_eq!(processor.loaded_mast_forests.len(), procedure_digests.len() + 1);
     assert!(processor.loaded_mast_forests.contains_key(&program.program.hash()));
     assert!(
@@ -2512,7 +2525,22 @@ async fn caches_advice_from_distinct_mast_forests() {
         .await
         .unwrap();
 
-    assert_eq!(host.lookup_count(), 2);
+    assert_eq!(
+        host.code_requests.borrow().as_slice(),
+        &[
+            CodeRequest::Procedure {
+                key: program.environment.descriptor().entry_key(),
+                implementation: ImplementationRoot::new(program.program.hash()),
+            },
+            CodeRequest::External {
+                implementation: ImplementationRoot::new(first_digest)
+            },
+            CodeRequest::External {
+                implementation: ImplementationRoot::new(second_digest)
+            },
+        ],
+        "each distinct structural forest is queried once after entry",
+    );
     assert_eq!(processor.loaded_mast_forests.len(), 3);
     for digest in [program.program.hash(), first_digest, second_digest] {
         assert!(processor.loaded_mast_forests.contains_key(&digest));
@@ -2568,7 +2596,10 @@ fn preserves_first_cached_forest_for_a_shared_procedure() {
         .unwrap();
 
     let cached_shared_forest = processor.loaded_mast_forests.get(&shared_digest).unwrap();
-    assert_eq!(cached_shared_forest.mast_forest().commitment(), first_commitment);
+    assert_eq!(
+        cached_shared_forest.first().unwrap().mast_forest().commitment(),
+        first_commitment
+    );
 }
 
 #[test]

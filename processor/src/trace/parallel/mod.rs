@@ -1055,10 +1055,12 @@ fn translate_snapshot_continuation_stack(
             Continuation::EnterForest {
                 forest: id,
                 package_debug_info,
+                loaded_owner: _,
                 inline_context_depth,
             } => Continuation::EnterForest {
                 forest: lookup_mast_forest(mast_forest_store, id)?.clone(),
                 package_debug_info,
+                loaded_owner: None,
                 inline_context_depth,
             },
             Continuation::StartNode(id) => Continuation::StartNode(id),

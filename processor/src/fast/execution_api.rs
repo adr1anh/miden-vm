@@ -3,10 +3,11 @@ use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
 use miden_core::{
     Word,
     mast::{MastForest, MastNodeExt, MastNodeId},
-    program::{MIN_STACK_DEPTH, Program, StackInputs, StackOutputs},
+    program::{ImplementationRoot, MIN_STACK_DEPTH, Program, StackInputs, StackOutputs},
 };
-use miden_mast_package::debug_info::{
-    DebugSourceGraphLookupError, DebugSourceNodeId, PackageDebugInfo,
+use miden_mast_package::{
+    PackageProcedureOccurrence,
+    debug_info::{DebugSourceGraphLookupError, DebugSourceNodeId, PackageDebugInfo},
 };
 use tracing::instrument;
 
@@ -17,9 +18,11 @@ use super::{
 #[cfg(feature = "std")]
 use crate::PrecompileWitness;
 use crate::{
-    BaseHost, ExecutionError, ExecutionOutput, ExecutionWitness, Host, LoadedMastForest, SyncHost,
+    BaseHost, CodeRequest, ExecutionError, ExecutionOutput, ExecutionWitness, Host,
+    LoadedMastForest, SyncHost,
     continuation_stack::ContinuationStack,
     errors::{MapExecErr, PackageSourceDebugContext, malformed_mast_forest_with_context},
+    execution::LoadedTarget,
     trace::execution_tracer::ExecutionTracer,
     tracer::Tracer,
 };
@@ -30,11 +33,17 @@ use crate::{
 /// authorize its execution.
 #[derive(Debug)]
 struct PreparedLoadedTarget {
+    request: CodeRequest,
     root_id: MastNodeId,
     loaded_mast_forest: LoadedMastForest,
     package_debug_info: Option<Arc<PackageDebugInfo>>,
     source_node_id: Option<DebugSourceNodeId>,
-    cache_on_publish: bool,
+}
+
+/// Whether source selection may infer a unique root or must retain an explicit occurrence.
+enum SourceNodeHint {
+    Infer,
+    Exact(Option<DebugSourceNodeId>),
 }
 
 impl FastProcessor {
@@ -56,6 +65,7 @@ impl FastProcessor {
         let descriptor = environment.descriptor();
         let resume = ResumeContext {
             current_forest: program.mast_forest().clone(),
+            loaded_owner: None,
             continuation_stack: ContinuationStack::default(),
             package_debug_info: None,
             inline_call_contexts: Vec::new(),
@@ -797,21 +807,19 @@ impl FastProcessor {
         package_debug_info: Option<&PackageDebugInfo>,
         source_node_id: Option<DebugSourceNodeId>,
         source_aware_execution: bool,
-    ) -> Result<
-        (
-            MastNodeId,
-            Arc<MastForest>,
-            Option<Arc<PackageDebugInfo>>,
-            Option<DebugSourceNodeId>,
-        ),
-        ExecutionError,
-    > {
-        let cached = self.loaded_mast_forests.get(&node_digest).cloned();
-        let was_cached = cached.is_some();
+    ) -> Result<LoadedTarget<Arc<MastForest>>, ExecutionError> {
+        let cached = self
+            .loaded_mast_forests
+            .get(&node_digest)
+            .and_then(|owners| owners.first())
+            .cloned();
         let loaded_mast_forest = match cached {
             Some(mast_forest) => mast_forest,
-            None => host.get_mast_forest(&node_digest).ok_or_else(|| {
-                match (package_debug_info, source_node_id) {
+            None => host
+                .get_mast_forest(CodeRequest::External {
+                    implementation: ImplementationRoot::new(node_digest),
+                })
+                .ok_or_else(|| match (package_debug_info, source_node_id) {
                     (Some(debug_info), Some(source_node_id)) => {
                         crate::errors::procedure_not_found_with_package_source_context(
                             node_digest,
@@ -820,13 +828,14 @@ impl FastProcessor {
                         )
                     },
                     _ => crate::errors::procedure_not_found_with_context(node_digest),
-                }
-            })?,
+                })?,
         };
         let prepared = Self::prepare_loaded_target(
             loaded_mast_forest,
-            node_digest,
-            !was_cached,
+            CodeRequest::External {
+                implementation: ImplementationRoot::new(node_digest),
+            },
+            None,
             package_debug_info,
             source_node_id,
             source_aware_execution,
@@ -842,21 +851,21 @@ impl FastProcessor {
         package_debug_info: Option<&PackageDebugInfo>,
         source_node_id: Option<DebugSourceNodeId>,
         source_aware_execution: bool,
-    ) -> Result<
-        (
-            MastNodeId,
-            Arc<MastForest>,
-            Option<Arc<PackageDebugInfo>>,
-            Option<DebugSourceNodeId>,
-        ),
-        ExecutionError,
-    > {
-        let cached = self.loaded_mast_forests.get(&node_digest).cloned();
-        let was_cached = cached.is_some();
+    ) -> Result<LoadedTarget<Arc<MastForest>>, ExecutionError> {
+        let cached = self
+            .loaded_mast_forests
+            .get(&node_digest)
+            .and_then(|owners| owners.first())
+            .cloned();
         let loaded_mast_forest = match cached {
             Some(mast_forest) => mast_forest,
             None => {
-                if let Some(mast_forest) = host.get_mast_forest(&node_digest).await {
+                if let Some(mast_forest) = host
+                    .get_mast_forest(CodeRequest::External {
+                        implementation: ImplementationRoot::new(node_digest),
+                    })
+                    .await
+                {
                     mast_forest
                 } else {
                     return Err(match (package_debug_info, source_node_id) {
@@ -874,8 +883,10 @@ impl FastProcessor {
         };
         let prepared = Self::prepare_loaded_target(
             loaded_mast_forest,
-            node_digest,
-            !was_cached,
+            CodeRequest::External {
+                implementation: ImplementationRoot::new(node_digest),
+            },
+            None,
             package_debug_info,
             source_node_id,
             source_aware_execution,
@@ -884,49 +895,86 @@ impl FastProcessor {
         self.publish_loaded_target(prepared)
     }
 
+    /// An exact keyed offer may improve metadata; generic code keeps the existing local choice.
+    fn select_code_offer(
+        request: CodeRequest,
+        offered: Option<LoadedMastForest>,
+        local: Option<LoadedMastForest>,
+    ) -> Option<LoadedMastForest> {
+        if offered.as_ref().is_some_and(|owner| {
+            request.key().is_some_and(|key| {
+                owner.materialized_procedure_occurrence(key, request.implementation()).is_some()
+            })
+        }) {
+            return offered;
+        }
+        local.or(offered)
+    }
+
     /// Resolves the requested local body and its actual package-owned source context without
     /// changing processor state. Keyed transitions can retain this result until their remaining
     /// VM and tracer preflights complete.
     fn prepare_loaded_target(
         loaded_mast_forest: LoadedMastForest,
-        node_digest: Word,
-        cache_on_publish: bool,
+        request: CodeRequest,
+        entry_hint: Option<(MastNodeId, Option<DebugSourceNodeId>)>,
         package_debug_info: Option<&PackageDebugInfo>,
         source_node_id: Option<DebugSourceNodeId>,
         source_aware_execution: bool,
         host: &impl BaseHost,
     ) -> Result<PreparedLoadedTarget, ExecutionError> {
         let mast_forest = loaded_mast_forest.mast_forest();
-        let root_id = mast_forest
-            .procedure_roots()
-            .iter()
-            .copied()
-            // An External(D) root alone cannot materialize D: loading it would make no progress.
-            .find(|&root_id| {
-                let node = &mast_forest[root_id];
+        let implementation = request.implementation();
+        let node_digest = *implementation.as_word();
+        let occurrence = request.key().and_then(|key| {
+            loaded_mast_forest.materialized_procedure_occurrence(key, implementation)
+        });
+        let root_hint = entry_hint.map(|(root, _)| root);
+        let root_id = if let Some(root) =
+            occurrence.map(PackageProcedureOccurrence::exec_node).or(root_hint)
+        {
+            Some(root).filter(|&root| {
+                mast_forest.procedure_roots().contains(&root)
+                    && !mast_forest[root].is_external()
+                    && mast_forest[root].digest() == node_digest
+            })
+        } else {
+            mast_forest.procedure_roots().iter().copied().find(|&root| {
+                let node = &mast_forest[root];
                 !node.is_external() && node.digest() == node_digest
             })
-            .ok_or_else(|| {
-                let context = match (package_debug_info, source_node_id) {
-                    (Some(debug_info), Some(source_node_id)) => {
-                        Some(PackageSourceDebugContext::new(debug_info, source_node_id))
-                    },
-                    _ => None,
-                };
-                malformed_mast_forest_with_context(node_digest, context, host)
-            })?;
+        }
+        .ok_or_else(|| {
+            let context = match (package_debug_info, source_node_id) {
+                (Some(debug_info), Some(source_node_id)) => {
+                    Some(PackageSourceDebugContext::new(debug_info, source_node_id))
+                },
+                _ => None,
+            };
+            malformed_mast_forest_with_context(node_digest, context, host)
+        })?;
+        // A keyed occurrence explicitly carries its source choice, including no source. Never
+        // replace that choice with the first equal-D root or an inferred debug source root.
+        let source_hint = if let Some(occurrence) = occurrence {
+            SourceNodeHint::Exact(occurrence.source_node())
+        } else if let Some((_, Some(source))) = entry_hint {
+            SourceNodeHint::Exact(Some(source))
+        } else {
+            SourceNodeHint::Infer
+        };
         let (package_debug_info, source_node_id) = Self::loaded_package_source_context(
             &loaded_mast_forest,
             root_id,
+            source_hint,
             source_aware_execution,
         )?;
 
         Ok(PreparedLoadedTarget {
+            request,
             root_id,
             loaded_mast_forest,
             package_debug_info,
             source_node_id,
-            cache_on_publish,
         })
     }
 
@@ -935,21 +983,13 @@ impl FastProcessor {
     fn publish_loaded_target(
         &mut self,
         prepared: PreparedLoadedTarget,
-    ) -> Result<
-        (
-            MastNodeId,
-            Arc<MastForest>,
-            Option<Arc<PackageDebugInfo>>,
-            Option<DebugSourceNodeId>,
-        ),
-        ExecutionError,
-    > {
+    ) -> Result<LoadedTarget<Arc<MastForest>>, ExecutionError> {
         let PreparedLoadedTarget {
+            request,
             root_id,
             loaded_mast_forest,
             package_debug_info,
             source_node_id,
-            cache_on_publish,
         } = prepared;
         let mast_forest = loaded_mast_forest.mast_forest().clone();
         let commitment = mast_forest.commitment();
@@ -963,27 +1003,37 @@ impl FastProcessor {
             advice_extension.commit();
             self.merged_mast_forests.insert(commitment);
         }
-        if cache_on_publish {
-            Self::cache_loaded_mast_forest(&mut self.loaded_mast_forests, &loaded_mast_forest);
+        Self::cache_loaded_mast_forest(&mut self.loaded_mast_forests, &loaded_mast_forest);
+        if request.key().is_some() {
+            self.loaded_code_requests.insert(request, loaded_mast_forest.clone());
         }
 
-        Ok((root_id, mast_forest, package_debug_info, source_node_id))
+        Ok(LoadedTarget {
+            implementation: request.implementation(),
+            root: root_id,
+            forest: mast_forest,
+            package_debug_info,
+            loaded_owner: Some(loaded_mast_forest),
+            source_node_id,
+        })
     }
 
     fn cache_loaded_mast_forest(
-        loaded_mast_forests: &mut BTreeMap<Word, LoadedMastForest>,
+        loaded_mast_forests: &mut BTreeMap<Word, Vec<LoadedMastForest>>,
         loaded_mast_forest: &LoadedMastForest,
     ) {
         for procedure_digest in loaded_mast_forest.mast_forest().local_procedure_digests() {
-            loaded_mast_forests
-                .entry(procedure_digest)
-                .or_insert_with(|| loaded_mast_forest.clone());
+            let owners = loaded_mast_forests.entry(procedure_digest).or_default();
+            if !owners.iter().any(|owner| owner.same_owner(loaded_mast_forest)) {
+                owners.push(loaded_mast_forest.clone());
+            }
         }
     }
 
     fn loaded_package_source_context(
         loaded_mast_forest: &LoadedMastForest,
         root_id: MastNodeId,
+        source_hint: SourceNodeHint,
         source_aware_execution: bool,
     ) -> Result<(Option<Arc<PackageDebugInfo>>, Option<DebugSourceNodeId>), ExecutionError> {
         if !source_aware_execution {
@@ -994,8 +1044,26 @@ impl FastProcessor {
             .package_debug_info()
             .map_err(|_| ExecutionError::Internal("loaded package debug info is malformed"))?
         else {
+            if matches!(source_hint, SourceNodeHint::Exact(Some(_))) {
+                return Err(ExecutionError::Internal(
+                    "loaded procedure source has no owning debug package",
+                ));
+            }
             return Ok((None, None));
         };
+
+        if let SourceNodeHint::Exact(source_node_id) = source_hint {
+            if let Some(source) = source_node_id
+                && package_debug_info
+                    .source_node(source)
+                    .is_none_or(|node| node.exec_node != root_id)
+            {
+                return Err(ExecutionError::Internal(
+                    "loaded procedure source does not match the resolved root",
+                ));
+            }
+            return Ok((Some(package_debug_info), source_node_id));
+        }
 
         let source_node_id = match package_debug_info.unique_source_root_for_exec_node(root_id) {
             Ok(source_node_id) => source_node_id,

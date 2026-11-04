@@ -83,7 +83,15 @@ async fn available_code_does_not_supply_missing_environment_evidence() {
         limits: opening_limits(),
     };
 
-    assert!(SyncHost::get_mast_forest(&host, &implementation).is_some());
+    assert!(
+        SyncHost::get_mast_forest(
+            &host,
+            crate::CodeRequest::External {
+                implementation: ImplementationRoot::new(implementation)
+            }
+        )
+        .is_some()
+    );
     assert!(SyncHost::get_environment_witness(&mut host, request).unwrap().is_none());
     assert!(Host::get_environment_witness(&mut host, request).await.unwrap().is_none());
 
@@ -236,7 +244,7 @@ impl BaseHost for LegacySyncHost {
 }
 
 impl SyncHost for LegacySyncHost {
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, _request: crate::CodeRequest) -> Option<LoadedMastForest> {
         panic!("environment lookup must not fall back to code lookup")
     }
 
@@ -262,7 +270,7 @@ impl BaseHost for AsyncOnlyHost {
 impl Host for AsyncOnlyHost {
     fn get_mast_forest(
         &self,
-        _node_digest: &Word,
+        _request: crate::CodeRequest,
     ) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
         async { panic!("environment lookup must not fall back to code lookup") }
     }
@@ -299,7 +307,7 @@ impl SyncHost for OverrideHost {
         Ok(Some(ResolutionWitness { path: vec![] }))
     }
 
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, _request: crate::CodeRequest) -> Option<LoadedMastForest> {
         panic!("environment lookup must not fall back to code lookup")
     }
 

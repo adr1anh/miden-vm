@@ -180,7 +180,7 @@ impl SyncHost for MalformedMastForestHost {
         self.environment_source.get(request)
     }
 
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, _request: crate::CodeRequest) -> Option<LoadedMastForest> {
         Some(LoadedMastForest::new(self.mast_forest.clone()))
     }
 

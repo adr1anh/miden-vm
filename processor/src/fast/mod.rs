@@ -22,7 +22,7 @@ use miden_mast_package::{
 };
 
 use crate::{
-    AdviceInputs, AdviceProvider, ContextId, ExecutionEnvironment, ExecutionError,
+    AdviceInputs, AdviceProvider, CodeRequest, ContextId, ExecutionEnvironment, ExecutionError,
     ExecutionOptions, LoadedMastForest, ProcessorState,
     advice::AdviceError,
     continuation_stack::{Continuation, ContinuationStack},
@@ -137,8 +137,11 @@ pub struct FastProcessor {
     /// The advice provider to be used during execution.
     advice: AdviceProvider,
 
-    /// MAST forests loaded during this execution, indexed by their local procedure digests.
-    loaded_mast_forests: BTreeMap<Word, LoadedMastForest>,
+    /// Loaded code owners indexed by local procedure digest, in first-loaded order.
+    loaded_mast_forests: BTreeMap<Word, Vec<LoadedMastForest>>,
+
+    /// Positive code availability for already selected requests; never environment authority.
+    loaded_code_requests: BTreeMap<CodeRequest, LoadedMastForest>,
 
     /// Commitments of MAST forests whose advice maps have been merged into the advice provider.
     merged_mast_forests: BTreeSet<Word>,
@@ -278,6 +281,7 @@ impl FastProcessor {
         Ok(Self {
             advice: AdviceProvider::new(advice_inputs, &options)?,
             loaded_mast_forests: BTreeMap::new(),
+            loaded_code_requests: BTreeMap::new(),
             merged_mast_forests: BTreeSet::new(),
             stack,
             stack_top_idx,

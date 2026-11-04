@@ -254,6 +254,7 @@ where
     state.continuation_stack.push_enter_forest_with_package_debug_info(
         current_forest.clone(),
         state.source_debug_info.clone(),
+        (*state.loaded_owner).clone(),
         inline_context_depth,
         request.source_node_id,
     );
@@ -272,6 +273,7 @@ where
     // The next cycle belongs to the loaded body even when stepping stops on this invocation row.
     *current_forest = target.forest;
     state.source_debug_info = target.package_debug_info;
+    *state.loaded_owner = target.loaded_owner;
     flow
 }
 

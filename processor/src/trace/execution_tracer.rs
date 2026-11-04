@@ -589,10 +589,12 @@ impl ExecutionTracer {
                 Continuation::EnterForest {
                     forest,
                     package_debug_info,
+                    loaded_owner: _,
                     inline_context_depth,
                 } => Continuation::EnterForest {
                     forest: self.forest_id(&forest),
                     package_debug_info,
+                    loaded_owner: None,
                     inline_context_depth,
                 },
                 Continuation::StartNode(id) => Continuation::StartNode(id),
@@ -1433,10 +1435,12 @@ impl Tracer for ExecutionTracer {
                     Continuation::EnterForest {
                         forest,
                         package_debug_info,
+                        loaded_owner: _,
                         inline_context_depth,
                     } => Continuation::EnterForest {
                         forest: self.forest_id(forest),
                         package_debug_info: package_debug_info.clone(),
+                        loaded_owner: None,
                         inline_context_depth: *inline_context_depth,
                     },
                     Continuation::StartNode(id) => Continuation::StartNode(*id),

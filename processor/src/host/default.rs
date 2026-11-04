@@ -1,10 +1,7 @@
 use alloc::{sync::Arc, vec::Vec};
 use core::fmt;
 
-use miden_core::{
-    Word,
-    events::{EventId, EventName},
-};
+use miden_core::events::{EventId, EventName};
 use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceManager, SourceSpan};
 use miden_mast_package::CodePackage;
 
@@ -12,9 +9,9 @@ use super::handlers::{
     EventError, EventHandler, EventHandlerRegistry, TraceError, TraceHandler, TraceHandlerRegistry,
 };
 use crate::{
-    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
-    ExecutionError, LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState,
-    ResolutionWitness, SyncHost, advice::AdviceMutation,
+    BaseHost, CodeRequest, EnvironmentSourceError, EnvironmentWitnessRequest,
+    EnvironmentWitnessSource, ExecutionError, LoadedMastForest, MastForestStore,
+    MemMastForestStore, ProcessorState, ResolutionWitness, SyncHost, advice::AdviceMutation,
 };
 
 // DEFAULT HOST IMPLEMENTATION
@@ -225,8 +222,8 @@ where
         }
     }
 
-    fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest> {
-        self.store.get(node_digest)
+    fn get_mast_forest(&self, request: CodeRequest) -> Option<LoadedMastForest> {
+        self.store.get(request)
     }
 
     fn on_event(
@@ -277,7 +274,7 @@ impl BaseHost for NoopHost {
 
 impl SyncHost for NoopHost {
     #[inline(always)]
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, _request: CodeRequest) -> Option<LoadedMastForest> {
         None
     }
 
@@ -419,7 +416,11 @@ mod tests {
 
         assert!(is_registered(&host, "test::a"));
         assert!(is_registered(&host, "test::b"));
-        let loaded = host.get_mast_forest(&procedure).expect("the forest is loaded");
+        let loaded = host
+            .get_mast_forest(CodeRequest::External {
+                implementation: ImplementationRoot::new(procedure),
+            })
+            .expect("the forest is loaded");
         let retained = loaded.code_package().expect("the whole code package is retained");
         assert!(Arc::ptr_eq(retained.package(), code.package()));
         assert!(Arc::ptr_eq(loaded.symbols().unwrap(), code.symbols()));
@@ -436,10 +437,33 @@ mod tests {
         let mut host = DefaultHost::default();
         host.load_library(code.clone()).unwrap();
 
-        let loaded = host.get_mast_forest(&procedure).unwrap();
+        let loaded = host
+            .get_mast_forest(CodeRequest::External {
+                implementation: ImplementationRoot::new(procedure),
+            })
+            .unwrap();
         assert!(Arc::ptr_eq(loaded.code_package().unwrap().package(), code.package()));
         let error = loaded.package_debug_info().expect_err("malformed debug info stays an error");
         assert!(matches!(&*error, PackageDebugInfoError::DecodeSection { .. }));
+    }
+
+    #[test]
+    fn failed_load_library_preserves_prior_equal_digest_owner() {
+        let initial = library(&[]);
+        let row = initial.code().package().procedure_occurrences()[0];
+        let implementation = ImplementationRoot::new(
+            initial.code().package().mast_forest()[row.exec_node()].digest(),
+        );
+        let request = CodeRequest::Procedure { key: row.key(), implementation };
+        let mut host = DefaultHost::default();
+        host.load_library(initial).unwrap();
+        let before = host.get_mast_forest(request).unwrap();
+        host.register_handler(EventName::new("test::b"), Arc::new(NoopEventHandler))
+            .unwrap();
+
+        assert!(host.load_library(library(&["test::a", "test::b"])).is_err());
+        assert!(!is_registered(&host, "test::a"));
+        assert_eq!(host.get_mast_forest(request), Some(before));
     }
 
     #[test]
@@ -459,6 +483,12 @@ mod tests {
             "unexpected error: {err}"
         );
         assert!(!is_registered(&host, "test::a"), "the first handler must be rolled back");
-        assert!(host.get_mast_forest(&procedure).is_none(), "the forest must not be loaded");
+        assert!(
+            host.get_mast_forest(CodeRequest::External {
+                implementation: ImplementationRoot::new(procedure)
+            })
+            .is_none(),
+            "the forest must not be loaded"
+        );
     }
 }

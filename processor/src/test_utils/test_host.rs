@@ -202,8 +202,8 @@ where
         }
     }
 
-    fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest> {
-        self.store.get(node_digest)
+    fn get_mast_forest(&self, request: crate::CodeRequest) -> Option<LoadedMastForest> {
+        self.store.get(request)
     }
 
     fn on_event(&mut self, process: &ProcessorState) -> Result<Vec<AdviceMutation>, EventError> {
