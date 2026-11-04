@@ -526,7 +526,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
-| 15 API/CLI closure | in-progress | Keyed loader `972cc889e`; owner `954377d10`; projects `3ff730b5a`; host `cf1043490`; consumers `50c27f59f`; CLI `49151a5b4`; prior SHAs below; base `f4350360d` | Independent reviews; keyed3138+focused1; ownership3126+focused2; strict14-crate all-target custom Clippy; production no_std10 with graph audit; earlier3772+615 and cache2 | Target-only execution/Program retirement, resolution options, remaining assembler/public migration and all final PR15 gates pending |
+| 15 API/CLI closure | in-progress | Target-only `10345ccf0`; API docs `5a658b95d`; keyed loader `972cc889e`; prior SHAs below; base `f4350360d` | Independent reviews; fresh runtime3,142; public-input/async28; prove/seed2; deterministic seed replay2; six compiled doctests; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumer packages | Checked-owner assembler link migration, CLI diagnostic/bounded-input audit and all remaining PR15/15a/16 final gates pending |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
@@ -3449,3 +3449,53 @@ review covered auth/publication ordering, owner restoration and replay omission.
 Target-only execution, explicit resolution options and complete Program/conversion retirement
 remain next. Keep caller target authority, all explicit resource/replay policies and PR15a/16/
 inherited final/security gates. General goal/M1 remain active; no PR or push.
+
+### PR15 target-only execution and consumer qualification, 4 November 2026
+
+Signed `10345ccf0` retires Program, its conversions/legacy codec/fuzzer, and ExecutionEnvironment.
+FastProcessor and ProgramExecutor receive the caller's ExecutionTarget separately from host code.
+ResolutionLimits has explicit opening/ledger/session policies without Default; ExecutionOptions
+requires selection before entry initialization. Resume copies the selected policies and target.
+Missing policies fail before host/identity publication and may be corrected on the same fresh
+processor; later option changes cannot replace a live resume's target or native policies. Exact
+CodePackage owners supply code/advice/source metadata, including private/equal-D occurrences;
+normal execution no longer receives detached source graphs or Program entry hints. No replacement
+forest-plus-entry wrapper was introduced. Auth/N0/entry/session/publication and cancel/terminal
+boundaries remain, as do claim40v2, canonical domains and replay6 bytes. Replay reader API now
+takes independent target/native policies, preserving trust revocation and remaining-budget clamps.
+
+Compiler/package/test-utils/core-library/prover/CLI/guest/benchmark consumers migrate consistently.
+Checked executable-code inspection remains separate from generic host-code integrity and target
+authority. The corpus snapshot changes exactly four obsolete Program serialization-size metrics
+to full package sizes; entry/body/forest digests, root IDs and other corpus facts remain identical.
+Source/debug negatives now use checked occurrence rows, structurally valid graphs and explicit
+stripped code where applicable, rather than removed detached metadata behavior.
+
+Fresh runtime scope: 3,142 passed, 1,233 outside-filter tests skipped
+(`pr15-target-only-runtime-final.log`). The initial run's ten failures were fixture/metric changes;
+none were suppressed. Strict14-crate all-target custom Clippy passes
+(`pr15-target-only-clippy-last.log`). Ten production no_std roots compile and normal dependency
+graphs contain no std (`pr15-target-only-no-std{,-features}.log`); host build dependencies remain
+separate under resolver3, with no bare-metal/cross-target claim. Four benchmark/Wycheproof consumer
+packages pass all-target type checks (`pr15-target-only-extra-consumers.log`); no benchmark or
+cryptographic-vector campaign was run. Public prover/explicit-input/async scope passes28
+(`pr15-target-only-prover-consumers.log`), partially overlapping the runtime scope. Positive
+buffered/overlapped prove_sync and ignored seed generator both pass
+(`pr15-target-only-prove-seeds.log`); the expensive private prover test binary was not rebuilt.
+
+Witness fuzzing now uses an independent canonical caller K/RE prefix plus unchanged replay6. Both
+owner-generated seeds are refreshed, and two deterministic tests reach the shared canonical and
+changed-authority/zero-policy/trailing-byte rejection oracles
+(`pr15-target-only-fuzz-seed-replay.log`). The two directly affected standalone fuzz binaries type
+check (`pr15-target-only-fuzz-bins-final.log`). This is not a mutation campaign; inherited PR16
+fuzz gates remain. Full signed API docs `5a658b95d` explain target/code distinction and fixed-root
+syscalls, correct legacy KernelDescriptor authority wording without changing its codec, and include
+the prover README in rustdoc. Six compile-only doctests pass; five preexisting ignored examples
+remain ignored (`pr15-target-only-doctests-final.log`). Independent bounded runtime/replay review
+reported no material delta finding; it did not replace native/AIR/admission qualification.
+
+Remaining PR15: ordinary assembler/kernel linking must accept/retain CodePackage rather than
+public mutable split package/symbol owners; preserve project postprocessor-before-seal order.
+Audit CLI K_entry/R_E/actual-D diagnostics and bounded proof input, then complete the active card's
+remaining acceptance. General goal/M1, PR15a/16 and inherited final/security gates remain active.
+No PR or push.
