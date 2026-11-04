@@ -304,8 +304,8 @@ Keep `ProcedureKey`, `EnvironmentRoot` and `ExecutionClaim`. Keep package code a
 ### PR 15a Revisit AIR and Chiplets trace cleanup
 
 **Branch:** `adr1anh/librarytree-15a-air-cleanup`. **Git base:** PR 15. **Semantic dependencies:**
-03, 06–08 and functional/native/recursive/public integration through 12–15. Planned follow-up;
-do not create this branch or interrupt current implementation now.
+03, 06–08 and functional/native/recursive/public integration through 12–15. This cleanup follows
+PR15 and precedes PR16 qualification; the ledger records its implementation and acceptance.
 
 Revisit the AIR/trace choices from PRs 03/06–08 against the integrated system. The preferred
 direction is a Controller-owned one-based address counter: anchor it at Controller entry, increment
@@ -528,7 +528,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
 | 15 API/CLI closure | implemented-awaiting-validation | Final source `a99264137`; checked links/CLI `ba651f64d`; review `8ba05fd00`; prior SHAs below; base `f4350360d` | Independent reviews; fresh combined runtime/CLI/witness/proof/flow3,179; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumers; six compiled doctests; standalone fuzz2 typechecks; earlier scoped evidence below | PR15 functional acceptance passes; PR15a/16 and inherited guest/security/fuzz/performance/final gates remain |
-| 15a AIR/Chiplets cleanup | in-progress | Counter/rebinding `7d51bff1b`; base `1afb98f50` | Independent reviews; fresh combined3,615; MAIN/ext/lookup capture and generated/recursive parity; actual prefix/raw/padded heights; final strict14; production no_std10 | Post-commit deterministic regeneration, PVM artifact/fixture checks and final review description pending; inherited PR16 gates remain |
+| 15a AIR/Chiplets cleanup | implemented-awaiting-validation | Counter/rebinding `7d51bff1b`; review `cffb3f279`; base `1afb98f50` | Independent reviews; fresh combined3,615; MAIN/ext/lookup capture and generated/recursive parity; actual heights; strict14; production no_std10; clean post-commit generation/check; PVM constants/277756-byte fixture; root-stability policy | PR15a functional/artifact acceptance passes; inherited PR16 guest/security/fuzz/performance/final gates remain |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
 ## Implementation evidence
@@ -3619,6 +3619,12 @@ material issue after strengthening two test oracles. Final strict14 all-target c
 feature/dependency graph and prior std-free normal graph audit. All24 changed Rust files pass pinned
 formatting; no unreviewed snapshot remains. Context commits are separate from implementation.
 
-Post-commit deterministic regeneration/PVM checks and final PR15a review description remain pending.
-General goal/M1 and PR16/inherited guest/security/fuzz/performance/final gates remain active. No PR,
-push or publication.
+Post-commit normal generation is idempotent with `git diff --exit-code` clean
+(`pr15a-regeneration-idempotence.log`); check mode exits0 (`pr15a-constraints-check.log`). Docs were
+rebuilt with MIDEN_BUILD_LIB_DOCS=1 and remain unchanged. PVM MASM artifacts are current
+(`pr15a-pvm-constants-check.log`). Required `make check-pvm-proof-fixture` passes in release mode;
+the fixture remains277756 bytes (`pr15a-pvm-proof-fixture.log`). `make test-masm-root-stability`
+passes its policy tests (`pr15a-root-stability-policy.log`). Final review description `cffb3f279`
+is committed separately. PR15a may advance linearly to PR16 while its ledger state retains the
+inherited final gates. General goal/M1 and PR16 guest/security/fuzz/performance/final qualification
+remain active. No PR, push or publication.
