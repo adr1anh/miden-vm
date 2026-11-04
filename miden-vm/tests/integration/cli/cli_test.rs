@@ -115,6 +115,25 @@ fn cli_run() {
         .stdout(predicate::str::contains("Byte-pair lookup rows:"));
 }
 
+fn assert_missing_inputs_file(mut command: Command, expected_basename: &str) {
+    let assertion = command
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to open input file"))
+        .stderr(predicate::str::contains("No such file or directory"));
+    // Diagnostic wrapping can split a filename under a long temporary directory. Remove display
+    // continuation prefixes and line breaks while retaining the complete filename assertion.
+    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr);
+    let unwrapped = stderr
+        .lines()
+        .map(|line| line.trim().trim_start_matches(['|', '│']).trim())
+        .collect::<String>();
+    assert!(
+        unwrapped.contains(expected_basename),
+        "missing inferred input filename: {stderr}"
+    );
+}
+
 #[test]
 fn run_rejects_missing_inferred_inputs_file() {
     let working_dir = TempDir::new().unwrap();
@@ -122,13 +141,8 @@ fn run_rejects_missing_inferred_inputs_file() {
     fs::write(&program_path, "begin push.1 end").unwrap();
 
     let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
-    let mut cmd = inputs.command(working_dir.path(), "run", &program_path);
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("Failed to open input file"))
-        .stderr(predicate::str::contains("miden-vm-cli-missing-run-"))
-        .stderr(predicate::str::contains("test.inputs"))
-        .stderr(predicate::str::contains("No such file or directory"));
+    let cmd = inputs.command(working_dir.path(), "run", &program_path);
+    assert_missing_inputs_file(cmd, "miden-vm-cli-missing-run-inputs-test.inputs");
 }
 
 #[test]
@@ -138,13 +152,8 @@ fn prove_rejects_missing_inferred_inputs_file() {
     fs::write(&program_path, "begin push.1 end").unwrap();
 
     let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
-    let mut cmd = inputs.command(working_dir.path(), "prove", &program_path);
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("Failed to open input file"))
-        .stderr(predicate::str::contains("miden-vm-cli-missing-prove-"))
-        .stderr(predicate::str::contains("test.inputs"))
-        .stderr(predicate::str::contains("No such file or directory"));
+    let cmd = inputs.command(working_dir.path(), "prove", &program_path);
+    assert_missing_inputs_file(cmd, "miden-vm-cli-missing-prove-inputs-test.inputs");
 }
 
 #[test]
