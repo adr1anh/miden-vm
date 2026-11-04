@@ -10,16 +10,20 @@ use crate::{
 // CONSTANTS
 // ================================================================================================
 
-/// Registered domain tag for the kernel commitment.
+/// Registered domain tag for the legacy kernel-inventory commitment.
 pub const KERNEL_DOMAIN_TAG: crate::Felt = super::domain::KernelCommitmentDomain::TAG.as_felt();
 
 // KERNEL
 // ================================================================================================
 
-/// A list of exported kernel procedure hashes defining a VM kernel.
+/// A legacy inventory of exported kernel procedure hashes retained for metadata compatibility.
 ///
 /// The internally-stored list always has a consistent order, regardless of the order of procedure
 /// list used to instantiate a descriptor.
+///
+/// This inventory does not authorize syscalls or configure the current public claim or verifier.
+/// Execution uses the caller's expected entry key and environment root; an actual syscall requires
+/// an authenticated binding whose immediate parent namespace equals the fixed initial namespace.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(
     all(feature = "arbitrary", test),
@@ -28,7 +32,7 @@ pub const KERNEL_DOMAIN_TAG: crate::Felt = super::domain::KernelCommitmentDomain
 pub struct KernelDescriptor(Vec<Word>);
 
 impl KernelDescriptor {
-    /// The maximum number of procedures which can be exported from a KernelDescriptor.
+    /// The maximum number of procedure hashes this metadata inventory can contain.
     pub const MAX_NUM_PROCEDURES: usize = u8::MAX as usize;
 
     /// Returns a new [KernelDescriptor] instantiated with the specified procedure hashes.
@@ -68,38 +72,39 @@ impl KernelDescriptor {
         }
     }
 
-    /// Creates a kernel from raw hashes without enforcing constructor invariants.
+    /// Creates a descriptor from raw hashes without enforcing constructor invariants.
     ///
-    /// This is only intended for tests that need intentionally malformed kernels.
+    /// This is only intended for tests that need intentionally malformed inventories.
     #[cfg(test)]
     pub(crate) fn from_hashes_unchecked(hashes: Vec<Word>) -> Self {
         Self(hashes)
     }
 
-    /// Returns true if this kernel does not contain any procedures.
+    /// Returns true if this inventory does not contain any procedure hashes.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Returns true if a procedure with the specified hash belongs to this kernel.
+    /// Returns true if the specified procedure hash appears in this inventory.
     ///
-    /// Note: the kernel is constructed from exported kernel procedures only.
+    /// Membership in this metadata inventory grants no execution or syscall authority.
     pub fn contains_proc(&self, proc_hash: Word) -> bool {
         // Note: we can't use `binary_search()` here because the hashes were sorted using a
         // different key that the `binary_search` algorithm uses.
         self.0.contains(&proc_hash)
     }
 
-    /// Returns a list of procedure hashes contained in this kernel.
+    /// Returns the procedure hashes contained in this inventory.
     pub fn proc_hashes(&self) -> &[Word] {
         &self.0
     }
 
-    /// Returns the canonical commitment to this kernel: the domain-tagged sequential hash of the
-    /// flattened procedure digests, `hash_elements_in_domain(flatten(procs), KERNEL_DOMAIN_TAG)`.
+    /// Returns the canonical diagnostic commitment to this legacy code inventory: the domain-tagged
+    /// sequential hash of the flattened procedure digests,
+    /// `hash_elements_in_domain(flatten(procs), KERNEL_DOMAIN_TAG)`.
     ///
-    /// This is the fixed-size identifier observed by the recursive verifier in place of the raw
-    /// digest list. The encoding is normative:
+    /// This commitment is not current syscall authority, a public-claim field, or verifier
+    /// configuration. The retained compatibility encoding is normative:
     /// - element order is this descriptor's canonical procedure order (fixed at construction);
     /// - Eidos initializes its chaining word from the registered domain and exact logical length,
     ///   preventing ambiguity between a partial block and its zero-padded form.
@@ -111,7 +116,7 @@ impl KernelDescriptor {
     }
 }
 
-// this is required by AIR as public inputs will be serialized with the proof
+// Retained metadata codec; this inventory is not part of the current AIR public inputs.
 impl Serializable for KernelDescriptor {
     fn write_into<W: ByteWriter>(&self, target: &mut W) {
         // expect is OK here because the number of procedures is enforced by the constructor
