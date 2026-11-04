@@ -1188,11 +1188,11 @@ end
     assert_eq!(ops.len(), 6);
     assert!(matches!(
         instruction_at(ops[0]),
-        Instruction::AddImm(Immediate::Value(value)) if *value.inner() == crate::Felt::ZERO
+        Instruction::AddImm(Immediate::Value(value)) if *value.inner() == Felt::ZERO
     ));
     assert!(matches!(
         instruction_at(ops[1]),
-        Instruction::MulImm(Immediate::Value(value)) if *value.inner() == crate::Felt::ONE
+        Instruction::MulImm(Immediate::Value(value)) if *value.inner() == Felt::ONE
     ));
     assert!(matches!(
         instruction_at(ops[2]),
