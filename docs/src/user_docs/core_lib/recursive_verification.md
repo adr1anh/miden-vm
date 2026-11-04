@@ -7,18 +7,31 @@ sidebar_position: 9
 
 ## Verifier contracts
 
-`C` is the commitment to the execution-claim (program, kernel, input stack, output stack), and `D` is its
-deferred root.
+`C` is the execution-claim commitment (entry procedure key, environment root, input stack, and output
+stack), and `D` is its deferred root. `V` is the caller-selected `VerifierIdentity`, which commits to
+the verifier's proof relation, entry procedure key, and exact configuration. An implementation root
+or the procedure key returned by `procref` cannot substitute for `V`.
 
 | Procedure | Input stack | Output stack |
 | --- | --- | --- |
 | `sys::vm::verify_proof` | `[C, ...]` | `[security_descriptor(12), D, ...]` |
-| `sys::pvm::request_proof` | `[D, ...]` | `[D, ...]` |
+| `sys::pvm::request_proof` | `[V, D, ...]` | `[D, ...]` |
 | `sys::pvm::verify_proof` | `[D, ...]` | `[security_descriptor(12), ...]` |
 | `stark::security::compute_conjectured_security_level` | `[security_descriptor(12), ...]` | `[level, ...]` |
 | `stark::security::compute_proven_security_level` | `[security_descriptor(12), ...]` | `[level, ...]` |
 
-Both verifiers consume their proof data from the advice stack.
+Both verifiers consume their proof data from the advice stack. `sys::build_proof_request_key`
+consumes `[V, C, ...]` and returns `[key, ...]`, where the request-v2 key is
+`H(C[4] || V[4])` under Eidos domain `0x01000202`.
+
+`CoreLibrary::vm_recursive_verifier_profile()` and `pvm_recursive_verifier_profile()` derive the
+embedded profiles. Select the expected identities independently of proof data. Mount the complete
+`shared_fragment()` as an actual subtree at the initial namespace in the owner's execution
+environment; flattening its bindings does not preserve that mount. Call each profile's `authorize`
+with the independently selected environment root, its validated environment, effective advice, and
+an explicit traversal budget. Effective advice includes package static resources and the selected
+request's ACE resources, with conflicts rejected. Additional private and proof advice is allowed.
+Deriving an identity alone does not authorize a profile.
 
 `D = TRUE_DIGEST` (`[0, 0, 0, 0]`) means the execution left no deferred work,
 so no PVM proof is needed.
@@ -57,19 +70,39 @@ use miden_processor::StackInputs;
 use miden_vm_stark::recursive::RecursiveVerifierInputs;
 
 let core_lib = CoreLibrary::default();
-let inputs = RecursiveVerifierInputs::for_request(
-    core_lib.vm_recursive_verifier_root(),
-    &proof,
-    &claim,
-)?;
+let vm_profile = core_lib.vm_recursive_verifier_profile()?;
+let pvm_profile = core_lib.pvm_recursive_verifier_profile()?;
+let expected_vm = vm_profile.identity();
+let expected_pvm = pvm_profile.identity();
+let inputs = RecursiveVerifierInputs::for_request(expected_vm, &proof, &claim)?;
 let (advice_inputs, claim_commitment) = inputs.into_parts();
 let stack_inputs = StackInputs::new(claim_commitment.as_elements())?;
+
+// Save the MASM block below as settle_deferred.masm. Add the selected identities to the outer
+// source before assembly; neither identity belongs inside its own committed core fragment.
+let constants: String = [
+    ("VM_VERIFIER_IDENTITY", expected_vm),
+    ("PVM_VERIFIER_IDENTITY", expected_pvm),
+]
+.into_iter()
+.map(|(name, identity)| {
+    let values = identity.as_word().iter()
+        .map(|felt| felt.as_canonical_u64().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("const {name} = [{values}]\n")
+})
+.collect();
+let source = format!("{constants}\n{}", include_str!("settle_deferred.masm"));
 ```
 
-The adapter stores the MVM proof under `proof_request_key(verifier_root, claim_commitment)` and
-supplies the claim preimage, kernel procedure list, and advice data. MASM derives the same key
-with `procref.vm::verify_proof` and takes `claim_commitment` as public input. If `proof` includes
-a PVM proof, supply it through the separate PVM request described below.
+The adapter stores the MVM proof under `proof_request_key(expected_vm, claim_commitment)` and
+supplies the exact 40-Felt claim preimage and proof advice. Assemble `source` with the core library,
+mount its selected complete fragment, and authorize the initial VM environment and effective
+package/request advice before execution. MASM pushes `VM_VERIFIER_IDENTITY` from this outer source
+and takes `claim_commitment` as public input. If `proof` includes a PVM proof, supply it through the
+separate PVM request described below. The PVM resource subset can be authorized when the response
+arrives, against the same prepared environment and the advice available at that point.
 
 This example enforces 96 bits of conjectured security. To enforce proven security, call
 `compute_proven_security_level` at both estimation sites and choose the application's required
@@ -86,7 +119,7 @@ const MIN_SECURITY_BITS = 96
 begin
     # Keep C for verify_proof while fetching the proof from advice.
     dupw
-    procref.vm::verify_proof exec.sys::build_proof_request_key
+    push.VM_VERIFIER_IDENTITY exec.sys::build_proof_request_key
     adv.push_mapval dropw
     exec.vm::verify_proof
     # => [security_descriptor(12), D, ...]
@@ -96,8 +129,8 @@ begin
     u32lt.MIN_SECURITY_BITS assertz.err="MVM proof security is below the required minimum"
     # => [D, ...]
 
-    # Request a proof for the root returned by the MVM verifier.
-    exec.pvm::request_proof
+    # Request a proof for the root returned by the MVM verifier under the owner's PVM identity.
+    push.PVM_VERIFIER_IDENTITY exec.pvm::request_proof
     exec.pvm::verify_proof
     # => [security_descriptor(12), ...]
 
@@ -112,8 +145,11 @@ end
 handler supplies the PVM proof and may await its generation or retrieval. The core library
 provides no default handler.
 
-At the event, the operand stack is `[event_id, VERIFIER_ROOT, D, ...]`. The handler then checks that `VERIFIER_ROOT` matches the PVM verifier your host supports, then obtains
-a PVM proof for `D` compatible with `VERIFIER_ROOT`. Generating it requires the original execution's deferred witness data.
+At the event, the operand stack is `[event_id, V, D, D, ...]`: `V` occupies positions 1–4, the
+requested `D` positions 5–8, and the preserved `D` positions 9–12. Compare the event word to the
+owner-selected typed `expected_pvm` before proving or retrieving a response. Never construct an
+authorized identity by wrapping the event word. Then obtain a PVM proof for `D` compatible with
+that profile. Generating it requires the original execution's deferred witness data.
 
 Package `pvm_proof` with `PvmRecursiveVerifierInputs::for_request`, which uses
 `pvm_proof.aggregate_root()` for the request key. For a single execution and hence for a single root, `pvm_proof.roots` is
@@ -123,9 +159,22 @@ Package `pvm_proof` with `PvmRecursiveVerifierInputs::for_request`, which uses
 use miden_precompiles_stark::recursive::PvmRecursiveVerifierInputs;
 use miden_processor::advice::AdviceMutation;
 
-let package = PvmRecursiveVerifierInputs::for_request(verifier_root, &pvm_proof)?;
+// expected_pvm was selected from the supported profile before execution.
+assert_eq!(process.get_stack_word(1), expected_pvm.into_word());
+let package = PvmRecursiveVerifierInputs::for_request(expected_pvm, &pvm_proof)?;
 let (advice, _) = package.into_parts();
 let (_, advice_map, store) = advice.into_parts();
+
+// The response adds the PVM ACE resource. Check conflicts and the required resource subset
+// against the already prepared, owner-authorized environment before returning any mutations.
+let mut effective_advice = process.advice_provider().map().clone();
+effective_advice.merge(&advice_map)?;
+pvm_profile.authorize(
+    authorized_environment_root,
+    &environment,
+    &effective_advice,
+    max_environment_visits,
+)?;
 
 Ok(vec![
     AdviceMutation::extend_map(advice_map),
@@ -133,7 +182,7 @@ Ok(vec![
 ])
 ```
 
-`request_proof` loads advice under `proof_request_key(verifier_root, D)`. The PVM verifier checks
+`request_proof` loads advice under `proof_request_key(expected_pvm, D)`. The PVM verifier checks
 the proof against `D` returned by the MVM verifier.
 
 For proof generation and the event handler, see the
@@ -144,7 +193,9 @@ For proof generation and the event handler, see the
 `verify_batch` in the [MASM batcher](https://github.com/0xMiden/miden-vm/blob/next/crates/lib/core/tests/stark/pvm_settlement/batch.masm)
 accepts a caller-provided buffer and an even runtime count from 2 through `MAX_CLAIMS` (4).
 The [Rust example](https://github.com/0xMiden/miden-vm/blob/next/crates/lib/core/tests/stark/pvm_settlement/batch.rs)
-uses two ECDSA executions as transaction stand-ins but this is generalisable in a straightforward manner to N transactions.
+uses two ECDSA executions as transaction stand-ins. It adds the owner-selected VM and PVM identity
+constants to the outer batch module before assembly and mounts the same complete core fragment.
+The same approach extends to N executions.
 
 `CLAIMS_COMMITMENT` is the hash of the ordered claim commitments `[C1, ..., CN]`. The
 example exposes `[N, CLAIMS_COMMITMENT]` as public inputs and supplies the list and MVM proofs

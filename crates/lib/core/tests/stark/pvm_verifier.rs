@@ -12,7 +12,7 @@ use miden_core::{
         DEFERRED_AND_FRAME, DeferredState, Node, PrecompileWitness, PrecompileWitnessEntry,
         deferred_chunks_frame,
     },
-    program::proof_request_key,
+    program::{VerifierIdentity, proof_request_key},
     proof::{HashFunction, PrecompileProof, StarkProof},
     serde::Deserializable,
     utils::bytes_to_packed_u32_elements,
@@ -34,7 +34,8 @@ use miden_processor::{
 use miden_utils_testing::recursive_verifier::VerifierData;
 
 use super::{
-    EXAMPLE_FIB_SMALL, fib_stack_inputs, generate_recursive_verifier_data,
+    EXAMPLE_FIB_SMALL, configure_recursive_verifier, configure_recursive_verifier_rejection,
+    fib_stack_inputs, generate_recursive_verifier_data,
     verifier_stack::{CALLER_WORD, VERIFIER_RETURN, VerifierStack},
 };
 use crate::{
@@ -49,25 +50,30 @@ const SECURITY_PARAM_COUNT: usize = 4;
 /// <https://github.com/0xMiden/miden-vm/issues/3863>.
 #[test]
 fn pvm_keccak_only_recursive_verifier_cost_is_bounded() {
-    const SOURCE: &str = "
+    let verifier_identity = masm_push_word(pvm_verify_proof_identity().as_word());
+    let source = format!(
+        "
         use miden::core::sys
         use miden::core::sys::pvm
         begin
             dupw
-            procref.pvm::verify_proof
+            {verifier_identity}
             exec.sys::build_proof_request_key
             adv.push_mapval dropw
             exec.pvm::verify_proof
             exec.sys::truncate_stack
         end
-    ";
+    "
+    );
 
     let proof = prove_keccak_claim(&[0x61; 32]);
-    let inputs = PvmRecursiveVerifierInputs::for_request(pvm_verify_proof_root(), &proof)
+    let inputs = PvmRecursiveVerifierInputs::for_request(pvm_verify_proof_identity(), &proof)
         .expect("host adapter must parse the proof");
     let initial_stack: [u64; 4] = inputs.claim_commitment().into();
-    let mut test = build_test!(SOURCE, initial_stack);
+    let mut test = build_test!(source, initial_stack);
     test.advice_inputs = inputs.advice().clone();
+    let profile = CoreLibrary::default().pvm_recursive_verifier_profile().unwrap();
+    let test = configure_recursive_verifier(test, &profile);
     let trace = test.execute().expect("Keccak-only PVM proof must verify");
     let summary = trace.trace_len_summary();
     eprintln!("Keccak-only PVM recursive trace: {summary:?}");
@@ -111,7 +117,7 @@ fn pvm_verifies_sha512_and_mixed_hash_claims() {
             .expect("the state logs hash claims");
         let proof = prove_precompiles(vec![witness], HashFunction::Eidos).unwrap();
         let inputs =
-            PvmRecursiveVerifierInputs::for_request(pvm_verify_proof_root(), &proof).unwrap();
+            PvmRecursiveVerifierInputs::for_request(pvm_verify_proof_identity(), &proof).unwrap();
         assert_pvm_verifies(&inputs);
     }
 }
@@ -138,7 +144,8 @@ fn pvm_verifies_sha256_claims() {
         .unwrap()
         .expect("the state logs a hash claim");
     let proof = prove_precompiles(vec![witness], HashFunction::Eidos).unwrap();
-    let inputs = PvmRecursiveVerifierInputs::for_request(pvm_verify_proof_root(), &proof).unwrap();
+    let inputs =
+        PvmRecursiveVerifierInputs::for_request(pvm_verify_proof_identity(), &proof).unwrap();
     assert_pvm_verifies(&inputs);
 }
 
@@ -223,15 +230,16 @@ fn pvm_verifies_a_session_mixing_every_precompile() {
     )
     .expect("the mixed session must be provable");
     assert_eq!(proof.roots, [output.precompile_root()], "the proof must cover the execution");
-    let inputs = PvmRecursiveVerifierInputs::for_request(pvm_verify_proof_root(), &proof).unwrap();
+    let inputs =
+        PvmRecursiveVerifierInputs::for_request(pvm_verify_proof_identity(), &proof).unwrap();
     assert_pvm_verifies(&inputs);
 }
 
 #[test]
 fn pvm_verifies_distinct_orders_and_coexists_with_the_vm() {
-    let verifier_root = pvm_verify_proof_root();
+    let verifier_identity = pvm_verify_proof_identity();
     let short_proof = prove_keccak_claim(b"PVM MASM verifier end-to-end fixture");
-    let short = PvmRecursiveVerifierInputs::for_request(verifier_root, &short_proof)
+    let short = PvmRecursiveVerifierInputs::for_request(verifier_identity, &short_proof)
         .expect("host adapter must parse the short proof");
 
     let mut suffixed_bytes = short_proof.proof.bytes().to_vec();
@@ -242,7 +250,7 @@ fn pvm_verifies_distinct_orders_and_coexists_with_the_vm() {
     };
     assert!(
         matches!(
-            PvmRecursiveVerifierInputs::for_request(verifier_root, &suffixed_proof),
+            PvmRecursiveVerifierInputs::for_request(verifier_identity, &suffixed_proof),
             Err(PvmRecursiveVerifierInputsError::ProofDeserialization(_)),
         ),
         "the host adapter must reject trailing proof bytes"
@@ -250,7 +258,7 @@ fn pvm_verifies_distinct_orders_and_coexists_with_the_vm() {
 
     let long_message = vec![0xa5; 4096];
     let long_proof = prove_keccak_claim(&long_message);
-    let long = PvmRecursiveVerifierInputs::for_request(verifier_root, &long_proof)
+    let long = PvmRecursiveVerifierInputs::for_request(verifier_identity, &long_proof)
         .expect("host adapter must parse the long proof");
 
     assert_ne!(
@@ -268,17 +276,17 @@ fn pvm_verifies_distinct_orders_and_coexists_with_the_vm() {
 }
 
 fn assert_pvm_rejects_tampering(inputs: &PvmRecursiveVerifierInputs) {
-    let verifier_root = pvm_verify_proof_root();
+    let verifier_identity = pvm_verify_proof_identity();
     let mut wrong_claim_elements: [u64; 4] = inputs.claim_commitment().into();
     wrong_claim_elements[0] ^= 1;
     let wrong_claim_commitment =
         Word::try_from(wrong_claim_elements).expect("mutated claim is canonical");
     let (stack, mut map, store) = inputs.advice().clone().into_parts();
-    let request_key = proof_request_key(verifier_root, inputs.claim_commitment());
+    let request_key = proof_request_key(verifier_identity, inputs.claim_commitment());
     let proof_stream = map
         .remove(&request_key)
         .expect("PVM request package must contain its proof stream");
-    map.insert(proof_request_key(verifier_root, wrong_claim_commitment), proof_stream);
+    map.insert(proof_request_key(verifier_identity, wrong_claim_commitment), proof_stream);
     let wrong_claim_advice = AdviceInputs::new(stack, map, store);
     assert_pvm_rejects(&wrong_claim_advice, wrong_claim_commitment);
 
@@ -341,7 +349,7 @@ fn assert_pvm_rejects_tampering(inputs: &PvmRecursiveVerifierInputs) {
     circuit_stream[0] = Felt::from_u8((circuit_stream[0].as_canonical_u64() == 0) as u8);
     map.insert(circuit_key, circuit_stream);
     let corrupt_circuit = AdviceInputs::new(stack, map, store);
-    assert_pvm_rejects(&corrupt_circuit, inputs.claim_commitment());
+    assert_pvm_rejects_with_resource_check(&corrupt_circuit, inputs.claim_commitment(), true);
 }
 
 pub(super) fn prove_keccak_claim(input: &[u8]) -> PrecompileProof {
@@ -388,12 +396,14 @@ pub(super) fn prove_keccak_claim(input: &[u8]) -> PrecompileProof {
 fn run_pvm_verifier_with_advice(
     advice: &AdviceInputs,
     claim_commitment: Word,
+    resource_rejection: bool,
 ) -> Result<VerifierStack, ExecutionError> {
-    let request_key = proof_request_key(pvm_verify_proof_root(), claim_commitment);
+    let request_key = proof_request_key(pvm_verify_proof_identity(), claim_commitment);
     assert!(
         advice.map().contains_key(&request_key),
         "test advice must contain the proof stream for the supplied claim"
     );
+    let verifier_identity = masm_push_word(pvm_verify_proof_identity().as_word());
     let source = format!(
         "
         use miden::core::sys
@@ -403,7 +413,7 @@ fn run_pvm_verifier_with_advice(
 
         begin
             dupw
-            procref.pvm::verify_proof
+            {verifier_identity}
             exec.sys::build_proof_request_key
             adv.push_mapval dropw
             exec.pvm::verify_proof
@@ -420,6 +430,12 @@ fn run_pvm_verifier_with_advice(
     let mut test = build_test!(source, initial_stack)
         .with_trace_handler(VERIFIER_RETURN, verifier_stack.clone());
     test.advice_inputs = advice.clone();
+    let profile = CoreLibrary::default().pvm_recursive_verifier_profile().unwrap();
+    let test = if resource_rejection {
+        configure_recursive_verifier_rejection(test, &profile)
+    } else {
+        configure_recursive_verifier(test, &profile)
+    };
     test.execute_for_output()?;
     Ok(verifier_stack)
 }
@@ -430,8 +446,9 @@ fn assert_pvm_verifies(inputs: &PvmRecursiveVerifierInputs) {
 
     let air_shape = miden_air::precompiles::protocol::metadata().air_shape;
 
-    let verifier_stack = run_pvm_verifier_with_advice(inputs.advice(), inputs.claim_commitment())
-        .expect("PVM MASM verifier rejected a valid proof");
+    let verifier_stack =
+        run_pvm_verifier_with_advice(inputs.advice(), inputs.claim_commitment(), false)
+            .expect("PVM MASM verifier rejected a valid proof");
 
     let stream = proof_stream(inputs);
     let log_max_height = stream[SECURITY_PARAM_COUNT..SECURITY_PARAM_COUNT + NUM_CHIPLETS]
@@ -458,7 +475,16 @@ fn assert_pvm_verifies(inputs: &PvmRecursiveVerifierInputs) {
 
 #[track_caller]
 fn assert_pvm_rejects(advice: &AdviceInputs, claim_commitment: Word) {
-    let error = run_pvm_verifier_with_advice(advice, claim_commitment)
+    assert_pvm_rejects_with_resource_check(advice, claim_commitment, false);
+}
+
+#[track_caller]
+fn assert_pvm_rejects_with_resource_check(
+    advice: &AdviceInputs,
+    claim_commitment: Word,
+    resource_rejection: bool,
+) {
+    let error = run_pvm_verifier_with_advice(advice, claim_commitment, resource_rejection)
         .expect_err("PVM MASM verifier accepted an invalid proof");
     assert!(
         matches!(
@@ -523,18 +549,26 @@ fn run_interleaved_verifiers(
         "
     );
     let test = build_test!(source, &[], &advice_stack, store, advice_map);
+    let core_lib = CoreLibrary::default();
+    let vm_profile = core_lib.vm_recursive_verifier_profile().unwrap();
+    let pvm_profile = core_lib.pvm_recursive_verifier_profile().unwrap();
+    let test = configure_recursive_verifier(test, &vm_profile);
+    // Both profiles select the same full core fragment. Authorize PVM against that actual mount
+    // without mounting it a second time, which would duplicate all executable keys.
+    super::authorize_recursive_verifier_test(&test, &pvm_profile)
+        .expect("the interleaved caller must also authorize the PVM resources");
     test.execute().map(|_| ())
 }
 
-fn pvm_verify_proof_root() -> Word {
-    CoreLibrary::default().pvm_recursive_verifier_root()
+fn pvm_verify_proof_identity() -> VerifierIdentity {
+    CoreLibrary::default().pvm_recursive_verifier_profile().unwrap().identity()
 }
 
 fn proof_stream(inputs: &PvmRecursiveVerifierInputs) -> &[Felt] {
     inputs
         .advice()
         .map()
-        .get(&proof_request_key(pvm_verify_proof_root(), inputs.claim_commitment()))
+        .get(&proof_request_key(pvm_verify_proof_identity(), inputs.claim_commitment()))
         .expect("PVM request package must contain its proof stream")
 }
 
@@ -543,7 +577,7 @@ fn mutate_proof_stream(
     advice: &mut AdviceInputs,
     mutate: impl FnOnce(&mut Vec<Felt>),
 ) {
-    let key = proof_request_key(pvm_verify_proof_root(), inputs.claim_commitment());
+    let key = proof_request_key(pvm_verify_proof_identity(), inputs.claim_commitment());
     let (stack, mut map, store) = core::mem::take(advice).into_parts();
     let mut stream = map
         .remove(&key)

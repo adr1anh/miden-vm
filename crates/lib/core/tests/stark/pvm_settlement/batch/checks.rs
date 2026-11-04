@@ -21,7 +21,10 @@ use miden_processor::{
 };
 use miden_prover::Prover;
 
-use super::{PvmSettlementHost, assemble_batch, batch_inputs, prove_ecdsa_execution};
+use super::{
+    super::{authorize_pvm_response, authorize_settlement_vm},
+    PvmSettlementHost, assemble_batch, batch_inputs, prove_ecdsa_execution,
+};
 use crate::{
     naming::{NamedProgram, assemble},
     support::ecdsa::{generator_public_key_fixture, valid_fixture},
@@ -60,9 +63,10 @@ async fn batch_root_and_response_checks() {
     let expected_root = expected_roots.iter().copied().reduce(fold_deferred_root).unwrap();
     let mut host = PvmSettlementHost::new(
         &core_lib,
+        &program,
+        &advice_inputs,
         vec![first_witness.clone(), second_witness, repeated_witness],
     );
-    host.inner = host.inner.with_environment_source(program.environment.source());
 
     let witness = FastProcessor::new_with_options(
         stack_inputs,
@@ -116,6 +120,7 @@ async fn batch_root_and_response_checks() {
     let wrong_commitment = Word::new(elements[1..5].try_into().unwrap());
     let wrong_advice = advice_inputs
         .with_map([(wrong_commitment, Word::words_as_elements(&commitments).to_vec())]);
+    authorize_settlement_vm(&core_lib, &program, &wrong_advice);
     let mut host = DefaultHost::default()
         .with_environment_source(program.environment.source())
         .with_library(&core_lib)
@@ -132,6 +137,7 @@ async fn batch_root_and_response_checks() {
 
     // Three valid claims must fail the even-count requirement.
     let (stack_inputs, advice_inputs) = batch_inputs(&core_lib, &[(&plain, &plain_claim); 3]);
+    authorize_settlement_vm(&core_lib, &program, &advice_inputs);
     let error =
         FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
             .unwrap()
@@ -141,6 +147,7 @@ async fn batch_root_and_response_checks() {
 
     // With only TRUE roots, the batch needs no PVM proof. This host has no request handler.
     let (stack_inputs, advice_inputs) = batch_inputs(&core_lib, &[(&plain, &plain_claim); 2]);
+    authorize_settlement_vm(&core_lib, &program, &advice_inputs);
     let witness = FastProcessor::new_with_options(
         stack_inputs,
         advice_inputs,
@@ -177,8 +184,11 @@ fn assert_rejects_pvm_response(
     advice_inputs: AdviceInputs,
     proof: &PrecompileProof,
 ) {
-    let verifier_root = core_lib.pvm_recursive_verifier_root();
-    let response = PvmRecursiveVerifierInputs::for_request(verifier_root, proof).unwrap();
+    authorize_settlement_vm(core_lib, program, &advice_inputs);
+    let profile = core_lib.pvm_recursive_verifier_profile().unwrap();
+    let expected_verifier = profile.identity();
+    let environment = program.environment.clone();
+    let response = PvmRecursiveVerifierInputs::for_request(expected_verifier, proof).unwrap();
     let response_root = response.claim_commitment();
     let requests = Arc::new(AtomicUsize::new(0));
     let handler_requests = Arc::clone(&requests);
@@ -190,14 +200,15 @@ fn assert_rejects_pvm_response(
         PVM_PROOF_REQUEST_EVENT_NAME,
         Arc::new(move |process: &ProcessorState<'_>| {
             handler_requests.fetch_add(1, Ordering::Relaxed);
-            assert_eq!(process.get_stack_word(1), verifier_root);
+            assert_eq!(process.get_stack_word(1), expected_verifier.into_word());
             let requested_root = process.get_stack_word(5);
             assert_ne!(requested_root, response_root);
             // Put a valid proof of a different root under the requested key. The MASM verifier
             // must reject it even though the host returned a proof in the expected place.
             let (_, mut map, store) = response.advice().clone().into_parts();
-            let stream = map.remove(&proof_request_key(verifier_root, response_root)).unwrap();
-            map.insert(proof_request_key(verifier_root, requested_root), stream);
+            let stream = map.remove(&proof_request_key(expected_verifier, response_root)).unwrap();
+            map.insert(proof_request_key(expected_verifier, requested_root), stream);
+            authorize_pvm_response(&profile, &environment, process.advice_provider().map(), &map)?;
             Ok(vec![
                 AdviceMutation::extend_map(map),
                 AdviceMutation::extend_merkle_store(store.inner_nodes()),

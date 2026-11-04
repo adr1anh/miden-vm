@@ -5,13 +5,17 @@ use std::sync::Arc;
 use miden_assembly::{Assembler, Linkage};
 use miden_core::{
     Felt, Word,
+    advice::AdviceMap,
     deferred::{PrecompileWitness, fold_deferred_root},
     events::{EventId, EventName},
-    program::{ExecutionClaim, proof_request_key},
+    program::{ExecutionClaim, VerifierIdentity, proof_request_key},
     proof::{ExecutionProof, HashFunction, PrecompileProof, PrecompileStatus},
     serde::Deserializable,
 };
-use miden_core_lib::{CoreLibrary, PVM_PROOF_REQUEST_EVENT_NAME, dsa::eddsa_25519_sha512};
+use miden_core_lib::{
+    CoreLibrary, CoreVerifierProfile, CoreVerifierProfileError, PVM_PROOF_REQUEST_EVENT_NAME,
+    dsa::eddsa_25519_sha512,
+};
 use miden_crypto::dsa::eddsa_25519_sha512::SigningKey as Ed25519SigningKey;
 use miden_debug_types::{Location, SourceFile, SourceSpan};
 use miden_precompiles_stark::recursive::{
@@ -25,6 +29,7 @@ use miden_processor::{
     event::EventError,
 };
 use miden_prover::{Prover, ProverError};
+use miden_utils_testing::librarytree::FixtureEnvironment;
 use miden_verifier::Verifier;
 use miden_vm_stark::recursive::RecursiveVerifierInputs;
 
@@ -168,7 +173,7 @@ async fn run_settlement_in_masm(
     precompile_witness: PrecompileWitness,
 ) -> Result<SettlementResult, miden_processor::ExecutionError> {
     let vm = RecursiveVerifierInputs::for_request(
-        core_lib.vm_recursive_verifier_root(),
+        core_lib.vm_recursive_verifier_profile().unwrap().identity(),
         deferred_proof,
         claim,
     )
@@ -179,8 +184,8 @@ async fn run_settlement_in_masm(
     let stack_inputs = StackInputs::new(claim_commitment.as_elements())
         .expect("claim commitment must fit the stack");
     let program = assemble_settlement_program(core_lib);
-    let mut host = PvmSettlementHost::new(core_lib, vec![precompile_witness]);
-    host.inner = host.inner.with_environment_source(program.environment.source());
+    let mut host =
+        PvmSettlementHost::new(core_lib, &program, &advice_inputs, vec![precompile_witness]);
 
     let output =
         FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
@@ -203,29 +208,95 @@ fn assemble_settlement_program(core_lib: &CoreLibrary) -> NamedProgram {
         .expect("guide must contain the settlement example");
     let (source, _) = example.split_once("\n```").expect("settlement code block must be closed");
 
-    assemble(
+    let source = format!("{}\n{source}", verifier_identity_constants(core_lib));
+    let program = assemble(
         Assembler::default()
             .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
             .expect("core library must link"),
         "async_pvm_settlement",
         source,
         &[core_lib.naming()],
+    );
+    mount_settlement_verifier(core_lib, program)
+}
+
+/// Outer program constants come from this fixture owner's selected embedded profiles. They are
+/// never definitions in the core fragment whose configuration the identities commit to.
+fn verifier_identity_constants(core_lib: &CoreLibrary) -> String {
+    let vm = core_lib.vm_recursive_verifier_profile().unwrap();
+    let pvm = core_lib.pvm_recursive_verifier_profile().unwrap();
+    [
+        ("VM_VERIFIER_IDENTITY", vm.identity()),
+        ("PVM_VERIFIER_IDENTITY", pvm.identity()),
+    ]
+    .into_iter()
+    .map(|(name, identity)| {
+        let values = identity
+            .as_word()
+            .iter()
+            .map(|felt| felt.as_canonical_u64().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("const {name} = [{values}]\n")
+    })
+    .collect()
+}
+
+fn mount_settlement_verifier(core_lib: &CoreLibrary, mut program: NamedProgram) -> NamedProgram {
+    let vm = core_lib.vm_recursive_verifier_profile().unwrap();
+    let pvm = core_lib.pvm_recursive_verifier_profile().unwrap();
+    assert_eq!(vm.fragment().root(), pvm.fragment().root());
+    program.environment = FixtureEnvironment::new_with_fragments(
+        program.naming.entry_key().expect("settlement program must have an entry"),
+        [program.naming.as_ref(), core_lib.naming()],
+        &[vm.shared_fragment()],
     )
+    .expect("the complete core fragment must mount in the settlement environment");
+    program
+}
+
+fn authorize_settlement_vm(core_lib: &CoreLibrary, program: &NamedProgram, advice: &AdviceInputs) {
+    let mut effective_advice = advice.map().clone();
+    effective_advice
+        .merge(program.program.mast_forest().advice_map())
+        .expect("outer program advice must not conflict with request advice");
+    effective_advice
+        .merge(core_lib.mast_forest().advice_map())
+        .expect("core package advice must not conflict with request advice");
+    let environment = program.environment.validated_environment();
+    core_lib
+        .vm_recursive_verifier_profile()
+        .unwrap()
+        .authorize(environment.root(), environment, &effective_advice, environment.visits())
+        .expect("the initial VM verifier environment and resources must authorize");
 }
 
 /// Generates a PVM proof from its witness when `pvm::request_proof` emits an event.
 struct PvmSettlementHost {
     inner: DefaultHost,
     event_name: EventName,
-    expected_verifier_root: Word,
+    expected_verifier: VerifierIdentity,
+    verifier_profile: CoreVerifierProfile,
+    environment: FixtureEnvironment,
     available_root: Word,
     precompile_witnesses: Vec<PrecompileWitness>,
     precompile_proof: Option<PrecompileProof>,
 }
 
 impl PvmSettlementHost {
-    fn new(core_lib: &CoreLibrary, precompile_witnesses: Vec<PrecompileWitness>) -> Self {
+    fn new(
+        core_lib: &CoreLibrary,
+        program: &NamedProgram,
+        advice: &AdviceInputs,
+        precompile_witnesses: Vec<PrecompileWitness>,
+    ) -> Self {
+        // The initial VM package authenticates the complete shared core mount. The PVM ACE
+        // resource arrives with the event response and is checked before it is supplied.
+        authorize_settlement_vm(core_lib, program, advice);
+        let verifier_profile = core_lib.pvm_recursive_verifier_profile().unwrap();
+        let expected_verifier = verifier_profile.identity();
         let inner = DefaultHost::default()
+            .with_environment_source(program.environment.source())
             .with_library(core_lib)
             .expect("core library must load into the settlement host");
         let registry = Arc::new(miden_precompiles::registry());
@@ -244,7 +315,9 @@ impl PvmSettlementHost {
         Self {
             inner,
             event_name: PVM_PROOF_REQUEST_EVENT_NAME,
-            expected_verifier_root: core_lib.pvm_recursive_verifier_root(),
+            expected_verifier,
+            verifier_profile,
+            environment: program.environment.clone(),
             available_root,
             precompile_witnesses,
             precompile_proof: None,
@@ -296,14 +369,14 @@ impl Host for PvmSettlementHost {
                 return SyncHost::on_event(&mut self.inner, process);
             }
 
-            // The event stack is [event_id, verifier_root, deferred_root]. Each root is four
-            // field elements, so the two roots start at positions 1 and 5.
-            let verifier_root = process.get_stack_word(1);
+            // The event stack is [event_id, V, D, D, ...]. V and the requested D start at
+            // positions 1 and 5; the preserved D starts at 9.
+            let verifier_word = process.get_stack_word(1);
             let requested_root = process.get_stack_word(5);
-            if verifier_root != self.expected_verifier_root {
-                return Err(SettlementEventError::VerifierRootMismatch {
-                    requested: verifier_root,
-                    expected: self.expected_verifier_root,
+            if verifier_word != self.expected_verifier.into_word() {
+                return Err(SettlementEventError::VerifierIdentityMismatch {
+                    requested: verifier_word,
+                    expected: self.expected_verifier,
                 }
                 .into());
             }
@@ -315,7 +388,7 @@ impl Host for PvmSettlementHost {
                 .into());
             }
 
-            let proof_key = proof_request_key(verifier_root, requested_root);
+            let proof_key = proof_request_key(self.expected_verifier, requested_root);
             if process.advice_provider().map().get(&proof_key).is_some() {
                 return Err(SettlementEventError::PackageAlreadyLoaded.into());
             }
@@ -328,10 +401,17 @@ impl Host for PvmSettlementHost {
                 .prove_precompiles(self.precompile_witnesses.clone())
                 .map_err(SettlementEventError::Proving)?;
             // Package the proof under the request key. MASM fetches it when request_proof returns.
-            let package = PvmRecursiveVerifierInputs::for_request(verifier_root, &precompile_proof)
-                .map_err(SettlementEventError::Advice)?;
+            let package =
+                PvmRecursiveVerifierInputs::for_request(self.expected_verifier, &precompile_proof)
+                    .map_err(SettlementEventError::Advice)?;
             let (advice, _) = package.into_parts();
             let (_, advice_map, store) = advice.into_parts();
+            authorize_pvm_response(
+                &self.verifier_profile,
+                &self.environment,
+                process.advice_provider().map(),
+                &advice_map,
+            )?;
             let merkle_nodes = store.inner_nodes();
             self.precompile_proof = Some(precompile_proof);
 
@@ -343,10 +423,35 @@ impl Host for PvmSettlementHost {
     }
 }
 
+fn authorize_pvm_response(
+    profile: &CoreVerifierProfile,
+    fixture: &FixtureEnvironment,
+    current_advice: &AdviceMap,
+    supplied_advice: &AdviceMap,
+) -> Result<(), SettlementEventError> {
+    let mut effective_advice = current_advice.clone();
+    effective_advice
+        .merge(supplied_advice)
+        .map_err(|_| SettlementEventError::AdviceConflict)?;
+    let environment = fixture.validated_environment();
+    profile
+        .authorize(environment.root(), environment, &effective_advice, environment.visits())
+        .map_err(SettlementEventError::Authorization)
+}
+
 #[derive(Debug, thiserror::Error)]
 enum SettlementEventError {
-    #[error("requested verifier root {requested:?} does not match expected root {expected:?}")]
-    VerifierRootMismatch { requested: Word, expected: Word },
+    #[error(
+        "requested verifier identity {requested:?} does not match expected identity {expected:?}"
+    )]
+    VerifierIdentityMismatch {
+        requested: Word,
+        expected: VerifierIdentity,
+    },
+    #[error("the supplied PVM advice conflicts with advice already loaded")]
+    AdviceConflict,
+    #[error("the PVM verifier environment or resources do not authorize: {0}")]
+    Authorization(#[source] CoreVerifierProfileError),
     #[error("requested deferred root {requested:?} does not match available root {available:?}")]
     RootMismatch { requested: Word, available: Word },
     #[error("a PVM proof package was already loaded before the settlement event")]

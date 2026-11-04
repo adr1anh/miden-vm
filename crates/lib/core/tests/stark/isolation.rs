@@ -35,12 +35,12 @@ fn mvm_verifier_preserves_caller_state() {
 fn pvm_verifier_preserves_caller_state() {
     let core_lib = CoreLibrary::default();
     let proof = super::pvm_verifier::prove_keccak_claim(b"PVM caller-state preservation");
-    let inputs =
-        PvmRecursiveVerifierInputs::for_request(core_lib.pvm_recursive_verifier_root(), &proof)
-            .expect("the PVM fixture must adapt to recursive-verifier advice");
+    let verifier_identity = core_lib.pvm_recursive_verifier_profile().unwrap().identity();
+    let inputs = PvmRecursiveVerifierInputs::for_request(verifier_identity, &proof)
+        .expect("the PVM fixture must adapt to recursive-verifier advice");
     let (advice, claim) = inputs.into_parts();
     let (mut stack, mut map, store) = advice.into_parts();
-    let key = miden_core::program::proof_request_key(core_lib.pvm_recursive_verifier_root(), claim);
+    let key = miden_core::program::proof_request_key(verifier_identity, claim);
     let stream = map.remove(&key).expect("the proof package must contain its stream");
     stack.append_elements(stream.iter().copied());
     check_caller_state("pvm", claim, AdviceInputs::new(stack, map, store), 3);
@@ -87,6 +87,13 @@ fn check_caller_state(relation: &str, claim: Word, advice: AdviceInputs, output_
     );
     let mut test = build_debug_test!(source.as_str());
     test.advice_inputs = advice;
+    let core_lib = CoreLibrary::default();
+    let profile = match relation {
+        "vm" => core_lib.vm_recursive_verifier_profile().unwrap(),
+        "pvm" => core_lib.pvm_recursive_verifier_profile().unwrap(),
+        _ => panic!("unknown recursive-verifier relation: {relation}"),
+    };
+    let test = super::configure_recursive_verifier(test, &profile);
     test.prove_and_verify(Vec::new(), false);
 }
 
