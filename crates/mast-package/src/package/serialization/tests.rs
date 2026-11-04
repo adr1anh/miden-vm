@@ -201,6 +201,8 @@ fn package_bytes_with_sections_count(count: usize) -> Vec<u8> {
     package.mast.write_into(&mut bytes);
     bytes.write_u32(package.naming_transport().as_bytes().len().try_into().unwrap());
     bytes.write_bytes(package.naming_transport().as_bytes());
+    bytes.write_u32(4);
+    bytes.write_u32(0);
     package.manifest.write_into(&mut bytes);
     bytes.write_usize(count);
 
@@ -387,9 +389,9 @@ fn package_readers_reject_non_executable_entrypoint() {
 fn package_format_version_rejects_previous_version() {
     let bytes = build_package().to_bytes();
     let version_offset = MAGIC_PACKAGE.len();
-    assert_eq!(&bytes[version_offset..version_offset + 3], &[9, 0, 0]);
+    assert_eq!(&bytes[version_offset..version_offset + 3], &[10, 0, 0]);
 
-    for previous in [[8, 0, 0], [7, 0, 0], [4, 0, 0]] {
+    for previous in [[9, 0, 0], [8, 0, 0], [7, 0, 0], [4, 0, 0]] {
         let mut old_bytes = bytes.clone();
         old_bytes[version_offset..version_offset + 3].copy_from_slice(&previous);
         // The header alone must reject old versions, before reading the package body.
@@ -402,7 +404,7 @@ fn package_format_version_rejects_previous_version() {
                 result,
                 Err(DeserializationError::InvalidValue(message))
                     if message == alloc::format!(
-                        "unsupported version. Got '{previous:?}', but only '[9, 0, 0]' is supported"
+                        "unsupported version. Got '{previous:?}', but only '[10, 0, 0]' is supported"
                     )
             );
         }
@@ -938,6 +940,7 @@ fn package_rejects_non_root_export() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1271,6 +1274,7 @@ fn regression_package_deserialisation_rejects_spoofed_mast_node_digests() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1320,6 +1324,7 @@ fn trusted_package_deserialisation_accepts_spoofed_mast_hashes() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1373,6 +1378,7 @@ fn regression_kernel_package_deserialisation_rejects_spoofed_mast_node_digests()
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1423,6 +1429,7 @@ fn package_deserialize_from_file_rejects_spoofed_kernel_mast_node_digests() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1481,6 +1488,7 @@ fn trusted_kernel_package_deserialisation_accepts_spoofed_mast_hashes() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 

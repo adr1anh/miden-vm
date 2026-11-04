@@ -70,6 +70,8 @@ pub enum ManifestValidationError {
     #[error(transparent)]
     InvalidNaming(#[from] PackageSymbolsError),
     #[error(transparent)]
+    InvalidOccurrences(#[from] super::PackageProcedureOccurrencesError),
+    #[error(transparent)]
     NamingTransport(#[from] NamingCodecError<Infallible>),
     #[error("canonical naming does not match the package's required naming transport")]
     MismatchedNamingTransport,

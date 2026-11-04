@@ -6,6 +6,7 @@ mod event_handlers;
 mod id;
 mod manifest;
 mod naming;
+mod occurrences;
 mod section;
 #[cfg(test)]
 mod seed_gen;
@@ -50,6 +51,7 @@ pub use self::{
         PackageSubmodule, ProcedureExport, TypeExport,
     },
     naming::{NamingCodecError, PackageSymbols, PackageSymbolsError, UnverifiedPackageSymbols},
+    occurrences::{PackageProcedureOccurrence, PackageProcedureOccurrencesError},
     section::{InvalidSectionIdError, Section, SectionId},
     target_type::{InvalidTargetTypeError, TargetType},
 };
@@ -107,6 +109,8 @@ pub struct Package {
     pub manifest: PackageManifest,
     /// Required naming transport. Possession of a package does not admit canonical homes or keys.
     naming: UnverifiedPackageSymbols,
+    /// Exact keyed code/source supply hints, independent of public aliases and authority.
+    procedure_occurrences: Vec<PackageProcedureOccurrence>,
     /// The set of custom sections included with the package, e.g. debug information, account
     /// metadata, etc.
     pub sections: Vec<Section>,
@@ -165,7 +169,7 @@ impl<'a> PackageCommitment<'a> {
 
     fn dependency_commitment(&self) -> Word {
         let mut bytes = Vec::new();
-        bytes.write_bytes(b"miden.package.dependency.v2");
+        bytes.write_bytes(b"miden.package.dependency.v3");
         self.code_commitment().write_into(&mut bytes);
         self.package.name.write_into(&mut bytes);
         self.package.version.to_string().write_into(&mut bytes);
@@ -174,6 +178,7 @@ impl<'a> PackageCommitment<'a> {
         let naming = self.package.naming.as_bytes();
         bytes.write_usize(naming.len());
         bytes.write_bytes(naming);
+        occurrences::write_code_supply(&self.package.procedure_occurrences, &mut bytes);
         self.write_dependency_commitment_sections(&mut bytes);
         hasher::hash(&bytes)
     }
@@ -203,7 +208,7 @@ impl<'a> PackageCommitment<'a> {
 
     fn artifacts_commitment(&self) -> Word {
         let mut bytes = Vec::new();
-        bytes.write_bytes(b"miden.package.artifacts.v2");
+        bytes.write_bytes(b"miden.package.artifacts.v3");
         self.package.write_header_into(&mut bytes);
         self.package.write_trailer_into(&mut bytes);
         hasher::hash(&bytes)
@@ -211,7 +216,7 @@ impl<'a> PackageCommitment<'a> {
 
     fn commitment(&self) -> Word {
         Self::merge_commitments(
-            b"miden.package.v2",
+            b"miden.package.v3",
             self.code_commitment(),
             self.artifacts_commitment(),
         )
@@ -293,6 +298,7 @@ impl Package {
             mast,
             manifest,
             naming,
+            procedure_occurrences: Vec::new(),
             sections: Vec::new(),
             debug_sections_trusted: true,
         };
@@ -361,10 +367,12 @@ impl Package {
                 return Err(PackageStripError::NestedEmbeddedKernel);
             }
             kernel_package.sections.retain(|section| !section.id.is_debug());
+            kernel_package.strip_occurrence_sources();
             section.data = Cow::Owned(kernel_package.to_bytes());
         }
 
         self.sections.retain(|section| !section.id.is_debug());
+        self.strip_occurrence_sources();
         Ok(())
     }
 
@@ -398,16 +406,19 @@ impl Package {
     /// compilers may retain the canonical metadata used when constructing the package.
     pub fn check_naming(&self, naming: &PackageSymbols) -> Result<(), ManifestValidationError> {
         naming.validate_package(self.kind, &self.mast, &self.manifest)?;
-        let encoded = UnverifiedPackageSymbols::from_owned(naming, FORMAT_NAMING_LIMITS)?;
+        let limits = self.symbols_limits_after_occurrences(FORMAT_NAMING_LIMITS)?;
+        let encoded = UnverifiedPackageSymbols::from_owned(naming, limits)?;
         if encoded.as_bytes() != self.naming.as_bytes() {
             return Err(ManifestValidationError::MismatchedNamingTransport);
         }
+        self.validate_procedure_occurrences(naming, FORMAT_NAMING_LIMITS)?;
         Ok(())
     }
 
     /// Admits naming using current explicit policy, context and resource limits.
     ///
     /// This checks the decoded naming against this package's current target, manifest and code.
+    /// Required occurrence rows share this operation's byte and record limits with naming.
     /// Success retains no validation state and grants no environment or publication authority.
     pub fn validate_symbols<P: HomeProfile + ?Sized>(
         &self,
@@ -415,8 +426,10 @@ impl Package {
         context: &P::Context,
         limits: CodecLimits,
     ) -> Result<PackageSymbols, NamingCodecError<P::Error>> {
-        let naming = self.naming.decode(profile, context, limits)?;
+        let symbol_limits = self.symbols_limits_after_occurrences(limits)?;
+        let naming = self.naming.decode(profile, context, symbol_limits)?;
         naming.validate_package(self.kind, &self.mast, &self.manifest)?;
+        self.validate_procedure_occurrences(&naming, limits)?;
         Ok(naming)
     }
 
@@ -441,7 +454,7 @@ impl Package {
 
     /// Returns the commitment used to identify this package during dependency resolution.
     ///
-    /// This v2 commitment binds the exact required naming transport, package code, identity,
+    /// This v3 commitment binds exact symbol transport, code, keyed occurrences, package identity,
     /// manifest, and sections which affect package use
     /// (account component metadata and event handlers). Optional debug data, descriptions, and
     /// opaque custom sections are excluded.
@@ -449,12 +462,12 @@ impl Package {
         PackageCommitment::new(self).dependency_commitment()
     }
 
-    /// Returns the v2 commitment to all serialized data outside the MAST forest, including naming.
+    /// Returns the v3 commitment to all serialized data outside the MAST forest.
     pub fn artifacts_commitment(&self) -> Word {
         PackageCommitment::new(self).artifacts_commitment()
     }
 
-    /// Returns the v2 commitment to the complete package, including exact required naming bytes.
+    /// Returns the v3 commitment to the complete package, including exact symbol/occurrence bytes.
     pub fn commitment(&self) -> Word {
         PackageCommitment::new(self).commitment()
     }
@@ -544,6 +557,17 @@ impl Package {
 
         if let Some(debug_info) = debug_info.as_ref() {
             self.validate_debug_info(debug_info)?;
+        } else if let Some(occurrence) = self
+            .procedure_occurrences
+            .iter()
+            .find(|occurrence| occurrence.source_node().is_some())
+        {
+            return Err(PackageDebugInfoError::InvalidReference {
+                message: format!(
+                    "procedure occurrence {:?} references a source node without a debug source graph",
+                    occurrence.key(),
+                ),
+            });
         }
 
         Ok(debug_info)
@@ -823,6 +847,7 @@ impl Package {
         self.validate_debug_sources(debug_info)?;
         self.validate_debug_types(debug_info)?;
         self.validate_debug_functions(debug_info)?;
+        self.validate_occurrence_sources(debug_info)?;
 
         for root in debug_info.roots().iter().copied() {
             if debug_info.source_node(root).is_none() {
@@ -1598,6 +1623,7 @@ impl Package {
                     )
                     .map_err(Report::msg)?;
                     package.description = self.description.clone();
+                    package.procedure_occurrences = self.procedure_occurrences.clone();
                     package.sections = self.sections.clone();
                     package.debug_sections_trusted = self.debug_sections_trusted;
                     Ok(package)

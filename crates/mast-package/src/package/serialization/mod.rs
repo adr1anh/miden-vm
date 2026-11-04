@@ -15,6 +15,7 @@
 //!
 //! #### Manifest
 //! - required naming (`u32` byte length, followed by opaque NamingV1 transport)
+//! - exact keyed occurrences (`u32` byte length, then `u32` count and sorted scalar rows)
 //! - `manifest` (see [`crate::PackageManifest`])
 //!
 //! #### Custom Sections
@@ -78,7 +79,7 @@ const MAGIC_PACKAGE: &[u8; 5] = b"MASP\0";
 /// The format version.
 ///
 /// If future modifications are made to this format, the version should be incremented by 1.
-const VERSION: [u8; 3] = [9, 0, 0];
+const VERSION: [u8; 3] = [10, 0, 0];
 
 /// Byte-read budget multiplier for package deserialization from a byte slice.
 ///
@@ -115,6 +116,11 @@ impl Package {
         let naming = self.naming_transport().as_bytes();
         target.write_u32(u32::try_from(naming.len()).expect("preflighted NamingV1 length"));
         target.write_bytes(naming);
+
+        let occurrence_len = super::occurrences::payload_len(&self.procedure_occurrences)
+            .expect("preflighted procedure occurrence length");
+        target.write_u32(u32::try_from(occurrence_len).expect("preflighted occurrence length"));
+        super::occurrences::write_payload(&self.procedure_occurrences, target);
 
         // Write manifest
         self.manifest.write_into(target);
@@ -261,6 +267,15 @@ impl Package {
             UnverifiedPackageSymbols::from_bytes_with_limits(naming_bytes, transport_limits)
                 .map_err(|error| DeserializationError::InvalidValue(error.to_string()))?;
 
+        // Required exact occurrences remain code/source supply hints, never authority. The
+        // complete framed payload is scanned before allocation under input-derived finite bounds.
+        let occurrence_len = source.read_u32()?;
+        let occurrence_bytes = source.read_slice(occurrence_len as usize)?;
+        let occurrence_limits = CodecLimits::new(occurrence_len, occurrence_len, 0, 0);
+        let procedure_occurrences =
+            super::occurrences::read_payload(occurrence_bytes, &mast, occurrence_limits)
+                .map_err(|error| DeserializationError::InvalidValue(error.to_string()))?;
+
         // Read manifest
         let manifest = if validate_manifest {
             PackageManifest::read_from_safe(source, &mast)?
@@ -278,6 +293,7 @@ impl Package {
             kind,
             mast,
             naming,
+            procedure_occurrences,
             manifest,
             sections,
             debug_sections_trusted: true,

@@ -27,6 +27,8 @@ pub enum NamingCodecError<E> {
     Callables(#[from] CallablesCodecError<E>),
     #[error(transparent)]
     InvalidNaming(#[from] PackageSymbolsError),
+    #[error(transparent)]
+    InvalidOccurrences(#[from] crate::PackageProcedureOccurrencesError),
     #[error("invalid naming entry tag {tag}")]
     InvalidEntryTag { tag: u8 },
     #[error("invalid canonical Word for naming entry key")]

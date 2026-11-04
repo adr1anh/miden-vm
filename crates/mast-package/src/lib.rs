@@ -36,8 +36,9 @@ pub use self::{
         EventHandlerSectionError, InvalidSectionIdError, InvalidTargetTypeError, MAX_HANDLERS,
         MAX_MODULE_BYTES, MAX_NAME_BYTES, MIN_ABI_VERSION, ManifestValidationError,
         NamingCodecError, Package, PackageCallables, PackageCallablesError, PackageDebugInfoError,
-        PackageExport, PackageId, PackageManifest, PackageModule, PackageStripError,
-        PackageSubmodule, PackageSymbols, PackageSymbolsError, ProcedureExport, Section, SectionId,
-        TargetType, TypeExport, UnverifiedPackageSymbols, validate_manifest_entries,
+        PackageExport, PackageId, PackageManifest, PackageModule, PackageProcedureOccurrence,
+        PackageProcedureOccurrencesError, PackageStripError, PackageSubmodule, PackageSymbols,
+        PackageSymbolsError, ProcedureExport, Section, SectionId, TargetType, TypeExport,
+        UnverifiedPackageSymbols, validate_manifest_entries,
     },
 };
