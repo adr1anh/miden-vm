@@ -260,7 +260,7 @@ Build the library with its supplied opaque ID, explicit home, declarations and r
 
 Read exactly40 advice Felts with bounded staging/no overread; hash five complete eight-Felt blocks under the new claim frame/domain. Stage Core36/Chiplets4/three external terms; remove kernel-list materialization while retaining security/deferred results and all24 proof permutations. Regenerate evaluators/ACE/layouts/constants/docs/setup/relation roots; bind verifier entry and helper/resource/mount configuration under the fixed-N0 relation, rather than D alone; remove the independent N_kernel configuration field. Replace old `procref == verifier root` APIs/docs with typed identities/request v2.
 
-**Acceptance:** native/MASM/recursive claims match; adjacent scratch cannot affect hash; old/missing/excess advice fails; malicious child/rebound entry/helper/root, non-root syscall suppliers and omitted deferred obligation reject. Captured degrees/shape/security counts match generated assets and rebuilt identity. **Checks:** `make regenerate-constraints`; `make check-constraints`; generated capture/drift/ACE tests; `cargo test -p miden-core-lib --test core-lib stark`; `cargo test -p miden-core-lib --lib proof_compatibility_roots_match_the_embedded_core_library`; `make check-pvm-proof-fixture`. Regenerate generated MASM docs with `MIDEN_BUILD_LIB_DOCS=1 cargo build -p miden-core-lib` when changed, following repository CI. Regenerate PVM constants/root only if its emitted code/relation changed.
+**Acceptance:** native/MASM/recursive claims match; adjacent scratch cannot affect hash; old/missing/excess advice fails; malicious child/rebound entry/helper/root, non-root syscall suppliers and omitted deferred obligation reject. Captured degrees/shape/security counts match generated assets and rebuilt identity. **Checks:** `make regenerate-constraints`; `make check-constraints`; generated capture/drift/ACE tests; `cargo test -p miden-core-lib --test core-lib stark`; `cargo test -p miden-core-lib --lib proof_compatibility_identities_match_the_embedded_core_library`; `make check-pvm-proof-fixture`. Regenerate generated MASM docs with `MIDEN_BUILD_LIB_DOCS=1 cargo build -p miden-core-lib` when changed, following repository CI. Regenerate PVM constants/root only if its emitted code/relation changed.
 
 ### PR 15 Public API, CLI and consumer closure
 
@@ -497,9 +497,9 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 09 Assembly/packages | implemented-awaiting-validation | Final review `0ec317994`; CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | implemented-awaiting-validation | Native `82e671c01`; assembly `e151d65c5`; instances `116a2d736`; supply `049d9ea68`; prior SHAs below; base `0ec317994` | Independent reviews; project90, assembly598/six existing skips, supply379/one existing skip and native3 pass; mast-package/both registries/project/assembly all-target strict Clippy, native-target Clippy and four shared no_std checks pass | Inherited public-statement/proof/recursive/security and final qualification remain; selected publication-profile behavior is not claimed |
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
-| 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Fifteen request K/D failures at PR14; three cost gates closed at PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
-| 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Full PR14 typed identity/request/compatibility closure and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
-| 14 Recursive verifier | in progress | Base `52e914a9a`; opening source uncommitted | Bounded source/API review only; no PR14 build/test pass claimed | Typed request/profile/fragment/consumer integration, fresh compatibility identities, recursive/adversarial/generation checks and inherited gates |
+| 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
+| 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
+| 14 Recursive verifier | in progress | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; base `52e914a9a` | Independent reviews; 273 disjoint unit/recursive/consumer checks; final ten-crate all-target strict Clippy; fresh VM/PVM generation/check and generated docs | Actual invalid non-root-syscall recursive qualification, inherited counterfactuals, sequential PVM fixture and remaining capture/public/no_std/final gates |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
@@ -3101,3 +3101,29 @@ cache after source/API alignment; no PR14 compilation or test result is claimed.
 snapshot capture, qualified compatibility identities, remaining consumers and PR14 acceptance
 remain pending. Old compatibility constants/whitelists are untouched. All inherited security,
 counterfactual, debug, guest, fuzz, performance and final gates remain; no PR/push or goal closure.
+
+
+### PR14 typed requests and configured consumers, 4 November 2026
+
+`cb779ece7` migrates native request packaging to typed identity/request2 and canonical identity
+transport. `2468fe2be` mounts complete reachable fragments, preserves physical opening slots/cache
+identity and rejects openings exceeding unchanged aggregate budgets. `ff5596f90` derives exact
+embedded relation/entry/mount/resource profiles and aligns MASM request/event ABIs/generated docs.
+`42c876e8d` replaces D defaults with freshly derived typed identities; no legacy whitelist/fallback.
+`c6f56d808`/`9ec10c04c` migrate core/settlement/CLI/benchmark consumers and add bounded claim,
+rebound-child and aux4-omission controls. Pure test lint fixes are `aa70a93c0`. All signatures verify.
+
+Independent bounded reviews and guarded checks pass: 111 units, 29 consumer controls and 133
+remaining recursive cases, disjoint273 total. Their union includes the full core-lib stark scope,
+all five formerly failing CLI recursive cases, actual asynchronous/batch settlement, preserved
+caller state, its proof-order/security/cost oracles, typed compatibility parity and strict complete
+PVM advice snapshot. Final ten-crate all-target strict custom Clippy passes. Freshly rebuilt VM/PVM
+generators write/check without code drift; generated MASM docs are refreshed. Logs:
+`.scratch/librarytree/pr14-{unit-checks,consumer-checks,remaining-recursive-checks,clippy-final,generator-build,vm-generation,pvm-generation}.log`.
+
+PR14 stays in progress: actual invalid non-root-syscall child qualification is distinct from the
+passing rebound-R_E control and existing processor/local AIR rejection. Inherited valid-principal
+counterfactuals, fresh capture/public/no_std/final gates remain. The deterministic PVM fixture
+requires a sequential, non-concurrent build; its fresh check remains pending for that dedicated
+build. This source slice reused the concurrent test cache. No gate is waived or M1/general-goal completion
+claimed. No PR/push; context changes remain separate.
