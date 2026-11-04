@@ -16,8 +16,9 @@ lookup evidence and non-deterministic inputs, and receives messages from the VM.
 Keep code, checked symbols, advice, and exact source metadata together in the `CodePackage`
 produced by assembly or project compilation. Load it with `DefaultHost::load_library(code)` or
 `DefaultHost::with_library(code)`, and configure the opening-evidence source with
-`DefaultHost::with_environment_source`. Execution uses `execute_sync(target, &mut host)` or its
-async analogue, `execute(target, &mut host).await`.
+`DefaultHost::with_environment_source`. Its `EnvironmentSource` trait returns untrusted openings;
+each still authenticates against the caller's expected root and key. Execution uses
+`execute_sync(target, &mut host)` or its async analogue, `execute(target, &mut host).await`.
 
 `ExecutionOptions` sets limits such as the maximum allowed number of cycles. Construct
 `ResolutionLimits::new(opening, ledger, session)` with caller-selected `OpeningLimits`,

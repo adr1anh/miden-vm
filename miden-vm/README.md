@@ -20,6 +20,11 @@ primary way to write programs for Miden VM is to use
 
 Miden assembler compiles assembly source code into a [program MAST](https://docs.miden.xyz/miden-vm/design/programs). Assembly and project products provide a `CodePackage` that keeps code, checked symbols, advice, and exact source metadata together. Load this package through the host before execution. Assembly requires an explicit namespace configuration; compiling or loading a package does not authorize its entry point.
 
+Dependencies are linked with the same owner: `assembler.link_package(code, Linkage::Dynamic)`
+or `with_package(code, linkage)`. Built-in libraries expose it through
+`core_lib.code_package().clone()`. Kernel attachment also receives a `CodePackage`; callers do
+not separately pair a package with its symbols.
+
 #### Execution identity
 
 The caller independently selects and authorizes an `ExecutionTarget` containing the expected entry procedure key `K_entry` and environment root `R_E`. The authenticated environment binds callable keys to implementation roots `D`. Host-loaded packages and environment lookup evidence supply witnesses for this target; they never supply execution authority. After binding authentication, the host may supply code for the requested `D`, subject to implementation-root and procedure-root checks.
@@ -290,7 +295,10 @@ target through `ExecutionClaim`.
 If you want to execute, prove, and verify programs on Miden VM, but don't want to write Rust code, you can use Miden CLI. It also contains a number of useful tools to help analyze and debug programs.
 
 The CLI limits package (`.masp`) files to 512 MiB, input (`.inputs`) JSON files to
-64 MiB, and output (`.outputs`) JSON files to 64 KiB. Files at the limit are accepted;
+64 MiB, and output (`.outputs`) JSON files to 64 KiB. Verification also limits the whole
+proof transport to 512 MiB by default; `--max-proof-size` selects another byte cap
+(for example, `64Mi`). The proof cap is checked before reading and decoding, and an explicit
+zero stays zero. Files at the limit are accepted;
 larger files are rejected before decoding. These readers accept regular files and
 symlinks to regular files. Pipes, devices, and directories are rejected.
 
