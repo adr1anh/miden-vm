@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use miden_event_handler_abi::ABI_VERSION;
-use miden_mast_package::{EventHandlerManifestEntry, EventHandlerSection, Package, PackageSymbols};
+use miden_mast_package::{
+    CodePackage, EventHandlerManifestEntry, EventHandlerSection, Package, PackageSymbols,
+};
 use miden_processor::{
     DefaultHost, FastProcessor, StackInputs,
     serde::{Deserializable, Serializable},
@@ -65,7 +67,9 @@ fn program_verifies_advice_from_a_packaged_wasm_handler() {
         package.event_handlers().expect("source section decodes"),
     );
 
-    let library = host_library_from_package(&decoded, WasmHandlerLimits::default())
+    let code = CodePackage::new(decoded.clone(), Arc::new(naming.clone()))
+        .expect("roundtrip retains exact symbols");
+    let library = host_library_from_package(&code, WasmHandlerLimits::default())
         .expect("handlers load from the package");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
@@ -114,7 +118,9 @@ fn packaged_handler_reads_vm_memory() {
     let package = (*package).with_event_handlers(&section).expect("section attaches");
     let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
-    let library = host_library_from_package(&Arc::new(package), WasmHandlerLimits::default())
+    let code = CodePackage::new(Arc::new(package), Arc::new(naming))
+        .expect("package retains exact symbols");
+    let library = host_library_from_package(&code, WasmHandlerLimits::default())
         .expect("handlers load from the package");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
@@ -210,7 +216,9 @@ fn rust_guest_fixture_end_to_end() {
         package.event_handlers().expect("source section decodes"),
     );
 
-    let library = host_library_from_package(&decoded, WasmHandlerLimits::default())
+    let code = CodePackage::new(decoded.clone(), Arc::new(naming.clone()))
+        .expect("roundtrip retains exact symbols");
+    let library = host_library_from_package(&code, WasmHandlerLimits::default())
         .expect("handlers load from the package");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
@@ -262,7 +270,9 @@ fn rust_guest_merges_words() {
     let package = (*package).with_event_handlers(&section).expect("section attaches");
     let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
-    let library = host_library_from_package(&Arc::new(package), WasmHandlerLimits::default())
+    let code = CodePackage::new(Arc::new(package), Arc::new(naming))
+        .expect("package retains exact symbols");
+    let library = host_library_from_package(&code, WasmHandlerLimits::default())
         .expect("handlers load from the package");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
@@ -289,7 +299,9 @@ fn rust_guest_panic_reaches_the_host() {
     let package = (*package).with_event_handlers(&section).expect("section attaches");
     let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
-    let library = host_library_from_package(&Arc::new(package), WasmHandlerLimits::default())
+    let code = CodePackage::new(Arc::new(package), Arc::new(naming))
+        .expect("package retains exact symbols");
+    let library = host_library_from_package(&code, WasmHandlerLimits::default())
         .expect("handlers load from the package");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");

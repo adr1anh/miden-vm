@@ -5,8 +5,8 @@ use alloc::{format, string::ToString, sync::Arc, vec::Vec};
 
 use miden_event_handler_abi::{ABI_VERSION, MANIFEST_RECORD_VERSION, MANIFEST_SECTION_NAME};
 use miden_mast_package::{
-    EventHandlerManifestEntry, EventHandlerSection, EventHandlerSectionError, MAX_HANDLERS,
-    MAX_MODULE_BYTES, MAX_NAME_BYTES, Package,
+    CodePackage, EventHandlerManifestEntry, EventHandlerSection, EventHandlerSectionError,
+    MAX_HANDLERS, MAX_MODULE_BYTES, MAX_NAME_BYTES, Package,
 };
 use miden_processor::{
     HostLibrary,
@@ -38,8 +38,8 @@ pub fn handlers_from_package(
     Ok(module.handlers())
 }
 
-/// Builds a [`HostLibrary`] from a package: its MAST forest, its debug info, and the Wasm event
-/// handlers of its `event_handlers` section, if any.
+/// Builds a [`HostLibrary`] retaining the complete code package, its exact checked symbols and
+/// the Wasm event handlers of its `event_handlers` section, if any.
 ///
 /// Load the result into a host with
 /// [`DefaultHost::load_library`](miden_processor::DefaultHost::load_library), which registers
@@ -48,11 +48,11 @@ pub fn handlers_from_package(
 /// # Errors
 /// Same failure conditions as [`handlers_from_package`].
 pub fn host_library_from_package(
-    package: &Arc<Package>,
+    code: &CodePackage,
     limits: WasmHandlerLimits,
 ) -> Result<HostLibrary, WasmHandlerLoadError> {
-    let handlers = handlers_from_package(package, limits)?;
-    Ok(HostLibrary::from(package.clone()).set_handlers(handlers))
+    let handlers = handlers_from_package(code.package(), limits)?;
+    Ok(HostLibrary::new(code.clone()).set_handlers(handlers))
 }
 
 // MANIFEST DERIVATION

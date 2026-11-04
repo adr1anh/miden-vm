@@ -1,37 +1,87 @@
 use alloc::{collections::BTreeMap, sync::Arc};
 
-use miden_core::{Word, mast::MastForest};
-use miden_mast_package::{PackageDebugInfoError, debug_info::PackageDebugInfo};
+use miden_core::{Word, mast::MastForest, program::ProcedureKey};
+use miden_mast_package::{
+    CodePackage, PackageDebugInfoError, PackageProcedureOccurrence, PackageSymbols,
+    debug_info::PackageDebugInfo,
+};
 
-/// Executable MAST loaded by the host, together with the package debug info that belongs to the
-/// same forest.
+/// Executable code loaded by the host, retaining its complete owning package for rich loads.
+///
+/// Code availability supplies no execution authority. Rich package loads retain exact checked
+/// symbols and occurrence metadata; raw forests remain available to lower-level custom hosts.
 #[derive(Debug, Clone)]
 pub struct LoadedMastForest {
-    mast_forest: Arc<MastForest>,
+    code: LoadedCode,
     debug_info: Result<Option<Arc<PackageDebugInfo>>, Arc<PackageDebugInfoError>>,
+}
+
+#[derive(Debug, Clone)]
+enum LoadedCode {
+    Raw(Arc<MastForest>),
+    Package(CodePackage),
 }
 
 impl LoadedMastForest {
     /// Creates a loaded MAST forest without package-owned debug info.
     pub fn new(mast_forest: Arc<MastForest>) -> Self {
-        Self { mast_forest, debug_info: Ok(None) }
+        Self {
+            code: LoadedCode::Raw(mast_forest),
+            debug_info: Ok(None),
+        }
     }
 
-    /// Creates a loaded MAST forest with package debug info already decoded from the owning
-    /// package.
+    /// Creates loaded code retaining its complete package and exact checked symbols.
+    ///
+    /// Debug info is decoded from the retained package under its existing validation limits.
+    /// Decode or trust failures are retained and returned by [`Self::package_debug_info`]; they
+    /// are never replaced with unrelated source metadata or silently treated as absent.
+    pub fn from_code_package(code: CodePackage) -> Self {
+        let debug_info = code.package().debug_info();
+        Self {
+            code: LoadedCode::Package(code),
+            debug_info: debug_info.map(|debug_info| debug_info.map(Arc::new)).map_err(Arc::new),
+        }
+    }
+
+    /// Creates a raw loaded MAST forest with separately supplied package debug info.
+    ///
+    /// This lower-level custom-host path does not retain a checked code package. Ordinary rich
+    /// package loading uses [`Self::from_code_package`] so code and source ownership stay together.
     pub fn with_package_debug_info(
         mast_forest: Arc<MastForest>,
         debug_info: Result<Option<PackageDebugInfo>, PackageDebugInfoError>,
     ) -> Self {
         Self {
-            mast_forest,
+            code: LoadedCode::Raw(mast_forest),
             debug_info: debug_info.map(|debug_info| debug_info.map(Arc::new)).map_err(Arc::new),
         }
     }
 
     /// Returns the executable MAST forest.
     pub fn mast_forest(&self) -> &Arc<MastForest> {
-        &self.mast_forest
+        match &self.code {
+            LoadedCode::Raw(mast_forest) => mast_forest,
+            LoadedCode::Package(code) => code.package().mast_forest(),
+        }
+    }
+
+    /// Returns the complete owning package for a rich load.
+    pub fn code_package(&self) -> Option<&CodePackage> {
+        match &self.code {
+            LoadedCode::Raw(_) => None,
+            LoadedCode::Package(code) => Some(code),
+        }
+    }
+
+    /// Returns the exact checked symbols retained by a rich load.
+    pub fn symbols(&self) -> Option<&Arc<PackageSymbols>> {
+        self.code_package().map(CodePackage::symbols)
+    }
+
+    /// Returns a supplied exact occurrence for this key without reconstructing one from D.
+    pub fn procedure_occurrence(&self, key: ProcedureKey) -> Option<&PackageProcedureOccurrence> {
+        self.code_package()?.package().procedure_occurrence(key)
     }
 
     /// Returns the package debug info associated with this forest, if any.
@@ -70,7 +120,7 @@ impl MemMastForestStore {
     /// Inserts all the procedures of the provided loaded MAST forest in the store.
     pub fn insert_loaded(&mut self, loaded_mast_forest: LoadedMastForest) {
         // only register the procedures which are local to this forest
-        for proc_digest in loaded_mast_forest.mast_forest.local_procedure_digests() {
+        for proc_digest in loaded_mast_forest.mast_forest().local_procedure_digests() {
             self.mast_forests.insert(proc_digest, loaded_mast_forest.clone());
         }
     }
