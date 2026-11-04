@@ -3578,3 +3578,34 @@ stopped/parallel replay. Compare height/order consequences and capture all measu
 recording the final layout choice. Rebind native/generated/MASM/recursive assets and identities;
 PVM artifacts change only if their emitted relation/code changes. All PR15a/16 and inherited
 acceptance remains. No PR or push.
+
+
+### PR15a source/canonical capture checkpoint, 4 November 2026
+
+At opening HEAD `e907c0998`, the uncommitted Controller-local counter slice is frozen after
+independent AIR/native/test reviews. The AIR review corrected a Library-exit mutant that otherwise
+rejected on A/B mismatch; the native test review added direct unpadded-row measurement. No guard
+or production policy was weakened. Three initial lint issues, a missing test trait import and
+unit-test module ordering were corrected; broad strict qualification remains pending below.
+
+Source-AIR scope passes396/396, including six new production-MAIN counter/boundary cases and
+existing exact lookup metadata/degree/rooted-Library tests (`pr15a-canonical-capture.log`). The
+additional generated snapshot test intentionally exposed the new canonical ACE/relation digests.
+Only that captured snapshot/config and matching MASM relation bootstrap constants were rebound;
+normal guarded regeneration then succeeds (`pr15a-regenerate-constraints.log`). Shape remains
+790 inputs/7676 evaluation gates/7920 stream cells; captured Core/Chiplets MAIN and extension
+maxima remain9, four AIRs and packed24/4 remain. These are capture facts, not native runtime or
+final performance evidence.
+
+The binding/setup capture passes12 checks, with only the expected old embedded identity parity
+failing (`pr15a-identity-setup-capture.log`). This independently validates both native relation pins,
+embedded ACE captures, all three VM setup commitments and PVM relation/setup. Both CURRENT_VM/PVM
+profile identities are then rebound from the actual derived full-core profiles; PVM relation and
+proof artifacts are unchanged. The Makefile handoff now names the existing identity parity test,
+preventing an obsolete filter from passing with zero tests. Independent binding review finds no
+bypass/fallback. All implementation/pin/artifact edits remain uncommitted at this checkpoint.
+
+The combined native/CLI/replay/proof/capture matrix is building its generated-drift binaries
+(`pr15a-runtime-proof-capture.log`); no passing runtime/height/parity result is claimed yet. Reuse
+that coherent build for drift checks, then finish strict/no_std/regeneration/PVM/focused adversarial
+and final PR15a gates before branch closeout. General goal/M1 and PR16/inherited gates remain.
