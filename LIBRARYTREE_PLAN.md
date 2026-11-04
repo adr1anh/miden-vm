@@ -45,7 +45,7 @@ semantics and public-kernel/private-helper placement, remove configurable kernel
 the generic code-package/publication separation through required consumers and formats. Validate
 affected runtime/replay/assembler/AIR/public-input/native/recursive/generated contracts. This may
 span several existing PRs: source-only correction is a substep, not proof that the milestone is done.
-The current slice is the fixed-root correction before Package9 and project routing. Record partial
+Record partial
 progress and downstream gates honestly; close M1 only with actual acceptance evidence. Then select
 the next milestone from the remaining plan without closing, shrinking or recreating the overall goal.
 Final completion still requires every required integration, regeneration and qualification gate;
@@ -274,7 +274,7 @@ Replace root-only verification flags and implicit Program/kernel reconstruction 
 
 #### Deferred API cleanup card
 
-**Kanban state:** in-progress under PR15, after PR14 qualification and before PR15a/16. This card is the durable record of the user's API review; preserve active PR14 work and schedule the cleanup in PR15.
+**Kanban state:** implemented-awaiting-validation under PR15, before PR15a/16. This card records the approved API scope; functional acceptance is recorded in the ledger, and inherited final gates remain required.
 
 **User-approved direction:**
 
@@ -527,7 +527,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
-| 15 API/CLI closure | in-progress | Checked linking/CLI/source trait `ba651f64d`; API docs `225aafe07`; target-only `10345ccf0`; prior SHAs below; base `f4350360d` | Independent reviews; fresh runtime3,146; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumer packages; six compiled doctests; standalone fuzz2 typechecks; earlier public-input/async28, prove/seed2 and deterministic seed replay2 | Complete PR15 proof-roundtrip/negative acceptance audit; PR15a/16 and inherited final gates remain |
+| 15 API/CLI closure | implemented-awaiting-validation | Final source `a99264137`; checked links/CLI `ba651f64d`; review `8ba05fd00`; prior SHAs below; base `f4350360d` | Independent reviews; fresh combined runtime/CLI/witness/proof/flow3,179; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumers; six compiled doctests; standalone fuzz2 typechecks; earlier scoped evidence below | PR15 functional acceptance passes; PR15a/16 and inherited guest/security/fuzz/performance/final gates remain |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
@@ -3533,3 +3533,31 @@ no material finding. Earlier target-only proving/seed evidence above remains sco
 whole proof matrix. Complete the PR15 run/prove/verify/transcript/stopped/deferred/negative acceptance
 audit before branch closeout. PR15a/16, inherited security/fuzz/performance gates and general goal/M1
 remain active. No GitHub PR or push.
+
+
+### PR15 final functional acceptance and branch closeout, 4 November 2026
+
+Signed `a99264137` fixes exact error-source restoration before return preflight when step/resume
+recreates ExecutionState. It copies the retained continuation's source, preserving exact None and
+owner identity; no digest lookup or authentication/publication/lifecycle policy changes. The
+existing local_fn_call negative exposed the regression through strict traced/step diagnostics.
+New tests exercise all three CLI transcript selections, checking decoded proof hash and complete
+verification plus K/R_E/actual-D diagnostics. Actual traces stopped before root END reject native
+session finalization and production witness export, while identical completed code exports.
+
+Fresh combined acceptance passes3,179/3,179 with1,202 outside-filter skips
+(`pr15-final-runtime-proof-next.log`): the earlier runtime scope plus prove_verify/flow_control
+filters, covering supported API/CLI hashes, native/recursive complete/deferred proof routes,
+portable replay, invocation modes, changed claims/legacy artifacts, budgets and code-hint authority.
+The initial proof/flow run exposed the diagnostic defect; the first combined run passed3,177 and
+failed only the two newly written fixtures (unbalanced final stack and expected later error gate).
+Both fixtures were corrected without weakening production checks; the fresh whole scope passes.
+Final strict14-crate all-target custom Clippy passes (`pr15-final-clippy.log`), pinned formatting
+and whitespace checks pass. Independent bounded source/test reviews report no material finding.
+Earlier no_std/consumer/doctest/fuzz typecheck evidence remains scoped as recorded above.
+
+Final review description `8ba05fd00` is committed separately. PR15 is implemented-awaiting-validation
+under inherited final gates and may advance linearly to PR15a. PR15a owns the actual Controller
+counter/layout choice, captures and regeneration; PR16 owns final post-cleanup qualification.
+General goal/M1 remain active, with no waiver of guest/security/fuzz/performance/release checks.
+No GitHub PR, push or publication.
