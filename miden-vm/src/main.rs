@@ -183,8 +183,28 @@ mod test {
     #[test]
     /// Check that the VM recognizes when it is being called under an alias.
     fn test_multicall() {
+        // Parse-only fixtures retain explicit caller authority and resource/naming inputs.
+        let run_args = [
+            "run",
+            "my_file.masm",
+            "--expected-entry-key",
+            "0x0100000000000000000000000000000000000000000000000000000000000000",
+            "--expected-environment-root",
+            "0x0200000000000000000000000000000000000000000000000000000000000000",
+            "--environment-openings",
+            "openings.json",
+            "--environment-policy",
+            "policy.json",
+            "--max-environment-policy-bytes",
+            "8192",
+            "--naming-inputs",
+            "naming.json",
+            "--max-naming-input-bytes",
+            "4096",
+        ];
+
         // Direct call
-        let miden_vm_command = MidenVmCli::try_parse_from(["miden-vm", "run", "my_file.masm"])
+        let miden_vm_command = MidenVmCli::try_parse_from(["miden-vm"].into_iter().chain(run_args))
             .expect("failed to parse commands");
 
         assert!(matches!(
@@ -198,7 +218,7 @@ mod test {
         // External call
 
         // This recreates how the vm would be called from midenup
-        let external = MidenVmCli::try_parse_from(["miden vm", "run", "my_file.masm"])
+        let external = MidenVmCli::try_parse_from(["miden vm"].into_iter().chain(run_args))
             .expect("failed to parse commands");
 
         assert!(matches!(external.behavior, Behavior::External(_)));

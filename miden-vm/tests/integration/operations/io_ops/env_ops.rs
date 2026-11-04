@@ -244,5 +244,6 @@ fn clk() {
         end";
 
     let test = build_test!(source, &[]);
-    test.expect_stack(&[7, 4, 5]);
+    // The retained keyed EXEC contributes invocation structure before foo's CLK instruction.
+    test.expect_stack(&[13, 4, 5]);
 }

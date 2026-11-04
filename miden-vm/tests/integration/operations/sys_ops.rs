@@ -24,7 +24,7 @@ fn assert_with_code() {
     let test = build_op_test!(asm_op, &[1]);
     test.expect_stack(&[]);
 
-    // triggered assertion captures the VM cycle and derived error code
+    // A triggered assertion preserves the derived error code and declared message.
     let test = build_op_test!(asm_op, &[0]);
 
     let code = mast::error_code_from_msg("123");
@@ -32,7 +32,7 @@ fn assert_with_code() {
     expect_exec_error_matches!(
         test,
         ExecutionError::OperationError{ err: OperationError::FailedAssertion{ err_code, err_msg }, .. }
-        if err_code == code && err_msg.is_none()
+        if err_code == code && err_msg.as_deref() == Some("123")
     );
 }
 
