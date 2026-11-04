@@ -281,6 +281,7 @@ Replace root-only verification flags and implicit Program/kernel reconstruction 
 | Current API | Cleanup direction |
 | --- | --- |
 | `ExecutionDescriptor` | `ExecutionTarget`: expected entry key and environment root |
+| `Program`, legacy `ProgramInfo` | Retire; host owns loaded package code, and execution takes the expected target |
 | `ExecutionEnvironment` | Keep the target separate; move its opening/ledger/session limits into `ExecutionOptions`, grouped as resolution limits |
 | `NamespacePlan` | `NamespacePath` |
 | `CallableBinding` | `ProcedureName`: canonical namespace/path deriving K; reserve binding terminology for K-to-D relations |
@@ -291,7 +292,9 @@ Replace root-only verification flags and implicit Program/kernel reconstruction 
 
 Keep `ProcedureKey`, `EnvironmentRoot` and `ExecutionClaim`. Keep package code and checked symbols together so ordinary linking does not require separately pairing package and naming. Rust names do not change canonical Latest/Pinned labels, encodings or hashes. Source version, runtime revision and selected implementation remain distinct under D5.
 
-**Proposed; settle before the affected cleanup:** `EnvironmentSource` is the latest suggestion for the untrusted lookup-evidence trait; neither that spelling nor `LookupProofProvider` is selected. Loading package code through the host and calling `execute_sync(target, &mut host)` would remove the separate Program argument. Retiring `Program` and legacy `ProgramInfo`, without another forest-plus-entry wrapper, is recommended but not yet a user-selected migration. Preserve exact source occurrences, private entry metadata, embedded advice and internal step/resume state. If Program remains, the approved borrowed-conversion naming direction is `to_program`; if retired, remove the conversion.
+**User-approved execution shape, 4 November 2026:** load package code through the host and call `execute_sync(target, &mut host)`. Retire `Program` and legacy `ProgramInfo`, remove their conversions, and add no replacement forest-plus-entry wrapper. Keep package code, checked symbols, advice and source metadata together. Preserve exact source occurrences, private entry metadata and internal step/resume state. The caller supplies the expected entry key/environment root; host-loaded code and lookup evidence do not supply authority.
+
+**Proposed; settle before the affected cleanup:** `EnvironmentSource` is the latest suggestion for the untrusted lookup-evidence trait; neither that spelling nor `LookupProofProvider` is selected.
 
 **Acceptance:** migrate affected assembler/package/project, host/processor, prove/verify, CLI, examples, docs and supported no_std callers consistently. The caller still supplies expected K_entry/R_E; untrusted code/evidence never supplies authority or fallback. Preserve D3/D5/D6/D8, fixed-N0 syscalls, canonical codecs, every explicit resource budget, replay/source identity and all existing PR15/security/final gates. Retain negative binding/evidence tests and run/prove/verify coverage; do not mark a rename as implementation or acceptance evidence. PR15a remains AIR/Chiplets cleanup, not a duplicate API card.
 
