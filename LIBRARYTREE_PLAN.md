@@ -525,7 +525,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
-| 14 Recursive verifier | in progress | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; retained+disjoint prover scope49; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Entry-kind tag-claim recheck, remaining guest/fuzz/performance/final gates and inherited qualification; DYNCALL controls remain compound/rejection-only |
+| 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
@@ -3297,3 +3297,30 @@ K_entry alone does not prove an independent blocker. A bounded read-only audit i
 remaining constraints and private lookup-comparison route; no fresh tag-only necessity result is
 claimed. Keep DYNCALL compound/rejection-only. PR14/M1/general goal and guest/fuzz/performance/final
 qualification remain open. No PR/push or branch change; context stays separately committed.
+
+
+### PR14 tag qualification and branch closeout, 4 November 2026
+
+Signed source `739b716b1` qualifies the block-stack frame tag with an explicitly nonzero, unchanged
+entry/final principal and fixed expected claim. The private comparison changes only the frame-tag
+contribution in extension emission265; structural guards, independent polynomial projection and
+per-assertion degree checks retain the production relation elsewhere. Its balanced forged witness
+constructs a proof accepted by the comparison; that same artifact fails current native STARK and
+MASM verification with the exact ACE circuit-nonzero error. Honest execution passes both, and an
+unrelated clock control still rejects under the comparison. Ten affected checks and two final
+strengthened reruns pass, as does final five-crate all-target strict custom Clippy. Logs:
+`pr14-tag-comparison-{checks,final,clippy}.log` under scratch. No production API, relation or pin
+changed in this private regression slice.
+
+Independent closeout review found no remaining PR14-specific gate. All50 prover lib cases now
+have passing scoped evidence; no fresh whole50 run is claimed. Preserve the earlier cached26
+result as25 passes plus one setup failure repaired by the passing MRUPDATE scope, and capture
+as20 passes plus the corrected single test, not a fresh whole21 run. Some inherited negatives
+allow recognized lookup-construction rejection; DYNCALL remains compound. Earlier production
+consumer273, generated assets/docs, actual five-root no_std graph and unchanged sequential PVM
+fixture evidence retain their stated scope.
+
+PR14 is implemented-awaiting-validation. Final branch review belongs in PR_DESCRIPTION.md before
+the linear transition to PR15. PR15 follows the approved host-owned code/API card; the general
+goal and M1 remain active. Guest/fuzz/performance/final and inherited qualification remain open,
+with PR15a still preceding PR16. No GitHub PR, push or publication is authorized.
