@@ -272,6 +272,29 @@ Replace root-only verification flags and implicit Program/kernel reconstruction 
 
 **Acceptance:** run/prove/verify round trips across supported transcript hashes, stopped witnesses and deferred/complete proof paths; changed expected descriptor fields/legacy flags/artifacts fail explicitly; allocation/budget checks precede execution; optional code hints cannot override bindings. **Checks:** `make test-vm test=cli::`; focused `prove_verify::`/`flow_control::` filters in the existing `miden-cli` integration test binary; compile supported public and no_std surfaces. Run the final commands in PR 16 before declaring release readiness.
 
+#### Deferred API cleanup card
+
+**Kanban state:** planned under PR15, after PR14 qualification and before PR15a/16. This card is the durable record of the user's API review; preserve active PR14 work and schedule the cleanup in PR15.
+
+**User-approved direction:**
+
+| Current API | Cleanup direction |
+| --- | --- |
+| `ExecutionDescriptor` | `ExecutionTarget`: expected entry key and environment root |
+| `ExecutionEnvironment` | Keep the target separate; move its opening/ledger/session limits into `ExecutionOptions`, grouped as resolution limits |
+| `NamespacePlan` | `NamespacePath` |
+| `CallableBinding` | `ProcedureName`: canonical namespace/path deriving K; reserve binding terminology for K-to-D relations |
+| `PackageNaming` | `PackageSymbols` |
+| `LibraryImport` | `LibraryRef`, with explicit `latest(base, id)` / `revision(base, id, revision)` helpers |
+| `Pinned(revision)` | `Revision(revision)`; exact code-hash pins remain a separate concept |
+| `admit_naming` | `validate_symbols`, retaining explicit profile/context/codec limits |
+
+Keep `ProcedureKey`, `EnvironmentRoot` and `ExecutionClaim`. Keep package code and checked symbols together so ordinary linking does not require separately pairing package and naming. Rust names do not change canonical Latest/Pinned labels, encodings or hashes. Source version, runtime revision and selected implementation remain distinct under D5.
+
+**Proposed; settle before the affected cleanup:** `EnvironmentSource` is the latest suggestion for the untrusted lookup-evidence trait; neither that spelling nor `LookupProofProvider` is selected. Loading package code through the host and calling `execute_sync(target, &mut host)` would remove the separate Program argument. Retiring `Program` and legacy `ProgramInfo`, without another forest-plus-entry wrapper, is recommended but not yet a user-selected migration. Preserve exact source occurrences, private entry metadata, embedded advice and internal step/resume state. If Program remains, the approved borrowed-conversion naming direction is `to_program`; if retired, remove the conversion.
+
+**Acceptance:** migrate affected assembler/package/project, host/processor, prove/verify, CLI, examples, docs and supported no_std callers consistently. The caller still supplies expected K_entry/R_E; untrusted code/evidence never supplies authority or fallback. Preserve D3/D5/D6/D8, fixed-N0 syscalls, canonical codecs, every explicit resource budget, replay/source identity and all existing PR15/security/final gates. Retain negative binding/evidence tests and run/prove/verify coverage; do not mark a rename as implementation or acceptance evidence. PR15a remains AIR/Chiplets cleanup, not a duplicate API card.
+
 ## Stage 5 AIR cleanup, qualification and release evidence
 
 ### PR 15a Revisit AIR and Chiplets trace cleanup
