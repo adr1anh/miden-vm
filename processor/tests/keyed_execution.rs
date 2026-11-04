@@ -22,8 +22,8 @@ use miden_core::{
     },
     operations::Operation,
     program::{
-        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionDescriptor, ImplementationRoot,
-        Namespace, ProcedureKey,
+        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionTarget, ImplementationRoot, Namespace,
+        ProcedureKey,
     },
 };
 use miden_debug_types::{
@@ -176,7 +176,7 @@ impl EnvironmentFixture {
 
     fn configuration(&self, entry: ProcedureKey) -> ExecutionEnvironment {
         ExecutionEnvironment::new(
-            ExecutionDescriptor::new(entry, self.root),
+            ExecutionTarget::new(entry, self.root),
             opening_limits(),
             ledger_limits(),
             session_limits(),
@@ -370,7 +370,7 @@ fn entry_authenticates_fixed_root_and_key_before_loading_authenticated_body() {
     assert!(wrong_key.code_requests.borrow().is_empty());
 
     let wrong_root = ExecutionEnvironment::new(
-        ExecutionDescriptor::new(entry, EnvironmentRoot::new(hint.hash())),
+        ExecutionTarget::new(entry, EnvironmentRoot::new(hint.hash())),
         opening_limits(),
         ledger_limits(),
         session_limits(),
@@ -1504,7 +1504,7 @@ fn explicit_native_budgets_and_missing_trace_policy_fail_closed() {
             SessionLimits { max_requests: 0, ..session_limits() }
         };
         let configuration = ExecutionEnvironment::new(
-            ExecutionDescriptor::new(entry, environment.root),
+            ExecutionTarget::new(entry, environment.root),
             opening,
             ledger_limits(),
             session,
@@ -2111,7 +2111,7 @@ fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
     };
     let mut processor = source_dyncall_processor();
     let configuration = ExecutionEnvironment::new(
-        ExecutionDescriptor::new(fixture.entry, fixture.environment.root),
+        ExecutionTarget::new(fixture.entry, fixture.environment.root),
         opening_limits(),
         ledger_limits(),
         SessionLimits { max_requests: 1, ..session_limits() },

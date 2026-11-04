@@ -15,7 +15,7 @@ fn canonical_setup_statement() -> miden_stark::air::Statement<
     use miden_core::{
         Felt, Word,
         program::{
-            EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, ProcedureKey, StackInputs,
+            EnvironmentRoot, ExecutionClaim, ExecutionTarget, ProcedureKey, StackInputs,
             StackOutputs,
         },
     };
@@ -23,7 +23,7 @@ fn canonical_setup_statement() -> miden_stark::air::Statement<
 
     let word = |start: u32| Word::new(core::array::from_fn(|i| Felt::from_u32(start + i as u32)));
     let claim = ExecutionClaim::new(
-        ExecutionDescriptor::new(ProcedureKey::new(word(1)), EnvironmentRoot::new(word(5))),
+        ExecutionTarget::new(ProcedureKey::new(word(1)), EnvironmentRoot::new(word(5))),
         StackInputs::new(&[Felt::from_u32(9)]).unwrap(),
         StackOutputs::new(&[Felt::from_u32(10)]).unwrap(),
     );

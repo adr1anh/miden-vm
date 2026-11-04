@@ -31,8 +31,8 @@ use miden_core::{
     serde::Serializable,
 };
 use miden_mast_package::{
-    CallableProcedurePath, ConstantExport, NamespacePlan, Package, PackageDebugInfoError,
-    PackageExport, PackageId, PackageModule, PackageNaming, PackageSubmodule, ProcedureExport,
+    CallableProcedurePath, ConstantExport, NamespacePath, Package, PackageDebugInfoError,
+    PackageExport, PackageId, PackageModule, PackageSubmodule, PackageSymbols, ProcedureExport,
     Section, SectionId, TypeExport,
     debug_info::{DebugSourceNodeId, PackageDebugInfo},
 };
@@ -41,8 +41,7 @@ use miden_project::{Linkage, PackageSourceMount, TargetType};
 use self::error::AssemblerError;
 pub use self::{namespace_inputs::NamespaceInputs, product::AssemblyProduct};
 use crate::{
-    CallableBinding, CallableDeclaration, GlobalItemIndex, ModuleIndex, Procedure,
-    ProcedureContext,
+    CallableDeclaration, GlobalItemIndex, ModuleIndex, Procedure, ProcedureContext, ProcedureName,
     ast::Path,
     basic_block_builder::{ActiveInlineCall, BasicBlockBuilder},
     fmp::{fmp_end_frame_sequence, fmp_initialization_sequence, fmp_start_frame_sequence},
@@ -215,7 +214,7 @@ impl Assembler {
     pub fn with_kernel(
         source_manager: Arc<dyn SourceManager>,
         kernel: Arc<Package>,
-        naming: impl Into<Arc<PackageNaming>>,
+        naming: impl Into<Arc<PackageSymbols>>,
     ) -> Result<Self, Report> {
         let linker = Box::new(Linker::with_kernel(source_manager.clone(), kernel, naming)?);
         Ok(Self {
@@ -264,13 +263,13 @@ impl Assembler {
     /// Every callable still needs a canonical path through [`Self::with_callable_path`]. Source
     /// namespaces, aliases and package code never fill in either part of this metadata.
     /// This configures naming only, without home/profile or execution-environment admission.
-    pub fn with_namespace_plan(mut self, plan: NamespacePlan) -> Self {
+    pub fn with_namespace_plan(mut self, plan: NamespacePath) -> Self {
         self.namespace_inputs = self.namespace_inputs.with_namespace_plan(plan);
         self
     }
 
     /// Returns the explicitly configured home for locally defined callables, if supplied.
-    pub fn namespace_plan(&self) -> Option<&NamespacePlan> {
+    pub fn namespace_plan(&self) -> Option<&NamespacePath> {
         self.namespace_inputs.namespace_plan()
     }
 
@@ -291,7 +290,7 @@ impl Assembler {
     pub fn with_callable_binding(
         mut self,
         declaration: Arc<Path>,
-        binding: CallableBinding,
+        binding: ProcedureName,
     ) -> Result<Self, Report> {
         self.namespace_inputs =
             self.namespace_inputs.with_callable_binding(declaration, binding)?;
@@ -308,7 +307,7 @@ impl Assembler {
         Ok(self)
     }
 
-    fn callable_binding(&self, gid: GlobalItemIndex) -> Result<&CallableBinding, Report> {
+    fn callable_binding(&self, gid: GlobalItemIndex) -> Result<&ProcedureName, Report> {
         self.linker[gid].callable_binding().ok_or_else(|| {
             Report::msg(format!(
                 "missing canonical callable binding for '{}::{}'",
@@ -419,7 +418,7 @@ impl Assembler {
         mut self,
         package: Arc<Package>,
         linkage: Linkage,
-        naming: impl Into<Arc<PackageNaming>>,
+        naming: impl Into<Arc<PackageSymbols>>,
     ) -> Result<Self, Report> {
         self.link_package(package, linkage, naming)?;
         Ok(self)
@@ -433,7 +432,7 @@ impl Assembler {
         &mut self,
         package: Arc<Package>,
         linkage: Linkage,
-        naming: impl Into<Arc<PackageNaming>>,
+        naming: impl Into<Arc<PackageSymbols>>,
     ) -> Result<(), Report> {
         match package.kind {
             TargetType::Kernel => {
@@ -468,7 +467,7 @@ impl Assembler {
         mut self,
         package: Arc<Package>,
         linkage: Linkage,
-        naming: impl Into<Arc<PackageNaming>>,
+        naming: impl Into<Arc<PackageSymbols>>,
         mount: PackageSourceMount,
     ) -> Result<Self, Report> {
         self.link_package_at(package, linkage, naming, mount)?;
@@ -483,7 +482,7 @@ impl Assembler {
         &mut self,
         package: Arc<Package>,
         linkage: Linkage,
-        naming: impl Into<Arc<PackageNaming>>,
+        naming: impl Into<Arc<PackageSymbols>>,
         mount: PackageSourceMount,
     ) -> Result<(), Report> {
         self.linker.link_library_at(
@@ -1319,7 +1318,7 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
-        let naming = PackageNaming::new(
+        let naming = PackageSymbols::new(
             self.namespace_inputs
                 .into_namespace_plan()
                 .expect("prebinding requires an explicit caller home"),
@@ -1380,7 +1379,7 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
-        let naming = PackageNaming::new(
+        let naming = PackageSymbols::new(
             self.namespace_inputs
                 .into_namespace_plan()
                 .expect("prebinding requires an explicit caller home"),

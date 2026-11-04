@@ -1,7 +1,7 @@
 use miden_air_definitions::vm::trace::MIN_TRACE_LEN;
 use miden_core::{
     deferred::PrecompileLimits,
-    program::{ExecutionDescriptor, MIN_STACK_DEPTH},
+    program::{ExecutionTarget, MIN_STACK_DEPTH},
 };
 
 use crate::{LedgerLimits, OpeningLimits, SessionLimits};
@@ -11,14 +11,14 @@ use crate::{LedgerLimits, OpeningLimits, SessionLimits};
 
 /// Immutable execution authority and explicit native resolution resource policies.
 ///
-/// The descriptor fixes the entry key and environment root. Its authority must come from the caller;
-/// neither this configuration nor available code authenticates those identities. Syscalls require an
-/// authenticated immediate parent equal to the fixed initial namespace. Opening verification and the
-/// resolution session enforce the supplied policies.
+/// The descriptor fixes the entry key and environment root. Its authority must come from the
+/// caller; neither this configuration nor available code authenticates those identities. Syscalls
+/// require an authenticated immediate parent equal to the fixed initial namespace. Opening
+/// verification and the resolution session enforce the supplied policies.
 /// No deployment defaults are provided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionEnvironment {
-    descriptor: ExecutionDescriptor,
+    descriptor: ExecutionTarget,
     opening: OpeningLimits,
     ledger: LedgerLimits,
     session: SessionLimits,
@@ -27,7 +27,7 @@ pub struct ExecutionEnvironment {
 impl ExecutionEnvironment {
     /// Creates an immutable configuration without authenticating its descriptor or bindings.
     pub const fn new(
-        descriptor: ExecutionDescriptor,
+        descriptor: ExecutionTarget,
         opening: OpeningLimits,
         ledger: LedgerLimits,
         session: SessionLimits,
@@ -36,7 +36,7 @@ impl ExecutionEnvironment {
     }
 
     /// Returns the fixed identities defining this execution.
-    pub const fn descriptor(&self) -> ExecutionDescriptor {
+    pub const fn descriptor(&self) -> ExecutionTarget {
         self.descriptor
     }
 

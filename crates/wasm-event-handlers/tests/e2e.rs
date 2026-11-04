@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use miden_event_handler_abi::ABI_VERSION;
-use miden_mast_package::{EventHandlerManifestEntry, EventHandlerSection, Package, PackageNaming};
+use miden_mast_package::{EventHandlerManifestEntry, EventHandlerSection, Package, PackageSymbols};
 use miden_processor::{
     DefaultHost, FastProcessor, StackInputs,
     serde::{Deserializable, Serializable},
@@ -39,7 +39,7 @@ begin
 end"#;
 
 /// Assembles the `double` program and attaches the `double` handler module to its package.
-fn assemble_package_with_handlers() -> (Package, PackageNaming, FixtureEnvironment) {
+fn assemble_package_with_handlers() -> (Package, PackageSymbols, FixtureEnvironment) {
     let (package, naming, environment) = named_package("wasm_handler_e2e", PROGRAM);
 
     let section = EventHandlerSection {

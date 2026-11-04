@@ -5,9 +5,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use miden_core::program::{
     CanonicalLabel, EnvNode, EnvironmentBuildLimits, EnvironmentBuilder, EnvironmentRoot,
-    ExecutionDescriptor, ImplementationRoot, Namespace, ProcedureKey, ValidatedEnvironment,
+    ExecutionTarget, ImplementationRoot, Namespace, ProcedureKey, ValidatedEnvironment,
 };
-use miden_mast_package::{CallableBinding, PackageNaming};
+use miden_mast_package::{PackageSymbols, ProcedureName};
 use miden_processor::{
     EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
     EnvironmentWitnessSource, ExecutionEnvironment, LedgerLimits, OpeningError, OpeningLimits,
@@ -39,7 +39,7 @@ pub struct NamedProgram {
     pub program: miden_core::program::Program,
     pub environment: FixtureEnvironment,
     pub package: Arc<miden_mast_package::Package>,
-    pub naming: Arc<PackageNaming>,
+    pub naming: Arc<PackageSymbols>,
 }
 
 /// Selects the source-test naming convention for local definitions in the same parsing context.
@@ -50,7 +50,7 @@ pub fn assemble_fixture_program(
     assembler: miden_assembly::Assembler,
     name: &str,
     source: impl miden_assembly::Parse,
-    imports: &[&PackageNaming],
+    imports: &[&PackageSymbols],
 ) -> NamedProgram {
     let root = source
         .parse(assembler.warnings_as_errors(), assembler.source_manager())
@@ -72,7 +72,7 @@ pub fn assemble_fixture_program(
 /// Imports are canonical owner inputs, never raw artifact metadata or a fallback admission policy.
 pub fn fixture_from_product(
     product: miden_assembly::AssemblyProduct,
-    imports: &[&PackageNaming],
+    imports: &[&PackageSymbols],
 ) -> NamedProgram {
     try_fixture_from_product(product, imports)
         .expect("fixture product and selections must form a valid named execution environment")
@@ -81,7 +81,7 @@ pub fn fixture_from_product(
 /// Fallible conversion for fixture consumers which report assembly or resource-policy errors.
 pub fn try_fixture_from_product(
     product: miden_assembly::AssemblyProduct,
-    imports: &[&PackageNaming],
+    imports: &[&PackageSymbols],
 ) -> Result<NamedProgram, Report> {
     let naming = Arc::new(product.naming().clone());
     let entry = naming
@@ -112,7 +112,7 @@ impl FixtureEnvironment {
     /// Builds and validates finite, unique bindings without deriving identity from code roots.
     pub fn new<'a>(
         entry: ProcedureKey,
-        naming: impl IntoIterator<Item = &'a PackageNaming>,
+        naming: impl IntoIterator<Item = &'a PackageSymbols>,
     ) -> Result<Self, Report> {
         Self::new_with_fragments(entry, naming, &[])
     }
@@ -122,13 +122,13 @@ impl FixtureEnvironment {
     /// already covered by fragments are retained there rather than duplicated as flat paths.
     pub fn new_with_fragments<'a>(
         entry: ProcedureKey,
-        naming: impl IntoIterator<Item = &'a PackageNaming>,
+        naming: impl IntoIterator<Item = &'a PackageSymbols>,
         fragments: &[Arc<ValidatedEnvironment>],
     ) -> Result<Self, Report> {
         if fragments.len() > MAX_BINDINGS {
             return Err(Report::msg("fixture fragment input limit exceeded"));
         }
-        let mut selections = BTreeMap::<ProcedureKey, (CallableBinding, ImplementationRoot)>::new();
+        let mut selections = BTreeMap::<ProcedureKey, (ProcedureName, ImplementationRoot)>::new();
         let mut naming_records = 0usize;
         for naming in naming {
             naming_records = naming_records
@@ -270,7 +270,7 @@ impl FixtureEnvironment {
             preflight_path(&environment, path, FIXTURE_OPENING_LIMITS).map_err(Report::msg)?;
         }
         let execution = ExecutionEnvironment::new(
-            ExecutionDescriptor::new(entry, root),
+            ExecutionTarget::new(entry, root),
             FIXTURE_OPENING_LIMITS,
             LedgerLimits {
                 max_occurrences: 262_144,
@@ -549,7 +549,7 @@ impl EnvironmentWitnessSource for FixtureSource {
 #[cfg(test)]
 mod tests {
     use miden_core::{Felt, Word};
-    use miden_mast_package::{CallableProcedurePath, NamespacePlan, PackageCallables};
+    use miden_mast_package::{CallableProcedurePath, NamespacePath, PackageCallables};
 
     use super::*;
 
@@ -559,7 +559,7 @@ mod tests {
         use miden_assembly::{Assembler, Parse, testing::FixtureNamespace};
         let assembler = Assembler::default();
         let root = Parse::parse("begin nop end", false, assembler.source_manager()).unwrap();
-        let deep_home = NamespacePlan::new(alloc::vec![CanonicalLabel::text("deep").unwrap(); 257]);
+        let deep_home = NamespacePath::new(alloc::vec![CanonicalLabel::text("deep").unwrap(); 257]);
         let mut fixture = FixtureNamespace::new(deep_home);
         fixture.add_module(&root).unwrap();
         let product = fixture
@@ -612,14 +612,14 @@ mod tests {
         assert_eq!(output.stack.get_element(0), Some(Felt::from_u32(5)));
     }
 
-    fn naming(name: &str, implementation: u32) -> PackageNaming {
-        let binding = CallableBinding::new(
-            NamespacePlan::new(alloc::vec![CanonicalLabel::text("selected-test-owner").unwrap()]),
+    fn naming(name: &str, implementation: u32) -> PackageSymbols {
+        let binding = ProcedureName::new(
+            NamespacePath::new(alloc::vec![CanonicalLabel::text("selected-test-owner").unwrap()]),
             CallableProcedurePath::from_semantic_components(alloc::vec![name.into()]).unwrap(),
         )
         .unwrap();
         let key = binding.key();
-        PackageNaming::new(
+        PackageSymbols::new(
             binding.namespace_plan().clone(),
             PackageCallables::new(
                 [binding],
@@ -633,8 +633,8 @@ mod tests {
     }
 
     fn branching_fragment(
-        first: &PackageNaming,
-        second: &PackageNaming,
+        first: &PackageSymbols,
+        second: &PackageSymbols,
     ) -> (Arc<ValidatedEnvironment>, EnvironmentRoot) {
         let mut builder = EnvironmentBuilder::new(EnvironmentBuildLimits {
             max_submitted_nodes: MAX_NODES,
@@ -645,7 +645,7 @@ mod tests {
             max_bindings: MAX_BINDINGS,
             max_storage_bytes: 128 * 1024 * 1024,
         });
-        let mut leaf = |naming: &PackageNaming| {
+        let mut leaf = |naming: &PackageSymbols| {
             let key = naming.entry_key().unwrap();
             let binding = naming.callables().binding(key).unwrap();
             builder
@@ -729,7 +729,7 @@ mod tests {
 
     #[test]
     fn mounted_fragment_opening_budgets_include_the_outer_list() {
-        fn wide_fragment(naming: &PackageNaming, count: usize) -> Arc<ValidatedEnvironment> {
+        fn wide_fragment(naming: &PackageSymbols, count: usize) -> Arc<ValidatedEnvironment> {
             let mut builder = EnvironmentBuilder::new(EnvironmentBuildLimits {
                 max_submitted_nodes: 4,
                 max_visits: count + 2,

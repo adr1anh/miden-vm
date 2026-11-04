@@ -13,7 +13,7 @@ use miden_core::{
         VerifierMount,
     },
 };
-use miden_mast_package::{CallableProcedurePath, PackageNaming};
+use miden_mast_package::{CallableProcedurePath, PackageSymbols};
 
 use crate::{CoreLibrary, embedded_naming};
 
@@ -71,7 +71,7 @@ impl CoreVerifierProfile {
     }
 
     fn from_owned(
-        naming: &PackageNaming,
+        naming: &PackageSymbols,
         path: &CallableProcedurePath,
         (relation_id, resource_inventory, resources): (Word, Word, &[([u8; 32], usize)]),
     ) -> Result<Self, CoreVerifierProfileError> {
@@ -264,7 +264,7 @@ fn compare_words(left: &Word, right: &Word) -> Ordering {
 }
 
 fn build_fragment(
-    naming: &PackageNaming,
+    naming: &PackageSymbols,
 ) -> Result<ValidatedEnvironment, CoreVerifierProfileError> {
     let callables = naming.callables();
     let selections = callables.selected_implementations();
@@ -396,7 +396,7 @@ mod tests {
     use alloc::{string::ToString, vec};
 
     use miden_core::{ZERO, chiplets::hasher, program::ImplementationRoot};
-    use miden_mast_package::{CallableBinding, NamespacePlan, PackageCallables};
+    use miden_mast_package::{NamespacePath, PackageCallables, ProcedureName};
 
     use super::*;
 
@@ -414,9 +414,9 @@ mod tests {
     fn fixture() -> (CoreVerifierProfile, AdviceMap) {
         let entry_path = path(&["owned", "verify"]);
         let private_path = path(&["owned", "private_callback"]);
-        let home = NamespacePlan::new(vec![]);
-        let entry = CallableBinding::new(home.clone(), entry_path.clone()).unwrap();
-        let private = CallableBinding::new(home.clone(), private_path).unwrap();
+        let home = NamespacePath::new(vec![]);
+        let entry = ProcedureName::new(home.clone(), entry_path.clone()).unwrap();
+        let private = ProcedureName::new(home.clone(), private_path).unwrap();
         let callables = PackageCallables::new(
             [entry.clone(), private.clone()],
             [(entry_path.clone(), entry.key())],
@@ -426,7 +426,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let naming = PackageNaming::new(home, callables, None).unwrap();
+        let naming = PackageSymbols::new(home, callables, None).unwrap();
         let resources = AdviceMap::from_iter([(word(20), vec![Felt::ONE, Felt::from_u32(2)])]);
         let metadata: Vec<_> =
             resources.iter().map(|(key, values)| (key.as_bytes(), values.len())).collect();

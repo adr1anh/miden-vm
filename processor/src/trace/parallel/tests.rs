@@ -19,7 +19,7 @@ use miden_core::{
     program::{CanonicalLabel, ImplementationRoot, Program, StackInputs},
     utils::RowMajorMatrix,
 };
-use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, ProcedureName};
 use miden_stark::lookup::build_logup_aux_trace;
 use miden_utils_testing::get_column_name;
 use pretty_assertions::assert_eq;
@@ -1891,13 +1891,13 @@ impl core::fmt::Debug for DeterministicTrace<'_> {
     }
 }
 
-fn fixture_binding(name: &str, kernel: bool) -> CallableBinding {
-    let home = NamespacePlan::new(if kernel {
+fn fixture_binding(name: &str, kernel: bool) -> ProcedureName {
+    let home = NamespacePath::new(if kernel {
         vec![]
     } else {
         vec![CanonicalLabel::text("processor-parallel-fixtures").unwrap()]
     });
-    CallableBinding::new(
+    ProcedureName::new(
         home,
         CallableProcedurePath::from_semantic_components(vec![name.to_string()]).unwrap(),
     )
@@ -1906,7 +1906,7 @@ fn fixture_binding(name: &str, kernel: bool) -> CallableBinding {
 
 fn synthetic_fixture(
     program: Program,
-    targets: impl IntoIterator<Item = (CallableBinding, ImplementationRoot)>,
+    targets: impl IntoIterator<Item = (ProcedureName, ImplementationRoot)>,
 ) -> NamedFixture {
     let fixture = named_program(program, fixture_binding("entry", false), targets).unwrap();
     let mut forest = MastForest::new();

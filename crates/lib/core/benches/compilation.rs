@@ -3,7 +3,7 @@ use std::{fmt::Write, hint::black_box, path::Path, sync::Arc, time::Duration};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use miden_assembly::{
     Assembler, ProjectTargetSelector, ast::Module, debuginfo::DefaultSourceManager,
-    package::NamespacePlan,
+    package::NamespacePath,
 };
 use miden_package_registry::InMemoryPackageRegistry;
 
@@ -65,7 +65,7 @@ fn bench_generated_programs(c: &mut Criterion, group_name: &str, cases: &[(&str,
                 let module =
                     Module::parser(None).parse_str(None, source, source_manager.clone()).unwrap();
                 let inputs = source_naming::source_namespace_inputs(
-                    NamespacePlan::new(vec![]),
+                    NamespacePath::new(vec![]),
                     core::iter::once(module.as_ref()),
                 )
                 .unwrap();

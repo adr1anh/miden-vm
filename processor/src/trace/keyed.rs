@@ -12,7 +12,7 @@ use core::{
 
 use miden_core::{
     program::{
-        EnvNode, EnvNodeError, ExecutionDescriptor, ImplementationRoot, Namespace, ProcedureKey,
+        EnvNode, EnvNodeError, ExecutionTarget, ImplementationRoot, Namespace, ProcedureKey,
     },
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
 };
@@ -162,7 +162,7 @@ struct ReplayOccurrence {
 /// Each selected occurrence is stored once, with only its incoming parent edge and core v1 bytes.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct EnvironmentReplay {
-    descriptor: ExecutionDescriptor,
+    descriptor: ExecutionTarget,
     entry: ReplayEntry,
     occurrences: Vec<ReplayOccurrence>,
     validated: bool,
@@ -199,7 +199,7 @@ impl PreparedEnvironmentReplay {
 }
 
 impl EnvironmentReplay {
-    pub(crate) const fn descriptor(&self) -> ExecutionDescriptor {
+    pub(crate) const fn descriptor(&self) -> ExecutionTarget {
         self.descriptor
     }
 
@@ -241,7 +241,7 @@ impl EnvironmentReplay {
 
     pub(crate) fn retained_bytes(&self) -> Result<usize, KeyedReplayError> {
         let mut bytes = add(
-            size_of::<ExecutionDescriptor>(),
+            size_of::<ExecutionTarget>(),
             add(
                 size_of::<ReplayEntry>(),
                 array_bytes::<ReplayOccurrence>(self.occurrences.capacity())?,
@@ -282,7 +282,7 @@ impl EnvironmentReplay {
         let native_retained_bytes = session.counters().retained_bytes;
         let other_retained_bytes = add(other_retained_bytes, native_retained_bytes)?;
         let count = session.ledger().occurrences().len();
-        let inline_bytes = add(size_of::<ExecutionDescriptor>(), size_of::<ReplayEntry>())?;
+        let inline_bytes = add(size_of::<ExecutionTarget>(), size_of::<ReplayEntry>())?;
         let requested = add(inline_bytes, array_bytes::<ReplayOccurrence>(count)?)?;
         check_capture_storage(policies, other_retained_bytes, other_preparation_bytes, requested)?;
         let mut occurrences = reserve_vec::<ReplayOccurrence>(count)?;
@@ -334,7 +334,7 @@ impl EnvironmentReplay {
     ) -> Result<Self, KeyedReplayError> {
         budget.wire(ENVIRONMENT_HEADER_BYTES)?;
         source.check_eor(ENVIRONMENT_HEADER_BYTES)?;
-        let descriptor = ExecutionDescriptor::new(
+        let descriptor = ExecutionTarget::new(
             ProcedureKey::read_from(source)?,
             miden_core::program::EnvironmentRoot::read_from(source)?,
         );
@@ -357,7 +357,7 @@ impl EnvironmentReplay {
             budget.read.max_wire_bytes,
         )?;
         let requested = add(
-            add(size_of::<ExecutionDescriptor>(), size_of::<ReplayEntry>())?,
+            add(size_of::<ExecutionTarget>(), size_of::<ReplayEntry>())?,
             array_bytes::<ReplayOccurrence>(count)?,
         )?;
         budget.storage(requested)?;

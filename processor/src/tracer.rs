@@ -6,7 +6,7 @@ use miden_core::{
     crypto::merkle::MerklePath,
     field::{BasedVectorSpace, Field, PrimeCharacteristicRing, PrimeField64, QuadFelt},
     mast::{ExecutableMastForest, MastNodeId},
-    program::{ExecutionDescriptor, ImplementationRoot, ProcedureKey},
+    program::{ExecutionTarget, ImplementationRoot, ProcedureKey},
 };
 
 use crate::{
@@ -137,7 +137,7 @@ pub trait Tracer {
     /// recorded only at the actual root END. All returned errors precede native/VM publication.
     fn prepare_environment(
         &mut self,
-        descriptor: &ExecutionDescriptor,
+        descriptor: &ExecutionTarget,
         entry: SessionBinding,
     ) -> Result<Self::KeyedReservation, ExecutionError>;
 

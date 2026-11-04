@@ -41,7 +41,7 @@ pub use miden_assembly_syntax::{
 /// Merkelized abstract syntax tree (MAST) components defining Miden VM programs.
 pub use miden_core::{mast, serde, utils};
 pub use miden_mast_package as package;
-pub use miden_mast_package::CallableBinding;
+pub use miden_mast_package::ProcedureName;
 pub use miden_project::PackageSourceMount;
 
 #[doc(hidden)]

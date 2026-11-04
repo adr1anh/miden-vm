@@ -17,8 +17,8 @@ pub use miden_core::{
     Word,
     deferred::{DeferredRoot, PrecompileError, PrecompileLimits, PreparationError},
     program::{
-        EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, ProcedureKey, StackInputs,
-        StackOutputs, VerifierIdentity,
+        EnvironmentRoot, ExecutionClaim, ExecutionTarget, ProcedureKey, StackInputs, StackOutputs,
+        VerifierIdentity,
     },
     proof::{
         ExecutionProof, ExecutionProofCompatibility, ExecutionProofCompatibilityError,
@@ -447,7 +447,7 @@ mod tests {
 
     fn claim() -> ExecutionClaim {
         ExecutionClaim::new(
-            ExecutionDescriptor::new(ProcedureKey::new(root(10)), EnvironmentRoot::new(root(20))),
+            ExecutionTarget::new(ProcedureKey::new(root(10)), EnvironmentRoot::new(root(20))),
             StackInputs::default(),
             StackOutputs::default(),
         )

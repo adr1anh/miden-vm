@@ -6,24 +6,24 @@ use miden_core::{
     operations::Operation,
     program::CanonicalLabel,
 };
-use miden_mast_package::{CallableProcedurePath, NamespacePlan, Package, PackageNaming};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, Package, PackageSymbols};
 use miden_project::Linkage;
 
 use super::*;
 use crate::{
-    CallableBinding, CallableDeclaration,
+    CallableDeclaration, ProcedureName,
     ast::{Ident, Instruction, ItemIndex, Op},
     debuginfo::Span,
     linker::{Linker, LinkerError},
     testing::{TestContext, admit_fixture_package},
 };
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
-fn binding(name: &str) -> CallableBinding {
-    CallableBinding::new(
+fn binding(name: &str) -> ProcedureName {
+    ProcedureName::new(
         home("foreign-canonical-home"),
         CallableProcedurePath::from_semantic_components(vec![name.to_string()]).unwrap(),
     )
@@ -54,7 +54,7 @@ fn dependency(context: &TestContext) -> Arc<Package> {
         .into()
 }
 
-fn dependency_naming(package: &Package) -> PackageNaming {
+fn dependency_naming(package: &Package) -> PackageSymbols {
     admit_fixture_package(package, &[home("inline-tests"), home("foreign-canonical-home")]).unwrap()
 }
 

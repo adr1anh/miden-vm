@@ -10,10 +10,10 @@ use miden_core::{
 };
 
 use super::{PackageCallables, PackageManifest, TargetType};
-use crate::{CallableProcedurePath, DeclarationError, NamespacePlan};
+use crate::{CallableProcedurePath, DeclarationError, NamespacePath};
 
 pub(crate) mod serialization;
-pub use serialization::{NamingCodecError, UnverifiedPackageNaming};
+pub use serialization::{NamingCodecError, UnverifiedPackageSymbols};
 
 /// The complete naming inventory required by a generic code package.
 ///
@@ -23,31 +23,31 @@ pub use serialization::{NamingCodecError, UnverifiedPackageNaming};
 /// Construction and [`Self::validate_package`] check owned relations only: they do not authorize
 /// an environment, authenticate a K-to-D binding or admit a publication/release profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackageNaming {
-    namespace_plan: NamespacePlan,
+pub struct PackageSymbols {
+    namespace_plan: NamespacePath,
     callables: PackageCallables,
     entry_key: Option<ProcedureKey>,
 }
 
-impl PackageNaming {
+impl PackageSymbols {
     /// Retains explicit naming metadata, requiring a supplied entry key to be declared.
     ///
     /// Call [`Self::validate_package`] to check the target, manifest and code relations. Home
     /// policy and environment admission require separate, explicitly supplied caller evidence.
     pub fn new(
-        namespace_plan: NamespacePlan,
+        namespace_plan: NamespacePath,
         callables: PackageCallables,
         entry_key: Option<ProcedureKey>,
-    ) -> Result<Self, PackageNamingError> {
+    ) -> Result<Self, PackageSymbolsError> {
         if let Some(key) = entry_key
             && callables.binding(key).is_none()
         {
-            return Err(PackageNamingError::UnknownEntryKey { key });
+            return Err(PackageSymbolsError::UnknownEntryKey { key });
         }
         Ok(Self { namespace_plan, callables, entry_key })
     }
 
-    pub fn namespace_plan(&self) -> &NamespacePlan {
+    pub fn namespace_plan(&self) -> &NamespacePath {
         &self.namespace_plan
     }
 
@@ -81,44 +81,44 @@ impl PackageNaming {
         kind: TargetType,
         mast: &MastForest,
         manifest: &PackageManifest,
-    ) -> Result<(), PackageNamingError> {
+    ) -> Result<(), PackageSymbolsError> {
         if !kind.is_executable() && (self.entry_key.is_some() || manifest.entrypoint().is_some()) {
-            return Err(PackageNamingError::NonExecutableEntrypoint);
+            return Err(PackageSymbolsError::NonExecutableEntrypoint);
         }
         if mast.procedure_roots().is_empty() {
-            return Err(PackageNamingError::NoProcedures);
+            return Err(PackageSymbolsError::NoProcedures);
         }
         if let Some(key) = self.entry_key
             && self.callables.selected_implementation(key).is_none()
         {
-            return Err(PackageNamingError::MissingEntryImplementation { key });
+            return Err(PackageSymbolsError::MissingEntryImplementation { key });
         }
 
         let mut exports = BTreeSet::new();
         for export in manifest.exports().filter_map(|export| export.as_procedure()) {
             let path = callable_path_from_manifest(&export.path)?;
             if !exports.insert(path.clone()) {
-                return Err(PackageNamingError::DuplicateVisibleExport { path });
+                return Err(PackageSymbolsError::DuplicateVisibleExport { path });
             }
             let key = self
                 .callables
                 .key_for_visible_path(&path)
-                .ok_or_else(|| PackageNamingError::MissingVisibleExport { path: path.clone() })?;
+                .ok_or_else(|| PackageSymbolsError::MissingVisibleExport { path: path.clone() })?;
             let selected = self
                 .callables
                 .selected_implementation(key)
-                .ok_or(PackageNamingError::MissingExportImplementation { key })?;
+                .ok_or(PackageSymbolsError::MissingExportImplementation { key })?;
             if selected.into_word() != export.digest {
-                return Err(PackageNamingError::ExportImplementationMismatch { path, key });
+                return Err(PackageSymbolsError::ExportImplementationMismatch { path, key });
             }
             if let Some(node) = export.node {
                 if !mast.is_procedure_root_with_exact_digest(node, export.digest) {
-                    return Err(PackageNamingError::InvalidProcedureExport {
+                    return Err(PackageSymbolsError::InvalidProcedureExport {
                         path: export.path.clone(),
                     });
                 }
             } else if mast.find_procedure_root(export.digest).is_none() {
-                return Err(PackageNamingError::MissingProcedureMast {
+                return Err(PackageSymbolsError::MissingProcedureMast {
                     path: export.path.clone(),
                     digest: export.digest,
                 });
@@ -131,34 +131,34 @@ impl PackageNaming {
                     .parent_namespace()
                     != Namespace::initial()
             {
-                return Err(PackageNamingError::KernelExportOutsideRoot { path, key });
+                return Err(PackageSymbolsError::KernelExportOutsideRoot { path, key });
             }
         }
         for (path, _) in self.callables.visible_paths() {
             if !exports.contains(path) {
-                return Err(PackageNamingError::UnexpectedVisiblePath { path: path.clone() });
+                return Err(PackageSymbolsError::UnexpectedVisiblePath { path: path.clone() });
             }
         }
 
         let mut selected_roots = BTreeSet::new();
         for (&key, &implementation) in self.callables.selected_implementations() {
             if mast.find_procedure_root(implementation.into_word()).is_none() {
-                return Err(PackageNamingError::MissingSelectedRoot { key, implementation });
+                return Err(PackageSymbolsError::MissingSelectedRoot { key, implementation });
             }
             selected_roots.insert(implementation);
         }
         for &node in mast.procedure_roots() {
             let implementation = ImplementationRoot::new(mast[node].digest());
             if !selected_roots.contains(&implementation) {
-                return Err(PackageNamingError::UnboundProcedureRoot { node, implementation });
+                return Err(PackageSymbolsError::UnboundProcedureRoot { node, implementation });
             }
         }
 
         if let Some(entry) = manifest.entrypoint() {
-            let key = self.entry_key.ok_or(PackageNamingError::MissingEntryKey)?;
+            let key = self.entry_key.ok_or(PackageSymbolsError::MissingEntryKey)?;
             let path = callable_path_from_manifest(&entry)?;
             if self.callables.key_for_visible_path(&path) != Some(key) {
-                return Err(PackageNamingError::EntryKeyMismatch { key });
+                return Err(PackageSymbolsError::EntryKeyMismatch { key });
             }
             // Export validation above already requires this entry's selected D to match both
             // the manifest digest and an exact procedure root.
@@ -171,7 +171,7 @@ impl PackageNaming {
 /// Absolute source roots are location syntax, while reserved roots remain ordinary Text.
 pub(crate) fn callable_path_from_manifest(
     path: &Path,
-) -> Result<CallableProcedurePath, PackageNamingError> {
+) -> Result<CallableProcedurePath, PackageSymbolsError> {
     let convert = || -> Result<CallableProcedurePath, DeclarationError> {
         Path::validate(path.as_str())?;
         let mut components = alloc::vec::Vec::new();
@@ -183,7 +183,7 @@ pub(crate) fn callable_path_from_manifest(
         }
         CallableProcedurePath::from_semantic_components(components)
     };
-    convert().map_err(|source| PackageNamingError::InvalidCallablePath {
+    convert().map_err(|source| PackageSymbolsError::InvalidCallablePath {
         path: path.to_path_buf().into(),
         source,
     })
@@ -191,7 +191,7 @@ pub(crate) fn callable_path_from_manifest(
 
 /// Inconsistent required naming, manifest, code or entry relations in a generic package.
 #[derive(Debug, thiserror::Error)]
-pub enum PackageNamingError {
+pub enum PackageSymbolsError {
     #[error("non-executable package contains an entrypoint")]
     NonExecutableEntrypoint,
     #[error("package must contain at least one callable procedure root")]

@@ -10,7 +10,7 @@ use miden_assembly_syntax::{
 use tempfile::TempDir;
 
 use crate::{
-    DependencyBinding, DependencyVersionScheme, LibraryImport, LibrarySelection, Linkage, Project,
+    DependencyBinding, DependencyVersionScheme, LibraryRef, LibrarySelection, Linkage, Project,
     SourceNamingConvention, TargetType, Word, Workspace,
 };
 
@@ -599,15 +599,15 @@ fn project_selection_roundtrip_keeps_source_version_linkage_and_runtime_naming_s
         assert_eq!(dependency.linkage(), Linkage::Static);
         assert_eq!(dependency.required_version().to_string(), "=2.0.0");
         let binding = dependency.binding().unwrap().clone();
-        let expected = LibraryImport::new(
-            miden_mast_package::NamespacePlan::new(vec![
+        let expected = LibraryRef::new(
+            miden_mast_package::NamespacePath::new(vec![
                 miden_core::program::CanonicalLabel::text("tenant").unwrap(),
             ]),
             Word::try_from(id).unwrap(),
             if selection == "latest" {
                 LibrarySelection::Latest
             } else {
-                LibrarySelection::Pinned(core::num::NonZeroU32::new(4).unwrap())
+                LibrarySelection::Revision(core::num::NonZeroU32::new(4).unwrap())
             },
         );
         assert_eq!(binding, DependencyBinding::Standard(expected));
@@ -638,7 +638,7 @@ fn workspace_binding_inheritance_is_explicit_and_member_override_wins() {
         let package = Project::load(&manifest, &context.source_manager).unwrap().package();
         assert_eq!(
             package.dependencies()[0].binding().unwrap().namespace_plan(),
-            miden_mast_package::NamespacePlan::new(vec![
+            miden_mast_package::NamespacePath::new(vec![
                 miden_core::program::CanonicalLabel::text(expected).unwrap()
             ])
         );

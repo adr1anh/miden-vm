@@ -9,25 +9,23 @@ use miden_core::{
     Felt, Word,
     mast::{BasicBlockNodeBuilder, MastForest, MastNodeExt},
     operations::Operation,
-    program::{
-        CanonicalLabel, EnvironmentRoot, ExecutionDescriptor, ImplementationRoot, ProcedureKey,
-    },
+    program::{CanonicalLabel, EnvironmentRoot, ExecutionTarget, ImplementationRoot, ProcedureKey},
 };
 use miden_mast_package::{
-    CallableBinding, CallableProcedurePath, NamespacePlan, Package, PackageCallables, PackageId,
-    PackageNaming, TargetType, Version,
+    CallableProcedurePath, NamespacePath, Package, PackageCallables, PackageId, PackageSymbols,
+    ProcedureName, TargetType, Version,
 };
 use miden_processor::{
     ExecutionEnvironment, ExecutionError, FastProcessor, LedgerLimits, OpeningLimits,
     SessionLimits, StackInputs,
 };
 
-fn home(label: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(label).unwrap()])
+fn home(label: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(label).unwrap()])
 }
 
-fn binding(name: &str) -> CallableBinding {
-    CallableBinding::new(
+fn binding(name: &str) -> ProcedureName {
+    ProcedureName::new(
         home("application"),
         CallableProcedurePath::from_semantic_components(vec!["private".into(), name.into()])
             .unwrap(),
@@ -35,7 +33,7 @@ fn binding(name: &str) -> CallableBinding {
     .unwrap()
 }
 
-fn package_fixture(has_entry: bool) -> (Arc<Package>, PackageNaming, ProcedureKey) {
+fn package_fixture(has_entry: bool) -> (Arc<Package>, PackageSymbols, ProcedureKey) {
     let mut forest = MastForest::new();
     let root = BasicBlockNodeBuilder::new(vec![Operation::Add])
         .add_to_forest(&mut forest)
@@ -43,7 +41,7 @@ fn package_fixture(has_entry: bool) -> (Arc<Package>, PackageNaming, ProcedureKe
     forest.make_root(root);
     let entry = binding("start");
     let key = entry.key();
-    let naming = PackageNaming::new(
+    let naming = PackageSymbols::new(
         home("compilation"),
         PackageCallables::new([entry], [], [(key, ImplementationRoot::new(forest[root].digest()))])
             .unwrap(),
@@ -67,7 +65,7 @@ fn environment(entry: ProcedureKey) -> ExecutionEnvironment {
     // This opaque root is a caller input, independent of the code digest and naming inventory.
     let root = EnvironmentRoot::new(Word::new([41u32; 4].map(Felt::from_u32)));
     ExecutionEnvironment::new(
-        ExecutionDescriptor::new(entry, root),
+        ExecutionTarget::new(entry, root),
         OpeningLimits {
             max_nodes: 8,
             max_depth: 7,
@@ -135,7 +133,7 @@ fn mismatched_descriptor_entry_is_typed_and_does_not_poison_later_preparation() 
 #[test]
 fn identical_code_with_stale_compilation_naming_returns_a_package_error() {
     let (package, naming, key) = package_fixture(true);
-    let stale = PackageNaming::new(
+    let stale = PackageSymbols::new(
         home("other-compilation"),
         naming.callables().clone(),
         naming.entry_key(),

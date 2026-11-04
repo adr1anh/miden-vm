@@ -7,10 +7,10 @@ use miden_core::{
     program::{CanonicalLabel, ProcedureKey},
 };
 use miden_mast_package::{
-    CallableProcedurePath, NamespacePlan,
+    CallableProcedurePath, NamespacePath,
     debug_info::{DebugFunctionInfo, PackageDebugInfo},
 };
-use miden_project::{LibraryImport, LibrarySelection, PackageSourceMount};
+use miden_project::{LibraryRef, LibrarySelection, PackageSourceMount};
 
 use super::*;
 use crate::{
@@ -18,8 +18,8 @@ use crate::{
     testing::{TestContext, source_file},
 };
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
 fn mount(package: &str, source: &str) -> PackageSourceMount {
@@ -35,10 +35,10 @@ fn semantic(components: &[&str]) -> CallableProcedurePath {
 
 fn pinned_library(context: &TestContext, revision: u32) -> LinkLibrary {
     let module = context.parse_module("namespace lib\npub proc foo push.1 end").unwrap();
-    let import = LibraryImport::new(
+    let import = LibraryRef::new(
         home("mount-fixture"),
         Word::new([Felt::from_u32(17); 4]),
-        LibrarySelection::Pinned(NonZeroU32::new(revision).unwrap()),
+        LibrarySelection::Revision(NonZeroU32::new(revision).unwrap()),
     );
     let product = Assembler::new(context.source_manager())
         .with_namespace_plan(import.namespace_plan())
@@ -385,10 +385,10 @@ fn explicit_mount_cannot_attach_a_kernel() {
     let context = TestContext::default();
     let kernel = context.parse_kernel(source_file!(&context, "pub proc foo push.1 end")).unwrap();
     let product = Assembler::new(context.source_manager())
-        .with_namespace_plan(NamespacePlan::new(vec![]))
+        .with_namespace_plan(NamespacePath::new(vec![]))
         .with_callable_binding(
             kernel.path().join("foo").into(),
-            CallableBinding::new(NamespacePlan::new(vec![]), semantic(&["syscall"])).unwrap(),
+            ProcedureName::new(NamespacePath::new(vec![]), semantic(&["syscall"])).unwrap(),
         )
         .unwrap()
         .assemble_library_modules("kernel".into(), kernel, [], miden_project::TargetType::Kernel)
@@ -439,7 +439,7 @@ fn mounted_private_helpers_and_dynamic_reexports_keep_keys_and_original_debug_na
         .with_namespace_plan(home("defining-home"))
         .with_callable_binding(
             Path::new("::dep::helper").into(),
-            CallableBinding::new(home("private-helper-home"), semantic(&["helper"])).unwrap(),
+            ProcedureName::new(home("private-helper-home"), semantic(&["helper"])).unwrap(),
         )
         .unwrap()
         .with_default_callable_paths([&*dependency])

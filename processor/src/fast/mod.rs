@@ -17,7 +17,7 @@ use miden_core::{
     utils::range,
 };
 use miden_mast_package::{
-    Package, PackageNaming,
+    Package, PackageSymbols,
     debug_info::{DebugSourceNodeId, PackageDebugInfo},
 };
 
@@ -310,7 +310,7 @@ impl FastProcessor {
     pub fn get_initial_resume_context_for_package(
         &mut self,
         package: Arc<Package>,
-        naming: &PackageNaming,
+        naming: &PackageSymbols,
         environment: ExecutionEnvironment,
     ) -> Result<ResumeContext, ExecutionError> {
         let program = package
@@ -707,7 +707,7 @@ impl Tracer for NoopTracer {
 
     fn prepare_environment(
         &mut self,
-        _descriptor: &miden_core::program::ExecutionDescriptor,
+        _descriptor: &miden_core::program::ExecutionTarget,
         _entry: crate::SessionBinding,
     ) -> Result<(), ExecutionError> {
         Ok(())

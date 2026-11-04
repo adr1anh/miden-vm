@@ -6,8 +6,8 @@ use miden_core::{
     mast::MastNode,
     program::{CanonicalLabel, ProcedureKey},
 };
-use miden_mast_package::{CallableBinding, CallableProcedurePath};
-use miden_project::{DependencyBinding, LibraryImport, LibrarySelection};
+use miden_mast_package::{CallableProcedurePath, ProcedureName};
+use miden_project::{DependencyBinding, LibraryRef, LibrarySelection};
 use tempfile::TempDir;
 
 use super::*;
@@ -35,15 +35,15 @@ fn write(path: &FsPath, source: &str) {
     fs::write(path, source).unwrap();
 }
 
-fn app_home() -> NamespacePlan {
-    NamespacePlan::new(vec![
+fn app_home() -> NamespacePath {
+    NamespacePath::new(vec![
         CanonicalLabel::text("client").unwrap(),
         CanonicalLabel::library_id(id(APP)),
     ])
 }
 
-fn parent_base() -> NamespacePlan {
-    NamespacePlan::new(vec![
+fn parent_base() -> NamespacePath {
+    NamespacePath::new(vec![
         CanonicalLabel::text("tenant").unwrap(),
         CanonicalLabel::library_id(id(ANCESTOR)),
         CanonicalLabel::revision(NonZeroU32::new(2).unwrap()),
@@ -51,8 +51,8 @@ fn parent_base() -> NamespacePlan {
     ])
 }
 
-fn fallback_home() -> NamespacePlan {
-    NamespacePlan::new(vec![
+fn fallback_home() -> NamespacePath {
+    NamespacePath::new(vec![
         CanonicalLabel::text("source-fallback").unwrap(),
         CanonicalLabel::library_id(id(OTHER)),
     ])
@@ -61,17 +61,17 @@ fn fallback_home() -> NamespacePlan {
 /// Every supplied ID, complete default home and expected public binding is chosen independently
 /// before the corresponding source package is created. Catalog spelling supplies no authority.
 struct Owner {
-    request: LibraryImport,
-    run: CallableBinding,
-    caller: CallableBinding,
+    request: LibraryRef,
+    run: ProcedureName,
+    caller: ProcedureName,
     expected: ExpectedVisibleCallables,
 }
 
 impl Owner {
     fn new(identity: Word, selection: LibrarySelection) -> Self {
-        let request = LibraryImport::new(parent_base(), identity, selection);
+        let request = LibraryRef::new(parent_base(), identity, selection);
         let run = request.callable_binding(path(&["dep", "run"])).unwrap();
-        let caller = CallableBinding::new(app_home(), path(&["app", "entry"])).unwrap();
+        let caller = ProcedureName::new(app_home(), path(&["app", "entry"])).unwrap();
         let expected =
             ExpectedVisibleCallables::new([(path(&["dep", "run"]), run.clone())]).unwrap();
         Self { request, run, caller, expected }
@@ -86,7 +86,7 @@ fn workspace(
 ) -> PathBuf {
     let (selection, revision, revision_label) = match selection {
         LibrarySelection::Latest => ("latest", String::new(), String::new()),
-        LibrarySelection::Pinned(revision) => (
+        LibrarySelection::Revision(revision) => (
             "pinned",
             format!(", revision = {revision}"),
             format!(", {{revision = {revision}}}"),
@@ -159,13 +159,14 @@ fn has_exec(package: &MastPackage, key: ProcedureKey) -> bool {
 fn workspace_catalogs_lower_supplied_ids_and_preserve_keys_across_readable_renames() {
     let mut selection_keys = Vec::new();
     let mut callee_bodies = Vec::new();
-    for selection in
-        [LibrarySelection::Latest, LibrarySelection::Pinned(NonZeroU32::new(3).unwrap())]
-    {
+    for selection in [
+        LibrarySelection::Latest,
+        LibrarySelection::Revision(NonZeroU32::new(3).unwrap()),
+    ] {
         let mut results = Vec::new();
         for (name, identity) in [("math", id(MATH)), ("renamed", id(MATH)), ("other", id(OTHER))] {
             let owner = Owner::new(identity, selection);
-            let fallback = CallableBinding::new(fallback_home(), path(&["dep", "run"])).unwrap();
+            let fallback = ProcedureName::new(fallback_home(), path(&["dep", "run"])).unwrap();
             let temp = TempDir::new().unwrap();
             let manifest = workspace(temp.path(), selection, name, "");
             let mut registry = TestRegistry::default();

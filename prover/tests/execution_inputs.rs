@@ -17,7 +17,7 @@ use miden_core::{
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::Operation,
     program::{
-        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionDescriptor, ImplementationRoot,
+        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionTarget, ImplementationRoot,
         LabelCommitment, Namespace, ProcedureKey, Program, StackInputs,
     },
     serde::Serializable,
@@ -147,8 +147,8 @@ fn caller_descriptor_must_match_the_json_header() {
         assert!(fixture.admit(&document, input_limits()).is_err(), "changed {field}");
     }
     for descriptor in [
-        ExecutionDescriptor::new(fixture.service, fixture.root()),
-        ExecutionDescriptor::new(fixture.entry, other_root()),
+        ExecutionTarget::new(fixture.service, fixture.root()),
+        ExecutionTarget::new(fixture.entry, other_root()),
     ] {
         assert!(
             AdmittedExecutionInputs::from_bytes(
@@ -167,8 +167,7 @@ fn matching_untrusted_headers_do_not_authenticate_a_root_or_key() {
     let fixture = Fixture::new();
     let mut document = fixture.document();
     document["environment_root"] = json!(word_hex(other_root().into_word()));
-    let environment =
-        fixture.with_descriptor(ExecutionDescriptor::new(fixture.entry, other_root()));
+    let environment = fixture.with_descriptor(ExecutionTarget::new(fixture.entry, other_root()));
     assert!(
         AdmittedExecutionInputs::from_bytes(
             &serde_json::to_vec(&document).unwrap(),
@@ -184,7 +183,7 @@ fn matching_untrusted_headers_do_not_authenticate_a_root_or_key() {
         let mut document = fixture.document();
         document["entry_key"] = json!(word_hex(key.into_word()));
         document["openings"][0]["key"] = json!(word_hex(key.into_word()));
-        let environment = fixture.with_descriptor(ExecutionDescriptor::new(key, fixture.root()));
+        let environment = fixture.with_descriptor(ExecutionTarget::new(key, fixture.root()));
         assert!(
             AdmittedExecutionInputs::from_bytes(
                 &serde_json::to_vec(&document).unwrap(),
@@ -251,7 +250,7 @@ fn invalid_slots_and_nonterminal_or_data_leaves_are_rejected() {
     assert!(
         AdmittedExecutionInputs::from_bytes(
             &serde_json::to_vec(&document).unwrap(),
-            fixture.with_descriptor(ExecutionDescriptor::new(key, root)),
+            fixture.with_descriptor(ExecutionTarget::new(key, root)),
             trace_limits(),
             input_limits(),
         )
@@ -685,7 +684,7 @@ impl Fixture {
         let entry = namespace.procedure_key(label("entry"));
         let service = namespace.procedure_key(label("service"));
         let environment = ExecutionEnvironment::new(
-            ExecutionDescriptor::new(entry, home.commitment().unwrap()),
+            ExecutionTarget::new(entry, home.commitment().unwrap()),
             OpeningLimits {
                 max_nodes: 16,
                 max_depth: 15,
@@ -751,7 +750,7 @@ impl Fixture {
         }
     }
 
-    fn with_descriptor(&self, descriptor: ExecutionDescriptor) -> ExecutionEnvironment {
+    fn with_descriptor(&self, descriptor: ExecutionTarget) -> ExecutionEnvironment {
         ExecutionEnvironment::new(
             descriptor,
             self.environment.opening_limits(),

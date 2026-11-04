@@ -5,7 +5,7 @@ extern crate alloc;
 use miden_core::{
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::Operation,
-    program::{CanonicalLabel, EnvNode, ExecutionDescriptor, ImplementationRoot, Namespace},
+    program::{CanonicalLabel, EnvNode, ExecutionTarget, ImplementationRoot, Namespace},
 };
 
 use self::alloc::{sync::Arc, vec, vec::Vec};
@@ -68,7 +68,7 @@ pub fn execution_fixture_for_program(program: Program) -> ExecutionFixture {
         implementation: ImplementationRoot::new(program.hash()),
     };
     let environment = ExecutionEnvironment::new(
-        ExecutionDescriptor::new(entry, node.commitment().unwrap()),
+        ExecutionTarget::new(entry, node.commitment().unwrap()),
         OpeningLimits {
             max_nodes: 1,
             max_depth: 0,

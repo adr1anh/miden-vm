@@ -140,12 +140,12 @@ impl Namespace {
 /// does not authenticate itself.
 /// Code bundles and implementation-root hints are separate from these execution identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExecutionDescriptor {
+pub struct ExecutionTarget {
     entry_key: ProcedureKey,
     environment_root: EnvironmentRoot,
 }
 
-impl ExecutionDescriptor {
+impl ExecutionTarget {
     /// Creates a descriptor without authenticating or authorizing its environment bindings.
     pub const fn new(entry_key: ProcedureKey, environment_root: EnvironmentRoot) -> Self {
         Self { entry_key, environment_root }
@@ -180,11 +180,11 @@ mod tests {
     fn execution_descriptor_contains_only_entry_and_environment() {
         let entry = ProcedureKey::new(Word::new([1, 2, 3, 4].map(Felt::new_unchecked)));
         let environment = EnvironmentRoot::new(Word::new([5, 6, 7, 8].map(Felt::new_unchecked)));
-        let descriptor = ExecutionDescriptor::new(entry, environment);
+        let descriptor = ExecutionTarget::new(entry, environment);
 
         assert_eq!(descriptor.entry_key(), entry);
         assert_eq!(descriptor.environment_root(), environment);
-        assert_eq!(size_of::<ExecutionDescriptor>(), 2 * size_of::<Word>());
+        assert_eq!(size_of::<ExecutionTarget>(), 2 * size_of::<Word>());
         assert_ne!(Namespace::initial().into_word(), Word::empty());
     }
 

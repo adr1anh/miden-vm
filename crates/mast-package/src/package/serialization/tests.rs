@@ -32,8 +32,8 @@ use super::{
     MAGIC_PACKAGE, PACKAGE_BYTE_READ_BUDGET_MULTIPLIER, Package, PackageManifest, Section, VERSION,
 };
 use crate::{
-    Dependency, ManifestValidationError, NamespacePlan, PackageExport, PackageId, PackageModule,
-    PackageSubmodule, ProcedureExport, SectionId, TargetType, UnverifiedPackageNaming,
+    Dependency, ManifestValidationError, NamespacePath, PackageExport, PackageId, PackageModule,
+    PackageSubmodule, ProcedureExport, SectionId, TargetType, UnverifiedPackageSymbols,
     debug_info::{DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, PackageDebugInfoBuilder},
     interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile},
     package::arbitrary::fixture_naming,
@@ -74,8 +74,8 @@ fn build_package_exports() -> (Arc<MastForest>, Vec<PackageExport>) {
     (Arc::new(forest), vec![PackageExport::Procedure(export)])
 }
 
-fn fixture_home() -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text("package-serde-fixture").unwrap()])
+fn fixture_home() -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text("package-serde-fixture").unwrap()])
 }
 
 fn fixture_create(
@@ -495,7 +495,7 @@ impl SerdeNamingProfile {
 }
 
 impl TypedIdProfile for SerdeNamingProfile {
-    type Context = NamespacePlan;
+    type Context = NamespacePath;
     type Error = &'static str;
 
     fn validate_typed_id(
@@ -531,7 +531,7 @@ impl HomeProfile for SerdeNamingProfile {
 #[test]
 fn package_readers_preserve_unknown_typed_ids_until_explicit_current_admission() {
     let codec = 9127;
-    let home = NamespacePlan::new(vec![
+    let home = NamespacePath::new(vec![
         CanonicalLabel::typed_id(codec, &[0xa5, 0, 0xff], |_, _| Ok(())).unwrap(),
     ]);
     let (mast, exports) = build_package_exports();
@@ -563,15 +563,19 @@ fn package_readers_preserve_unknown_typed_ids_until_explicit_current_admission()
         assert_eq!(decoded.to_bytes(), bytes);
 
         let unknown = SerdeNamingProfile::new(77);
-        assert!(decoded.admit_naming(&unknown, &home, limits).is_err());
+        assert!(decoded.validate_symbols(&unknown, &home, limits).is_err());
         assert!(unknown.typed_calls.get() > 0);
-        assert_eq!(decoded.admit_naming(&selected, &home, limits).unwrap(), naming);
+        assert_eq!(decoded.validate_symbols(&selected, &home, limits).unwrap(), naming);
         assert!(selected.typed_calls.get() > 0);
         assert!(selected.home_calls.get() > 0);
         // Prior admission confers no cached permission under a changed caller context.
-        assert!(decoded.admit_naming(&selected, &fixture_home(), limits).is_err());
+        assert!(decoded.validate_symbols(&selected, &fixture_home(), limits).is_err());
         let calls = (selected.typed_calls.get(), selected.home_calls.get());
-        assert!(decoded.admit_naming(&selected, &home, CodecLimits::new(0, 0, 0, 0)).is_err());
+        assert!(
+            decoded
+                .validate_symbols(&selected, &home, CodecLimits::new(0, 0, 0, 0))
+                .is_err()
+        );
         assert_eq!((selected.typed_calls.get(), selected.home_calls.get()), calls);
         assert_eq!(decoded.naming_transport(), package.naming_transport());
     }
@@ -926,7 +930,7 @@ fn package_rejects_non_root_export() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Library,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Library, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1259,7 +1263,7 @@ fn regression_package_deserialisation_rejects_spoofed_mast_node_digests() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Library,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Library, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1308,7 +1312,7 @@ fn trusted_package_deserialisation_accepts_spoofed_mast_hashes() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Library,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Library, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1361,7 +1365,7 @@ fn regression_kernel_package_deserialisation_rejects_spoofed_mast_node_digests()
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Kernel,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Kernel, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1411,7 +1415,7 @@ fn package_deserialize_from_file_rejects_spoofed_kernel_mast_node_digests() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Kernel,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Kernel, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1469,7 +1473,7 @@ fn trusted_kernel_package_deserialisation_accepts_spoofed_mast_hashes() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Kernel,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Kernel, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )

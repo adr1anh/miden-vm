@@ -5,18 +5,18 @@ use core::num::NonZeroU32;
 
 use miden_assembly_syntax::PathComponent;
 use miden_core::program::{CanonicalLabel, Namespace, ProcedureKey};
-use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath};
 
 use super::*;
-use crate::{CallableBinding, testing::FixtureNamespace};
+use crate::{ProcedureName, testing::FixtureNamespace};
 
-fn kernel_fixture_namespaces() -> (FixtureNamespace, NamespacePlan) {
-    let home = NamespacePlan::new(vec![
+fn kernel_fixture_namespaces() -> (FixtureNamespace, NamespacePath) {
+    let home = NamespacePath::new(vec![
         CanonicalLabel::text("assembly-kernel-fixtures").unwrap(),
         CanonicalLabel::revision(NonZeroU32::new(1).unwrap()),
         CanonicalLabel::text("owner").unwrap(),
     ]);
-    (FixtureNamespace::new(home), NamespacePlan::new(vec![]))
+    (FixtureNamespace::new(home), NamespacePath::new(vec![]))
 }
 
 // Follow the fixture's public module surface, placing exported definitions at N0. Private
@@ -51,7 +51,7 @@ fn add_kernel_fixture_modules(
             let declaration = module.path().join(procedure.name());
             let exported = procedure.visibility().is_exported();
             let (home, components) = if exported {
-                (NamespacePlan::new(vec![]), vec![procedure.name().to_string()])
+                (NamespacePath::new(vec![]), vec![procedure.name().to_string()])
             } else {
                 let components = declaration
                     .components()
@@ -67,7 +67,7 @@ fn add_kernel_fixture_modules(
             };
             let canonical =
                 CallableProcedurePath::from_semantic_components(components).into_diagnostic()?;
-            let binding = CallableBinding::new(home, canonical).into_diagnostic()?;
+            let binding = ProcedureName::new(home, canonical).into_diagnostic()?;
             assert_eq!(binding.parent_namespace() == Namespace::initial(), exported);
             if exported && !root_keys.insert(binding.key()) {
                 return Err(Report::msg("kernel fixture has conflicting root export labels"));
@@ -82,7 +82,7 @@ fn assemble_kernel_fixture(
     context: &TestContext,
     kernel: Box<Module>,
     support: impl IntoIterator<Item = Box<Module>>,
-) -> Result<(Arc<Package>, FixtureNamespace, NamespacePlan), Report> {
+) -> Result<(Arc<Package>, FixtureNamespace, NamespacePath), Report> {
     let support = support.into_iter().collect::<Vec<_>>();
     let (mut bindings, kernel_home) = kernel_fixture_namespaces();
     let modules = core::iter::once(&*kernel)
@@ -231,7 +231,7 @@ fn kernel_reexport_from_private_submodule_preserves_the_defining_root_key() -> T
             CallableProcedurePath::from_semantic_components(vec![export.into()]).unwrap();
         bindings.add_binding(
             Arc::from(Path::new(declaration)),
-            CallableBinding::new(root_home.clone(), canonical).unwrap(),
+            ProcedureName::new(root_home.clone(), canonical).unwrap(),
         )?;
     }
     let root = bindings.binding(Path::new("::$kernel::root")).unwrap().clone();
@@ -562,7 +562,7 @@ fn test_syscall_resolution_to_non_kernel_path_is_checked() -> TestResult {
                 CallableProcedurePath::from_semantic_components(vec!["bar".into()]).unwrap();
             bindings.add_binding(
                 lib.path().join("bar").into(),
-                CallableBinding::new(kernel_home.clone(), canonical).unwrap(),
+                ProcedureName::new(kernel_home.clone(), canonical).unwrap(),
             )?;
             bindings
         } else {

@@ -3926,7 +3926,7 @@ fn allow_root_fixture_bindings(
     assembler.with_package_naming_provider(move |package| {
         let mut homes = vec![FixtureNamespace::assembly_tests().namespace_plan().clone()];
         if artifacts.contains(&package.commitment()) {
-            homes.push(NamespacePlan::new(vec![]));
+            homes.push(NamespacePath::new(vec![]));
         }
         crate::testing::admit_fixture_package(package, &homes)
     });
@@ -3946,7 +3946,7 @@ fn cache_test_project(directory: &FsPath, source_path: &str) -> PathBuf {
 fn cache_test_inputs(
     context: &TargetAssemblyContext<'_>,
     sources: &ProjectSourceInputs,
-    home: NamespacePlan,
+    home: NamespacePath,
 ) -> Result<NamespaceInputs, Report> {
     let mut fixture = FixtureNamespace::new(home);
     let modules = core::iter::once(sources.root.as_ref())
@@ -3976,7 +3976,7 @@ fn source_cache_selects_current_naming_before_reuse_and_rejects_changed_home() {
         move |context, sources, _base| {
             calls.set(calls.get() + 1);
             let home = if changed_home.get() {
-                NamespacePlan::new(vec![
+                NamespacePath::new(vec![
                     miden_core::program::CanonicalLabel::text("changed-caller").unwrap(),
                 ])
             } else {
@@ -4229,14 +4229,14 @@ fn manual_dependency_ast_rejects_changed_source_provenance_for_the_same_body() {
 
 #[test]
 fn standard_dependency_bindings_match_compiled_homes_and_reject_changed_requests() {
-    use miden_project::{LibraryImport, LibrarySelection};
+    use miden_project::{LibraryRef, LibrarySelection};
     let id = "0x0100000000000000020000000000000003000000000000000400000000000000";
     for (mode, revision, selection) in [
         ("latest", "", LibrarySelection::Latest),
         (
             "pinned",
             ", revision = 2",
-            LibrarySelection::Pinned(core::num::NonZeroU32::new(2).unwrap()),
+            LibrarySelection::Revision(core::num::NonZeroU32::new(2).unwrap()),
         ),
     ] {
         let temp = TempDir::new().unwrap();
@@ -4255,8 +4255,8 @@ fn standard_dependency_bindings_match_compiled_homes_and_reject_changed_requests
         };
         write_file(&manifest, &config("owner"));
         write_file(&app.join("mod.masm"), "use dep pub proc entry exec.dep::run end");
-        let import = LibraryImport::new(
-            NamespacePlan::new(vec![miden_core::program::CanonicalLabel::text("owner").unwrap()]),
+        let import = LibraryRef::new(
+            NamespacePath::new(vec![miden_core::program::CanonicalLabel::text("owner").unwrap()]),
             miden_core::Word::try_from(id).unwrap(),
             selection,
         );

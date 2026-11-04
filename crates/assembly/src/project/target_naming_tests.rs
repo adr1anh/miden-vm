@@ -7,15 +7,15 @@ use miden_core::{
     program::{CanonicalLabel, Namespace, ProcedureKey},
     serde::{Deserializable, Serializable},
 };
-use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
-use miden_project::{DependencyBinding, LibraryImport, LibrarySelection};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, ProcedureName};
+use miden_project::{DependencyBinding, LibraryRef, LibrarySelection};
 use tempfile::TempDir;
 
 use super::*;
 use crate::testing::{TestRegistry, admit_fixture_package};
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
 fn path(components: &[&str]) -> CallableProcedurePath {
@@ -25,8 +25,8 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn binding(home: NamespacePlan, components: &[&str]) -> CallableBinding {
-    CallableBinding::new(home, path(components)).unwrap()
+fn binding(home: NamespacePath, components: &[&str]) -> ProcedureName {
+    ProcedureName::new(home, path(components)).unwrap()
 }
 
 fn write(path: &FsPath, contents: &str) {
@@ -81,9 +81,9 @@ fn assemble_source(
 
 /// Change only the independently untrusted package-default metadata, preserving valid bindings,
 /// the exact body supply, and source provenance. The raw package must carry the changed naming.
-fn package_with_default_home(original: &ResolvedPackage, home: NamespacePlan) -> ResolvedPackage {
+fn package_with_default_home(original: &ResolvedPackage, home: NamespacePath) -> ResolvedPackage {
     let naming =
-        PackageNaming::new(home, original.naming.callables().clone(), original.naming.entry_key())
+        PackageSymbols::new(home, original.naming.callables().clone(), original.naming.entry_key())
             .unwrap();
     let source = &original.package;
     let mut package = MastPackage::create_with_modules(
@@ -307,11 +307,11 @@ fn configured_home_keeps_provider_bound_overrides_and_rejects_mismatch_before_so
 fn explicit_parent_source_selection_overrides_target_fallback_without_changing_source_aliases() {
     let identity = "0x0100000000000000020000000000000003000000000000000400000000000000";
     let id = Word::try_from(identity).unwrap();
-    let latest = LibraryImport::new(home("parent"), id, LibrarySelection::Latest);
-    let pinned = LibraryImport::new(
+    let latest = LibraryRef::new(home("parent"), id, LibrarySelection::Latest);
+    let pinned = LibraryRef::new(
         home("parent"),
         id,
-        LibrarySelection::Pinned(NonZeroU32::new(3).unwrap()),
+        LibrarySelection::Revision(NonZeroU32::new(3).unwrap()),
     );
     let choices = [
         (
@@ -418,8 +418,8 @@ fn configured_kernel_names_root_exports_public_submodules_and_private_helpers_wi
     );
     write(&temp.path().join("kernel/api.masm"), "pub proc child push.9 drop end\n");
     write(&temp.path().join("main.masm"), "begin syscall.run syscall.promoted end\n");
-    let run = binding(NamespacePlan::new(vec![]), &["run"]);
-    let child = binding(NamespacePlan::new(vec![]), &["child"]);
+    let run = binding(NamespacePath::new(vec![]), &["run"]);
+    let child = binding(NamespacePath::new(vec![]), &["child"]);
     let hidden = binding(home("kernel-helper-home"), &["$kernel", "hidden"]);
     let entry = binding(home("kernel-program-home"), &["$exec", "$main"]);
     assert_eq!(run.parent_namespace(), Namespace::initial());

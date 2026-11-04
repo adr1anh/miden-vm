@@ -6,7 +6,7 @@ use clap::Args;
 use miden_assembly::diagnostics::Report;
 use miden_core::{
     Word,
-    program::{EnvironmentRoot, ExecutionDescriptor, ProcedureKey},
+    program::{EnvironmentRoot, ExecutionTarget, ProcedureKey},
     serde::read_file_bounded,
 };
 use miden_processor::{
@@ -27,8 +27,8 @@ pub struct DescriptorArgs {
 }
 
 impl DescriptorArgs {
-    pub fn descriptor(&self) -> ExecutionDescriptor {
-        ExecutionDescriptor::new(self.expected_entry_key, self.expected_environment_root)
+    pub fn descriptor(&self) -> ExecutionTarget {
+        ExecutionTarget::new(self.expected_entry_key, self.expected_environment_root)
     }
 }
 

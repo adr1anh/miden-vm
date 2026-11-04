@@ -109,7 +109,7 @@ fn home_bytes(labels: &[&[u8]]) -> Vec<u8> {
 fn assert_structural_failure(bytes: &[u8]) {
     let profile = profile();
     let error =
-        NamespacePlan::decode_home_v1(bytes, &profile, &context(&[]), limits()).unwrap_err();
+        NamespacePath::decode_home_v1(bytes, &profile, &context(&[]), limits()).unwrap_err();
     assert!(!matches!(error, Error::ProfileRejected { .. }), "{error}");
     assert_eq!(profile.home_calls.get(), 0);
 }
@@ -117,7 +117,7 @@ fn assert_structural_failure(bytes: &[u8]) {
 #[test]
 fn interface_home_frozen_builtin_and_synthetic_typed_vector_roundtrips() {
     let home = fixture_home();
-    let plan = NamespacePlan::new(home.clone());
+    let plan = NamespacePath::new(home.clone());
     let profile = profile();
     let context = context(&home);
     // This is a portable wire fixture using a synthetic external codec, never AccountId policy.
@@ -128,7 +128,7 @@ fn interface_home_frozen_builtin_and_synthetic_typed_vector_roundtrips() {
     ];
     assert_eq!(plan.encode_home_v1(&profile, &context, limits()).unwrap(), frozen);
     assert_eq!(
-        NamespacePlan::decode_home_v1(&frozen, &profile, &context, limits()).unwrap(),
+        NamespacePath::decode_home_v1(&frozen, &profile, &context, limits()).unwrap(),
         plan
     );
     assert_eq!(profile.typed_calls.get(), 2);
@@ -137,13 +137,13 @@ fn interface_home_frozen_builtin_and_synthetic_typed_vector_roundtrips() {
 
 #[test]
 fn interface_home_empty_is_explicit_and_requires_policy_for_both_directions() {
-    let plan = NamespacePlan::new(vec![]);
+    let plan = NamespacePath::new(vec![]);
     let profile = profile();
     let mut context = context(&[]);
     let limits = CodecLimits::new(5, 0, 0, 0);
     assert_eq!(plan.encode_home_v1(&profile, &context, limits).unwrap(), [1, 0, 0, 0, 0]);
     let decoded =
-        NamespacePlan::decode_home_v1(&[1, 0, 0, 0, 0], &profile, &context, limits).unwrap();
+        NamespacePath::decode_home_v1(&[1, 0, 0, 0, 0], &profile, &context, limits).unwrap();
     assert_eq!(decoded.namespace(), Namespace::initial());
     assert_eq!(profile.typed_calls.get(), 0);
     assert_eq!(profile.home_calls.get(), 2);
@@ -153,7 +153,7 @@ fn interface_home_empty_is_explicit_and_requires_policy_for_both_directions() {
         Err(Error::ProfileRejected { operation: ProfileOperation::Home, .. })
     ));
     assert!(matches!(
-        NamespacePlan::decode_home_v1(&[1, 0, 0, 0, 0], &profile, &context, limits),
+        NamespacePath::decode_home_v1(&[1, 0, 0, 0, 0], &profile, &context, limits),
         Err(Error::ProfileRejected { operation: ProfileOperation::Home, .. })
     ));
 }
@@ -164,12 +164,12 @@ fn interface_home_preserves_exact_text_tags_and_component_boundaries() {
         .into_iter()
         .map(|text| CanonicalLabel::text(text).unwrap())
         .collect::<Vec<_>>();
-    let plan = NamespacePlan::new(labels.clone());
+    let plan = NamespacePath::new(labels.clone());
     let profile = profile();
     let context = context(&labels);
     let bytes = plan.encode_home_v1(&profile, &context, limits()).unwrap();
     assert_eq!(
-        NamespacePlan::decode_home_v1(&bytes, &profile, &context, limits()).unwrap(),
+        NamespacePath::decode_home_v1(&bytes, &profile, &context, limits()).unwrap(),
         plan
     );
     assert_eq!(profile.typed_calls.get(), 0);
@@ -178,7 +178,7 @@ fn interface_home_preserves_exact_text_tags_and_component_boundaries() {
 #[test]
 fn interface_home_rejects_unknown_outer_versions_truncation_and_trailing_bytes() {
     let home = fixture_home();
-    let bytes = NamespacePlan::new(home.clone())
+    let bytes = NamespacePath::new(home.clone())
         .encode_home_v1(&profile(), &context(&home), limits())
         .unwrap();
     for end in 0..bytes.len() {
@@ -189,7 +189,7 @@ fn interface_home_rejects_unknown_outer_versions_truncation_and_trailing_bytes()
         bad[0] = version;
         let profile = profile();
         assert!(matches!(
-            NamespacePlan::decode_home_v1(&bad, &profile, &context(&home), limits()),
+            NamespacePath::decode_home_v1(&bad, &profile, &context(&home), limits()),
             Err(Error::UnsupportedVersion { kind: "home", version: v }) if v == version
         ));
         assert_eq!(profile.home_calls.get(), 0);
@@ -200,7 +200,7 @@ fn interface_home_rejects_unknown_outer_versions_truncation_and_trailing_bytes()
         bad.extend_from_slice(suffix);
         let profile = profile();
         assert!(matches!(
-            NamespacePlan::decode_home_v1(&bad, &profile, &context(&home), limits()),
+            NamespacePath::decode_home_v1(&bad, &profile, &context(&home), limits()),
             Err(Error::TrailingBytes("HomeV1"))
         ));
         assert_eq!(profile.home_calls.get(), 0);
@@ -231,7 +231,7 @@ fn interface_home_core_label_decoder_rejects_versions_tags_utf8_words_and_revisi
     for label in malformed {
         let profile = profile();
         assert!(matches!(
-            NamespacePlan::decode_home_v1(
+            NamespacePath::decode_home_v1(
                 &home_bytes(&[&label]),
                 &profile,
                 &context(&[]),
@@ -258,7 +258,7 @@ fn interface_home_external_codec_canonicality_and_context_rejections_are_distinc
         let bytes = home_bytes(&[&envelope(1, 3, &payload)]);
         let profile = profile();
         assert!(matches!(
-            NamespacePlan::decode_home_v1(&bytes, &profile, &context(&[]), limits()),
+            NamespacePath::decode_home_v1(&bytes, &profile, &context(&[]), limits()),
             Err(Error::ProfileRejected { operation: ProfileOperation::TypedId, error })
                 if error == expected_error
         ));
@@ -267,14 +267,14 @@ fn interface_home_external_codec_canonicality_and_context_rejections_are_distinc
     }
 
     let home = fixture_home();
-    let plan = NamespacePlan::new(home.clone());
+    let plan = NamespacePath::new(home.clone());
     let bytes = plan.encode_home_v1(&profile(), &context(&home), limits()).unwrap();
     let profile = profile();
     let mut wrong = context(&home);
     wrong.permit_typed = false;
     for result in [
         plan.encode_home_v1(&profile, &wrong, limits()).map(|_| ()),
-        NamespacePlan::decode_home_v1(&bytes, &profile, &wrong, limits()).map(|_| ()),
+        NamespacePath::decode_home_v1(&bytes, &profile, &wrong, limits()).map(|_| ()),
     ] {
         assert!(matches!(
             result,
@@ -286,7 +286,7 @@ fn interface_home_external_codec_canonicality_and_context_rejections_are_distinc
     wrong.expected_home.swap(0, 1);
     for result in [
         plan.encode_home_v1(&profile, &wrong, limits()).map(|_| ()),
-        NamespacePlan::decode_home_v1(&bytes, &profile, &wrong, limits()).map(|_| ()),
+        NamespacePath::decode_home_v1(&bytes, &profile, &wrong, limits()).map(|_| ()),
     ] {
         assert!(matches!(
             result,
@@ -302,7 +302,7 @@ fn interface_home_external_codec_canonicality_and_context_rejections_are_distinc
 #[test]
 fn interface_home_exact_budgets_and_each_aggregate_limit_apply_in_both_directions() {
     let home = fixture_home();
-    let plan = NamespacePlan::new(home.clone());
+    let plan = NamespacePath::new(home.clone());
     let profile = profile();
     let context = context(&home);
     let bytes = plan.encode_home_v1(&profile, &context, limits()).unwrap();
@@ -310,7 +310,7 @@ fn interface_home_exact_budgets_and_each_aggregate_limit_apply_in_both_direction
     let count = home.len() as u32;
     let exact = CodecLimits::new(bytes.len() as u32, count, count, blob_bytes);
     assert_eq!(plan.encode_home_v1(&profile, &context, exact).unwrap(), bytes);
-    assert_eq!(NamespacePlan::decode_home_v1(&bytes, &profile, &context, exact).unwrap(), plan);
+    assert_eq!(NamespacePath::decode_home_v1(&bytes, &profile, &context, exact).unwrap(), plan);
     for (limits, expected_resource) in [
         (CodecLimits::new(bytes.len() as u32 - 1, count, count, blob_bytes), "wire bytes"),
         (CodecLimits::new(bytes.len() as u32, count - 1, count, blob_bytes), "records"),
@@ -319,7 +319,7 @@ fn interface_home_exact_budgets_and_each_aggregate_limit_apply_in_both_direction
     ] {
         for result in [
             plan.encode_home_v1(&profile, &context, limits).map(|_| ()),
-            NamespacePlan::decode_home_v1(&bytes, &profile, &context, limits).map(|_| ()),
+            NamespacePath::decode_home_v1(&bytes, &profile, &context, limits).map(|_| ()),
         ] {
             assert!(matches!(result,
                 Err(Error::LimitExceeded { resource, .. }) if resource == expected_resource));
@@ -341,7 +341,7 @@ fn interface_home_huge_counts_lengths_and_component_lower_bounds_reject_before_p
     bytes.extend_from_slice(CanonicalLabel::text("").unwrap().as_bytes());
     let profile = profile();
     assert!(matches!(
-        NamespacePlan::decode_home_v1(&bytes, &profile, &context(&[]), limits()),
+        NamespacePath::decode_home_v1(&bytes, &profile, &context(&[]), limits()),
         Err(Error::Truncated("HomeV1 components"))
     ));
     assert_eq!(profile.typed_calls.get(), 0);

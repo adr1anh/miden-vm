@@ -49,7 +49,7 @@ pub use self::{
         ConstantExport, ManifestValidationError, PackageExport, PackageManifest, PackageModule,
         PackageSubmodule, ProcedureExport, TypeExport,
     },
-    naming::{NamingCodecError, PackageNaming, PackageNamingError, UnverifiedPackageNaming},
+    naming::{NamingCodecError, PackageSymbols, PackageSymbolsError, UnverifiedPackageSymbols},
     section::{InvalidSectionIdError, Section, SectionId},
     target_type::{InvalidTargetTypeError, TargetType},
 };
@@ -106,7 +106,7 @@ pub struct Package {
     /// if known.
     pub manifest: PackageManifest,
     /// Required naming transport. Possession of a package does not admit canonical homes or keys.
-    naming: UnverifiedPackageNaming,
+    naming: UnverifiedPackageSymbols,
     /// The set of custom sections included with the package, e.g. debug information, account
     /// metadata, etc.
     pub sections: Vec<Section>,
@@ -231,7 +231,8 @@ impl Package {
     /// Construct a [Package] from its essential component parts and required naming metadata.
     ///
     /// The borrowed naming is checked structurally and retained as opaque transport. This does
-    /// not admit its homes under a profile; callers use [`Self::admit_naming`] with current policy.
+    /// not admit its homes under a profile; callers use [`Self::validate_symbols`] with current
+    /// policy.
     pub fn create(
         name: PackageId,
         version: Version,
@@ -239,7 +240,7 @@ impl Package {
         mast: Arc<MastForest>,
         exports: impl IntoIterator<Item = PackageExport>,
         dependencies: impl IntoIterator<Item = Dependency>,
-        naming: &PackageNaming,
+        naming: &PackageSymbols,
     ) -> Result<Self, ManifestValidationError> {
         Self::create_with_modules(name, version, kind, mast, exports, [], dependencies, naming)
     }
@@ -254,7 +255,7 @@ impl Package {
         exports: impl IntoIterator<Item = PackageExport>,
         modules: impl IntoIterator<Item = PackageModule>,
         dependencies: impl IntoIterator<Item = Dependency>,
-        naming: &PackageNaming,
+        naming: &PackageSymbols,
     ) -> Result<Self, ManifestValidationError> {
         let manifest = PackageManifest::new(exports)?
             .with_modules(modules)?
@@ -282,7 +283,7 @@ impl Package {
             }
         }
         naming.validate_package(kind, &mast, &manifest)?;
-        let naming = UnverifiedPackageNaming::from_owned(naming, FORMAT_NAMING_LIMITS)?;
+        let naming = UnverifiedPackageSymbols::from_owned(naming, FORMAT_NAMING_LIMITS)?;
 
         let package = Self {
             name,
@@ -386,18 +387,18 @@ impl Package {
     }
 
     /// Returns required opaque naming bytes without admitting their homes or callable identities.
-    pub fn naming_transport(&self) -> &UnverifiedPackageNaming {
+    pub fn naming_transport(&self) -> &UnverifiedPackageSymbols {
         &self.naming
     }
 
     /// Checks already owned canonical metadata against this package and its exact transport.
     ///
     /// This integrity check does not admit a home under a selected profile. Callers reading raw
-    /// packages must first obtain naming through [`Self::admit_naming`] with explicit policy;
+    /// packages must first obtain naming through [`Self::validate_symbols`] with explicit policy;
     /// compilers may retain the canonical metadata used when constructing the package.
-    pub fn check_naming(&self, naming: &PackageNaming) -> Result<(), ManifestValidationError> {
+    pub fn check_naming(&self, naming: &PackageSymbols) -> Result<(), ManifestValidationError> {
         naming.validate_package(self.kind, &self.mast, &self.manifest)?;
-        let encoded = UnverifiedPackageNaming::from_owned(naming, FORMAT_NAMING_LIMITS)?;
+        let encoded = UnverifiedPackageSymbols::from_owned(naming, FORMAT_NAMING_LIMITS)?;
         if encoded.as_bytes() != self.naming.as_bytes() {
             return Err(ManifestValidationError::MismatchedNamingTransport);
         }
@@ -408,12 +409,12 @@ impl Package {
     ///
     /// This checks the decoded naming against this package's current target, manifest and code.
     /// Success retains no validation state and grants no environment or publication authority.
-    pub fn admit_naming<P: HomeProfile + ?Sized>(
+    pub fn validate_symbols<P: HomeProfile + ?Sized>(
         &self,
         profile: &P,
         context: &P::Context,
         limits: CodecLimits,
-    ) -> Result<PackageNaming, NamingCodecError<P::Error>> {
+    ) -> Result<PackageSymbols, NamingCodecError<P::Error>> {
         let naming = self.naming.decode(profile, context, limits)?;
         naming.validate_package(self.kind, &self.mast, &self.manifest)?;
         Ok(naming)
@@ -1306,7 +1307,7 @@ impl Package {
     /// `naming` must be retained from compilation or admitted with explicit current policy.
     /// Canonical bindings, rather than source namespaces or body digests, identify exports.
     /// This neither constructs an authorization list nor authenticates an execution environment.
-    pub fn check_kernel_code(&self, naming: &PackageNaming) -> Result<(), Report> {
+    pub fn check_kernel_code(&self, naming: &PackageSymbols) -> Result<(), Report> {
         self.check_naming(naming).map_err(Report::msg)?;
         if !self.is_kernel() {
             return Err(Report::msg("invalid kernel package: not a kernel"));
@@ -1320,13 +1321,14 @@ impl Package {
     /// Selects the code/source hint for this package's explicitly named executable entry.
     ///
     /// Requires the exact canonical metadata retained by compilation or obtained through
-    /// [`Self::admit_naming`] with current caller policy. A target tag, source path, body root or
-    /// embedded kernel never supplies a missing key or execution authority. The returned legacy
-    /// `Program` carries available code; execution still requires a caller-authorized descriptor
-    /// and authenticated K-to-D opening. Kernel code can be supplied independently by a host.
+    /// [`Self::validate_symbols`] with current caller policy. A target tag, source path, body root
+    /// or embedded kernel never supplies a missing key or execution authority. The returned
+    /// legacy `Program` carries available code; execution still requires a caller-authorized
+    /// descriptor and authenticated K-to-D opening. Kernel code can be supplied independently
+    /// by a host.
     pub fn try_into_program(
         &self,
-        naming: &PackageNaming,
+        naming: &PackageSymbols,
     ) -> Result<miden_core::program::Program, Report> {
         use miden_core::program::Program;
 
@@ -1357,7 +1359,7 @@ impl Package {
     }
 
     /// Panicking convenience for [`Self::try_into_program`] with explicitly supplied metadata.
-    pub fn unwrap_program(&self, naming: &PackageNaming) -> miden_core::program::Program {
+    pub fn unwrap_program(&self, naming: &PackageSymbols) -> miden_core::program::Program {
         self.try_into_program(naming).unwrap_or_else(|err| panic!("{err}"))
     }
 
@@ -1538,7 +1540,7 @@ impl Package {
             return Err(Report::msg("expected library but got an executable"));
         }
         let admitted = self
-            .admit_naming(profile, context, limits)
+            .validate_symbols(profile, context, limits)
             .map_err(|error| Report::msg(error.to_string()))?;
 
         let entrypoint =
@@ -1577,9 +1579,12 @@ impl Package {
                             .map(|(&key, &implementation)| (key, implementation)),
                     )
                     .map_err(Report::msg)?;
-                    let naming =
-                        PackageNaming::new(admitted.namespace_plan().clone(), callables, Some(key))
-                            .map_err(Report::msg)?;
+                    let naming = PackageSymbols::new(
+                        admitted.namespace_plan().clone(),
+                        callables,
+                        Some(key),
+                    )
+                    .map_err(Report::msg)?;
                     let mut procedure = procedure.clone();
                     procedure.path = executable_entrypoint;
                     let mut package = Self::create(
@@ -1865,8 +1870,8 @@ mod tests {
         (Arc::new(forest), new_exports, sections)
     }
 
-    fn fixture_home() -> crate::NamespacePlan {
-        crate::NamespacePlan::new(vec![
+    fn fixture_home() -> crate::NamespacePath {
+        crate::NamespacePath::new(vec![
             miden_core::program::CanonicalLabel::text("package-unit-fixture").unwrap(),
         ])
     }
@@ -1956,7 +1961,7 @@ mod tests {
         assert_eq!(first.entrypoint(), None);
         assert!(!first.is_program());
         let naming = first
-            .admit_naming(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
+            .validate_symbols(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
             .unwrap();
         assert!(first.try_into_program(&naming).is_err());
         assert!(first.check_kernel_code(&naming).is_err());
@@ -2677,7 +2682,7 @@ mod tests {
         )
         .unwrap();
         let naming = package
-            .admit_naming(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
+            .validate_symbols(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
             .unwrap();
         let error = package
             .check_kernel_code(&naming)
@@ -3078,7 +3083,7 @@ mod tests {
         assert_eq!(debug_info[asm_op.context_name_idx].as_ref(), "alias_b");
 
         let naming = executable
-            .admit_naming(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
+            .validate_symbols(&ExactNamingHomes, &[fixture_home()], FORMAT_NAMING_LIMITS)
             .unwrap();
         let program = executable.try_into_program(&naming).unwrap();
         assert_eq!(program.entrypoint(), entrypoint_node);
@@ -3271,7 +3276,7 @@ mod tests {
     struct ExactNamingHomes;
 
     impl crate::interface::serialization::TypedIdProfile for ExactNamingHomes {
-        type Context = [crate::NamespacePlan];
+        type Context = [crate::NamespacePath];
         type Error = &'static str;
 
         fn validate_typed_id(
@@ -3300,20 +3305,20 @@ mod tests {
 
     fn naming_container_fixture(
         canonical_home: &str,
-    ) -> (Package, Vec<crate::NamespacePlan>, miden_core::program::ProcedureKey) {
+    ) -> (Package, Vec<crate::NamespacePath>, miden_core::program::ProcedureKey) {
         use miden_core::program::{CanonicalLabel, ImplementationRoot};
 
-        use crate::{CallableBinding, CallableProcedurePath, NamespacePlan};
+        use crate::{CallableProcedurePath, NamespacePath, ProcedureName};
 
-        let compilation_home = NamespacePlan::new(vec![CanonicalLabel::text("compile").unwrap()]);
+        let compilation_home = NamespacePath::new(vec![CanonicalLabel::text("compile").unwrap()]);
         let canonical_home =
-            NamespacePlan::new(vec![CanonicalLabel::text(canonical_home).unwrap()]);
+            NamespacePath::new(vec![CanonicalLabel::text(canonical_home).unwrap()]);
         let canonical_path = CallableProcedurePath::from_semantic_components(vec![
             "implementation".into(),
             "run".into(),
         ])
         .unwrap();
-        let binding = CallableBinding::new(canonical_home.clone(), canonical_path).unwrap();
+        let binding = ProcedureName::new(canonical_home.clone(), canonical_path).unwrap();
         let key = binding.key();
         let (forest, root) = build_forest();
         let digest = forest[root].digest();
@@ -3326,7 +3331,7 @@ mod tests {
             [(key, ImplementationRoot::new(digest))],
         )
         .unwrap();
-        let naming = PackageNaming::new(compilation_home.clone(), callables, None).unwrap();
+        let naming = PackageSymbols::new(compilation_home.clone(), callables, None).unwrap();
         let package = Package::create(
             PackageId::from("app"),
             Version::new(1, 0, 0),
@@ -3362,13 +3367,13 @@ mod tests {
     fn check_naming_requires_exact_owned_inventory_and_compilation_home() {
         let (first, first_homes, _) = naming_container_fixture("first");
         let first_naming = first
-            .admit_naming(&ExactNamingHomes, first_homes.as_slice(), FORMAT_NAMING_LIMITS)
+            .validate_symbols(&ExactNamingHomes, first_homes.as_slice(), FORMAT_NAMING_LIMITS)
             .unwrap();
         first.check_naming(&first_naming).unwrap();
 
         let (second, second_homes, _) = naming_container_fixture("second");
         let second_naming = second
-            .admit_naming(&ExactNamingHomes, second_homes.as_slice(), FORMAT_NAMING_LIMITS)
+            .validate_symbols(&ExactNamingHomes, second_homes.as_slice(), FORMAT_NAMING_LIMITS)
             .unwrap();
         // Both inventories select identical code and visible source aliases. That does not make
         // their distinct canonical names interchangeable at the linker boundary.
@@ -3380,8 +3385,8 @@ mod tests {
             Err(ManifestValidationError::MismatchedNamingTransport)
         ));
 
-        let other_compilation_home = PackageNaming::new(
-            crate::NamespacePlan::new(vec![
+        let other_compilation_home = PackageSymbols::new(
+            crate::NamespacePath::new(vec![
                 miden_core::program::CanonicalLabel::text("other-compilation-home").unwrap(),
             ]),
             first_naming.callables().clone(),
@@ -3402,19 +3407,19 @@ mod tests {
         package.strip_debug_info().unwrap();
         assert_eq!(package.naming_transport().as_bytes(), naming_bytes);
         let admitted = package
-            .admit_naming(&ExactNamingHomes, homes.as_slice(), FORMAT_NAMING_LIMITS)
+            .validate_symbols(&ExactNamingHomes, homes.as_slice(), FORMAT_NAMING_LIMITS)
             .unwrap();
         assert!(admitted.callables().binding(key).is_some());
         assert!(
             package
-                .admit_naming(&ExactNamingHomes, &homes[..1], FORMAT_NAMING_LIMITS,)
+                .validate_symbols(&ExactNamingHomes, &homes[..1], FORMAT_NAMING_LIMITS,)
                 .is_err()
         );
         package.manifest = PackageManifest::new([]).unwrap();
         assert!(matches!(
-            package.admit_naming(&ExactNamingHomes, homes.as_slice(), FORMAT_NAMING_LIMITS),
+            package.validate_symbols(&ExactNamingHomes, homes.as_slice(), FORMAT_NAMING_LIMITS),
             Err(NamingCodecError::InvalidNaming(
-                PackageNamingError::UnexpectedVisiblePath { .. }
+                PackageSymbolsError::UnexpectedVisiblePath { .. }
             )),
         ));
     }
@@ -3431,7 +3436,7 @@ mod tests {
             )
             .unwrap();
         let naming = executable
-            .admit_naming(&ExactNamingHomes, homes.as_slice(), FORMAT_NAMING_LIMITS)
+            .validate_symbols(&ExactNamingHomes, homes.as_slice(), FORMAT_NAMING_LIMITS)
             .unwrap();
         assert_eq!(naming.entry_key(), Some(key));
         let declaration = naming.callables().binding(key).unwrap();

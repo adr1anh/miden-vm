@@ -1414,7 +1414,7 @@ mod tests {
     ) -> Dependency {
         // An explicit graph-fixture choice, independent of package names, versions and bodies.
         Dependency::new(name, version, linkage).with_binding(crate::DependencyBinding::Custom(
-            miden_mast_package::NamespacePlan::new(vec![
+            miden_mast_package::NamespacePath::new(vec![
                 miden_core::program::CanonicalLabel::text("project-graph-fixtures").unwrap(),
             ]),
         ))
@@ -1456,8 +1456,8 @@ mod tests {
                 "foo".into(),
             ])
             .unwrap(),
-            miden_mast_package::CallableBinding::new(
-                miden_mast_package::NamespacePlan::new(vec![
+            miden_mast_package::ProcedureName::new(
+                miden_mast_package::NamespacePath::new(vec![
                     miden_core::program::CanonicalLabel::text("defining-home").unwrap(),
                 ]),
                 miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
@@ -1501,7 +1501,7 @@ mod tests {
         );
         assert_eq!(
             node_named(&graph, "root").unwrap().dependencies[0].binding,
-            Some(crate::DependencyBinding::Custom(miden_mast_package::NamespacePlan::new(vec![
+            Some(crate::DependencyBinding::Custom(miden_mast_package::NamespacePath::new(vec![
                 miden_core::program::CanonicalLabel::text("project-graph-fixtures").unwrap(),
             ])))
         );
@@ -2439,10 +2439,10 @@ mod tests {
     }
 
     fn pinned_binding(revision: u32) -> crate::DependencyBinding {
-        crate::DependencyBinding::Standard(crate::LibraryImport::new(
-            miden_mast_package::NamespacePlan::new(vec![]),
+        crate::DependencyBinding::Standard(crate::LibraryRef::new(
+            miden_mast_package::NamespacePath::new(vec![]),
             hash_string_to_word("same-opaque-library-id"),
-            crate::LibrarySelection::Pinned(core::num::NonZeroU32::new(revision).unwrap()),
+            crate::LibrarySelection::Revision(core::num::NonZeroU32::new(revision).unwrap()),
         ))
     }
 

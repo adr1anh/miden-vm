@@ -10,8 +10,8 @@ use miden_core::{
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::Operation,
     program::{
-        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionDescriptor, ImplementationRoot,
-        Namespace, ProcedureKey,
+        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionTarget, ImplementationRoot, Namespace,
+        ProcedureKey,
     },
 };
 use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceSpan};
@@ -26,7 +26,7 @@ use crate::{
 #[test]
 fn configuration_preserves_explicit_authority_and_limits() {
     let descriptor =
-        ExecutionDescriptor::new(ProcedureKey::new(word(10)), EnvironmentRoot::new(word(20)));
+        ExecutionTarget::new(ProcedureKey::new(word(10)), EnvironmentRoot::new(word(20)));
     let opening = OpeningLimits { max_depth: 0, ..opening_limits() };
     let ledger = LedgerLimits {
         max_occurrences: 0,
@@ -46,11 +46,11 @@ fn configuration_preserves_explicit_authority_and_limits() {
 
     // Const evaluation remains available to callers, including for deliberately restrictive policy.
     const fn configured_values(
-        descriptor: ExecutionDescriptor,
+        descriptor: ExecutionTarget,
         opening: OpeningLimits,
         ledger: LedgerLimits,
         session: SessionLimits,
-    ) -> (ExecutionDescriptor, OpeningLimits, LedgerLimits, SessionLimits) {
+    ) -> (ExecutionTarget, OpeningLimits, LedgerLimits, SessionLimits) {
         let environment = ExecutionEnvironment::new(descriptor, opening, ledger, session);
         (
             environment.descriptor(),

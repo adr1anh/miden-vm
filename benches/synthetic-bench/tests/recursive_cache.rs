@@ -1,6 +1,6 @@
 use miden_core::{
     Felt, Word,
-    program::{EnvironmentRoot, ExecutionDescriptor, ProcedureKey, VerifierIdentity},
+    program::{EnvironmentRoot, ExecutionTarget, ProcedureKey, VerifierIdentity},
     proof::ExecutionProofCompatibility,
 };
 use miden_verifier::Verifier;
@@ -11,8 +11,8 @@ mod cache_key;
 
 use cache_key::tx_proof_cache_key;
 
-fn descriptor(entry: u32, root: u32) -> ExecutionDescriptor {
-    ExecutionDescriptor::new(
+fn descriptor(entry: u32, root: u32) -> ExecutionTarget {
+    ExecutionTarget::new(
         ProcedureKey::new(Word::new([Felt::from_u32(entry); 4])),
         EnvironmentRoot::new(Word::new([Felt::from_u32(root); 4])),
     )

@@ -3,7 +3,7 @@
 use miden_core::{
     Felt, Word,
     program::{
-        EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, NUM_CLAIM_ELEMENTS, ProcedureKey,
+        EnvironmentRoot, ExecutionClaim, ExecutionTarget, NUM_CLAIM_ELEMENTS, ProcedureKey,
         StackInputs, StackOutputs,
     },
 };
@@ -19,7 +19,7 @@ fn claim_fixture() -> ExecutionClaim {
     let elements: [Felt; NUM_CLAIM_ELEMENTS] =
         std::array::from_fn(|i| Felt::new_unchecked(i as u64 + 1));
     ExecutionClaim::new(
-        ExecutionDescriptor::new(
+        ExecutionTarget::new(
             ProcedureKey::new(Word::new(elements[..4].try_into().unwrap())),
             EnvironmentRoot::new(Word::new(elements[4..8].try_into().unwrap())),
         ),

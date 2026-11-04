@@ -1,7 +1,7 @@
 //! Tests for the common MVM/PVM recursive security estimator.
 
 use miden_air::vm::security as vm_metadata;
-use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, ProcedureName};
 
 use super::{
     EXAMPLE_FIB_SMALL, fib_stack_inputs, generate_recursive_verifier_data, vm_verify_proof_program,
@@ -764,11 +764,11 @@ fn pvm_lookup_round_matches_native_exhaustively() {
     );
 }
 
-fn security_estimator_binding(procedure: &str) -> CallableBinding {
+fn security_estimator_binding(procedure: &str) -> ProcedureName {
     // Core declares its full semantic paths under the empty custom compilation home.
     // Derive the callable identity independently of the selected implementation root.
-    CallableBinding::new(
-        NamespacePlan::new(vec![]),
+    ProcedureName::new(
+        NamespacePath::new(vec![]),
         CallableProcedurePath::from_semantic_components(
             ["miden", "core", "stark", "security", procedure]
                 .into_iter()

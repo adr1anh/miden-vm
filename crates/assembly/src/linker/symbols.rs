@@ -9,7 +9,7 @@ use miden_assembly_syntax::{
 };
 
 use super::LinkStatus;
-use crate::{CallableBinding, CallableDeclaration};
+use crate::{CallableDeclaration, ProcedureName};
 
 /// A [Symbol] is a named, linkable item defined within a module.
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ pub struct Symbol {
     /// The type of item associated with this symbol.
     item: SymbolItem,
     /// Canonical declaration identity, never inferred from source aliases or compiled code.
-    callable_binding: OnceCell<CallableBinding>,
+    callable_binding: OnceCell<ProcedureName>,
 }
 
 /// An import declared by a module.
@@ -149,12 +149,12 @@ impl Symbol {
         &self.item
     }
 
-    pub fn callable_binding(&self) -> Option<&CallableBinding> {
+    pub fn callable_binding(&self) -> Option<&ProcedureName> {
         self.callable_binding.get()
     }
 
     /// Binds a concrete declaration once. Repeating the identical metadata is harmless.
-    pub fn bind_callable(&self, binding: CallableBinding) -> Result<(), CallableBinding> {
+    pub fn bind_callable(&self, binding: ProcedureName) -> Result<(), ProcedureName> {
         if self.callable_binding.get() == Some(&binding) {
             return Ok(());
         }

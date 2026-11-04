@@ -9,7 +9,7 @@ use miden_core::{
     Felt, WORD_SIZE, Word,
     deferred::DeferredRoot,
     program::{
-        EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, MIN_STACK_DEPTH, ProcedureKey,
+        EnvironmentRoot, ExecutionClaim, ExecutionTarget, MIN_STACK_DEPTH, ProcedureKey,
         StackInputs, StackOutputs,
     },
     serde::{
@@ -36,7 +36,7 @@ pub struct PublicInputs {
 
 impl PublicInputs {
     pub fn new(
-        descriptor: ExecutionDescriptor,
+        descriptor: ExecutionTarget,
         stack_inputs: StackInputs,
         stack_outputs: StackOutputs,
         deferred_root: DeferredRoot,
@@ -52,7 +52,7 @@ impl PublicInputs {
         Self { claim: claim.clone(), deferred_root }
     }
 
-    pub fn execution_descriptor(&self) -> ExecutionDescriptor {
+    pub fn execution_descriptor(&self) -> ExecutionTarget {
         self.claim.execution_descriptor()
     }
 
@@ -123,7 +123,7 @@ impl Deserializable for PublicInputs {
                 "unsupported VM public-input transport version".into(),
             ));
         }
-        let descriptor = ExecutionDescriptor::new(
+        let descriptor = ExecutionTarget::new(
             ProcedureKey::read_from(source)?,
             EnvironmentRoot::read_from(source)?,
         );

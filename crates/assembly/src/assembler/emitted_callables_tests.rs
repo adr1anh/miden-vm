@@ -3,8 +3,8 @@ use miden_core::{mast::MastNode, program::CanonicalLabel};
 use super::*;
 use crate::testing::{FixtureNamespace, TestContext};
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
 fn canonical(components: &[&str]) -> CallableProcedurePath {
@@ -109,8 +109,8 @@ fn emitted_inventory_coalesces_declaration_aliases_without_selected_code() {
     let root = context
         .parse_module("namespace client\nuse left\nuse right\npub proc caller exec.left::run exec.right::run end")
         .unwrap();
-    let caller = CallableBinding::new(home("caller"), canonical(&["public", "caller"])).unwrap();
-    let dependency = CallableBinding::new(home("dependency"), canonical(&["run"])).unwrap();
+    let caller = ProcedureName::new(home("caller"), canonical(&["public", "caller"])).unwrap();
+    let dependency = ProcedureName::new(home("dependency"), canonical(&["run"])).unwrap();
     let mut assembler = Assembler::new(context.source_manager())
         .with_namespace_plan(caller.namespace_plan().clone())
         .with_callable_path(Arc::from(Path::new("::client::caller")), caller.path().clone())

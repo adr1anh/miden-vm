@@ -7,7 +7,7 @@ use miden_air_definitions::vm::{
 };
 use miden_core::{
     Felt,
-    program::{ExecutionClaim, ExecutionDescriptor, StackOutputs},
+    program::{ExecutionClaim, ExecutionTarget, StackOutputs},
     proof::{ExecutionProof, HashFunction, PrecompileStatus, VmProof},
     utils::{Matrix, RowMajorMatrix},
 };
@@ -44,7 +44,7 @@ pub struct ReproTrace {
     eidos_compression: RowMajorMatrix<Felt>,
     and8: RowMajorMatrix<Felt>,
     program_info: miden_processor::ProgramInfo,
-    execution_descriptor: ExecutionDescriptor,
+    execution_descriptor: ExecutionTarget,
     init_stack: miden_processor::StackInputs,
     precompile_root: miden_core::deferred::DeferredRoot,
     outputs: StackOutputs,

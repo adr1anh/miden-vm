@@ -2,13 +2,13 @@
 // ================================================================================================
 
 use miden_core::program::CanonicalLabel;
-use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath};
 
 use super::*;
 
 fn graph_assembler(context: &TestContext, declarations: &[(&str, &[&str])]) -> Assembler {
     let mut assembler =
-        Assembler::new(context.source_manager()).with_namespace_plan(NamespacePlan::new(vec![
+        Assembler::new(context.source_manager()).with_namespace_plan(NamespacePath::new(vec![
             CanonicalLabel::text("runtime-graph-tests").unwrap(),
         ]));
     for &(declaration, components) in declarations {

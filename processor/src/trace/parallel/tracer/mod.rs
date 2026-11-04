@@ -482,7 +482,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
 
     fn prepare_environment(
         &mut self,
-        _descriptor: &crate::ExecutionDescriptor,
+        _descriptor: &crate::ExecutionTarget,
         _entry: crate::SessionBinding,
     ) -> Result<KeyedEvent, ExecutionError> {
         Err(ExecutionError::Internal("fragment replay cannot initialize native environment"))

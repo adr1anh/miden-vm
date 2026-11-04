@@ -5,7 +5,7 @@ use alloc::{string::ToString, vec::Vec};
 use miden_core::{
     WORD_SIZE, Word,
     field::{PrimeCharacteristicRing, QuadFelt},
-    program::{EnvironmentRoot, ExecutionDescriptor, ProcedureKey, StackInputs, StackOutputs},
+    program::{EnvironmentRoot, ExecutionTarget, ProcedureKey, StackInputs, StackOutputs},
     serde::{Deserializable, Serializable},
 };
 use miden_stark::lookup::Challenges;
@@ -207,7 +207,7 @@ fn eval_external_accepts_only_deferred_aux4_and_rejects_legacy_shapes() {
 fn statement_fixture() -> PublicInputs {
     let word = |start: u32| Word::new(core::array::from_fn(|i| Felt::from_u32(start + i as u32)));
     PublicInputs::new(
-        ExecutionDescriptor::new(ProcedureKey::new(word(101)), EnvironmentRoot::new(word(201))),
+        ExecutionTarget::new(ProcedureKey::new(word(101)), EnvironmentRoot::new(word(201))),
         StackInputs::new(&[Felt::from_u32(5), Felt::from_u32(6)]).unwrap(),
         StackOutputs::new(&[Felt::from_u32(7)]).unwrap(),
         word(301),

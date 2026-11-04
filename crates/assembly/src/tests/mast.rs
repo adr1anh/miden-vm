@@ -4,11 +4,11 @@ use miden_core::{
     mast::BasicBlockNodeBuilder,
     program::{CanonicalLabel, ProcedureKey},
 };
-use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath};
 
 use super::*;
 use crate::{
-    CallableBinding,
+    ProcedureName,
     testing::{FixtureNamespace, admit_fixture_package},
 };
 
@@ -31,12 +31,12 @@ fn nested_blocks() -> Result<(), Report> {
         )
         .unwrap()
     };
-    let program_home = NamespacePlan::new(vec![
+    let program_home = NamespacePath::new(vec![
         CanonicalLabel::text("nested-blocks").unwrap(),
         CanonicalLabel::text("program").unwrap(),
     ]);
-    let kernel_home = NamespacePlan::new(vec![]);
-    let helper_home = NamespacePlan::new(vec![
+    let kernel_home = NamespacePath::new(vec![]);
+    let helper_home = NamespacePath::new(vec![
         CanonicalLabel::text("nested-blocks").unwrap(),
         CanonicalLabel::text("dependency").unwrap(),
     ]);
@@ -87,12 +87,12 @@ fn nested_blocks() -> Result<(), Report> {
                 .unwrap()
                 .with_callable_binding(
                     Path::kernel_path().join("foo").into(),
-                    CallableBinding::new(kernel_home.clone(), kernel_foo_path).unwrap(),
+                    ProcedureName::new(kernel_home.clone(), kernel_foo_path).unwrap(),
                 )
                 .unwrap()
                 .with_callable_binding(
                     Arc::from(Path::new("::libs::helpers::help")),
-                    CallableBinding::new(helper_home.clone(), helper_path).unwrap(),
+                    ProcedureName::new(helper_home.clone(), helper_path).unwrap(),
                 )
                 .unwrap();
         assembler

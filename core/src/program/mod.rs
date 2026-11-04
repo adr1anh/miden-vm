@@ -21,7 +21,7 @@ mod environment;
 pub use environment::{
     CanonicalLabel, EnvNode, EnvNodeError, EnvironmentBinding, EnvironmentBuildError,
     EnvironmentBuildLimits, EnvironmentBuildResource, EnvironmentBuilder, EnvironmentRoot,
-    ExecutionDescriptor, ImplementationRoot, LabelCommitment, LabelError, Namespace, ProcedureKey,
+    ExecutionTarget, ImplementationRoot, LabelCommitment, LabelError, Namespace, ProcedureKey,
     ValidatedEnvironment,
 };
 
@@ -232,7 +232,7 @@ impl fmt::Display for Program {
 /// procedure roots used for its compilation.
 ///
 /// This metadata supports code inspection and debugging. The authenticated execution identities
-/// belong to [`ExecutionDescriptor`] and the public statement belongs to [`ExecutionClaim`]. A
+/// belong to [`ExecutionTarget`] and the public statement belongs to [`ExecutionClaim`]. A
 /// caller must independently authorize the descriptor's environment and its bindings; this
 /// metadata does not grant syscall authority.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

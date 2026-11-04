@@ -1,7 +1,7 @@
 use miden_assembly_syntax::PathComponent;
 use miden_core::mast::MastForest;
 use miden_mast_package::{
-    Dependency, PackageCallables, PackageNaming, debug_info::PackageDebugInfo,
+    Dependency, PackageCallables, PackageSymbols, debug_info::PackageDebugInfo,
 };
 
 use super::*;
@@ -14,7 +14,7 @@ pub struct AssemblyProduct {
     package: Box<Package>,
     kernel_package: Option<Arc<Package>>,
     debug_info: Box<PackageDebugInfo>,
-    naming: PackageNaming,
+    naming: PackageSymbols,
     callable_sources: CallableSources,
 }
 
@@ -25,8 +25,8 @@ pub(super) type CallableSources =
 
 /// Transient compiler references which must be resolved before the forest builder is consumed.
 pub(super) struct PendingCallables {
-    definitions: Vec<(Arc<Path>, CallableBinding, Option<MastNodeUse>, bool)>,
-    imported: Vec<(CallableBinding, Option<ImplementationRoot>)>,
+    definitions: Vec<(Arc<Path>, ProcedureName, Option<MastNodeUse>, bool)>,
+    imported: Vec<(ProcedureName, Option<ImplementationRoot>)>,
     visible_paths: Vec<(CallableProcedurePath, ProcedureKey)>,
 }
 
@@ -63,7 +63,7 @@ impl Assembler {
         // descriptor or a defining source path in this compilation.
         let mut imported = Vec::new();
         let mut retain_imported =
-            |naming: &PackageNaming| {
+            |naming: &PackageSymbols| {
                 let callables = naming.callables();
                 imported.extend(callables.bindings().map(|(&key, binding)| {
                     (binding.clone(), callables.selected_implementation(key))
@@ -203,7 +203,7 @@ impl AssemblyProduct {
         package: Box<Package>,
         kernel: Option<Arc<Package>>,
         debug_info: Box<PackageDebugInfo>,
-        naming: PackageNaming,
+        naming: PackageSymbols,
         callable_sources: CallableSources,
     ) -> Self {
         assert!(
@@ -220,7 +220,7 @@ impl AssemblyProduct {
     }
 
     /// Returns the compiler's complete canonical naming inventory without profile admission.
-    pub fn naming(&self) -> &PackageNaming {
+    pub fn naming(&self) -> &PackageSymbols {
         &self.naming
     }
 
@@ -252,7 +252,7 @@ impl AssemblyProduct {
     }
 
     /// Returns the explicit caller home supplied to this compilation, without admitting it.
-    pub fn namespace_plan(&self) -> &NamespacePlan {
+    pub fn namespace_plan(&self) -> &NamespacePath {
         self.naming.namespace_plan()
     }
 
@@ -412,7 +412,7 @@ mod tests {
     struct ExactFixtureHome;
 
     impl TypedIdProfile for ExactFixtureHome {
-        type Context = NamespacePlan;
+        type Context = NamespacePath;
         type Error = &'static str;
 
         fn validate_typed_id(
@@ -555,13 +555,13 @@ mod tests {
                 let package = product.into_artifact(emit_debug_info).unwrap();
                 assert_eq!(
                     package
-                        .admit_naming(&ExactFixtureHome, names.namespace_plan(), limits)
+                        .validate_symbols(&ExactFixtureHome, names.namespace_plan(), limits)
                         .unwrap(),
                     expected,
                 );
                 assert!(
                     package
-                        .admit_naming(&ExactFixtureHome, &NamespacePlan::new(vec![]), limits)
+                        .validate_symbols(&ExactFixtureHome, &NamespacePath::new(vec![]), limits)
                         .is_err(),
                 );
                 assert_eq!(package.debug_info().unwrap().is_some(), emit_debug_info);
@@ -573,7 +573,7 @@ mod tests {
                     assert_eq!(decoded.naming_transport(), package.naming_transport());
                     assert_eq!(
                         decoded
-                            .admit_naming(&ExactFixtureHome, names.namespace_plan(), limits)
+                            .validate_symbols(&ExactFixtureHome, names.namespace_plan(), limits)
                             .unwrap(),
                         expected,
                     );

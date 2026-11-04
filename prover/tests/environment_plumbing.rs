@@ -6,7 +6,7 @@ use miden_core::{
     Felt, Word,
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::Operation,
-    program::{CanonicalLabel, EnvironmentRoot, ExecutionDescriptor, Namespace},
+    program::{CanonicalLabel, EnvironmentRoot, ExecutionTarget, Namespace},
 };
 use miden_processor::{
     DefaultHost, EnvironmentTraceLimits, ExecutionEnvironment, ExecutionError, ExecutionOptions,
@@ -29,7 +29,7 @@ fn proving_preserves_the_caller_environment_in_sequential_and_overlapped_executi
         .procedure_key(CanonicalLabel::text("start").unwrap().commitment());
     let authorized_root = EnvironmentRoot::new(Word::new([83u32; 4].map(Felt::from_u32)));
     let environment = ExecutionEnvironment::new(
-        ExecutionDescriptor::new(entry, authorized_root),
+        ExecutionTarget::new(entry, authorized_root),
         OpeningLimits {
             max_nodes: 8,
             max_depth: 7,

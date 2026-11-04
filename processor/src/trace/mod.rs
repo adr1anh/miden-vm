@@ -110,7 +110,7 @@ impl ExecutionWitness {
     }
 
     /// Immutable descriptor authenticated separately from legacy ProgramInfo transport.
-    pub fn execution_descriptor(&self) -> crate::ExecutionDescriptor {
+    pub fn execution_descriptor(&self) -> crate::ExecutionTarget {
         self.vm.trace.environment.descriptor()
     }
 

@@ -5,7 +5,7 @@ use alloc::collections::BTreeMap;
 use miden_core::program::{ImplementationRoot, ProcedureKey};
 
 use crate::{
-    CallableBinding, CallableProcedurePath,
+    CallableProcedurePath, ProcedureName,
     interface::serialization::{Budget, CodecError, CodecLimits, HomeProfile, checked_add},
 };
 
@@ -26,14 +26,14 @@ pub use serialization::CallablesCodecError;
 ///
 /// This detached inventory is not a package, interface or release artifact. Its canonical v1
 /// payload codec revalidates explicit home policy; it does not add container admission. Entry/code
-/// relationships belong to [`crate::PackageNaming`]; publication identity and policy stay external.
-/// Syscall authority is defined by the VM, not an inventory configuration.
+/// relationships belong to [`crate::PackageSymbols`]; publication identity and policy stay
+/// external. Syscall authority is defined by the VM, not an inventory configuration.
 /// [`Self::validate_homes`] checks explicit
 /// caller-supplied home policy and aggregate owned-data bounds. Full artifact admission, including
 /// required container metadata, remains a separate container operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageCallables {
-    bindings: BTreeMap<ProcedureKey, CallableBinding>,
+    bindings: BTreeMap<ProcedureKey, ProcedureName>,
     visible_paths: BTreeMap<CallableProcedurePath, ProcedureKey>,
     selected_implementations: BTreeMap<ProcedureKey, ImplementationRoot>,
 }
@@ -46,7 +46,7 @@ impl PackageCallables {
     /// rejected even when their associated values are identical. Empty inventories and declarations
     /// without aliases or selected implementations are permitted.
     pub fn new(
-        bindings: impl IntoIterator<Item = CallableBinding>,
+        bindings: impl IntoIterator<Item = ProcedureName>,
         visible_paths: impl IntoIterator<Item = (CallableProcedurePath, ProcedureKey)>,
         selected_implementations: impl IntoIterator<Item = (ProcedureKey, ImplementationRoot)>,
     ) -> Result<Self, PackageCallablesError> {
@@ -165,12 +165,12 @@ impl PackageCallables {
     }
 
     /// Iterates over every declaration in key order, without defining a wire encoding.
-    pub fn bindings(&self) -> impl ExactSizeIterator<Item = (&ProcedureKey, &CallableBinding)> {
+    pub fn bindings(&self) -> impl ExactSizeIterator<Item = (&ProcedureKey, &ProcedureName)> {
         self.bindings.iter()
     }
 
     /// Looks up a declaration independently of its visibility or selected implementation.
-    pub fn binding(&self, key: ProcedureKey) -> Option<&CallableBinding> {
+    pub fn binding(&self, key: ProcedureKey) -> Option<&ProcedureName> {
         self.bindings.get(&key)
     }
 

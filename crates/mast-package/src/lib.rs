@@ -15,10 +15,7 @@ pub mod namespace_plan;
 mod package;
 mod serde_helpers;
 
-pub use miden_assembly_syntax::{
-    PathBuf, Version, VersionError,
-    ast::{ProcedureName, QualifiedProcedureName},
-};
+pub use miden_assembly_syntax::{PathBuf, Version, VersionError, ast::QualifiedProcedureName};
 pub use miden_core::{Word, mast::MastForest, program::Program};
 
 #[cfg(feature = "arbitrary")]
@@ -33,14 +30,14 @@ pub use self::{
             InterfaceProfile, LibraryId,
         },
     },
-    namespace_plan::{CallableBinding, NamespacePlan},
+    namespace_plan::{NamespacePath, ProcedureName},
     package::{
         CallablesCodecError, ConstantExport, EventHandlerManifestEntry, EventHandlerSection,
         EventHandlerSectionError, InvalidSectionIdError, InvalidTargetTypeError, MAX_HANDLERS,
         MAX_MODULE_BYTES, MAX_NAME_BYTES, MIN_ABI_VERSION, ManifestValidationError,
         NamingCodecError, Package, PackageCallables, PackageCallablesError, PackageDebugInfoError,
-        PackageExport, PackageId, PackageManifest, PackageModule, PackageNaming,
-        PackageNamingError, PackageStripError, PackageSubmodule, ProcedureExport, Section,
-        SectionId, TargetType, TypeExport, UnverifiedPackageNaming, validate_manifest_entries,
+        PackageExport, PackageId, PackageManifest, PackageModule, PackageStripError,
+        PackageSubmodule, PackageSymbols, PackageSymbolsError, ProcedureExport, Section, SectionId,
+        TargetType, TypeExport, UnverifiedPackageSymbols, validate_manifest_entries,
     },
 };

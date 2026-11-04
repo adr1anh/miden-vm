@@ -9,10 +9,10 @@ use miden_core::{
 };
 
 use super::*;
-use crate::{CallableBinding, CallableProcedurePath, NamespacePlan};
+use crate::{CallableProcedurePath, NamespacePath, ProcedureName};
 
-fn home(components: &[&str]) -> NamespacePlan {
-    NamespacePlan::new(
+fn home(components: &[&str]) -> NamespacePath {
+    NamespacePath::new(
         components
             .iter()
             .map(|component| CanonicalLabel::text(component).unwrap())
@@ -27,8 +27,8 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn binding(home_components: &[&str], components: &[&str]) -> CallableBinding {
-    CallableBinding::new(home(home_components), path(components)).unwrap()
+fn binding(home_components: &[&str], components: &[&str]) -> ProcedureName {
+    ProcedureName::new(home(home_components), path(components)).unwrap()
 }
 
 fn body(forest: &mut MastForest, operation: Operation) -> MastNodeId {
@@ -52,12 +52,12 @@ fn export(source: &str, forest: &MastForest, node: MastNodeId) -> PackageExport 
 }
 
 fn naming(
-    bindings: impl IntoIterator<Item = CallableBinding>,
+    bindings: impl IntoIterator<Item = ProcedureName>,
     aliases: impl IntoIterator<Item = (CallableProcedurePath, ProcedureKey)>,
     selected: impl IntoIterator<Item = (ProcedureKey, ImplementationRoot)>,
     entry: Option<ProcedureKey>,
-) -> PackageNaming {
-    PackageNaming::new(
+) -> PackageSymbols {
+    PackageSymbols::new(
         home(&["conversion-fixtures"]),
         PackageCallables::new(bindings, aliases, selected).unwrap(),
         entry,
@@ -69,7 +69,7 @@ fn package(
     kind: TargetType,
     forest: MastForest,
     exports: impl IntoIterator<Item = PackageExport>,
-    metadata: &PackageNaming,
+    metadata: &PackageSymbols,
 ) -> Package {
     Package::create(
         PackageId::from("conversion-fixture"),
@@ -83,7 +83,7 @@ fn package(
     .unwrap()
 }
 
-fn private_entry_fixture() -> (Package, PackageNaming, MastNodeId) {
+fn private_entry_fixture() -> (Package, PackageSymbols, MastNodeId) {
     let mut forest = MastForest::new();
     let root = body(&mut forest, Operation::Add);
     let entry = binding(&["application"], &["private", "start"]);
@@ -174,7 +174,7 @@ fn executable_tag_and_main_like_alias_do_not_supply_missing_entry_metadata() {
 #[test]
 fn program_conversion_requires_exact_naming_even_for_identical_code() {
     let (package, metadata, _) = private_entry_fixture();
-    let changed = PackageNaming::new(
+    let changed = PackageSymbols::new(
         home(&["different-compilation"]),
         metadata.callables().clone(),
         metadata.entry_key(),
@@ -267,7 +267,7 @@ fn kernel_code_requires_kernel_kind_public_exports_and_exact_naming() {
 
     let kernel = package(TargetType::Kernel, forest.clone(), exports, &metadata);
     let changed =
-        PackageNaming::new(home(&["different-compilation"]), metadata.callables().clone(), None)
+        PackageSymbols::new(home(&["different-compilation"]), metadata.callables().clone(), None)
             .unwrap();
     changed
         .validate_package(kernel.kind, kernel.mast_forest(), &kernel.manifest)
@@ -296,6 +296,6 @@ fn kernel_public_source_alias_cannot_turn_a_child_binding_into_a_root_binding() 
 
     assert!(matches!(
         metadata.validate_package(TargetType::Kernel, &forest, &manifest),
-        Err(PackageNamingError::KernelExportOutsideRoot { key, .. }) if key == child.key(),
+        Err(PackageSymbolsError::KernelExportOutsideRoot { key, .. }) if key == child.key(),
     ));
 }

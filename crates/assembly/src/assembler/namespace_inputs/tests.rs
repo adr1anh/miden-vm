@@ -1,18 +1,17 @@
 use alloc::{string::ToString, sync::Arc};
 
 use miden_core::program::{CanonicalLabel, ImplementationRoot, Namespace};
-use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath};
 use miden_project::TargetType;
 
 use crate::{
-    Assembler, AssemblyProduct, CallableBinding, CallableDeclaration, NamespaceInputs, Path,
-    Report,
+    Assembler, AssemblyProduct, CallableDeclaration, NamespaceInputs, Path, ProcedureName, Report,
     ast::{self, Ident, ItemIndex},
     testing::{FixtureNamespace, TestContext},
 };
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
 fn canonical(name: &str) -> CallableProcedurePath {
@@ -23,16 +22,16 @@ fn declaration(path: &str) -> Arc<Path> {
     Arc::from(Path::new(path))
 }
 
-fn binding(home_name: &str, name: &str) -> CallableBinding {
-    CallableBinding::new(home(home_name), canonical(name)).unwrap()
+fn binding(home_name: &str, name: &str) -> ProcedureName {
+    ProcedureName::new(home(home_name), canonical(name)).unwrap()
 }
 
-fn source_binding(home_name: &str, components: &[&str]) -> CallableBinding {
+fn source_binding(home_name: &str, components: &[&str]) -> ProcedureName {
     let path = CallableProcedurePath::from_semantic_components(
         components.iter().map(|component| (*component).to_string()).collect(),
     )
     .unwrap();
-    CallableBinding::new(home(home_name), path).unwrap()
+    ProcedureName::new(home(home_name), path).unwrap()
 }
 
 fn inputs(home_name: &str) -> NamespaceInputs {
@@ -88,7 +87,7 @@ fn empty_replacement_clears_the_previous_caller_home() {
     let error = library(&context, assembler, "namespace client\npub proc run push.1 end")
         .err()
         .expect("an empty replacement must not inherit the previous caller home");
-    assert!(error.to_string().contains("explicit caller NamespacePlan"));
+    assert!(error.to_string().contains("explicit caller NamespacePath"));
 }
 
 #[test]
@@ -322,13 +321,13 @@ fn default_source_paths_require_an_explicit_home_even_with_complete_bindings() {
         .unwrap();
     for inputs in [missing, bound] {
         let error = inputs.with_default_callable_paths([&*module]).unwrap_err();
-        assert!(error.to_string().contains("explicit caller NamespacePlan"));
+        assert!(error.to_string().contains("explicit caller NamespacePath"));
     }
     let explicit_root = NamespaceInputs::new()
-        .with_namespace_plan(NamespacePlan::new(vec![]))
+        .with_namespace_plan(NamespacePath::new(vec![]))
         .with_default_callable_paths([&*module])
         .unwrap();
-    assert_eq!(explicit_root.namespace_plan(), Some(&NamespacePlan::new(vec![])));
+    assert_eq!(explicit_root.namespace_plan(), Some(&NamespacePath::new(vec![])));
 }
 
 #[test]
@@ -470,8 +469,8 @@ fn default_source_paths_require_separate_kernel_placement_at_any_source_path() {
     }
 }
 
-fn root_binding(name: &str) -> CallableBinding {
-    CallableBinding::new(NamespacePlan::new(vec![]), canonical(name)).unwrap()
+fn root_binding(name: &str) -> ProcedureName {
+    ProcedureName::new(NamespacePath::new(vec![]), canonical(name)).unwrap()
 }
 
 #[test]
@@ -480,7 +479,7 @@ fn kernel_root_exports_require_a_chosen_home_and_nonempty_cohort() {
     let base = Assembler::new(context.source_manager());
     let root = ast::Module::new(ast::ModuleKind::Kernel, Path::KERNEL);
     let error = NamespaceInputs::new().with_kernel_root_exports(&base, &[&root]).unwrap_err();
-    assert!(error.to_string().contains("explicit caller NamespacePlan"));
+    assert!(error.to_string().contains("explicit caller NamespacePath"));
     let error = NamespaceInputs::new()
         .with_namespace_plan(home("helpers"))
         .with_kernel_root_exports(&base, &[])
@@ -506,7 +505,7 @@ fn kernel_root_exports_follow_public_submodules_and_keep_private_helpers_in_chil
     let base = Assembler::new(context.source_manager());
     // Empty homes remain explicit: a helper's defining path still creates a child parent.
     let inputs = NamespaceInputs::new()
-        .with_namespace_plan(NamespacePlan::new(vec![]))
+        .with_namespace_plan(NamespacePath::new(vec![]))
         .with_kernel_root_exports(&base, &[&root, &api, &hidden])
         .unwrap();
     let product = base
@@ -527,7 +526,7 @@ fn kernel_root_exports_follow_public_submodules_and_keep_private_helpers_in_chil
             components.iter().map(|component| (*component).to_string()).collect(),
         )
         .unwrap();
-        let expected = CallableBinding::new(NamespacePlan::new(vec![]), canonical).unwrap();
+        let expected = ProcedureName::new(NamespacePath::new(vec![]), canonical).unwrap();
         assert_ne!(expected.parent_namespace(), Namespace::initial());
         let declaration = format!("::{}", components.join("::"));
         assert_eq!(
@@ -738,7 +737,7 @@ fn kernel_local_root_overrides_and_empty_home_child_paths_are_compatible() {
         ))
         .unwrap();
     let inputs = NamespaceInputs::new()
-        .with_namespace_plan(NamespacePlan::new(vec![]))
+        .with_namespace_plan(NamespacePath::new(vec![]))
         .with_callable_path(declaration("::$kernel::run"), canonical("root-override"))
         .unwrap()
         .with_callable_path(
@@ -780,7 +779,7 @@ fn kernel_root_exports_reject_overrides_with_incompatible_actual_parents() {
             .with_callable_binding(declaration("::$kernel::helper"), root_binding("helper"))
             .unwrap(),
         NamespaceInputs::new()
-            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .with_namespace_plan(NamespacePath::new(vec![]))
             .with_callable_path(declaration("::$kernel::helper"), canonical("helper"))
             .unwrap(),
     ] {
@@ -1053,12 +1052,12 @@ fn cache_commitment_requires_a_caller_home_even_for_complete_foreign_bindings() 
                 .cache_commitment()
                 .unwrap_err()
                 .to_string()
-                .contains("explicit caller NamespacePlan")
+                .contains("explicit caller NamespacePath")
         );
     }
     assert!(
         NamespaceInputs::new()
-            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .with_namespace_plan(NamespacePath::new(vec![]))
             .cache_commitment()
             .is_ok(),
         "an explicitly requested root home is distinct from missing configuration"
@@ -1101,7 +1100,7 @@ fn cache_commitment_tracks_typed_home_labels_and_complete_home_paths() {
 
     let make = |labels| {
         NamespaceInputs::new()
-            .with_namespace_plan(NamespacePlan::new(labels))
+            .with_namespace_plan(NamespacePath::new(labels))
             .cache_commitment()
             .unwrap()
     };

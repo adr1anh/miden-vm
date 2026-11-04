@@ -1445,8 +1445,8 @@ fn system_state_changes_across_end_imply_a_caller_frame_flag() {
             .unwrap();
         forest.make_root(kernel_proc_id);
         let kernel_digest = forest[kernel_proc_id].digest();
-        let kernel_binding = miden_mast_package::CallableBinding::new(
-            miden_mast_package::NamespacePlan::new(vec![]),
+        let kernel_binding = miden_mast_package::ProcedureName::new(
+            miden_mast_package::NamespacePath::new(vec![]),
             miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
                 "syscall-target".into(),
             ])

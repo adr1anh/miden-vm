@@ -1,7 +1,7 @@
 use alloc::{format, sync::Arc, vec::Vec};
 
 use miden_assembly_syntax::diagnostics::Report;
-use miden_mast_package::{Dependency as PackageDependency, Package as MastPackage, PackageNaming};
+use miden_mast_package::{Dependency as PackageDependency, Package as MastPackage, PackageSymbols};
 use miden_project::Linkage;
 
 use crate::project::ResolvedPackage;
@@ -12,7 +12,7 @@ use crate::project::ResolvedPackage;
 #[derive(Default)]
 pub(super) struct RuntimeDependencies {
     pub deps: Vec<PackageDependency>,
-    pub kernel: Option<(Arc<MastPackage>, Arc<PackageNaming>)>,
+    pub kernel: Option<(Arc<MastPackage>, Arc<PackageSymbols>)>,
 }
 
 impl RuntimeDependencies {
@@ -60,7 +60,7 @@ impl RuntimeDependencies {
     pub fn record_linked_kernel_dependency(
         &mut self,
         package: Arc<MastPackage>,
-        naming: Arc<PackageNaming>,
+        naming: Arc<PackageSymbols>,
     ) -> Result<(), Report> {
         debug_assert!(package.is_kernel());
         package.check_naming(&naming).map_err(|error| Report::msg(format!("{error}")))?;
@@ -114,8 +114,8 @@ mod tests {
         program::{CanonicalLabel, ImplementationRoot},
     };
     use miden_mast_package::{
-        CallableBinding, CallableProcedurePath, NamespacePlan, PackageCallables, PackageExport,
-        PackageId, ProcedureExport, TargetType, Version,
+        CallableProcedurePath, NamespacePath, PackageCallables, PackageExport, PackageId,
+        ProcedureExport, ProcedureName, TargetType, Version,
     };
 
     use super::*;
@@ -141,18 +141,18 @@ mod tests {
         let node = remapping.get(node).unwrap();
         let digest = mast[node].digest();
         let home = if kind == TargetType::Kernel {
-            NamespacePlan::new(vec![])
+            NamespacePath::new(vec![])
         } else {
-            NamespacePlan::new(vec![CanonicalLabel::text("runtime-supply-fixture").unwrap()])
+            NamespacePath::new(vec![CanonicalLabel::text("runtime-supply-fixture").unwrap()])
         };
         let visible =
             CallableProcedurePath::from_semantic_components(vec!["supply".into(), "run".into()])
                 .unwrap();
         let canonical =
             CallableProcedurePath::from_semantic_components(vec!["run".into()]).unwrap();
-        let binding = CallableBinding::new(home.clone(), canonical).unwrap();
+        let binding = ProcedureName::new(home.clone(), canonical).unwrap();
         let key = binding.key();
-        let naming = PackageNaming::new(
+        let naming = PackageSymbols::new(
             home,
             PackageCallables::new(
                 [binding],

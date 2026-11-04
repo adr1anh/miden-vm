@@ -8,7 +8,7 @@ use std::{
 use miden_assembly_syntax::{ast::ModuleKind, diagnostics::Report};
 use miden_core::serde::Deserializable;
 use miden_mast_package::{
-    NamespacePlan, Package as MastPackage, PackageNaming, SectionId, TargetType,
+    NamespacePath, Package as MastPackage, PackageSymbols, SectionId, TargetType,
 };
 use miden_package_registry::{PackageCache, PackageId, Version as PackageVersion};
 use miden_project::{
@@ -169,7 +169,7 @@ impl SourcePackageCacheKey {
 pub type SourcePackageCache = BTreeMap<SourcePackageCacheKey, ResolvedPackage>;
 
 /// Owned code and exact naming retained together, without granting execution authority.
-pub type CodePackage = (Arc<MastPackage>, Arc<PackageNaming>);
+pub type CodePackage = (Arc<MastPackage>, Arc<PackageSymbols>);
 
 pub struct ProjectSourceInputs {
     pub root: Box<Module>,
@@ -279,7 +279,7 @@ impl core::fmt::Display for InterruptedTargetRole {
     }
 }
 
-type PackageNamingProvider<'a> = dyn Fn(&MastPackage) -> Result<PackageNaming, Report> + 'a;
+type PackageSymbolsProvider<'a> = dyn Fn(&MastPackage) -> Result<PackageSymbols, Report> + 'a;
 type NamespaceInputsProvider<'a> = dyn Fn(
         &TargetAssemblyContext<'_>,
         &ProjectSourceInputs,
@@ -294,7 +294,7 @@ pub struct ProjectAssembler<'a, S: PackageCache> {
     source_provider: SourceProviderRegistry,
     /// Package post-processors, run in registration order. Empty by default.
     post_processors: Vec<Box<dyn PackagePostProcessor>>,
-    package_naming_provider: Option<Box<PackageNamingProvider<'a>>>,
+    package_naming_provider: Option<Box<PackageSymbolsProvider<'a>>>,
     namespace_inputs_provider: Option<Box<NamespaceInputsProvider<'a>>>,
     source_candidates: SourcePackageCache,
     store: &'a mut S,
@@ -331,7 +331,7 @@ where
     /// Source compilation retains its own canonical naming and does not use this provider.
     pub fn with_package_naming_provider(
         &mut self,
-        provider: impl Fn(&MastPackage) -> Result<PackageNaming, Report> + 'a,
+        provider: impl Fn(&MastPackage) -> Result<PackageSymbols, Report> + 'a,
     ) -> &mut Self {
         self.package_naming_provider = Some(Box::new(provider));
         self
@@ -875,8 +875,8 @@ where
 
     fn check_selected_source_home(
         target: &Target,
-        naming: &PackageNaming,
-        selected_home: &NamespacePlan,
+        naming: &PackageSymbols,
+        selected_home: &NamespacePath,
     ) -> Result<(), Report> {
         if naming.namespace_plan() != selected_home {
             return Err(Report::msg(format!(
@@ -1039,7 +1039,7 @@ where
     fn naming_for_loaded_package(
         &self,
         package: &MastPackage,
-    ) -> Result<Arc<PackageNaming>, Report> {
+    ) -> Result<Arc<PackageSymbols>, Report> {
         let provider = self.package_naming_provider.as_ref().ok_or_else(|| {
             Report::msg(format!(
                 "package '{}@{}' requires an explicit package naming provider; configure with_package_naming_provider with the current home profile, context and codec limits",
@@ -1066,8 +1066,8 @@ where
     fn resolve_linked_kernel_package(
         &self,
         package: Arc<MastPackage>,
-        naming: Arc<PackageNaming>,
-    ) -> Result<Option<(Arc<MastPackage>, Arc<PackageNaming>)>, Report> {
+        naming: Arc<PackageSymbols>,
+    ) -> Result<Option<(Arc<MastPackage>, Arc<PackageSymbols>)>, Report> {
         if package.is_kernel() {
             return Ok(Some((package, naming)));
         }
@@ -1133,7 +1133,7 @@ where
         package_id: &PackageId,
         version: &miden_project::SemVer,
         expected: &PackageBuildProvenance,
-        selected_home: &NamespacePlan,
+        selected_home: &NamespacePath,
     ) -> Result<RegisteredSourcePackage, Report> {
         let Some(record) = self.store.get_by_semver(package_id, version) else {
             return Ok(RegisteredSourcePackage::Missing);
@@ -1172,7 +1172,7 @@ where
         &self,
         instance: DependencyInstanceId,
         candidate: &ResolvedPackage,
-        selected_home: &NamespacePlan,
+        selected_home: &NamespacePath,
     ) -> bool {
         candidate.naming.namespace_plan() != selected_home
             && self.dependency_graph.has_other_source_home(
@@ -1186,7 +1186,7 @@ where
     fn cache_source_package(
         &mut self,
         instance: DependencyInstanceId,
-        selected_home: &NamespacePlan,
+        selected_home: &NamespacePath,
         resolved: &ResolvedPackage,
     ) -> Result<(), Report> {
         if let Some(record) =
@@ -1420,8 +1420,8 @@ where
 #[derive(Clone)]
 pub struct ResolvedPackage {
     pub package: Arc<MastPackage>,
-    pub naming: Arc<PackageNaming>,
-    pub linked_kernel_package: Option<(Arc<MastPackage>, Arc<PackageNaming>)>,
+    pub naming: Arc<PackageSymbols>,
+    pub linked_kernel_package: Option<(Arc<MastPackage>, Arc<PackageSymbols>)>,
     /// Available dependency code and exact naming, including local builds which are not canonical
     /// registry publications. Loading these candidates grants no environment or binding authority.
     pub dependency_packages: Vec<CodePackage>,

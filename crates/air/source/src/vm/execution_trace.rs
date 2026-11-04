@@ -7,7 +7,7 @@ use core::ops::Range;
 use miden_core::{
     Felt, Word, ZERO,
     deferred::Digest,
-    program::{ExecutionDescriptor, MIN_STACK_DEPTH, ProgramInfo, StackInputs, StackOutputs},
+    program::{ExecutionTarget, MIN_STACK_DEPTH, ProgramInfo, StackInputs, StackOutputs},
     utils::RowMajorMatrix,
 };
 
@@ -32,7 +32,7 @@ use super::{
 pub struct VmTrace {
     main_trace: MainTrace,
     program_info: ProgramInfo,
-    execution_descriptor: ExecutionDescriptor,
+    execution_descriptor: ExecutionTarget,
     stack_inputs: StackInputs,
     stack_outputs: StackOutputs,
     precompile_root: Digest,
@@ -50,7 +50,7 @@ impl VmTrace {
     /// Construction does not evaluate the AIR constraints.
     pub fn new_from_parts(
         program_info: ProgramInfo,
-        execution_descriptor: ExecutionDescriptor,
+        execution_descriptor: ExecutionTarget,
         stack_inputs: StackInputs,
         stack_outputs: StackOutputs,
         precompile_root: Digest,
@@ -77,7 +77,7 @@ impl VmTrace {
     }
 
     /// Returns the authenticated descriptor of this execution trace.
-    pub fn execution_descriptor(&self) -> ExecutionDescriptor {
+    pub fn execution_descriptor(&self) -> ExecutionTarget {
         self.execution_descriptor
     }
 

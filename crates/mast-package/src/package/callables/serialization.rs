@@ -14,7 +14,7 @@ use miden_core::{
 
 use super::{PackageCallables, PackageCallablesError};
 use crate::{
-    CallableBinding, CallableProcedurePath, DeclarationError, NamespacePlan,
+    CallableProcedurePath, DeclarationError, NamespacePath, ProcedureName,
     interface::serialization::{
         Budget, CodecError, CodecLimits, HomeProfile, Reader, Writer, check_label_layout,
         checked_add, compare_text_paths, count_with_tail, reserve, wire_len,
@@ -99,7 +99,7 @@ impl PackageCallables {
         budget.records(self.bindings.len())?;
         budget.records(self.visible_paths.len())?;
         budget.records(self.selected_implementations.len())?;
-        check_array::<(&ProcedureKey, &CallableBinding), E>(
+        check_array::<(&ProcedureKey, &ProcedureName), E>(
             self.bindings.len(),
             "callable ordering",
         )?;
@@ -227,7 +227,7 @@ pub(crate) fn preflight_v1_decoding<'a, E>(
         return Err(CodecError::UnsupportedVersion { kind: "callables", version }.into());
     }
     let count = reader.u32("callable binding count")?;
-    let count = count_with_tail::<CallableBinding, E>(reader, count, 48, 8, "callable bindings")?;
+    let count = count_with_tail::<ProcedureName, E>(reader, count, 48, 8, "callable bindings")?;
     check_array::<(ProcedureKey, &[u8], CallableProcedurePath), E>(
         count,
         "borrowed callable bindings",
@@ -238,7 +238,7 @@ pub(crate) fn preflight_v1_decoding<'a, E>(
         let key = decode_word(reader, "callable binding key")?;
         check_word_order(&mut previous, key, "callable bindings")?;
         let rest = remaining_tail(count - index - 1, 48, 8, "callable bindings")?;
-        NamespacePlan::preflight_home_v1(
+        NamespacePath::preflight_home_v1(
             reader,
             budget,
             checked_add(rest, 11, "callable path framing")?,
@@ -369,10 +369,10 @@ impl PreparedCallables<'_> {
         for (stored, bytes, path) in borrowed_bindings {
             let mut home_reader = Reader::new(bytes, budget)?;
             let home =
-                NamespacePlan::decode_preflighted_home_v1(&mut home_reader, profile, context)?;
+                NamespacePath::decode_preflighted_home_v1(&mut home_reader, profile, context)?;
             home_reader.finish("HomeV1")?;
             let binding =
-                CallableBinding::new(home, path).map_err(CallablesCodecError::InvalidBinding)?;
+                ProcedureName::new(home, path).map_err(CallablesCodecError::InvalidBinding)?;
             if binding.key() != stored {
                 return Err(CallablesCodecError::KeyMismatch { stored, derived: binding.key() });
             }

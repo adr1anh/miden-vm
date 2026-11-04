@@ -5,16 +5,16 @@ use miden_core::{
     program::{CanonicalLabel, ProcedureKey},
     serde::Serializable,
 };
-use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, ProcedureName};
 use miden_package_registry::PackageRegistry;
-use miden_project::{ExpectedVisibleCallables, LibraryImport, LibrarySelection};
+use miden_project::{ExpectedVisibleCallables, LibraryRef, LibrarySelection};
 use tempfile::TempDir;
 
 use super::*;
 use crate::testing::{TestRegistry, admit_fixture_package};
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
 fn path(components: &[&str]) -> CallableProcedurePath {
@@ -33,17 +33,17 @@ fn write(path: &FsPath, contents: &str) {
 /// neither its public surface nor its private binding is reconstructed from serialized metadata.
 #[derive(Clone)]
 struct Owner {
-    default_home: NamespacePlan,
-    public: CallableBinding,
-    private: CallableBinding,
+    default_home: NamespacePath,
+    public: ProcedureName,
+    private: ProcedureName,
 }
 
 impl Owner {
-    fn new(public_home: NamespacePlan) -> Self {
+    fn new(public_home: NamespacePath) -> Self {
         Self {
             default_home: home("package-default-metadata"),
-            public: CallableBinding::new(public_home, path(&["published", "run"])).unwrap(),
-            private: CallableBinding::new(home("private-helper"), path(&["internal", "helper"]))
+            public: ProcedureName::new(public_home, path(&["published", "run"])).unwrap(),
+            private: ProcedureName::new(home("private-helper"), path(&["internal", "helper"]))
                 .unwrap(),
         }
     }
@@ -56,7 +56,7 @@ impl Owner {
         .unwrap()
     }
 
-    fn homes(&self) -> Vec<NamespacePlan> {
+    fn homes(&self) -> Vec<NamespacePath> {
         vec![
             self.default_home.clone(),
             self.public.namespace_plan().clone(),
@@ -90,7 +90,7 @@ fn configure_owner(assembler: &mut ProjectAssembler<'_, TestRegistry>, owner: &O
     assembler.with_namespace_inputs_provider(move |_, sources, _| owner.inputs(sources));
 }
 
-fn configure_client(assembler: &mut ProjectAssembler<'_, TestRegistry>, homes: Vec<NamespacePlan>) {
+fn configure_client(assembler: &mut ProjectAssembler<'_, TestRegistry>, homes: Vec<NamespacePath>) {
     // A finite policy chosen independently of the package being admitted. Missing homes reject;
     // there is no retry with the homes advertised by the artifact.
     assembler.with_package_naming_provider(move |package| admit_fixture_package(package, &homes));
@@ -138,7 +138,7 @@ fn compile_owner(directory: &FsPath, owner: &Owner, body: u32) -> ResolvedPackag
 }
 
 /// Serialize only the owner's independently supplied configuration, never the artifact's naming.
-fn home_config(home: &NamespacePlan) -> String {
+fn home_config(home: &NamespacePath) -> String {
     format!(
         "[{}]",
         home.home()
@@ -242,10 +242,10 @@ fn latest_and_pinned_artifacts_keep_keys_and_exec_across_bodies_and_linkage() {
     let mut selected_keys = Vec::new();
     for selection in [
         LibrarySelection::Latest,
-        LibrarySelection::Pinned(core::num::NonZeroU32::new(2).unwrap()),
+        LibrarySelection::Revision(core::num::NonZeroU32::new(2).unwrap()),
     ] {
         let temp = TempDir::new().unwrap();
-        let import = LibraryImport::new(
+        let import = LibraryRef::new(
             home("ancestor"),
             miden_core::Word::try_from(identity).unwrap(),
             selection,
@@ -255,7 +255,7 @@ fn latest_and_pinned_artifacts_keep_keys_and_exec_across_bodies_and_linkage() {
             LibrarySelection::Latest => format!(
                 "{{selection = 'latest', base = [{{text = 'ancestor'}}], library-id = '{identity}'}}"
             ),
-            LibrarySelection::Pinned(_) => format!(
+            LibrarySelection::Revision(_) => format!(
                 "{{selection = 'pinned', base = [{{text = 'ancestor'}}], library-id = '{identity}', revision = 2}}"
             ),
         };
@@ -289,7 +289,7 @@ fn latest_and_pinned_artifacts_keep_keys_and_exec_across_bodies_and_linkage() {
                     Some(&owner.private)
                 );
                 let caller =
-                    CallableBinding::new(home("client"), path(&["client", "entry"])).unwrap();
+                    ProcedureName::new(home("client"), path(&["client", "entry"])).unwrap();
                 caller_roots.push(
                     resolved.naming.callables().selected_implementation(caller.key()).unwrap(),
                 );
@@ -329,7 +329,7 @@ fn invalid_artifact_expectations_never_promote_code_to_the_registry() {
     missing_alias.remove(&path(&["dep", "alias"]));
     let mut extra = correct.mappings().clone();
     extra.insert(path(&["dep", "nonexistent"]), owner.public.clone());
-    let wrong = CallableBinding::new(home("wrong-owner"), owner.public.path().clone()).unwrap();
+    let wrong = ProcedureName::new(home("wrong-owner"), owner.public.path().clone()).unwrap();
     let changed = ExpectedVisibleCallables::new(
         correct.mappings().keys().cloned().map(|path| (path, wrong.clone())),
     )
@@ -436,7 +436,7 @@ fn source_expectations_are_checked_before_cold_promotion_memory_and_registered_r
     let wrong = ExpectedVisibleCallables::new(expected.mappings().keys().cloned().map(|visible| {
         (
             visible,
-            CallableBinding::new(home("changed-request"), owner.public.path().clone()).unwrap(),
+            ProcedureName::new(home("changed-request"), owner.public.path().clone()).unwrap(),
         )
     }))
     .unwrap();

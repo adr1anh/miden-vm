@@ -379,7 +379,7 @@ mod prover_api_lifecycle {
     use miden_core::{
         Felt, ONE, Word, ZERO,
         deferred::{Node, PrecompileWitnessEntry, deferred_chunks_frame},
-        program::{EnvironmentRoot, ExecutionDescriptor, ProcedureKey},
+        program::{EnvironmentRoot, ExecutionTarget, ProcedureKey},
     };
     use miden_precompiles::{UintDomain, UintPrecompile};
     use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
@@ -502,7 +502,7 @@ mod prover_api_lifecycle {
     }
 
     fn assert_complete(
-        execution_descriptor: ExecutionDescriptor,
+        execution_descriptor: ExecutionTarget,
         stack_inputs: StackInputs,
         stack_outputs: StackOutputs,
         proof: &ExecutionProof,
@@ -556,7 +556,7 @@ mod prover_api_lifecycle {
                 let mut elements = claim.to_elements();
                 elements[coordinate] += ONE;
                 let changed = ExecutionClaim::new(
-                    ExecutionDescriptor::new(
+                    ExecutionTarget::new(
                         ProcedureKey::new(Word::new(elements[0..4].try_into().unwrap())),
                         EnvironmentRoot::new(Word::new(elements[4..8].try_into().unwrap())),
                     ),
@@ -854,8 +854,8 @@ mod execution_witness_serialization {
         serde::DeserializationError,
     };
     use miden_mast_package::{
-        CallableBinding, CallableProcedurePath, Package, PackageCallables, PackageId,
-        PackageNaming, TargetType, Version,
+        CallableProcedurePath, Package, PackageCallables, PackageId, PackageSymbols, ProcedureName,
+        TargetType, Version,
     };
     use miden_processor::{
         DefaultHost, EnvironmentTraceLimits, ExecutionOptions, FastProcessor, HostLibrary,
@@ -946,7 +946,7 @@ mod execution_witness_serialization {
         // This test owns a hand-built structural ExternalNode forest. Name its one local entry
         // explicitly, while retaining the external forest and its separate host code supply.
         let namespace = FixtureNamespace::assembly_tests();
-        let entry = CallableBinding::new(
+        let entry = ProcedureName::new(
             namespace.namespace_plan().clone(),
             CallableProcedurePath::from_semantic_components(vec!["external_witness_entry".into()])
                 .unwrap(),
@@ -954,7 +954,7 @@ mod execution_witness_serialization {
         .unwrap();
         let key = entry.key();
         let naming = Arc::new(
-            PackageNaming::new(
+            PackageSymbols::new(
                 namespace.namespace_plan().clone(),
                 PackageCallables::new(
                     [entry],

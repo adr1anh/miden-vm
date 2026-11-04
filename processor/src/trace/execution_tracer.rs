@@ -373,7 +373,7 @@ fn validate_mast_forest_id(
 #[derive(Debug)]
 pub struct ExecutionTracer {
     trace_limits: EnvironmentTraceLimits,
-    entry: Option<(miden_core::program::ExecutionDescriptor, SessionBinding)>,
+    entry: Option<(miden_core::program::ExecutionTarget, SessionBinding)>,
     environment: Option<EnvironmentReplay>,
     keyed: KeyedReplay,
     keyed_events: usize,
@@ -978,7 +978,7 @@ pub struct ExecutionTraceReservation(ExecutionTraceReservationKind);
 // trace preparation's checked resource reservations. Its bounded stack footprint is deliberate.
 #[allow(clippy::large_enum_variant)]
 enum ExecutionTraceReservationKind {
-    Entry(miden_core::program::ExecutionDescriptor, SessionBinding),
+    Entry(miden_core::program::ExecutionTarget, SessionBinding),
     Completion,
     Event {
         record: PreparedKeyedRecord,
@@ -998,13 +998,13 @@ impl Tracer for ExecutionTracer {
 
     fn prepare_environment(
         &mut self,
-        descriptor: &miden_core::program::ExecutionDescriptor,
+        descriptor: &miden_core::program::ExecutionTarget,
         entry: SessionBinding,
     ) -> Result<Self::KeyedReservation, ExecutionError> {
         if self.entry.is_some() || entry.procedure_key() != descriptor.entry_key() {
             return Err(ExecutionError::InvalidExecutionState);
         }
-        let bytes = size_of::<miden_core::program::ExecutionDescriptor>()
+        let bytes = size_of::<miden_core::program::ExecutionTarget>()
             .checked_add(size_of::<SessionBinding>())
             .ok_or(ExecutionError::InvalidExecutionState)?;
         for (resource, limit) in [
@@ -1030,7 +1030,7 @@ impl Tracer for ExecutionTracer {
             unreachable!("entry reservation kind");
         };
         self.keyed_retained_bytes =
-            size_of::<miden_core::program::ExecutionDescriptor>() + size_of::<SessionBinding>();
+            size_of::<miden_core::program::ExecutionTarget>() + size_of::<SessionBinding>();
         self.entry = Some((descriptor, entry));
     }
 

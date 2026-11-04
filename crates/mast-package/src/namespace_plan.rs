@@ -13,7 +13,7 @@ use crate::{CallableProcedurePath, PublicProcedurePath};
 mod callable_binding;
 mod serialization;
 
-pub use callable_binding::CallableBinding;
+pub use callable_binding::ProcedureName;
 
 /// An explicitly supplied complete home path, independent of code and source import aliases.
 ///
@@ -24,11 +24,11 @@ pub use callable_binding::CallableBinding;
 /// There is no default home. An explicitly supplied empty path denotes [`Namespace::initial`].
 /// Generic label validity does not imply that a Protocol profile permits or authorizes the home.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NamespacePlan {
+pub struct NamespacePath {
     home: Vec<CanonicalLabel>,
 }
 
-impl NamespacePlan {
+impl NamespacePath {
     /// Retains an explicit home made from validated canonical labels.
     ///
     /// TypedId construction/decoding must use the core label API's external codec validator.

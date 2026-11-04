@@ -2,7 +2,7 @@ use alloc::{sync::Arc, vec::Vec};
 
 use miden_assembly_syntax::module::ModuleDescriptor;
 use miden_core::Word;
-use miden_mast_package::{ManifestValidationError, MastForest, Package, PackageNaming};
+use miden_mast_package::{ManifestValidationError, MastForest, Package, PackageSymbols};
 pub use miden_project::Linkage;
 
 /// Represents an assembled module or modules to use when resolving references while linking,
@@ -11,17 +11,18 @@ pub use miden_project::Linkage;
 pub struct LinkLibrary {
     pub package: Arc<Package>,
     /// Canonical metadata retained by compilation or admitted with explicit current policy.
-    naming: Arc<PackageNaming>,
+    naming: Arc<PackageSymbols>,
     /// How to link against this library
     pub linkage: Linkage,
 }
 
 impl LinkLibrary {
     /// Pairs a package with the exact canonical metadata retained by its compiler or obtained by
-    /// explicit [`Package::admit_naming`] policy admission. This checks integrity, not home policy.
+    /// explicit [`Package::validate_symbols`] policy admission. This checks integrity, not home
+    /// policy.
     pub fn from_package(
         package: Arc<Package>,
-        naming: impl Into<Arc<PackageNaming>>,
+        naming: impl Into<Arc<PackageSymbols>>,
     ) -> Result<Self, ManifestValidationError> {
         let naming = naming.into();
         package.check_naming(&naming)?;
@@ -33,7 +34,7 @@ impl LinkLibrary {
     }
 
     /// Returns the complete canonical inventory, including private callable declarations.
-    pub fn naming(&self) -> &Arc<PackageNaming> {
+    pub fn naming(&self) -> &Arc<PackageSymbols> {
         &self.naming
     }
 

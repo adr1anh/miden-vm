@@ -11,7 +11,7 @@ use miden_core::{
             ExecutableForestFixture, GenerationMode, MastForestParams, executable_forest_strategy,
         },
     },
-    program::{EnvironmentBuildLimits, ExecutionDescriptor, Program, StackInputs},
+    program::{EnvironmentBuildLimits, ExecutionTarget, Program, StackInputs},
 };
 use proptest::{prelude::*, strategy::ValueTree, test_runner::TestRunner};
 
@@ -130,7 +130,7 @@ fn run_every_binding(fixture: ExecutableForestFixture, stack: &[Felt]) -> Result
     for procedure in fixture.procedures() {
         let program = Program::new(fixture.forest().clone(), procedure.root);
         let environment = ExecutionEnvironment::new(
-            ExecutionDescriptor::new(procedure.key, fixture.environment().root()),
+            ExecutionTarget::new(procedure.key, fixture.environment().root()),
             opening_limits(),
             ledger_limits(),
             session_limits(),

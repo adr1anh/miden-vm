@@ -1894,7 +1894,7 @@ fn named_library(
     manager: Arc<DefaultSourceManager>,
     root: Box<Module>,
     support: impl IntoIterator<Item = Box<Module>>,
-) -> (Arc<Package>, PackageNaming) {
+) -> (Arc<Package>, PackageSymbols) {
     let support = support.into_iter().collect::<Vec<_>>();
     let mut names = miden_assembly::testing::FixtureNamespace::assembly_tests();
     for module in core::iter::once(root.as_ref()).chain(support.iter().map(Box::as_ref)) {
@@ -1913,8 +1913,8 @@ fn named_library(
     (Arc::from(product.into_artifact(true).unwrap()), naming)
 }
 
-fn fixture_binding(path: &[&str]) -> miden_mast_package::CallableBinding {
-    miden_mast_package::CallableBinding::new(
+fn fixture_binding(path: &[&str]) -> miden_mast_package::ProcedureName {
+    miden_mast_package::ProcedureName::new(
         package_fixture_home(),
         miden_mast_package::CallableProcedurePath::from_semantic_components(
             path.iter().map(|component| (*component).to_string()).collect(),
@@ -1925,7 +1925,7 @@ fn fixture_binding(path: &[&str]) -> miden_mast_package::CallableBinding {
 }
 
 /// Explicit fixture names and selected implementations remain separate inputs.
-fn synthetic_library_naming(declarations: &[(&[&str], Word)]) -> PackageNaming {
+fn synthetic_library_naming(declarations: &[(&[&str], Word)]) -> PackageSymbols {
     let bindings = declarations.iter().map(|(path, _)| fixture_binding(path)).collect::<Vec<_>>();
     let visible = bindings.iter().map(|binding| (binding.path().clone(), binding.key()));
     let selected = bindings
@@ -1935,13 +1935,13 @@ fn synthetic_library_naming(declarations: &[(&[&str], Word)]) -> PackageNaming {
     let callables =
         miden_mast_package::PackageCallables::new(bindings.iter().cloned(), visible, selected)
             .unwrap();
-    PackageNaming::new(package_fixture_home(), callables, None).unwrap()
+    PackageSymbols::new(package_fixture_home(), callables, None).unwrap()
 }
 
 /// ENTRY uses a fixed child-home name; runtime targets are separately declared by each fixture.
 fn synthetic_fixture(
     program: Program,
-    targets: impl IntoIterator<Item = (miden_mast_package::CallableBinding, ImplementationRoot)>,
+    targets: impl IntoIterator<Item = (miden_mast_package::ProcedureName, ImplementationRoot)>,
 ) -> NamedFixture {
     named_program(program, fixture_binding(&["entry"]), targets).unwrap()
 }
@@ -1961,8 +1961,8 @@ fn with_fixture_source<'a, H: FixtureHost>(host: &'a mut H, fixture: &NamedFixtu
     host
 }
 
-fn package_fixture_home() -> miden_mast_package::NamespacePlan {
-    miden_mast_package::NamespacePlan::new(vec![
+fn package_fixture_home() -> miden_mast_package::NamespacePath {
+    miden_mast_package::NamespacePath::new(vec![
         miden_core::program::CanonicalLabel::text("processor-package-fixtures").unwrap(),
     ])
 }
@@ -1970,7 +1970,7 @@ fn package_fixture_home() -> miden_mast_package::NamespacePlan {
 struct PackageFixtureHomes;
 
 impl miden_mast_package::interface::serialization::TypedIdProfile for PackageFixtureHomes {
-    type Context = miden_mast_package::NamespacePlan;
+    type Context = miden_mast_package::NamespacePath;
     type Error = &'static str;
 
     fn validate_typed_id(&self, _: &Self::Context, _: u32, _: &[u8]) -> Result<(), Self::Error> {
@@ -2136,7 +2136,7 @@ fn external_then_fail_program_for_digest(
 
 struct SameDigestEntrypointFixture {
     package: Arc<Package>,
-    naming: PackageNaming,
+    naming: PackageSymbols,
     environment: ExecutionEnvironment,
     source: Arc<dyn crate::EnvironmentWitnessSource>,
     program: Program,
@@ -2234,7 +2234,7 @@ fn same_digest_entrypoint_fixture(
     assert_eq!(entrypoint_source_node_id, source_alias_b);
 
     let naming = executable
-        .admit_naming(
+        .validate_symbols(
             &PackageFixtureHomes,
             &package_fixture_home(),
             miden_mast_package::interface::serialization::CodecLimits::new(

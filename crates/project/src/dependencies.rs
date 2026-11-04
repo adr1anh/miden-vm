@@ -20,12 +20,12 @@ use crate::{Diagnostic, Linkage, SourceSpan, Span, Uri, miette};
 /// package-default metadata, while the naming provider admits the full retained inventory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DependencyBinding {
-    Standard(crate::LibraryImport),
-    Custom(miden_mast_package::NamespacePlan),
+    Standard(crate::LibraryRef),
+    Custom(miden_mast_package::NamespacePath),
 }
 
 impl DependencyBinding {
-    pub fn namespace_plan(&self) -> miden_mast_package::NamespacePlan {
+    pub fn namespace_plan(&self) -> miden_mast_package::NamespacePath {
         match self {
             Self::Standard(import) => import.namespace_plan(),
             Self::Custom(home) => home.clone(),

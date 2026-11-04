@@ -32,7 +32,7 @@ use miden_core::{
     operations::{Operation, opcodes},
     program::{CanonicalLabel, ImplementationRoot, Program, StackInputs},
 };
-use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, ProcedureName};
 
 use crate::{
     AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor, ProcessorState,
@@ -1974,13 +1974,13 @@ fn build_op_group(ops: &[Operation]) -> Felt {
     Felt::new_unchecked(group)
 }
 
-fn fixture_binding(name: &str, kernel: bool) -> CallableBinding {
-    let home = NamespacePlan::new(if kernel {
+fn fixture_binding(name: &str, kernel: bool) -> ProcedureName {
+    let home = NamespacePath::new(if kernel {
         vec![]
     } else {
         vec![CanonicalLabel::text("processor-core-decoder-fixtures").unwrap()]
     });
-    CallableBinding::new(
+    ProcedureName::new(
         home,
         CallableProcedurePath::from_semantic_components(vec![name.to_string()]).unwrap(),
     )
@@ -1989,7 +1989,7 @@ fn fixture_binding(name: &str, kernel: bool) -> CallableBinding {
 
 fn synthetic_fixture(
     program: Program,
-    targets: impl IntoIterator<Item = (CallableBinding, ImplementationRoot)>,
+    targets: impl IntoIterator<Item = (ProcedureName, ImplementationRoot)>,
 ) -> NamedFixture {
     named_program(program, fixture_binding("entry", false), targets).unwrap()
 }

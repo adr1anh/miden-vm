@@ -6,7 +6,7 @@ use miden_assembly_syntax::{
     diagnostics::{IntoDiagnostic, Report},
 };
 use miden_core::{Word, chiplets::hasher, serde::Serializable, utils::hash_string_to_word};
-use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath};
 use miden_package_registry::{PackageRegistry, PackageRegistryAndProvider, Version};
 use miden_project::{
     DependencyBinding, DependencyInstanceId, Linkage, Package as ProjectPackage,
@@ -113,7 +113,7 @@ fn append_provenance_version(material: &mut Vec<u8>, version: &Version) -> Resul
     Ok(())
 }
 
-fn append_provenance_home(material: &mut Vec<u8>, home: &NamespacePlan) -> Result<(), Report> {
+fn append_provenance_home(material: &mut Vec<u8>, home: &NamespacePath) -> Result<(), Report> {
     append_provenance_len(material, home.home().len())?;
     for label in home.home() {
         append_provenance_bytes(material, label.as_bytes())?;
@@ -206,7 +206,7 @@ impl DependencyGraph {
         instance: DependencyInstanceId,
         name: &miden_package_registry::PackageId,
         version: &miden_project::SemVer,
-        home: &NamespacePlan,
+        home: &NamespacePath,
     ) -> bool {
         self.dependency_graph.nodes().values().any(|parent| {
             parent.dependencies.iter().any(|edge| {
@@ -571,18 +571,18 @@ mod tests {
 
     use miden_assembly_syntax::debuginfo::{DefaultSourceManager, Span, Uri};
     use miden_core::{Felt, program::CanonicalLabel};
-    use miden_mast_package::CallableBinding;
+    use miden_mast_package::ProcedureName;
     use miden_package_registry::{PackageIndex, PackageRecord, VersionRequirement};
     use miden_project::{
-        Dependency, DependencyVersionScheme, ExpectedVisibleCallables, LibraryImport,
+        Dependency, DependencyVersionScheme, ExpectedVisibleCallables, LibraryRef,
         LibrarySelection, PackageSourceMount, SemVer,
     };
 
     use super::*;
     use crate::testing::TestRegistry;
 
-    fn home(labels: &[&str]) -> NamespacePlan {
-        NamespacePlan::new(
+    fn home(labels: &[&str]) -> NamespacePath {
+        NamespacePath::new(
             labels.iter().map(|label| CanonicalLabel::text(label).unwrap()).collect(),
         )
     }
@@ -690,7 +690,7 @@ mod tests {
         .with_binding(baseline.binding().unwrap().clone());
         let expected = ExpectedVisibleCallables::new([(
             path(&["visible", "run"]),
-            CallableBinding::new(home(&["foreign-owner"]), path(&["original", "run"])).unwrap(),
+            ProcedureName::new(home(&["foreign-owner"]), path(&["original", "run"])).unwrap(),
         )])
         .unwrap();
         let mount = PackageSourceMount::new(Path::new("::dep"), Path::new("::left")).unwrap();
@@ -719,15 +719,15 @@ mod tests {
             .0
         };
         assert_ne!(hash_binding(home(&["a::b"])), hash_binding(home(&["a", "b"])));
-        let typed = NamespacePlan::new(vec![CanonicalLabel::library_id(Word::default())]);
+        let typed = NamespacePath::new(vec![CanonicalLabel::library_id(Word::default())]);
         let text = home(&[&Word::default().to_string()]);
         assert_ne!(hash_binding(typed), hash_binding(text));
         let typed_id = |payload: &[u8]| {
-            NamespacePlan::new(vec![CanonicalLabel::typed_id(77, payload, |_, _| Ok(())).unwrap()])
+            NamespacePath::new(vec![CanonicalLabel::typed_id(77, payload, |_, _| Ok(())).unwrap()])
         };
         assert_ne!(hash_binding(typed_id(&[4, 0, 9])), hash_binding(typed_id(&[4, 0, 8])));
         let standard =
-            LibraryImport::new(home(&["ancestor"]), Word::default(), LibrarySelection::Latest);
+            LibraryRef::new(home(&["ancestor"]), Word::default(), LibrarySelection::Latest);
         assert_ne!(
             hash_binding(standard.namespace_plan()),
             hash_dependencies(vec![
@@ -739,7 +739,7 @@ mod tests {
         let expected_hash = |visible, defining| {
             let expected = ExpectedVisibleCallables::new([(
                 visible,
-                CallableBinding::new(home(&["foreign"]), defining).unwrap(),
+                ProcedureName::new(home(&["foreign"]), defining).unwrap(),
             )])
             .unwrap();
             hash_dependencies(vec![baseline.clone().with_expected_callables(expected)]).0

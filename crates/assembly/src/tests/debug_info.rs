@@ -3,7 +3,7 @@
 
 use miden_core::program::{CanonicalLabel, ProcedureKey};
 use miden_mast_package::{
-    NamespacePlan,
+    NamespacePath,
     debug_info::{DebugFunctionInfo, DebugSourceNodeId, PackageDebugInfo},
 };
 
@@ -11,7 +11,7 @@ use super::*;
 use crate::testing::FixtureNamespace;
 
 fn dependency_fixture_namespace() -> FixtureNamespace {
-    FixtureNamespace::new(NamespacePlan::new(vec![
+    FixtureNamespace::new(NamespacePath::new(vec![
         CanonicalLabel::text("debug-info-dependency-fixtures").unwrap(),
         CanonicalLabel::revision(core::num::NonZeroU32::new(1).unwrap()),
     ]))

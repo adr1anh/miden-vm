@@ -7,7 +7,7 @@ use miden_core::{
     operations::Operation,
     program::{CanonicalLabel, Program},
 };
-use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, ProcedureName};
 
 use super::VmTrace;
 use crate::{
@@ -43,9 +43,9 @@ fn pure_trace_fixture(program: Program) -> NamedFixture {
     trace_named_program(program, [])
 }
 
-pub(super) fn trace_binding(name: &str) -> CallableBinding {
-    CallableBinding::new(
-        NamespacePlan::new(vec![CanonicalLabel::text("processor-trace-fixtures").unwrap()]),
+pub(super) fn trace_binding(name: &str) -> ProcedureName {
+    ProcedureName::new(
+        NamespacePath::new(vec![CanonicalLabel::text("processor-trace-fixtures").unwrap()]),
         CallableProcedurePath::from_semantic_components(vec![name.into()]).unwrap(),
     )
     .unwrap()
@@ -53,7 +53,7 @@ pub(super) fn trace_binding(name: &str) -> CallableBinding {
 
 pub(super) fn trace_named_program(
     program: Program,
-    targets: impl IntoIterator<Item = (CallableBinding, miden_core::program::ImplementationRoot)>,
+    targets: impl IntoIterator<Item = (ProcedureName, miden_core::program::ImplementationRoot)>,
 ) -> NamedFixture {
     named_program(program, trace_binding("entry"), targets).unwrap()
 }

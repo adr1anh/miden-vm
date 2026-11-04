@@ -10,15 +10,15 @@ fn canonical(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn binding(home: &[&str], components: &[&str]) -> CallableBinding {
+fn binding(home: &[&str], components: &[&str]) -> ProcedureName {
     let home =
-        NamespacePlan::new(home.iter().map(|label| CanonicalLabel::text(label).unwrap()).collect());
-    CallableBinding::new(home, canonical(components)).unwrap()
+        NamespacePath::new(home.iter().map(|label| CanonicalLabel::text(label).unwrap()).collect());
+    ProcedureName::new(home, canonical(components)).unwrap()
 }
 
-fn assembler(context: &TestContext, bindings: &[(&str, CallableBinding)]) -> Assembler {
+fn assembler(context: &TestContext, bindings: &[(&str, ProcedureName)]) -> Assembler {
     let mut assembler =
-        Assembler::new(context.source_manager()).with_namespace_plan(NamespacePlan::new(vec![]));
+        Assembler::new(context.source_manager()).with_namespace_plan(NamespacePath::new(vec![]));
     for (path, binding) in bindings {
         assembler = assembler
             .with_callable_binding(Arc::from(Path::new(path)), binding.clone())

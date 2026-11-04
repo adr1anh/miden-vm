@@ -6,7 +6,7 @@ use miden_assembly_syntax::{
     diagnostics::Report,
 };
 use miden_core::Word;
-use miden_mast_package::CallableBinding;
+use miden_mast_package::ProcedureName;
 
 use super::{
     GlobalItemIndex,
@@ -21,14 +21,14 @@ use super::{
 #[derive(Clone, Debug)]
 pub struct CallableDeclaration {
     pub name: miden_assembly_syntax::ast::Ident,
-    pub binding: CallableBinding,
+    pub binding: ProcedureName,
     pub visibility: Visibility,
     pub signature: Option<Arc<FunctionType>>,
     pub attributes: AttributeSet,
 }
 
 impl CallableDeclaration {
-    pub fn new(name: miden_assembly_syntax::ast::Ident, binding: CallableBinding) -> Self {
+    pub fn new(name: miden_assembly_syntax::ast::Ident, binding: ProcedureName) -> Self {
         Self {
             name,
             binding,
@@ -54,7 +54,7 @@ pub struct ProcedureContext {
     visibility: Visibility,
     is_kernel: bool,
     num_locals: u16,
-    binding: Option<CallableBinding>,
+    binding: Option<ProcedureName>,
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -118,7 +118,7 @@ impl ProcedureContext {
     }
 
     /// Supplies the declaration identity before compiling any body instructions.
-    pub fn with_callable_binding(mut self, binding: CallableBinding) -> Self {
+    pub fn with_callable_binding(mut self, binding: ProcedureName) -> Self {
         self.binding = Some(binding);
         self
     }
@@ -151,7 +151,7 @@ impl ProcedureContext {
         self.num_locals
     }
 
-    pub fn callable_binding(&self) -> Option<&CallableBinding> {
+    pub fn callable_binding(&self) -> Option<&ProcedureName> {
         self.binding.as_ref()
     }
 
@@ -234,7 +234,7 @@ pub struct Procedure {
     body_node_ref: MastNodeRef,
     /// The exact source/debug occurrence for this procedure body.
     body_source_ref: SourceNodeRef,
-    binding: Option<CallableBinding>,
+    binding: Option<ProcedureName>,
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -275,7 +275,7 @@ impl Procedure {
 /// Public accessors
 impl Procedure {
     /// Returns the declaration identity, separately from the implementation commitment.
-    pub fn callable_binding(&self) -> Option<&CallableBinding> {
+    pub fn callable_binding(&self) -> Option<&ProcedureName> {
         self.binding.as_ref()
     }
 

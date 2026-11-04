@@ -23,7 +23,7 @@ use miden_core::{
     program::{CanonicalLabel, ProcedureKey},
 };
 use miden_mast_package::{
-    CallableBinding, CallableProcedurePath, NamespacePlan, Package, PackageNaming,
+    CallableProcedurePath, NamespacePath, Package, PackageSymbols, ProcedureName,
 };
 use miden_processor::{
     DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
@@ -59,11 +59,11 @@ impl Drop for Workspace {
     }
 }
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
-fn library_home(owner: &str, revision: Option<u32>) -> NamespacePlan {
+fn library_home(owner: &str, revision: Option<u32>) -> NamespacePath {
     let mut labels = vec![
         CanonicalLabel::text(owner).unwrap(),
         CanonicalLabel::text(if revision.is_some() { "pinned" } else { "latest" }).unwrap(),
@@ -72,7 +72,7 @@ fn library_home(owner: &str, revision: Option<u32>) -> NamespacePlan {
     if let Some(revision) = revision {
         labels.push(CanonicalLabel::revision(NonZeroU32::new(revision).unwrap()));
     }
-    NamespacePlan::new(labels)
+    NamespacePath::new(labels)
 }
 
 fn path(components: &[&str]) -> CallableProcedurePath {
@@ -82,11 +82,11 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn binding(home: NamespacePlan, components: &[&str]) -> CallableBinding {
-    CallableBinding::new(home, path(components)).unwrap()
+fn binding(home: NamespacePath, components: &[&str]) -> ProcedureName {
+    ProcedureName::new(home, path(components)).unwrap()
 }
 
-fn home_config(home: &NamespacePlan) -> String {
+fn home_config(home: &NamespacePath) -> String {
     format!(
         "[{}]",
         home.home()
@@ -97,7 +97,7 @@ fn home_config(home: &NamespacePlan) -> String {
     )
 }
 
-fn expected_config(visible: &[&str], binding: &CallableBinding) -> String {
+fn expected_config(visible: &[&str], binding: &ProcedureName) -> String {
     format!(
         "{{visible-path = {:?}, home = {}, canonical-path = {:?}}}",
         visible,
@@ -129,7 +129,7 @@ fn library_manifest(name: &str, namespace: &str, dependencies: &str) -> String {
     )
 }
 
-fn assemble(manifest: &Path, homes: Vec<NamespacePlan>) -> ResolvedPackage {
+fn assemble(manifest: &Path, homes: Vec<NamespacePath>) -> ResolvedPackage {
     let mut registry = TestRegistry::default();
     let mut assembler = Assembler::default().for_project_at_path(manifest, &mut registry).unwrap();
     // These complete homes were selected before compilation, independently of artifact metadata.
@@ -141,8 +141,8 @@ fn assemble(manifest: &Path, homes: Vec<NamespacePlan>) -> ResolvedPackage {
 
 fn selected_package<'a>(
     resolved: &'a ResolvedPackage,
-    expected: &CallableBinding,
-) -> (&'a Package, &'a PackageNaming) {
+    expected: &ProcedureName,
+) -> (&'a Package, &'a PackageSymbols) {
     let mut candidates = resolved.dependency_packages.iter().filter(|(_, naming)| {
         naming.callables().binding(expected.key()) == Some(expected)
             && naming.namespace_plan() == expected.namespace_plan()
@@ -185,7 +185,7 @@ impl EnvironmentWitnessSource for RecordingSource {
 
 fn execute(
     resolved: &ResolvedPackage,
-    owners: &[&CallableBinding],
+    owners: &[&ProcedureName],
     external_code: bool,
 ) -> StackOutputs {
     let supplies = owners.iter().map(|owner| selected_package(resolved, owner)).collect::<Vec<_>>();

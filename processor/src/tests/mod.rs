@@ -12,7 +12,7 @@ use miden_core::{
 };
 use miden_debug_types::{Location, SourceFile, SourceManager, SourceSpan};
 use miden_mast_package::{
-    CallableBinding, CallableProcedurePath, Package, PackageNaming, TargetType,
+    CallableProcedurePath, Package, PackageSymbols, ProcedureName, TargetType,
 };
 use miden_utils_testing::{
     Test,
@@ -88,8 +88,8 @@ fn parse_library_module(
     parser.parse_str(Some(path.as_path()), source, source_manager).unwrap()
 }
 
-fn diagnostic_binding(name: &str) -> CallableBinding {
-    CallableBinding::new(
+fn diagnostic_binding(name: &str) -> ProcedureName {
+    ProcedureName::new(
         FixtureNamespace::assembly_tests().namespace_plan().clone(),
         CallableProcedurePath::from_semantic_components(vec![name.to_string()]).unwrap(),
     )
@@ -111,7 +111,7 @@ fn diagnostic_library(
     source_manager: Arc<DefaultSourceManager>,
     module: Box<Module>,
     name: &str,
-) -> (Arc<Package>, PackageNaming) {
+) -> (Arc<Package>, PackageSymbols) {
     let mut names = FixtureNamespace::assembly_tests();
     names.add_module(&module).unwrap();
     let assembler = names.configure(Assembler::new(source_manager), [module.as_ref()]).unwrap();

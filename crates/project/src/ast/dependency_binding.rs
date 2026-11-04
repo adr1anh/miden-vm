@@ -4,11 +4,11 @@ use alloc::{string::String, vec::Vec};
 use core::num::NonZeroU32;
 
 use miden_core::{Word, program::CanonicalLabel};
-use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, ProcedureName};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DependencyBinding, ExpectedVisibleCallables, LibraryCatalog, LibraryImport, LibrarySelection,
+    DependencyBinding, ExpectedVisibleCallables, LibraryCatalog, LibraryRef, LibrarySelection,
     Report,
 };
 
@@ -72,7 +72,7 @@ impl HomeLabelSpec {
         }
     }
 
-    fn from_home(home: &NamespacePlan) -> Result<Vec<Self>, Report> {
+    fn from_home(home: &NamespacePath) -> Result<Vec<Self>, Report> {
         home.home().iter().map(|label| {
             CanonicalLabel::from_bytes(label.as_bytes()).map_err(|_| Report::msg(
                 "manifest serialization of TypedId ancestors requires an external codec/profile-aware writer",
@@ -97,7 +97,7 @@ pub struct ExpectedCallableSpec {
 
 impl ExpectedCallableSpec {
     /// Validates built-in home encodings and exact semantic path components.
-    pub fn resolve(&self) -> Result<(CallableProcedurePath, CallableBinding), Report> {
+    pub fn resolve(&self) -> Result<(CallableProcedurePath, ProcedureName), Report> {
         self.resolve_with_catalog(&LibraryCatalog::default())
     }
 
@@ -105,14 +105,14 @@ impl ExpectedCallableSpec {
     pub fn resolve_with_catalog(
         &self,
         catalog: &LibraryCatalog,
-    ) -> Result<(CallableProcedurePath, CallableBinding), Report> {
+    ) -> Result<(CallableProcedurePath, ProcedureName), Report> {
         let visible = CallableProcedurePath::from_semantic_components(self.visible_path.clone())
             .map_err(Report::msg)?;
         let canonical =
             CallableProcedurePath::from_semantic_components(self.canonical_path.clone())
                 .map_err(Report::msg)?;
         let binding =
-            CallableBinding::new(DependencyBindingSpec::home(&self.home, catalog)?, canonical)
+            ProcedureName::new(DependencyBindingSpec::home(&self.home, catalog)?, canonical)
                 .map_err(Report::msg)?;
         Ok((visible, binding))
     }
@@ -135,11 +135,11 @@ impl ExpectedCallableSpec {
     }
 }
 
-impl TryFrom<(&CallableProcedurePath, &CallableBinding)> for ExpectedCallableSpec {
+impl TryFrom<(&CallableProcedurePath, &ProcedureName)> for ExpectedCallableSpec {
     type Error = Report;
 
     fn try_from(
-        (visible, binding): (&CallableProcedurePath, &CallableBinding),
+        (visible, binding): (&CallableProcedurePath, &ProcedureName),
     ) -> Result<Self, Report> {
         Ok(Self {
             visible_path: visible.components().to_vec(),
@@ -189,26 +189,26 @@ impl DependencyBindingSpec {
         let (base, identity, selection) = match self {
             Self::Latest { base, library_id } => (base, library_id, LibrarySelection::Latest),
             Self::Pinned { base, library_id, revision } => {
-                (base, library_id, LibrarySelection::Pinned(*revision))
+                (base, library_id, LibrarySelection::Revision(*revision))
             },
             Self::Custom { home } => {
                 return Ok(DependencyBinding::Custom(Self::home(home, catalog)?));
             },
         };
         let identity = identity.resolve_with_catalog(catalog)?;
-        Ok(DependencyBinding::Standard(LibraryImport::new(
+        Ok(DependencyBinding::Standard(LibraryRef::new(
             Self::home(base, catalog)?,
             identity,
             selection,
         )))
     }
 
-    fn home(labels: &[HomeLabelSpec], catalog: &LibraryCatalog) -> Result<NamespacePlan, Report> {
+    fn home(labels: &[HomeLabelSpec], catalog: &LibraryCatalog) -> Result<NamespacePath, Report> {
         labels
             .iter()
             .map(|label| label.label(catalog))
             .collect::<Result<Vec<_>, _>>()
-            .map(NamespacePlan::new)
+            .map(NamespacePath::new)
     }
 }
 
@@ -225,7 +225,7 @@ impl TryFrom<&DependencyBinding> for DependencyBindingSpec {
                     base: HomeLabelSpec::from_home(import.base())?,
                     library_id: import.library_id().to_hex().into(),
                 },
-                LibrarySelection::Pinned(revision) => Self::Pinned {
+                LibrarySelection::Revision(revision) => Self::Pinned {
                     base: HomeLabelSpec::from_home(import.base())?,
                     library_id: import.library_id().to_hex().into(),
                     revision,
@@ -359,8 +359,8 @@ mod tests {
 
     #[test]
     fn expected_callable_writer_rejects_unvalidated_external_typed_homes() {
-        let binding = CallableBinding::new(
-            NamespacePlan::new(vec![
+        let binding = ProcedureName::new(
+            NamespacePath::new(vec![
                 CanonicalLabel::typed_id(77, &[9, 0, 4], |_, _| Ok(())).unwrap(),
             ]),
             CallableProcedurePath::from_semantic_components(vec!["run".into()]).unwrap(),
@@ -377,7 +377,7 @@ mod tests {
             )),
             crate::Linkage::Dynamic,
         )
-        .with_binding(DependencyBinding::Custom(NamespacePlan::new(vec![])))
+        .with_binding(DependencyBinding::Custom(NamespacePath::new(vec![])))
         .with_expected_callables(ExpectedVisibleCallables::new([(visible, binding)]).unwrap());
         let package = crate::Package::new(
             "app",
@@ -401,9 +401,9 @@ mod tests {
     #[test]
     fn manifest_writer_rejects_external_typed_ancestors_instead_of_emitting_unreloadable_data() {
         let typed = CanonicalLabel::typed_id(77, &[9, 0, 4], |_, _| Ok(())).unwrap();
-        let home = NamespacePlan::new(alloc::vec![typed.clone()]);
+        let home = NamespacePath::new(alloc::vec![typed.clone()]);
         let import =
-            LibraryImport::new(home.clone(), Word::try_from(ID).unwrap(), LibrarySelection::Latest);
+            LibraryRef::new(home.clone(), Word::try_from(ID).unwrap(), LibrarySelection::Latest);
         assert_eq!(import.namespace_plan().home()[0], typed);
         for binding in [DependencyBinding::Standard(import), DependencyBinding::Custom(home)] {
             let error = DependencyBindingSpec::try_from(&binding).unwrap_err();
@@ -495,7 +495,7 @@ mod tests {
             toml::from_str("selection = 'custom'\nhome = [{text = 'chosen::home'}]").unwrap();
         assert_eq!(
             spec.resolve().unwrap().namespace_plan(),
-            NamespacePlan::new(alloc::vec![CanonicalLabel::text("chosen::home").unwrap()])
+            NamespacePath::new(alloc::vec![CanonicalLabel::text("chosen::home").unwrap()])
         );
     }
 }

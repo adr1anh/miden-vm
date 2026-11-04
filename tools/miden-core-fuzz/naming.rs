@@ -10,8 +10,8 @@ use miden_core::{
     serde::DeserializationError,
 };
 use miden_mast_package::{
-    CallableBinding, CallableProcedurePath, NamespacePlan, Package, PackageCallables,
-    PackageExport, PackageId, PackageNaming, PathBuf, ProcedureExport, TargetType, Version,
+    CallableProcedurePath, NamespacePath, Package, PackageCallables, PackageExport, PackageId,
+    PackageSymbols, PathBuf, ProcedureExport, ProcedureName, TargetType, Version,
     interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile},
 };
 
@@ -94,8 +94,8 @@ impl HomeProfile for SyntheticProfile {
     }
 }
 
-pub fn source_home() -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text("package-fuzz-source").unwrap()])
+pub fn source_home() -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text("package-fuzz-source").unwrap()])
 }
 
 /// Unsupported profiles may reject valid raw transport. Successful admission must preserve exact
@@ -105,14 +105,14 @@ pub fn check_naming_admission(
     profile: &SyntheticProfile,
     permitted: &bool,
     limits: CodecLimits,
-) -> Option<PackageNaming> {
-    let naming = package.admit_naming(profile, permitted, limits).ok()?;
+) -> Option<PackageSymbols> {
+    let naming = package.validate_symbols(profile, permitted, limits).ok()?;
     assert_eq!(
         naming.encode_v1(profile, permitted, limits).unwrap(),
         package.naming_transport().as_bytes()
     );
     assert_eq!(package.naming_transport().decode(profile, permitted, limits).unwrap(), naming);
-    assert!(package.admit_naming(profile, &false, limits).is_err());
+    assert!(package.validate_symbols(profile, &false, limits).is_err());
     assert_named_package(package, &naming);
     Some(naming)
 }
@@ -127,20 +127,20 @@ fn path(components: &[&str]) -> CallableProcedurePath {
 /// A bounded valid package runs before hostile-input guards, so semantic admission cannot become
 /// unreachable when corpus bytes use an old format or an unsupported naming profile. Names are
 /// selected before code: two distinct public keys share D, and a private helper retains its root.
-pub fn named_package_fixture(data: &[u8]) -> (Package, PackageNaming) {
+pub fn named_package_fixture(data: &[u8]) -> (Package, PackageSymbols) {
     let selector = data.first().copied().unwrap_or(0);
     let kind = [TargetType::Library, TargetType::Executable, TargetType::Kernel]
         [usize::from(selector % 3)];
     let home = source_home();
     let public_home = if kind == TargetType::Kernel {
-        NamespacePlan::new(vec![])
+        NamespacePath::new(vec![])
     } else {
         let profile = SyntheticProfile::packages();
-        NamespacePlan::new(profile.homes[usize::from((selector / 3) % 3)].clone())
+        NamespacePath::new(profile.homes[usize::from((selector / 3) % 3)].clone())
     };
-    let first = CallableBinding::new(public_home.clone(), path(&["first"])).unwrap();
-    let second = CallableBinding::new(public_home, path(&["second"])).unwrap();
-    let helper = CallableBinding::new(home.clone(), path(&["helpers", "callback"])).unwrap();
+    let first = ProcedureName::new(public_home.clone(), path(&["first"])).unwrap();
+    let second = ProcedureName::new(public_home, path(&["second"])).unwrap();
+    let helper = ProcedureName::new(home.clone(), path(&["helpers", "callback"])).unwrap();
     assert_ne!(first.key(), second.key());
 
     let mut mast = MastForest::new();
@@ -167,7 +167,7 @@ pub fn named_package_fixture(data: &[u8]) -> (Package, PackageNaming) {
     .unwrap();
     // Exercise both an explicitly selected private entry and a non-runnable code candidate.
     let entry = (kind == TargetType::Executable && selector & 16 == 0).then_some(helper.key());
-    let naming = PackageNaming::new(home, callables, entry).unwrap();
+    let naming = PackageSymbols::new(home, callables, entry).unwrap();
     let exports = ["first", "second"].map(|name| {
         let source = PathBuf::new(&format!("::fixture::{name}")).unwrap();
         PackageExport::Procedure(ProcedureExport::new(
@@ -191,7 +191,7 @@ pub fn named_package_fixture(data: &[u8]) -> (Package, PackageNaming) {
 }
 
 /// Check owned code/name relations without manufacturing an execution descriptor or authority.
-pub fn assert_named_package(package: &Package, naming: &PackageNaming) {
+pub fn assert_named_package(package: &Package, naming: &PackageSymbols) {
     package
         .check_naming(naming)
         .expect("canonical naming must match exact package transport");
@@ -200,7 +200,7 @@ pub fn assert_named_package(package: &Package, naming: &PackageNaming) {
         assert_eq!(key, binding.key());
         assert_eq!(
             key,
-            CallableBinding::new(binding.namespace_plan().clone(), binding.path().clone())
+            ProcedureName::new(binding.namespace_plan().clone(), binding.path().clone())
                 .unwrap()
                 .key()
         );

@@ -109,7 +109,7 @@ mod tests {
     use alloc::string::ToString;
 
     use miden_core::program::CanonicalLabel;
-    use miden_mast_package::NamespacePlan;
+    use miden_mast_package::NamespacePath;
 
     use super::*;
 
@@ -148,7 +148,7 @@ mod tests {
         let typed = CanonicalLabel::typed_id(77, &[9, 0, 4], |_, _| Ok(())).unwrap();
         let naming = SourceNaming::new(
             SourceNamingConvention::DefiningPaths,
-            DependencyBinding::Custom(NamespacePlan::new(vec![typed.clone()])),
+            DependencyBinding::Custom(NamespacePath::new(vec![typed.clone()])),
         );
         let error = SourceNamingSpec::try_from(&naming).unwrap_err();
         assert!(error.to_string().contains("external codec/profile-aware writer"));

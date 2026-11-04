@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 use core::alloc::Layout;
 
 use miden_core::program::{
-    EnvironmentRoot, ExecutionDescriptor, ImplementationRoot, Namespace, ProcedureKey,
+    EnvironmentRoot, ExecutionTarget, ImplementationRoot, Namespace, ProcedureKey,
 };
 
 use super::{
@@ -206,7 +206,7 @@ pub enum SessionError {
 /// cache. Selective membership does not establish global executable-key uniqueness or admission.
 #[derive(Debug)]
 pub struct ResolutionSession {
-    descriptor: ExecutionDescriptor,
+    descriptor: ExecutionTarget,
     limits: SessionLimits,
     ledger: OpeningLedger,
     state: SessionState,
@@ -214,7 +214,7 @@ pub struct ResolutionSession {
 
 impl ResolutionSession {
     pub const fn new(
-        descriptor: ExecutionDescriptor,
+        descriptor: ExecutionTarget,
         ledger_limits: LedgerLimits,
         limits: SessionLimits,
     ) -> Self {
@@ -237,7 +237,7 @@ impl ResolutionSession {
         }
     }
 
-    pub const fn descriptor(&self) -> ExecutionDescriptor {
+    pub const fn descriptor(&self) -> ExecutionTarget {
         self.descriptor
     }
 
@@ -797,7 +797,7 @@ fn ledger_peak_available(
 }
 
 fn check_binding(
-    descriptor: ExecutionDescriptor,
+    descriptor: ExecutionTarget,
     key: ProcedureKey,
     binding: &ResolvedBinding,
 ) -> Result<(), SessionError> {

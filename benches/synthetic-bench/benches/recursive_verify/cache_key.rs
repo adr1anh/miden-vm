@@ -2,7 +2,7 @@
 
 use miden_air::vm::config::RELATION_DIGEST;
 use miden_core::{
-    crypto::hash::Blake3_256, program::ExecutionDescriptor, proof::ExecutionProofCompatibility,
+    crypto::hash::Blake3_256, program::ExecutionTarget, proof::ExecutionProofCompatibility,
     serde::Serializable, utils::to_hex,
 };
 use miden_stark::pcs::PcsParams;
@@ -14,7 +14,7 @@ pub(super) const INNER_PROOF_HASH: HashFunction = HashFunction::Eidos;
 
 pub(super) fn tx_proof_cache_key(
     program_info: &ProgramInfo,
-    descriptor: ExecutionDescriptor,
+    descriptor: ExecutionTarget,
     stack_values: &[u64],
     compatibility: &ExecutionProofCompatibility,
 ) -> String {

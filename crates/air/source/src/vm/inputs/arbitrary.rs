@@ -3,8 +3,7 @@
 use miden_core::{
     Felt, WORD_SIZE, Word,
     program::{
-        EnvironmentRoot, ExecutionDescriptor, MIN_STACK_DEPTH, ProcedureKey, StackInputs,
-        StackOutputs,
+        EnvironmentRoot, ExecutionTarget, MIN_STACK_DEPTH, ProcedureKey, StackInputs, StackOutputs,
     },
 };
 use proptest::prelude::*;
@@ -23,7 +22,7 @@ impl Arbitrary for PublicInputs {
             any::<[u32; WORD_SIZE]>().prop_map(|values| Word::new(values.map(Felt::from)))
         }
         let descriptor = (word_strategy(), word_strategy()).prop_map(|(entry, root)| {
-            ExecutionDescriptor::new(ProcedureKey::new(entry), EnvironmentRoot::new(root))
+            ExecutionTarget::new(ProcedureKey::new(entry), EnvironmentRoot::new(root))
         });
         let stack_inputs = proptest::collection::vec(felt_strategy(), 0..=MIN_STACK_DEPTH)
             .prop_map(|values| StackInputs::new(&values).expect("generated stack inputs fit"));

@@ -18,10 +18,10 @@ use miden_assembly::{
     ast::{Item, Module, ModuleKind, Path as SourcePath},
     testing::{FixtureNamespace, parser},
 };
-use miden_core::program::{CanonicalLabel, ExecutionDescriptor, ProcedureKey};
+use miden_core::program::{CanonicalLabel, ExecutionTarget, ProcedureKey};
 use miden_core_lib::CoreLibrary;
 use miden_mast_package::{
-    CallableBinding, NamespacePlan, Package, PackageCallables, PackageNaming, TargetType,
+    NamespacePath, Package, PackageCallables, PackageSymbols, ProcedureName, TargetType,
     interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile},
 };
 use miden_processor::EnvironmentWitnessRequest;
@@ -56,7 +56,7 @@ fn quote(value: &str) -> String {
     format!("{value:?}")
 }
 
-fn home(plan: &NamespacePlan) -> String {
+fn home(plan: &NamespacePath) -> String {
     format!(
         "[{}]",
         plan.home()
@@ -67,16 +67,16 @@ fn home(plan: &NamespacePlan) -> String {
     )
 }
 
-fn homes() -> Vec<NamespacePlan> {
+fn homes() -> Vec<NamespacePath> {
     vec![
         FixtureNamespace::assembly_tests().namespace_plan().clone(),
-        NamespacePlan::new(vec![]),
+        NamespacePath::new(vec![]),
     ]
 }
 
 struct ExactFixtureHomes;
 impl TypedIdProfile for ExactFixtureHomes {
-    type Context = [NamespacePlan];
+    type Context = [NamespacePath];
     type Error = &'static str;
     fn validate_typed_id(&self, _: &Self::Context, _: u32, _: &[u8]) -> Result<(), Self::Error> {
         Err("CLI builtin-exact-v1 fixtures reject TypedId")
@@ -96,7 +96,7 @@ impl HomeProfile for ExactFixtureHomes {
     }
 }
 
-fn expected(path: &Path, naming: &PackageNaming) -> String {
+fn expected(path: &Path, naming: &PackageSymbols) -> String {
     let bytes = naming
         .encode_v1(
             &ExactFixtureHomes,
@@ -146,7 +146,7 @@ struct SourceSelection {
     root: Box<Module>,
     support: Box<[Box<Module>]>,
     names: FixtureNamespace,
-    bindings: Vec<CallableBinding>,
+    bindings: Vec<ProcedureName>,
     choice: String,
 }
 impl SourceSelection {
@@ -249,8 +249,8 @@ pub fn bundle_inputs(
 /// Independently compiled library/kernel metadata, before any CLI bundle output is inspected.
 pub struct LibraryFixture {
     pub package: Arc<Package>,
-    pub naming: Arc<PackageNaming>,
-    selected: PackageNaming,
+    pub naming: Arc<PackageSymbols>,
+    selected: PackageSymbols,
 }
 impl LibraryFixture {
     pub fn new(source: &Path, kernel: bool, namespace: Option<&str>) -> Self {
@@ -284,7 +284,7 @@ impl LibraryFixture {
 // Only independently declared local K receive authority, including private callable roots.
 // Full compiler naming still travels through artifact expectations. In particular, equal D does
 // not turn unrelated Core bindings into authorized fixture entries.
-fn project(naming: &PackageNaming, bindings: &[CallableBinding]) -> PackageNaming {
+fn project(naming: &PackageSymbols, bindings: &[ProcedureName]) -> PackageSymbols {
     let implementations = bindings
         .iter()
         .filter_map(|binding| {
@@ -294,7 +294,7 @@ fn project(naming: &PackageNaming, bindings: &[CallableBinding]) -> PackageNamin
                 .map(|implementation| (binding.key(), implementation))
         })
         .collect::<Vec<_>>();
-    PackageNaming::new(
+    PackageSymbols::new(
         naming.namespace_plan().clone(),
         PackageCallables::new(bindings.iter().cloned(), [], implementations).unwrap(),
         None,
@@ -304,7 +304,7 @@ fn project(naming: &PackageNaming, bindings: &[CallableBinding]) -> PackageNamin
 
 pub struct ProgramFixture {
     pub named: NamedProgram,
-    expected_descriptor: ExecutionDescriptor,
+    expected_descriptor: ExecutionTarget,
     source: NamingFile,
     artifact: NamingFile,
     execution_args: Vec<OsString>,

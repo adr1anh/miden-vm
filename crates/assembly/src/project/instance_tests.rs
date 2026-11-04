@@ -6,8 +6,8 @@ use miden_core::{
     program::{CanonicalLabel, ProcedureKey},
     serde::Serializable,
 };
-use miden_mast_package::{CallableBinding, CallableProcedurePath};
-use miden_project::{LibraryImport, LibrarySelection, PackageSourceMount};
+use miden_mast_package::{CallableProcedurePath, ProcedureName};
+use miden_project::{LibraryRef, LibrarySelection, PackageSourceMount};
 use tempfile::TempDir;
 
 use super::*;
@@ -20,8 +20,8 @@ const LIBRARY_ID: &str = "0x0100000000000000020000000000000003000000000000000400
 const SOURCE: &str =
     "use left as chosen\nuse right\npub proc entry exec.chosen::run exec.right::run end\n";
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
 fn path(components: &[&str]) -> CallableProcedurePath {
@@ -31,20 +31,20 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn owner(revision: u32) -> LibraryImport {
-    LibraryImport::new(
+fn owner(revision: u32) -> LibraryRef {
+    LibraryRef::new(
         home("instance-owner"),
         Word::try_from(LIBRARY_ID).unwrap(),
-        LibrarySelection::Pinned(NonZeroU32::new(revision).unwrap()),
+        LibrarySelection::Revision(NonZeroU32::new(revision).unwrap()),
     )
 }
 
-fn run(revision: u32) -> CallableBinding {
+fn run(revision: u32) -> ProcedureName {
     owner(revision).callable_binding(path(&["dep", "lib", "run"])).unwrap()
 }
 
-fn caller() -> CallableBinding {
-    CallableBinding::new(home("instance-client"), path(&["app", "entry"])).unwrap()
+fn caller() -> ProcedureName {
+    ProcedureName::new(home("instance-client"), path(&["app", "entry"])).unwrap()
 }
 
 fn write(path: &FsPath, source: &str) {

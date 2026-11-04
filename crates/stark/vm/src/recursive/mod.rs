@@ -320,7 +320,7 @@ mod tests {
         crypto::merkle::{InnerNodeInfo, MerkleStore},
         field::{BasedVectorSpace, QuotientMap},
         program::{
-            EnvironmentRoot, ExecutionDescriptor, ImplementationRoot, ProcedureKey, StackInputs,
+            EnvironmentRoot, ExecutionTarget, ImplementationRoot, ProcedureKey, StackInputs,
             StackOutputs, VerifierConfiguration, proof_request_key,
         },
         proof::{PrecompileStatus, StarkProof as CoreStarkProof, VmProof},
@@ -358,7 +358,7 @@ mod tests {
 
     fn claim() -> ExecutionClaim {
         ExecutionClaim::new(
-            ExecutionDescriptor::new(
+            ExecutionTarget::new(
                 ProcedureKey::new(Word::new([1, 2, 3, 4].map(Felt::new_unchecked))),
                 EnvironmentRoot::new(Word::new([5, 6, 7, 8].map(Felt::new_unchecked))),
             ),
@@ -369,7 +369,7 @@ mod tests {
 
     fn claim_from_elements(elements: &[Felt; 40]) -> ExecutionClaim {
         ExecutionClaim::new(
-            ExecutionDescriptor::new(
+            ExecutionTarget::new(
                 ProcedureKey::new(Word::new(elements[0..4].try_into().unwrap())),
                 EnvironmentRoot::new(Word::new(elements[4..8].try_into().unwrap())),
             ),

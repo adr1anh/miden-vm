@@ -34,9 +34,9 @@ fn fixture_identity_preserves_typed_homes_and_ignores_bodies() -> Result<(), Rep
         CanonicalLabel::revision(NonZeroU32::new(7).unwrap()),
         CanonicalLabel::text("nested").unwrap(),
     ];
-    let mut first_fixture = FixtureNamespace::new(NamespacePlan::new(home.clone()));
+    let mut first_fixture = FixtureNamespace::new(NamespacePath::new(home.clone()));
     first_fixture.add_module(&first)?;
-    let mut second_fixture = FixtureNamespace::new(NamespacePlan::new(home.clone()));
+    let mut second_fixture = FixtureNamespace::new(NamespacePath::new(home.clone()));
     second_fixture.add_module(&second)?;
     let declaration = first.path().join("run");
     let binding = first_fixture.binding(&declaration).unwrap();
@@ -45,7 +45,7 @@ fn fixture_identity_preserves_typed_homes_and_ignores_bodies() -> Result<(), Rep
 
     let mut text_revision_home = home;
     text_revision_home[2] = CanonicalLabel::text("7").unwrap();
-    let mut changed = FixtureNamespace::new(NamespacePlan::new(text_revision_home));
+    let mut changed = FixtureNamespace::new(NamespacePath::new(text_revision_home));
     changed.add_module(&first)?;
     assert_ne!(binding.key(), changed.binding(&declaration).unwrap().key());
     assert!(
@@ -78,7 +78,7 @@ fn raw_fixture_configuration_limits_metadata_to_the_actual_module_cohort() -> Re
 fn fixture_configuration_rejects_a_conflicting_explicit_home() -> Result<(), Report> {
     let context = TestContext::new();
     let fixture = FixtureNamespace::assembly_tests();
-    let different = NamespacePlan::new(vec![CanonicalLabel::text("custom-fixture-home").unwrap()]);
+    let different = NamespacePath::new(vec![CanonicalLabel::text("custom-fixture-home").unwrap()]);
     let assembler = Assembler::new(context.source_manager()).with_namespace_plan(different.clone());
     assert_eq!(assembler.namespace_plan(), Some(&different));
     let error = fixture
@@ -88,7 +88,7 @@ fn fixture_configuration_rejects_a_conflicting_explicit_home() -> Result<(), Rep
     assert!(
         error
             .to_string()
-            .contains("conflicts with the assembler's explicit NamespacePlan")
+            .contains("conflicts with the assembler's explicit NamespacePath")
     );
 
     let assembler = fixture.configure(
@@ -106,7 +106,7 @@ fn raw_assembler_still_requires_an_explicit_namespace_plan() {
     let error = Assembler::new(context.source_manager())
         .assemble_program("missing-home", "begin push.1 end")
         .expect_err("test utility metadata must not become an assembler default");
-    assert!(error.to_string().contains("assembly requires an explicit caller NamespacePlan"));
+    assert!(error.to_string().contains("assembly requires an explicit caller NamespacePath"));
 }
 
 #[test]
@@ -132,7 +132,7 @@ fn imported_fixtures_require_explicit_metadata_and_preserve_equal_body_keys() ->
     let source_context = TestContext::new();
     let root = source_context
         .parse_module("namespace imported pub proc first push.1 end pub proc second push.1 end")?;
-    let home = NamespacePlan::new(vec![
+    let home = NamespacePath::new(vec![
         CanonicalLabel::text("foreign-fixture").unwrap(),
         CanonicalLabel::revision(NonZeroU32::new(3).unwrap()),
     ]);

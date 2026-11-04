@@ -12,7 +12,7 @@ use miden_core::{
     advice::AdviceInputs,
     crypto::hash::Blake3_256,
     field::QuotientMap,
-    program::{ExecutionClaim, ExecutionDescriptor, VerifierIdentity},
+    program::{ExecutionClaim, ExecutionTarget, VerifierIdentity},
     proof::{PrecompileProof, PrecompileStatus},
     serde::{Deserializable, Serializable},
     utils::to_hex,
@@ -88,7 +88,7 @@ fn load_cached_tx_proof(
     cache_dir: &Path,
     proof_index: usize,
     cache_key: &str,
-    descriptor: ExecutionDescriptor,
+    descriptor: ExecutionTarget,
     stack_inputs: StackInputs,
 ) -> Option<(StackOutputs, ExecutionProof)> {
     let (proof_path, outputs_path) = tx_proof_cache_paths(cache_dir, proof_index, cache_key);

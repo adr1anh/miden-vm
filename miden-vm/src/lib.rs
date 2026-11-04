@@ -20,7 +20,7 @@ pub use miden_core::{
     operations::Operation,
     program,
     program::{
-        CanonicalLabel, EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, ImplementationRoot,
+        CanonicalLabel, EnvironmentRoot, ExecutionClaim, ExecutionTarget, ImplementationRoot,
         InputError, KernelDescriptor, Namespace, ProcedureKey, Program, ProgramInfo, StackInputs,
         StackOutputs,
     },

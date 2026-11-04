@@ -154,9 +154,9 @@ struct PreparedTest {
     // Cache keys use this instance's address; retain it so the allocator cannot recycle that
     // identity for another manager while the compiled source/debug mappings remain cached.
     _source_manager: Arc<DefaultSourceManager>,
-    _local_naming: miden_mast_package::PackageNaming,
-    _kernel_naming: Option<miden_mast_package::PackageNaming>,
-    _import_naming: Vec<miden_mast_package::PackageNaming>,
+    _local_naming: miden_mast_package::PackageSymbols,
+    _kernel_naming: Option<miden_mast_package::PackageSymbols>,
+    _import_naming: Vec<miden_mast_package::PackageSymbols>,
     environment: librarytree::FixtureEnvironment,
 }
 
@@ -273,7 +273,7 @@ pub struct Test {
     pub advice_inputs: AdviceInputs,
     pub in_tracing_mode: bool,
     pub libraries: Vec<Arc<Package>>,
-    library_naming: Vec<(usize, Arc<miden_mast_package::PackageNaming>)>,
+    library_naming: Vec<(usize, Arc<miden_mast_package::PackageSymbols>)>,
     environment_fragments: Vec<Arc<miden_core::program::ValidatedEnvironment>>,
     pub handlers: Vec<(EventName, Arc<dyn EventHandler>)>,
     pub trace_handlers: Vec<(EventName, Arc<dyn TraceHandler>)>,
@@ -370,7 +370,7 @@ impl Test {
     pub fn with_library_and_naming(
         mut self,
         package: Arc<Package>,
-        naming: Arc<miden_mast_package::PackageNaming>,
+        naming: Arc<miden_mast_package::PackageSymbols>,
     ) -> Self {
         let index = self.libraries.len();
         self.library_naming.retain(|(slot, _)| *slot < index);
@@ -1064,13 +1064,13 @@ mod tests {
     use miden_assembly::{Assembler, NamespaceInputs, ast::Module};
     use miden_core::program::CanonicalLabel;
     use miden_mast_package::{
-        CallableBinding, CallableProcedurePath, NamespacePlan, PackageNaming, TargetType,
+        CallableProcedurePath, NamespacePath, PackageSymbols, ProcedureName, TargetType,
     };
     use miden_processor::{advice::AdviceMutation, event::EventError};
 
     use super::*;
 
-    fn compiler_owned_library(home: &str) -> (Arc<Package>, Arc<PackageNaming>, CallableBinding) {
+    fn compiler_owned_library(home: &str) -> (Arc<Package>, Arc<PackageSymbols>, ProcedureName) {
         let source_manager = Arc::new(DefaultSourceManager::default());
         let module = Module::parser(None)
             .parse_str(
@@ -1079,8 +1079,8 @@ mod tests {
                 source_manager.clone(),
             )
             .unwrap();
-        let binding = CallableBinding::new(
-            NamespacePlan::new(vec![
+        let binding = ProcedureName::new(
+            NamespacePath::new(vec![
                 CanonicalLabel::text(home).unwrap(),
                 CanonicalLabel::revision(NonZeroU32::new(7).unwrap()),
             ]),
@@ -1092,7 +1092,7 @@ mod tests {
         )
         .unwrap();
         let inputs = NamespaceInputs::new()
-            .with_namespace_plan(NamespacePlan::new(vec![
+            .with_namespace_plan(NamespacePath::new(vec![
                 CanonicalLabel::text("owned-library-compilation-context").unwrap(),
             ]))
             .with_callable_binding(Arc::from(Path::new("::foreign::answer")), binding.clone())

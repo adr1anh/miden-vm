@@ -10,7 +10,7 @@ use miden_assembly::{
 use miden_core::{mast::MastForest, program::ImplementationRoot};
 use miden_debug_types::DefaultSourceManager;
 use miden_mast_package::{
-    CallableBinding, Package, PackageCallables, PackageNaming, TargetType, Version,
+    Package, PackageCallables, PackageSymbols, ProcedureName, TargetType, Version,
 };
 use miden_utils_testing::librarytree::FixtureEnvironment;
 
@@ -19,7 +19,7 @@ use crate::{EnvironmentWitnessSource, ExecutionEnvironment, Program};
 
 pub(crate) struct NamedFixture {
     pub package: Arc<Package>,
-    pub naming: PackageNaming,
+    pub naming: PackageSymbols,
     pub program: Program,
     pub environment: ExecutionEnvironment,
     pub source: Arc<dyn EnvironmentWitnessSource>,
@@ -74,8 +74,8 @@ pub(crate) fn named_module(
 /// Uses exact caller-selected names and code selections, not a decoder-derived permission profile.
 pub(crate) fn named_package(
     package: Arc<Package>,
-    naming: PackageNaming,
-    extra: &[&PackageNaming],
+    naming: PackageSymbols,
+    extra: &[&PackageSymbols],
 ) -> Result<NamedFixture, Report> {
     let program = package.try_into_program(&naming)?;
     let entry = naming.entry_key().expect("converted code has an explicit entry");
@@ -95,8 +95,8 @@ pub(crate) fn named_package(
 /// covered; no procedure key, home or target identity is reconstructed from its body digest.
 pub(crate) fn named_program(
     program: Program,
-    entry: CallableBinding,
-    targets: impl IntoIterator<Item = (CallableBinding, ImplementationRoot)>,
+    entry: ProcedureName,
+    targets: impl IntoIterator<Item = (ProcedureName, ImplementationRoot)>,
 ) -> Result<NamedFixture, Report> {
     let key = entry.key();
     let home = entry.namespace_plan().clone();
@@ -107,7 +107,7 @@ pub(crate) fn named_program(
         bindings.push(binding);
     }
     let callables = PackageCallables::new(bindings, [], implementations).map_err(Report::msg)?;
-    let naming = PackageNaming::new(home, callables, Some(key)).map_err(Report::msg)?;
+    let naming = PackageSymbols::new(home, callables, Some(key)).map_err(Report::msg)?;
     let forest: Arc<MastForest> = program.mast_forest().clone();
     let package = Package::create(
         "processor-synthetic".into(),

@@ -84,8 +84,8 @@ pub use host::{
 pub use miden_core::{
     EMPTY_WORD, Felt, ONE, WORD_SIZE, Word, ZERO, crypto, field, mast,
     program::{
-        ExecutionClaim, ExecutionDescriptor, InputError, KernelDescriptor, MIN_STACK_DEPTH,
-        Program, ProgramInfo, StackInputs, StackOutputs,
+        ExecutionClaim, ExecutionTarget, InputError, KernelDescriptor, MIN_STACK_DEPTH, Program,
+        ProgramInfo, StackInputs, StackOutputs,
     },
     serde, utils,
 };

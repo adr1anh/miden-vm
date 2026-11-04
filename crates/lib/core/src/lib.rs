@@ -17,7 +17,7 @@ extern crate alloc;
 use alloc::{sync::Arc, vec, vec::Vec};
 
 use miden_core::{Word, events::EventName, mast::MastForest};
-use miden_mast_package::{Package, PackageNaming};
+use miden_mast_package::{Package, PackageSymbols};
 use miden_processor::{HostLibrary, event::EventHandler};
 use miden_utils_sync::LazyLock;
 
@@ -117,7 +117,7 @@ pub const PVM_PROOF_REQUEST_EVENT_NAME: EventName =
 #[derive(Clone)]
 pub struct CoreLibrary {
     package: Arc<Package>,
-    naming: Arc<PackageNaming>,
+    naming: Arc<PackageSymbols>,
 }
 
 impl From<&CoreLibrary> for HostLibrary {
@@ -145,7 +145,7 @@ impl CoreLibrary {
     }
 
     /// Returns the compiler-owned naming retained for the exact embedded core package.
-    pub fn naming(&self) -> &Arc<PackageNaming> {
+    pub fn naming(&self) -> &Arc<PackageSymbols> {
         &self.naming
     }
 
@@ -286,7 +286,7 @@ mod tests {
     use alloc::format;
 
     use miden_core::program::Namespace;
-    use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+    use miden_mast_package::{CallableProcedurePath, NamespacePath};
     use miden_verifier::Verifier;
 
     use super::*;
@@ -303,7 +303,7 @@ mod tests {
         let core_lib = CoreLibrary::default();
         let naming = core_lib.naming();
         let path = callable_path(&["miden", "core", "sys", "vm", "ood_frames", "pipe_2"]);
-        let key = NamespacePlan::new(vec![]).callable_procedure_key(&path).unwrap();
+        let key = NamespacePath::new(vec![]).callable_procedure_key(&path).unwrap();
         let binding = naming.callables().binding(key).expect("private pipe_2 must retain its name");
 
         assert_eq!(binding.path(), &path);
@@ -409,7 +409,7 @@ mod tests {
 
         let core = CoreLibrary::default();
         let path = callable_path(&["miden", "core", "sys", "vm", "ood_frames", "pipe_2"]);
-        let key = NamespacePlan::new(vec![]).callable_procedure_key(&path).unwrap();
+        let key = NamespacePath::new(vec![]).callable_procedure_key(&path).unwrap();
         let implementation = core.naming().callables().selected_implementation(key).unwrap();
         let key = key.into_word();
         let advice_key = Word::from([91_u32, 92, 93, 94]);
@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn declaration_only_caller_accepts_independently_selected_exported_implementations() {
         use miden_assembly::{
-            Assembler, CallableBinding, CallableDeclaration, NamespaceInputs, Path,
+            Assembler, CallableDeclaration, NamespaceInputs, Path, ProcedureName,
             ast::{Ident, Module},
             debuginfo::DefaultSourceManager,
         };
@@ -506,8 +506,8 @@ mod tests {
             FixtureEnvironment, assemble_fixture_program, trace_limits,
         };
 
-        let binding = CallableBinding::new(
-            NamespacePlan::new(vec![CanonicalLabel::text("core-packaging-fixture").unwrap()]),
+        let binding = ProcedureName::new(
+            NamespacePath::new(vec![CanonicalLabel::text("core-packaging-fixture").unwrap()]),
             callable_path(&["service", "answer"]),
         )
         .unwrap();
@@ -588,7 +588,7 @@ mod tests {
         let callables = core_lib.naming().callables();
         let defining = callable_path(&["miden", "core", "stark", "verifier", "verify"]);
         let alias = callable_path(&["miden", "core", "stark", "verify"]);
-        let home = NamespacePlan::new(vec![]);
+        let home = NamespacePath::new(vec![]);
         let key = home.callable_procedure_key(&defining).unwrap();
 
         assert_eq!(callables.key_for_visible_path(&alias), Some(key));
@@ -600,8 +600,8 @@ mod tests {
     fn embedded_package_rejects_a_different_retained_compilation_home() {
         let core_lib = CoreLibrary::default();
         let naming = core_lib.naming();
-        let different = PackageNaming::new(
-            NamespacePlan::new(vec![miden_core::program::CanonicalLabel::text("other").unwrap()]),
+        let different = PackageSymbols::new(
+            NamespacePath::new(vec![miden_core::program::CanonicalLabel::text("other").unwrap()]),
             naming.callables().clone(),
             naming.entry_key(),
         )

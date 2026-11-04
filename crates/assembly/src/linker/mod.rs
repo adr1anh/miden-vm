@@ -70,7 +70,7 @@ use miden_assembly_syntax::{
     module::{ItemInfo, ModuleDescriptor},
 };
 use miden_core::{Word, advice::AdviceMap};
-use miden_mast_package::{CallableProcedurePath, Package as MastPackage, PackageNaming};
+use miden_mast_package::{CallableProcedurePath, Package as MastPackage, PackageSymbols};
 use miden_project::PackageSourceMount;
 use smallvec::{SmallVec, smallvec};
 
@@ -87,7 +87,7 @@ use self::{
     namespaces::ResolvedImports,
     resolver::*,
 };
-use crate::{CallableBinding, CallableDeclaration};
+use crate::{CallableDeclaration, ProcedureName};
 
 /// The resolved public modules available for analysis after linking.
 ///
@@ -284,7 +284,7 @@ impl Linker {
 
     /// Projects source-visible exports onto their existing canonical declarations. Source paths
     /// only locate aliases; their spelling never supplies a callable home or canonical name.
-    fn library_export_bindings(library: &LinkLibrary) -> BTreeMap<Arc<Path>, CallableBinding> {
+    fn library_export_bindings(library: &LinkLibrary) -> BTreeMap<Arc<Path>, ProcedureName> {
         library
             .package
             .manifest
@@ -321,7 +321,7 @@ impl Linker {
     fn preflight_library_modules(
         &self,
         modules: Vec<ModuleDescriptor>,
-        bindings: &BTreeMap<Arc<Path>, CallableBinding>,
+        bindings: &BTreeMap<Arc<Path>, ProcedureName>,
     ) -> Result<Vec<ModuleDescriptor>, LinkerError> {
         let mut pending = Vec::new();
         for descriptor in modules {
@@ -371,7 +371,7 @@ impl Linker {
     fn insert_library_modules(
         &mut self,
         modules: Vec<ModuleDescriptor>,
-        bindings: &BTreeMap<Arc<Path>, CallableBinding>,
+        bindings: &BTreeMap<Arc<Path>, ProcedureName>,
         package_paths: &BTreeMap<Arc<Path>, Arc<Path>>,
     ) {
         for descriptor in modules {
@@ -621,7 +621,7 @@ impl Linker {
     pub fn with_kernel(
         source_manager: Arc<dyn SourceManager>,
         kernel_package: Arc<MastPackage>,
-        naming: impl Into<Arc<PackageNaming>>,
+        naming: impl Into<Arc<PackageSymbols>>,
     ) -> Result<Self, Report> {
         log::debug!(target: "linker", "instantiating linker with kernel package {}@{}", kernel_package.name, kernel_package.version);
 
@@ -640,7 +640,7 @@ impl Linker {
     pub fn link_with_kernel(
         &mut self,
         kernel_package: Arc<MastPackage>,
-        naming: impl Into<Arc<PackageNaming>>,
+        naming: impl Into<Arc<PackageSymbols>>,
     ) -> Result<(), Report> {
         let library =
             LinkLibrary::from_package(kernel_package.clone(), naming).map_err(Report::msg)?;
@@ -677,7 +677,7 @@ impl Linker {
         self.kernel_library.as_ref().map(|library| library.package.clone())
     }
 
-    pub fn kernel_naming(&self) -> Option<Arc<PackageNaming>> {
+    pub fn kernel_naming(&self) -> Option<Arc<PackageSymbols>> {
         self.kernel_library.as_ref().map(|library| library.naming().clone())
     }
 
@@ -1265,7 +1265,7 @@ mod tests {
         module::{ItemInfo, TypeInfo},
     };
     use miden_core::{Felt, program::CanonicalLabel};
-    use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+    use miden_mast_package::{CallableProcedurePath, NamespacePath};
 
     use super::*;
     use crate::{
@@ -1393,7 +1393,7 @@ mod tests {
             ))
             .expect("library module should parse");
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
+            .with_namespace_plan(NamespacePath::new(vec![
                 CanonicalLabel::text("lib-fixture-home").unwrap(),
             ]))
             .with_callable_path(
@@ -1452,13 +1452,13 @@ mod tests {
             ))
             .unwrap();
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
+            .with_namespace_plan(NamespacePath::new(vec![
                 CanonicalLabel::text("compilation-home").unwrap(),
             ]))
             .with_callable_binding(
                 Arc::from(Path::new("::lib::foo")),
-                CallableBinding::new(
-                    NamespacePlan::new(vec![CanonicalLabel::text(home).unwrap()]),
+                ProcedureName::new(
+                    NamespacePath::new(vec![CanonicalLabel::text(home).unwrap()]),
                     CallableProcedurePath::from_semantic_components(vec!["definition".into()])
                         .unwrap(),
                 )
@@ -1560,7 +1560,7 @@ mod tests {
             ))
             .unwrap();
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
+            .with_namespace_plan(NamespacePath::new(vec![
                 CanonicalLabel::text("compilation-home").unwrap(),
             ]))
             .with_callable_path(
@@ -1617,14 +1617,14 @@ mod tests {
                 ))
                 .unwrap();
             kernel.set_path(source_path);
-            let export = CallableBinding::new(
-                NamespacePlan::new(vec![]),
+            let export = ProcedureName::new(
+                NamespacePath::new(vec![]),
                 CallableProcedurePath::from_semantic_components(vec!["canonical_export".into()])
                     .unwrap(),
             )
             .unwrap();
             let product = Assembler::new(context.source_manager())
-                .with_namespace_plan(NamespacePlan::new(vec![
+                .with_namespace_plan(NamespacePath::new(vec![
                     CanonicalLabel::text("private-kernel-home").unwrap(),
                 ]))
                 .with_callable_binding(source_path.join("foo").into(), export.clone())
@@ -1677,8 +1677,8 @@ mod tests {
             .unwrap();
         ordinary.set_path(Path::kernel_path());
         let ordinary_home =
-            NamespacePlan::new(vec![CanonicalLabel::text("ordinary-fixture-home").unwrap()]);
-        let ordinary_binding = CallableBinding::new(
+            NamespacePath::new(vec![CanonicalLabel::text("ordinary-fixture-home").unwrap()]);
+        let ordinary_binding = ProcedureName::new(
             ordinary_home.clone(),
             CallableProcedurePath::from_semantic_components(vec!["ordinary".into()]).unwrap(),
         )
@@ -1720,14 +1720,14 @@ mod tests {
         let mut kernel =
             context.parse_kernel(source_file!(&context, "pub proc foo push.2 end")).unwrap();
         kernel.set_path(source_path);
-        let export = CallableBinding::new(
-            NamespacePlan::new(vec![]),
+        let export = ProcedureName::new(
+            NamespacePath::new(vec![]),
             CallableProcedurePath::from_semantic_components(vec!["canonical_export".into()])
                 .unwrap(),
         )
         .unwrap();
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .with_namespace_plan(NamespacePath::new(vec![]))
             .with_callable_binding(source_path.join("foo").into(), export.clone())
             .unwrap()
             .assemble_library_modules(
@@ -1791,7 +1791,7 @@ mod tests {
             ))
             .expect("library module should parse");
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
+            .with_namespace_plan(NamespacePath::new(vec![
                 CanonicalLabel::text("overflow-fixture-home").unwrap(),
             ]))
             .with_callable_path(
@@ -1849,7 +1849,7 @@ mod tests {
             ))
             .expect("kernel module should parse");
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .with_namespace_plan(NamespacePath::new(vec![]))
             .with_callable_path(
                 Arc::from(Path::new("::$kernel::foo")),
                 CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
