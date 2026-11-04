@@ -526,7 +526,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
-| 15 API/CLI closure | in-progress | API names `652e1780c`; base `f4350360d` | Independent review; core/package/project/assembly1427 and strict four-crate all-target custom Clippy pass; authority compile-fail and existing codecs retained | Exact package occurrences/host-owned execution, downstream/public/no_std closure and remaining PR15 acceptance pending |
+| 15 API/CLI closure | in-progress | Names `652e1780c`; ProgramInfo `b3877191e`; package `77bbd95a7`; producer `f8e052482`; base `f4350360d` | Independent reviews; six-crate3772 pass then final affected615; strict11-crate all-target custom Clippy; prior1427 and authority fixture | Immutable CodePackage/host-owned execution, Program retirement, resolution options, downstream runtime/no_std and remaining PR15 acceptance pending |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
@@ -3346,3 +3346,39 @@ removing Program's entry hints. A private entry/helper must retain its exact occ
 serialization and host loading, including equal-D roots; never reconstruct an occurrence by
 selecting the first D. The package codec/assembler and processor owners are disjoint. Preserve
 canonical symbol bytes, all existing admission/resource gates and caller-supplied target authority.
+
+
+### PR15 replay and exact occurrence checkpoint, 4 November 2026
+
+Signed `b3877191e` retires ProgramInfo and Program::to_info. Replay v6 omits that redundant
+transport while retaining caller-target validation and authenticated entry extraction; proof
+transport3 and claim2 are unchanged. VmTrace retains typed ImplementationRoot diagnostics.
+Twenty-seven snapshot migrations alter only that metadata field, preserving all matrix checksums,
+heights and outputs. Transaction cache v8 uses the expected target and retains relation, verifier
+identities, stack, transcript and parameter separation. Readme authority corrections are separate
+signed docs `9f9a4ff18`. Program itself is still pending retirement.
+
+Signed `77bbd95a7` adds Package10 bounded sorted keyed occurrence transport, separate from
+unchanged canonical NamingV1. Explicit admission shares aggregate byte/record budgets before
+profile callbacks; readers scan the entire scalar payload before row allocation. Exact roots,
+tags/order/tails, checked K/D association and owning source graph are validated. Trusted readers
+defer only existing debug validation; source stripping retains exact executable occurrences.
+Dependency v3 commits K/exec without optional source IDs; full artifact/package v3 includes all
+metadata, while the code commitment remains unchanged.
+
+Signed `f8e052482` transports compiler-owned local/private occurrences and actual static root/source
+remappings. Metadata collection does not import otherwise unselected source trees. Debug-disabled
+export uses existing fallible stripping; no occurrence is synthesized from first matching D.
+Independent reviews pass. The six-crate lib/integration run initially passed3750/3772; producer
+fixes resolve21 dangling-source failures and one source-projection failure with all checks retained.
+The fresh rerun passes3772, with nine existing skips. After lint-equivalent ownership grouping,
+all615 affected assembler/codec/source/instance controls pass; this is not another whole3772 run.
+Final11-crate all-target strict custom Clippy also type-checks CLI/public/private-prover consumers.
+Logs: `pr15-occurrence-replay-{checks,final,postlint,clippy-final}.log`. The initial lint failures
+remain a separate diagnostic log. Cache2 runtime is pending; no fresh no_std or proof-regeneration
+claim is made. No production AIR/claim/pin changes in these slices.
+
+Next: immutable checked CodePackage association, keyed host code/source ownership, then target-only
+execution and Program retirement with explicit resolution policies. This is ordinary implementation
+within the approved PR15 card, not a new authority model. All remaining PR15, PR15a/16, inherited
+guest/fuzz/performance/final gates and the general goal/M1 remain open. No push or GitHub PR.
