@@ -50,12 +50,8 @@ impl fmt::Display for NamingRole {
     }
 }
 
-/// A package with its independently expected and profile-admitted complete naming retained.
-#[derive(Clone, Debug)]
-pub struct LoadedPackage {
-    pub package: Arc<Package>,
-    pub naming: Arc<PackageSymbols>,
-}
+/// Owned package code and exact checked symbols; policy is supplied by the admitting caller.
+pub use miden_mast_package::CodePackage;
 
 /// Current caller naming policy, exact source bindings and independent artifact expectations.
 #[derive(Debug)]
@@ -248,7 +244,7 @@ impl NamingInputs {
     }
 
     /// Admits a package under current policy and compares its complete independent expectation.
-    pub fn admit(&self, role: NamingRole, package: Arc<Package>) -> Result<LoadedPackage, Report> {
+    pub fn admit(&self, role: NamingRole, package: Arc<Package>) -> Result<CodePackage, Report> {
         let expected = match self.choice(role)? {
             SelectedChoice::Artifact(expected) => expected,
             SelectedChoice::Source(_) => {
@@ -265,7 +261,7 @@ impl NamingInputs {
                 "{role} complete naming differs from its independently supplied expectation"
             )));
         }
-        Ok(LoadedPackage { package, naming: Arc::new(naming) })
+        CodePackage::new(package, Arc::new(naming)).map_err(Report::msg)
     }
 
     /// Requires one ordered artifact expectation for every explicit `-l` input.
@@ -529,12 +525,12 @@ mod tests {
         let path = write_document(directory.path(), &config);
         let inputs = NamingInputs::read(&path, JSON_LIMIT).unwrap();
         let loaded = inputs.admit(NamingRole::Target, package.clone()).unwrap();
-        assert_eq!(*loaded.naming, naming);
-        assert_eq!(loaded.naming.entry_key(), naming.entry_key());
-        assert_eq!(loaded.naming.callables().bindings().len(), 2);
-        assert_eq!(loaded.naming.callables().visible_paths().len(), 1);
+        assert_eq!(**loaded.symbols(), naming);
+        assert_eq!(loaded.symbols().entry_key(), naming.entry_key());
+        assert_eq!(loaded.symbols().callables().bindings().len(), 2);
+        assert_eq!(loaded.symbols().callables().visible_paths().len(), 1);
         assert_eq!(
-            inputs.encode_owned(&loaded.naming).unwrap(),
+            inputs.encode_owned(loaded.symbols()).unwrap(),
             fs::read(directory.path().join("chosen.bin")).unwrap(),
         );
         assert!(inputs.source(NamingRole::Target).is_err());

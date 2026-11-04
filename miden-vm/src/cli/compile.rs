@@ -50,11 +50,11 @@ impl CompileCmd {
         // Note: assembler debug mode is always enabled (issue #1821)
         let compiled =
             program.compile_package(libraries.libraries.iter().cloned(), namespace_inputs)?;
-        let naming_bytes = naming_inputs.encode_owned(&compiled.naming)?;
-        compiled.package.check_naming(&compiled.naming).map_err(Report::msg)?;
+        let naming_bytes = naming_inputs.encode_owned(compiled.symbols())?;
+        compiled.package().check_naming(compiled.symbols()).map_err(Report::msg)?;
 
         // report program hash to user
-        let compiled_program = compiled.package.try_into_program(&compiled.naming)?;
+        let compiled_program = compiled.package().try_into_program(compiled.symbols())?;
         let program_hash: [u8; 32] = compiled_program.hash().into();
         println!("program hash is {}", hex::encode(program_hash));
 
@@ -68,7 +68,7 @@ impl CompileCmd {
         });
 
         compiled
-            .package
+            .package()
             .write_to_file(out_path)
             .into_diagnostic()
             .wrap_err("Failed to write the compiled file")?;

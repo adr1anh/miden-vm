@@ -154,9 +154,9 @@ struct PreparedTest {
     // Cache keys use this instance's address; retain it so the allocator cannot recycle that
     // identity for another manager while the compiled source/debug mappings remain cached.
     _source_manager: Arc<DefaultSourceManager>,
-    _local_naming: miden_mast_package::PackageSymbols,
-    _kernel_naming: Option<miden_mast_package::PackageSymbols>,
-    _import_naming: Vec<miden_mast_package::PackageSymbols>,
+    local_code: miden_mast_package::CodePackage,
+    kernel_code: Option<miden_mast_package::CodePackage>,
+    import_code: Vec<miden_mast_package::CodePackage>,
     environment: librarytree::FixtureEnvironment,
 }
 
@@ -697,12 +697,33 @@ impl Test {
                 .chain(import_naming.iter()),
             &self.environment_fragments,
         )?;
+        let local_code =
+            miden_mast_package::CodePackage::new(package.into(), Arc::new(local_naming))
+                .map_err(Report::msg)?;
+        let kernel_code = kernel_lib
+            .clone()
+            .zip(kernel_naming)
+            .map(|(package, symbols)| {
+                miden_mast_package::CodePackage::new(package, Arc::new(symbols))
+            })
+            .transpose()
+            .map_err(Report::msg)?;
+        let import_code = self
+            .libraries
+            .iter()
+            .cloned()
+            .zip(import_naming)
+            .map(|(package, symbols)| {
+                miden_mast_package::CodePackage::new(package, Arc::new(symbols))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Report::msg)?;
         let result = PreparedTest {
             compiled: (program, kernel_lib, debug_info),
             _source_manager: self.source_manager.clone(),
-            _local_naming: local_naming,
-            _kernel_naming: kernel_naming,
-            _import_naming: import_naming,
+            local_code,
+            kernel_code,
+            import_code,
             environment,
         };
 
@@ -919,13 +940,14 @@ impl Test {
         let environment = prepared.environment.execution();
         let mut host =
             DefaultHost::default().with_environment_source(prepared.environment.source());
-        let (program, kernel, debug_info) = prepared.compiled;
-        if let Some(kernel) = kernel {
-            host.load_library(kernel.mast_forest()).unwrap();
+        let (program, _, debug_info) = prepared.compiled;
+        if let Some(kernel) = prepared.kernel_code {
+            host.load_library(kernel).unwrap();
         }
-        for library in &self.libraries {
-            host.load_library(library.mast_forest()).unwrap();
+        for library in prepared.import_code {
+            host.load_library(library).unwrap();
         }
+        host.load_library(prepared.local_code).unwrap();
         for (event, handler) in &self.handlers {
             host.register_handler(event.clone(), handler.clone()).unwrap_or_else(|err| {
                 panic!("Failed to register handler for event '{}': {err}", event.as_str())
@@ -1040,8 +1062,9 @@ impl Test {
             library_artifacts: self
                 .libraries
                 .iter()
-                // This binds code, exact required canonical naming and semantic sections. The
-                // Current raw/owned input checks run before cache lookup; this key does not
+                // The full package commitment binds code/advice, exact symbols/occurrences,
+                // and all metadata sections, including source/debug data. Current raw/owned
+                // input checks run before cache lookup; this key does not
                 // substitute for either admission or exact package/naming correspondence.
                 .map(|library| library.commitment())
                 .collect(),

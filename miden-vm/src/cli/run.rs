@@ -191,8 +191,8 @@ fn run_program(
     }
     load_program_libraries(&mut host, &loaded, libraries)?;
     let program_hash = loaded.program.hash().into();
-    let debug_info = loaded.target.package.debug_info().map_err(Report::msg)?;
-    let entry_source = loaded.target.package.entrypoint_source_node();
+    let debug_info = loaded.target.package().debug_info().map_err(Report::msg)?;
+    let entry_source = loaded.target.package().entrypoint_source_node();
     let processor = FastProcessor::new_with_options(stack_inputs, advice_inputs, exec_options)
         .map_err(Report::msg)?;
     let witness = match (debug_info.as_ref(), entry_source) {

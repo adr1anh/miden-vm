@@ -244,7 +244,7 @@ fn test_masm_consistency(
     let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
     let mut host = DefaultHost::default().with_environment_source(source);
     if let Some(kernel_lib) = &kernel_lib {
-        host.load_library(kernel_lib.mast_forest()).unwrap();
+        host.mast_forest_store_mut().insert(kernel_lib.mast_forest().clone());
     }
 
     // fast processor
@@ -310,7 +310,7 @@ fn test_masm_errors_consistency(
     let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
     let mut host = DefaultHost::default().with_environment_source(source);
     if let Some(kernel_lib) = &kernel_lib {
-        host.load_library(kernel_lib.mast_forest()).unwrap();
+        host.mast_forest_store_mut().insert(kernel_lib.mast_forest().clone());
     }
 
     // fast processor

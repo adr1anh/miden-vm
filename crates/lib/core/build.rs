@@ -284,9 +284,9 @@ fn main() -> Result<(), Report> {
     let core = project_assembler
         .assemble_with_naming(miden_assembly::ProjectTargetSelector::Library, "release")?;
 
-    core.package.check_naming(&core.naming).into_diagnostic()?;
+    core.code.package().check_naming(core.code.symbols()).into_diagnostic()?;
     let vm_metadata = verifier_metadata(
-        &core.package,
+        core.code.package(),
         "vm",
         Word::new(miden_air::vm::config::RELATION_DIGEST),
         Word::new(miden_air::vm::config::ACE_CIRCUIT_DIGEST),
@@ -298,16 +298,19 @@ fn main() -> Result<(), Report> {
     )?;
     let pvm_circuit = miden_air::precompiles::protocol::recursive_circuit();
     let pvm_metadata = verifier_metadata(
-        &core.package,
+        core.code.package(),
         "pvm",
         Word::new(miden_air::precompiles::PVM_RELATION_DIGEST.map(Felt::new_unchecked)),
         pvm_circuit.commitment,
         pvm_circuit.instructions,
     )?;
-    core.package.write_masp_file(build_dir.join(PKG_OUT_DIR)).into_diagnostic()?;
+    core.code
+        .package()
+        .write_masp_file(build_dir.join(PKG_OUT_DIR))
+        .into_diagnostic()?;
     fs::write(
         build_dir.join("core_naming.rs"),
-        naming_sidecar::render(&core.naming, &vm_metadata, &pvm_metadata)?,
+        naming_sidecar::render(core.code.symbols(), &vm_metadata, &pvm_metadata)?,
     )
     .into_diagnostic()?;
 

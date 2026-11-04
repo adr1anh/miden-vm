@@ -79,11 +79,8 @@ fn run(source: &str, advice: AdviceInputs) -> (String, ExecutionOutput) {
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
     let buf = Arc::new(Mutex::new(String::new()));
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: debug_handlers_with_writer(SharedBuf(buf.clone())),
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone())
+        .set_handlers(debug_handlers_with_writer(SharedBuf(buf.clone())));
     let mut host = DefaultHost::default()
         .with_environment_source(named.environment.source())
         .with_library(host_lib)
@@ -302,11 +299,8 @@ fn print_mem_rejects_out_of_bounds_range_end() {
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))),
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone())
+        .set_handlers(debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))));
     let mut host = DefaultHost::default()
         .with_environment_source(named.environment.source())
         .with_library(host_lib)
@@ -345,11 +339,8 @@ fn print_mem_rejects_oversized_range() {
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))),
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone())
+        .set_handlers(debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))));
     let mut host = DefaultHost::default()
         .with_environment_source(named.environment.source())
         .with_library(host_lib)
@@ -388,11 +379,8 @@ fn print_mem_rejects_full_range() {
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))),
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone())
+        .set_handlers(debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))));
     let mut host = DefaultHost::default()
         .with_environment_source(named.environment.source())
         .with_library(host_lib)
@@ -594,11 +582,7 @@ fn debug_handlers_compose_with_default_core_handlers() {
 
     let mut handlers = core_lib.handlers();
     handlers.extend(advice_debug_handlers());
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers,
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone()).set_handlers(handlers);
     let mut host = DefaultHost::default()
         .with_environment_source(named.environment.source())
         .with_library(host_lib)
@@ -664,11 +648,8 @@ fn noop_debug_handlers_run_print_stack_without_output() {
         .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: noop_debug_handlers(),
-    };
+    let host_lib =
+        HostLibrary::new(core_lib.code_package().clone()).set_handlers(noop_debug_handlers());
     let mut host = DefaultHost::default()
         .with_environment_source(named.environment.source())
         .with_library(host_lib)

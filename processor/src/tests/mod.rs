@@ -236,8 +236,8 @@ fn test_diagnostic_advice_map_key_already_present() {
     };
 
     let mut host = DefaultHost::default();
-    host.load_library(lib_1.mast_forest()).unwrap();
-    host.load_library(lib_2.mast_forest()).unwrap();
+    host.mast_forest_store_mut().insert(lib_1.mast_forest().clone());
+    host.mast_forest_store_mut().insert(lib_2.mast_forest().clone());
 
     let mut mast_forest = MastForest::new();
     let basic_block_id = BasicBlockNodeBuilder::new(vec![Operation::Noop])
@@ -1565,7 +1565,7 @@ fn syscall_root_target_executes_without_a_kernel_descriptor() {
     let (program, kernel, _) = test.compile().unwrap();
     let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
     let mut host = DefaultHost::default().with_environment_source(source);
-    host.load_library(kernel.unwrap().mast_forest()).unwrap();
+    host.mast_forest_store_mut().insert(kernel.unwrap().mast_forest().clone());
     FastProcessor::new(StackInputs::default())
         .execute_sync(&program, environment, &mut host)
         .unwrap();

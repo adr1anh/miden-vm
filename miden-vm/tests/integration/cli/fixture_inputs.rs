@@ -530,7 +530,7 @@ fn selected_fixture_files_admit_and_execute_without_cli_output() {
         .unwrap()
         .admit(NamingRole::Target, fixture.named.package.clone())
         .unwrap();
-    assert_eq!(admitted.naming, fixture.named.naming);
+    assert_eq!(admitted.symbols(), &fixture.named.naming);
 
     let openings = fixture
         .execution_args

@@ -74,7 +74,8 @@ async fn available_code_does_not_supply_missing_environment_evidence() {
         .unwrap();
     forest.make_root(body);
     let implementation = forest.local_procedure_digests().next().unwrap();
-    let mut host = DefaultHost::default().with_library(Arc::new(forest)).unwrap();
+    let mut host = DefaultHost::default();
+    host.mast_forest_store_mut().insert(Arc::new(forest));
     let request = EnvironmentWitnessRequest {
         root: EnvironmentRoot::new(word(50)),
         // Even a key whose bytes match available code does not authorize that implementation.

@@ -700,7 +700,7 @@ pub fn generate_recursive_verifier_data(
     let advice_inputs = AdviceInputs::default();
     let mut host = DefaultHost::default().with_environment_source(program.environment.source());
     if let Some(ref kernel_lib) = kernel_lib {
-        host.load_library(kernel_lib.mast_forest()).unwrap();
+        host.mast_forest_store_mut().insert(kernel_lib.mast_forest().clone());
     }
 
     let processor = FastProcessor::new_with_options(

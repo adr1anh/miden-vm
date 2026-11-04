@@ -15,7 +15,7 @@ use miden_core_lib::CoreLibrary;
 use miden_mast_package::Package;
 use miden_vm::{
     ExecutionProof, StackOutputs,
-    internal::naming_inputs::{LoadedPackage, NamingInputs, NamingRole},
+    internal::naming_inputs::{CodePackage, NamingInputs, NamingRole},
 };
 use serde::{Deserialize, Serialize};
 use tracing::{field::Empty, instrument};
@@ -207,9 +207,9 @@ where
         &self,
         libraries: I,
         inputs: NamespaceInputs,
-    ) -> Result<LoadedPackage, Report>
+    ) -> Result<CodePackage, Report>
     where
-        I: IntoIterator<Item = LoadedPackage>,
+        I: IntoIterator<Item = CodePackage>,
     {
         self.compile_package_with_kernel(libraries, inputs, None)
     }
@@ -218,16 +218,16 @@ where
         &self,
         libraries: I,
         inputs: NamespaceInputs,
-        kernel: Option<&LoadedPackage>,
-    ) -> Result<LoadedPackage, Report>
+        kernel: Option<&CodePackage>,
+    ) -> Result<CodePackage, Report>
     where
-        I: IntoIterator<Item = LoadedPackage>,
+        I: IntoIterator<Item = CodePackage>,
     {
         let mut assembler = match kernel {
             Some(kernel) => Assembler::with_kernel(
                 self.source_manager.clone(),
-                kernel.package.clone(),
-                kernel.naming.clone(),
+                kernel.package().clone(),
+                kernel.symbols().clone(),
             )?,
             None => Assembler::new(self.source_manager.clone()),
         }
@@ -243,17 +243,18 @@ where
 
         for library in libraries {
             assembler
-                .link_package(library.package, miden_assembly::Linkage::Dynamic, library.naming)
+                .link_package(
+                    library.package().clone(),
+                    miden_assembly::Linkage::Dynamic,
+                    library.symbols().clone(),
+                )
                 .wrap_err("Failed to load libraries")?;
         }
 
         let product = assembler
             .assemble_executable_modules("program".into(), self.ast.clone(), [])
             .wrap_err("Failed to compile program")?;
-        let naming = Arc::new(product.naming().clone());
-        let package: Arc<Package> = product.into_artifact(true)?.into();
-        package.check_naming(&naming).map_err(Report::msg)?;
-        Ok(LoadedPackage { package, naming })
+        product.into_code_package(true)
     }
 
     /// Returns the source manager for this program file.
@@ -321,7 +322,7 @@ impl ProofFile {
 // LIBRARY FILE
 // ================================================================================================
 pub struct Libraries {
-    pub libraries: Vec<LoadedPackage>,
+    pub libraries: Vec<CodePackage>,
 }
 
 impl Libraries {

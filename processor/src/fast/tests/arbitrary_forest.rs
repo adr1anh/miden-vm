@@ -123,10 +123,9 @@ impl EnvironmentWitnessSource for FixtureSource {
 /// hint.
 fn run_every_binding(fixture: ExecutableForestFixture, stack: &[Felt]) -> Result<(), String> {
     let fixture = Arc::new(fixture);
-    let mut host = DefaultHost::default()
-        .with_library(fixture.forest())
-        .map_err(|err| err.to_string())?
-        .with_environment_source(Arc::new(FixtureSource(fixture.clone())));
+    let mut host =
+        DefaultHost::default().with_environment_source(Arc::new(FixtureSource(fixture.clone())));
+    host.mast_forest_store_mut().insert(fixture.forest().clone());
     for procedure in fixture.procedures() {
         let program = Program::new(fixture.forest().clone(), procedure.root);
         let environment = ExecutionEnvironment::new(

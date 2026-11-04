@@ -28,7 +28,7 @@ use rstest::{fixture, rstest};
 use super::*;
 use crate as processor;
 use crate::{
-    AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor, HostLibrary,
+    AdviceInputs, DefaultHost, ExecutionOptions, FastProcessor,
     test_utils::{NamedFixture, named_package, named_program, native_trace_limits},
     trace::trace_state::MemoryReadsReplay,
 };
@@ -333,7 +333,7 @@ fn test_trace_generation_at_fragment_boundaries(
         )
         .expect("processor advice inputs should fit advice map limits");
         let mut host = DefaultHost::default().with_environment_source(program.source.clone());
-        host.load_library(create_simple_library()).unwrap();
+        host.mast_forest_store_mut().insert(create_simple_library());
         let vm_witness = processor
             .execute_for_proving_sync(&program.program, program.environment, &mut host)
             .unwrap()
@@ -353,7 +353,7 @@ fn test_trace_generation_at_fragment_boundaries(
         )
         .expect("processor advice inputs should fit advice map limits");
         let mut host = DefaultHost::default().with_environment_source(program.source.clone());
-        host.load_library(create_simple_library()).unwrap();
+        host.mast_forest_store_mut().insert(create_simple_library());
         let vm_witness = processor
             .execute_for_proving_sync(&program.program, program.environment, &mut host)
             .unwrap()
@@ -564,7 +564,7 @@ fn test_partial_last_fragment_exists_for_h0_inversion_path() {
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
-    host.load_library(create_simple_library()).unwrap();
+    host.mast_forest_store_mut().insert(create_simple_library());
 
     let vm_witness = processor
         .execute_for_proving_sync(&program.program, program.environment, &mut host)
@@ -605,7 +605,7 @@ fn miri_repro_uninitialized_tail_read_during_h0_inversion() {
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
-    host.load_library(create_simple_library()).unwrap();
+    host.mast_forest_store_mut().insert(create_simple_library());
     let vm_witness = processor
         .execute_for_proving_sync(&program.program, program.environment, &mut host)
         .unwrap()
@@ -618,13 +618,13 @@ fn miri_repro_uninitialized_tail_read_during_h0_inversion() {
 }
 
 /// Creates a library with a single procedure containing just a SWAP operation.
-fn create_simple_library() -> HostLibrary {
+fn create_simple_library() -> Arc<MastForest> {
     let mut mast_forest = MastForest::new();
     let swap_block = BasicBlockNodeBuilder::new(vec![Operation::Swap, Operation::Swap])
         .add_to_forest(&mut mast_forest)
         .unwrap();
     mast_forest.make_root(swap_block);
-    HostLibrary::from(Arc::new(mast_forest))
+    Arc::new(mast_forest)
 }
 
 /// (join (
@@ -1114,7 +1114,7 @@ fn test_build_trace_returns_err_on_invalid_mast_forest_id(
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
     if load_library {
-        host.load_library(create_simple_library()).unwrap();
+        host.mast_forest_store_mut().insert(create_simple_library());
     }
     let mut vm_witness = processor
         .execute_for_proving_sync(&program.program, program.environment, &mut host)
@@ -1770,7 +1770,7 @@ fn build_trace_for_program(
     )
     .expect("processor advice inputs should fit advice map limits");
     let mut host = DefaultHost::default().with_environment_source(program.source.clone());
-    host.load_library(create_simple_library()).unwrap();
+    host.mast_forest_store_mut().insert(create_simple_library());
     let vm_witness = processor
         .execute_for_proving_sync(&program.program, program.environment, &mut host)
         .unwrap()

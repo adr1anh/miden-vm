@@ -23,7 +23,7 @@ use miden_core::{
     program::{CanonicalLabel, ProcedureKey},
 };
 use miden_mast_package::{
-    CallableProcedurePath, NamespacePath, Package, PackageSymbols, ProcedureName,
+    CallableProcedurePath, CodePackage, NamespacePath, Package, ProcedureName,
 };
 use miden_processor::{
     DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
@@ -142,18 +142,19 @@ fn assemble(manifest: &Path, homes: Vec<NamespacePath>) -> ResolvedPackage {
 fn selected_package<'a>(
     resolved: &'a ResolvedPackage,
     expected: &ProcedureName,
-) -> (&'a Package, &'a PackageSymbols) {
-    let mut candidates = resolved.dependency_packages.iter().filter(|(_, naming)| {
+) -> &'a CodePackage {
+    let mut candidates = resolved.dependency_packages.iter().filter(|code| {
+        let naming = code.symbols();
         naming.callables().binding(expected.key()) == Some(expected)
             && naming.namespace_plan() == expected.namespace_plan()
     });
-    let (package, naming) = candidates.next().expect("exact selected owner code must be retained");
+    let code = candidates.next().expect("exact selected owner code must be retained");
     assert!(
         candidates.next().is_none(),
         "the selected owner must have one exact code supply"
     );
-    package.check_naming(naming).unwrap();
-    (package, naming)
+    code.package().check_naming(code.symbols()).unwrap();
+    code
 }
 
 fn exec_targets(package: &Package) -> BTreeSet<ProcedureKey> {
@@ -190,20 +191,20 @@ fn execute(
 ) -> StackOutputs {
     let supplies = owners.iter().map(|owner| selected_package(resolved, owner)).collect::<Vec<_>>();
     let environment = FixtureEnvironment::new(
-        resolved.naming.entry_key().unwrap(),
-        core::iter::once(resolved.naming.as_ref())
-            .chain(supplies.iter().map(|(_, naming)| *naming)),
+        resolved.code.symbols().entry_key().unwrap(),
+        core::iter::once(resolved.code.symbols().as_ref())
+            .chain(supplies.iter().map(|code| code.symbols().as_ref())),
     )
     .unwrap();
-    let program = resolved.package.try_into_program(&resolved.naming).unwrap();
+    let program = resolved.code.package().try_into_program(resolved.code.symbols()).unwrap();
     let source = Arc::new(RecordingSource {
         inner: environment.source(),
         requested: Mutex::new(BTreeSet::new()),
     });
     let mut host = DefaultHost::default().with_environment_source(source.clone());
     if external_code {
-        for (package, _) in supplies {
-            host.load_library(package.mast_forest().clone()).unwrap();
+        for code in supplies {
+            host.load_library(code.clone()).unwrap();
         }
     }
     let output = FastProcessor::new(StackInputs::new(&[Felt::from_u32(1)]).unwrap())
@@ -211,7 +212,7 @@ fn execute(
         .expect("exact project selections and code must execute natively")
         .stack;
     let requested = source.requested.lock().unwrap();
-    assert!(requested.contains(&resolved.naming.entry_key().unwrap()));
+    assert!(requested.contains(&resolved.code.symbols().entry_key().unwrap()));
     for owner in owners {
         assert!(
             requested.contains(&owner.key()),
@@ -262,24 +263,28 @@ fn same_source_pinned_project_instances_execute_with_distinct_keys_and_equal_bod
             ],
         );
         assert_eq!(resolved.dependency_packages.len(), 2);
-        assert_eq!(exec_targets(&resolved.package), BTreeSet::from([first.key(), second.key()]));
+        assert_eq!(
+            exec_targets(resolved.code.package()),
+            BTreeSet::from([first.key(), second.key()])
+        );
         let mut bodies = Vec::new();
         let mut commitments = Vec::new();
         for expected in [&first, &second] {
-            let (package, naming) = selected_package(&resolved, expected);
+            let code = selected_package(&resolved, expected);
+            let (package, naming) = (code.package(), code.symbols());
             assert_eq!(package.name, "dep");
             assert_eq!(package.version.to_string(), "1.0.0");
             assert_eq!(
                 naming.callables().key_for_visible_path(expected.path()),
                 Some(expected.key()),
             );
-            assert_eq!(resolved.naming.callables().binding(expected.key()), Some(expected));
+            assert_eq!(resolved.code.symbols().callables().binding(expected.key()), Some(expected));
             let body = naming.callables().selected_implementation(expected.key()).unwrap();
             assert_eq!(
-                resolved.naming.callables().selected_implementation(expected.key()),
+                resolved.code.symbols().callables().selected_implementation(expected.key()),
                 Some(body),
             );
-            let forest = resolved.package.mast_forest();
+            let forest = resolved.code.package().mast_forest();
             let node = forest.find_procedure_root(body.into_word()).unwrap();
             assert_eq!(forest[node].is_external(), linkage == "dynamic");
             bodies.push(body);
@@ -287,7 +292,7 @@ fn same_source_pinned_project_instances_execute_with_distinct_keys_and_equal_bod
         }
         assert_eq!(bodies[0], bodies[1], "the same source can supply equal D under distinct K");
         assert_ne!(commitments[0].digest, commitments[1].digest);
-        let runtime = resolved.package.manifest.dependencies().cloned().collect::<Vec<_>>();
+        let runtime = resolved.code.package().manifest.dependencies().cloned().collect::<Vec<_>>();
         if linkage == "dynamic" {
             assert_eq!(runtime.len(), 2, "same-name runtime supplies must both survive");
             assert!(commitments.iter().all(|dependency| runtime.contains(dependency)));
@@ -299,11 +304,11 @@ fn same_source_pinned_project_instances_execute_with_distinct_keys_and_equal_bod
         products.push((resolved, output));
     }
     assert_eq!(products[0].1, products[1].1, "bundled and external code have the same behavior");
-    let entry = products[0].0.naming.entry_key().unwrap();
-    assert_eq!(products[1].0.naming.entry_key(), Some(entry));
+    let entry = products[0].0.code.symbols().entry_key().unwrap();
+    assert_eq!(products[1].0.code.symbols().entry_key(), Some(entry));
     assert_eq!(
-        products[0].0.naming.callables().selected_implementation(entry),
-        products[1].0.naming.callables().selected_implementation(entry),
+        products[0].0.code.symbols().callables().selected_implementation(entry),
+        products[1].0.code.symbols().callables().selected_implementation(entry),
         "the caller's ordered canonical invocation keys do not depend on code availability",
     );
 }
@@ -362,7 +367,8 @@ fn pinned_project_reexports_private_helpers_and_retained_latest_calls_execute() 
             &manifest,
             vec![home("instance-client"), pinned.clone(), latest.namespace_plan().clone()],
         );
-        let (package, naming) = selected_package(&resolved, &run);
+        let code = selected_package(&resolved, &run);
+        let (package, naming) = (code.package(), code.symbols());
         assert_eq!(
             naming.callables().key_for_visible_path(&path(&["dep", "lib", "alias"])),
             Some(run.key()),
@@ -372,7 +378,7 @@ fn pinned_project_reexports_private_helpers_and_retained_latest_calls_execute() 
         assert_eq!(naming.callables().binding(latest.key()), Some(&latest));
         assert!(naming.callables().binding(rebased_latest.key()).is_none());
         assert!(exec_targets(package).is_superset(&BTreeSet::from([hidden.key(), latest.key()])));
-        assert!(exec_targets(&resolved.package).contains(&run.key()));
+        assert!(exec_targets(resolved.code.package()).contains(&run.key()));
         let fallback = binding(home("source-fallback"), &["dep", "lib", "implementation", "run"]);
         assert!(naming.callables().binding(fallback.key()).is_none());
         let output = execute(&resolved, &[&run, &latest], linkage == "dynamic");
@@ -393,8 +399,8 @@ fn conflicting_project_implementations_for_one_key_are_rejected_before_execution
         write(&directory.join("main.masm"), &format!("begin add.{body} end\n"));
         products.push(assemble(&manifest, vec![home("instance-client")]));
     }
-    let first = &products[0].naming;
-    let second = &products[1].naming;
+    let first = products[0].code.symbols();
+    let second = products[1].code.symbols();
     let entry = first.entry_key().unwrap();
     assert_eq!(second.entry_key(), Some(entry));
     assert_ne!(

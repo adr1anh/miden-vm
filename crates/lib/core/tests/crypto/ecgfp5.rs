@@ -641,7 +641,7 @@ fn callable_from_a_kernel_procedure() {
             .with_environment_source(named.environment.source())
             .with_library(&core)
             .unwrap();
-        host.load_library(kernel.mast_forest()).unwrap();
+        host.mast_forest_store_mut().insert(kernel.mast_forest().clone());
         let witness =
             FastProcessor::new(inputs)
                 .with_options(

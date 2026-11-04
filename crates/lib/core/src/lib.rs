@@ -17,7 +17,7 @@ extern crate alloc;
 use alloc::{sync::Arc, vec, vec::Vec};
 
 use miden_core::{Word, events::EventName, mast::MastForest};
-use miden_mast_package::{Package, PackageSymbols};
+use miden_mast_package::{CodePackage, Package, PackageSymbols};
 use miden_processor::{HostLibrary, event::EventHandler};
 use miden_utils_sync::LazyLock;
 
@@ -116,16 +116,12 @@ pub const PVM_PROOF_REQUEST_EVENT_NAME: EventName =
 /// [`Package`]: miden_mast_package::Package
 #[derive(Clone)]
 pub struct CoreLibrary {
-    package: Arc<Package>,
-    naming: Arc<PackageSymbols>,
+    code: CodePackage,
 }
 
 impl From<&CoreLibrary> for HostLibrary {
     fn from(core_lib: &CoreLibrary) -> Self {
-        Self {
-            handlers: core_lib.handlers(),
-            ..HostLibrary::from(core_lib.package.clone())
-        }
+        HostLibrary::new(core_lib.code.clone()).set_handlers(core_lib.handlers())
     }
 }
 
@@ -136,17 +132,22 @@ impl CoreLibrary {
 
     /// Returns a reference to the [MastForest] used to execute the core library
     pub fn mast_forest(&self) -> &Arc<MastForest> {
-        self.package.mast_forest()
+        self.code.package().mast_forest()
     }
 
     /// Returns the `miden-core` package.
     pub fn package(&self) -> Arc<Package> {
-        Arc::clone(&self.package)
+        Arc::clone(self.code.package())
+    }
+
+    /// Returns the embedded package and its exact checked symbols as one immutable value.
+    pub fn code_package(&self) -> &CodePackage {
+        &self.code
     }
 
     /// Returns the compiler-owned naming retained for the exact embedded core package.
     pub fn naming(&self) -> &Arc<PackageSymbols> {
-        &self.naming
+        self.code.symbols()
     }
 
     /// Constructs the exact embedded VM verifier's dependencies and derived identity.
@@ -175,7 +176,8 @@ impl CoreLibrary {
     /// the typed identity returned by [`Self::vm_recursive_verifier_profile`]. Proof requests use
     /// the caller's expected typed identity, not this implementation root.
     pub fn vm_recursive_verifier_root(&self) -> Word {
-        self.package
+        self.code
+            .package()
             .get_procedure_root_by_path("::miden::core::sys::vm::verify_proof")
             .expect("vm::verify_proof is exported from the core library")
     }
@@ -186,7 +188,8 @@ impl CoreLibrary {
     /// the typed identity returned by [`Self::pvm_recursive_verifier_profile`]. Proof requests use
     /// the caller's expected typed identity, not this implementation root.
     pub fn pvm_recursive_verifier_root(&self) -> Word {
-        self.package
+        self.code
+            .package()
             .get_procedure_root_by_path("::miden::core::sys::pvm::verify_proof")
             .expect("pvm::verify_proof is exported from the core library")
     }
@@ -198,7 +201,8 @@ impl CoreLibrary {
     /// returned level with its own threshold. The estimator does not verify proofs or authenticate
     /// descriptors assembled by the caller.
     pub fn conjectured_security_estimator_root(&self) -> Word {
-        self.package
+        self.code
+            .package()
             .get_procedure_root_by_path(
                 "::miden::core::stark::security::compute_conjectured_security_level",
             )
@@ -210,7 +214,8 @@ impl CoreLibrary {
     /// Like the conjectured estimator, it encodes no acceptance threshold and does not
     /// authenticate caller-assembled descriptors.
     pub fn proven_security_estimator_root(&self) -> Word {
-        self.package
+        self.code
+            .package()
             .get_procedure_root_by_path(
                 "::miden::core::stark::security::compute_proven_security_level",
             )
@@ -257,11 +262,10 @@ impl Default for CoreLibrary {
                     .expect("failed to read core package!"),
             );
             let naming = Arc::new(embedded_naming::reconstruct());
-            package
-                .check_naming(&naming)
+            let code = CodePackage::new(package, naming)
                 .expect("embedded core package must match its compiler-owned naming");
 
-            CoreLibrary { package, naming }
+            CoreLibrary { code }
         });
         CORELIB.clone()
     }
@@ -375,9 +379,9 @@ mod tests {
         imported.check_naming(core.naming()).unwrap();
         assert_eq!(
             imported.naming_transport().as_bytes(),
-            core.package.naming_transport().as_bytes()
+            core.code.package().naming_transport().as_bytes()
         );
-        assert_eq!(imported.mast_forest_commitment(), core.package.mast_forest_commitment());
+        assert_eq!(imported.mast_forest_commitment(), core.code.package().mast_forest_commitment());
         assert_eq!(imported.mast_forest().advice_map(), core.mast_forest().advice_map());
 
         let source = "use miden::core::math::u64\nbegin push.0.2.0.3 exec.u64::wrapping_add swap drop swap drop end";
@@ -418,7 +422,7 @@ mod tests {
         let mut advice = AdviceMap::default();
         assert!(!core.mast_forest().advice_map().contains_key(&advice_key));
         advice.insert(advice_key, values.clone());
-        let package = core.package.as_ref().clone().with_advice_map(advice);
+        let package = core.code.package().as_ref().clone().with_advice_map(advice);
         let file = ExportedPackageFile::new(&package.to_bytes());
         let imported = Arc::new(file.read());
         imported.check_naming(core.naming()).unwrap();
@@ -568,7 +572,7 @@ mod tests {
 
             let mut host = DefaultHost::default()
                 .with_environment_source(environment.source())
-                .with_library(imported)
+                .with_library(CodePackage::new(imported, Arc::new(naming.clone())).unwrap())
                 .unwrap();
             let output = FastProcessor::new_with_options(
                 StackInputs::default(),
@@ -625,7 +629,7 @@ mod tests {
     #[test]
     fn core_package_version_matches_crate_release_line() {
         let core_lib = CoreLibrary::default();
-        let package_version = &core_lib.package.version;
+        let package_version = &core_lib.code.package().version;
         let crate_version = env!("CARGO_PKG_VERSION")
             .parse::<miden_mast_package::Version>()
             .expect("crate version should be a valid package version");
@@ -633,7 +637,7 @@ mod tests {
         assert!(
             core_package_versions_match(&crate_version, package_version),
             "embedded package {} version {} does not match the miden-core-lib crate version {}",
-            core_lib.package.name,
+            core_lib.code.package().name,
             package_version,
             crate_version,
         );
@@ -701,7 +705,8 @@ mod tests {
     fn test_compile() {
         let core_lib = CoreLibrary::default();
         let exists = core_lib
-            .package
+            .code
+            .package()
             .get_procedure_root_by_path("::miden::core::math::u64::overflowing_add")
             .is_some();
 

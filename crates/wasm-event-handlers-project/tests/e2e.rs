@@ -14,9 +14,9 @@ use std::{
 use miden_assembly::{
     Assembler, DefaultSourceManager, MasmSourceProvider, ProjectSourceProvider,
     ProjectTargetSelector,
-    testing::{FixtureNamespace, TestRegistry, configure_project_fixture},
+    testing::{TestRegistry, configure_project_fixture},
 };
-use miden_mast_package::Package;
+use miden_mast_package::{CodePackage, Package};
 use miden_processor::{
     DefaultHost, FastProcessor, StackInputs,
     serde::{Deserializable, Serializable},
@@ -61,13 +61,12 @@ fn a_project_build_ships_a_working_wasm_handler() {
     configure_project_fixture(&mut project_assembler);
     project_assembler.with_package_post_processor(WasmEventHandlerCargoBuildProcessor::new());
 
-    let package = project_assembler
+    let code = project_assembler
         .assemble(ProjectTargetSelector::Executable("main"), "release")
         .expect("the project assembles and its guest crate builds");
 
-    let naming = FixtureNamespace::assembly_tests()
-        .admit_package(&package)
-        .expect("source naming uses the explicitly selected fixture home");
+    let package = code.package();
+    let naming = code.symbols();
 
     // Full wire roundtrip: the handlers travel inside the .masp bytes.
     let decoded = Arc::new(Package::read_from_bytes(&package.to_bytes()).expect("package decodes"));
@@ -76,12 +75,16 @@ fn a_project_build_ships_a_working_wasm_handler() {
         decoded.event_handlers().expect("roundtrip section decodes"),
         package.event_handlers().expect("source section decodes"),
     );
-    let program = decoded.try_into_program(&naming).expect("exact fixture naming selects code");
-    let environment =
-        FixtureEnvironment::new(naming.entry_key().expect("fixture entry is named"), [&naming])
-            .expect("fixture environment validates");
+    let program = decoded.try_into_program(naming).expect("exact fixture naming selects code");
+    let environment = FixtureEnvironment::new(
+        naming.entry_key().expect("fixture entry is named"),
+        [naming.as_ref()],
+    )
+    .expect("fixture environment validates");
 
-    let library = host_library_from_package(&decoded, WasmHandlerLimits::default())
+    let decoded_code = CodePackage::new(decoded, naming.clone())
+        .expect("roundtrip package retains the exact assembled symbols");
+    let library = host_library_from_package(&decoded_code, WasmHandlerLimits::default())
         .expect("the handlers load from the package");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("the handlers register");
@@ -114,7 +117,7 @@ fn the_midenc_call_shape_embeds_the_handlers() {
         .assemble_interruptible(ProjectTargetSelector::Executable("main"), "release")
         .expect("the project assembles and its guest crate builds")
     {
-        ControlFlow::Continue(package) => assert_fixture_section(&package),
+        ControlFlow::Continue(code) => assert_fixture_section(code.package()),
         ControlFlow::Break(interrupted) => {
             panic!("assembly of '{}' was interrupted", interrupted.package)
         },

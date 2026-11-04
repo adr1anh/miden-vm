@@ -858,8 +858,8 @@ mod execution_witness_serialization {
         TargetType, Version,
     };
     use miden_processor::{
-        DefaultHost, EnvironmentTraceLimits, ExecutionOptions, FastProcessor, HostLibrary,
-        ReplayReadLimits, StackInputs, advice::AdviceInputs, trace::build_trace,
+        DefaultHost, EnvironmentTraceLimits, ExecutionOptions, FastProcessor, ReplayReadLimits,
+        StackInputs, advice::AdviceInputs, trace::build_trace,
     };
     use miden_prover::{HashFunction, Prover};
     use miden_utils_testing::librarytree::{
@@ -914,13 +914,13 @@ mod execution_witness_serialization {
             .with_environment_source(environment.source())
     }
 
-    fn create_simple_library() -> HostLibrary {
+    fn create_simple_library() -> Arc<MastForest> {
         let mut mast_forest = MastForest::new();
         let swap_block = BasicBlockNodeBuilder::new(vec![Operation::Swap, Operation::Swap])
             .add_to_forest(&mut mast_forest)
             .unwrap();
         mast_forest.make_root(swap_block);
-        HostLibrary::from(Arc::new(mast_forest))
+        Arc::new(mast_forest)
     }
 
     fn external_lib_proc_digest() -> Word {
@@ -1110,8 +1110,7 @@ mod execution_witness_serialization {
         let advice_inputs = AdviceInputs::default();
         let mut host =
             fixture_host(Arc::new(DefaultSourceManager::default()), &fixture.named.environment);
-        host.load_library(create_simple_library())
-            .expect("failed to load test library into host");
+        host.mast_forest_store_mut().insert(create_simple_library());
         let witness = FastProcessor::new_with_options(
             stack_inputs,
             advice_inputs,

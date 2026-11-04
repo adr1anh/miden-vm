@@ -161,8 +161,8 @@ impl ProveCmd {
             host = host.with_source_manager(source_manager);
         }
         load_program_libraries(&mut host, &loaded, &libraries)?;
-        let package_debug_info = loaded.target.package.debug_info().map_err(Report::msg)?;
-        let entrypoint_source_node = loaded.target.package.entrypoint_source_node();
+        let package_debug_info = loaded.target.package().debug_info().map_err(Report::msg)?;
+        let entrypoint_source_node = loaded.target.package().entrypoint_source_node();
         let program = loaded.program;
 
         let program_hash: [u8; 32] = program.hash().into();
