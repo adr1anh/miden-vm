@@ -528,7 +528,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
 | 15 API/CLI closure | implemented-awaiting-validation | Final source `a99264137`; checked links/CLI `ba651f64d`; review `8ba05fd00`; prior SHAs below; base `f4350360d` | Independent reviews; fresh combined runtime/CLI/witness/proof/flow3,179; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumers; six compiled doctests; standalone fuzz2 typechecks; earlier scoped evidence below | PR15 functional acceptance passes; PR15a/16 and inherited guest/security/fuzz/performance/final gates remain |
-| 15a AIR/Chiplets cleanup | in-progress | Opening base `1afb98f50` | Two bounded read-only address/constraint reviews; no new implementation or measured capture yet | Validate local Controller counter with Library-first candidate, remove prefix retagging; adversarial/capture/height/native-recursive/regeneration gates before16 |
+| 15a AIR/Chiplets cleanup | in-progress | Counter/rebinding `7d51bff1b`; base `1afb98f50` | Independent reviews; fresh combined3,615; MAIN/ext/lookup capture and generated/recursive parity; actual prefix/raw/padded heights; final strict14; production no_std10 | Post-commit deterministic regeneration, PVM artifact/fixture checks and final review description pending; inherited PR16 gates remain |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
 ## Implementation evidence
@@ -3580,32 +3580,45 @@ PVM artifacts change only if their emitted relation/code changes. All PR15a/16 a
 acceptance remains. No PR or push.
 
 
-### PR15a source/canonical capture checkpoint, 4 November 2026
+### PR15a Controller-local counter qualification, 4 November 2026
 
-At opening HEAD `e907c0998`, the uncommitted Controller-local counter slice is frozen after
-independent AIR/native/test reviews. The AIR review corrected a Library-exit mutant that otherwise
-rejected on A/B mismatch; the native test review added direct unpadded-row measurement. No guard
-or production policy was weakened. Three initial lint issues, a missing test trait import and
-unit-test module ordering were corrected; broad strict qualification remains pending below.
+Signed `7d51bff1b` selects Library-first/current selectors with Controller-owned one-based c[23].
+Entry anchors1; within-Controller increments include its padding and stop at exit. Removed physical
+prefix retagging, PhysicalControllerAddress and generic non-Controller clock writes. Checked layout,
+span, band, nullable0/present1/endcursor/alignment/admission bounds remain. Core/Memory/ACE clocks,
+statement/domain/resource/fixed-N0/claim40v2/replay6 contracts are unchanged. No wire bump or unused-
+cell zero constraint was added. Controller-first would require selector/Library-overlay changes,
+with no height gain for the same aligned band lengths; actual retained layout validates below.
 
-Source-AIR scope passes396/396, including six new production-MAIN counter/boundary cases and
-existing exact lookup metadata/degree/rooted-Library tests (`pr15a-canonical-capture.log`). The
-additional generated snapshot test intentionally exposed the new canonical ACE/relation digests.
-Only that captured snapshot/config and matching MASM relation bootstrap constants were rebound;
-normal guarded regeneration then succeeds (`pr15a-regenerate-constraints.log`). Shape remains
-790 inputs/7676 evaluation gates/7920 stream cells; captured Core/Chiplets MAIN and extension
-maxima remain9, four AIRs and packed24/4 remain. These are capture facts, not native runtime or
-final performance evidence.
+Fresh combined scope passes3,615/3,615 with1,237 outside-filter skips
+(`pr15a-runtime-proof-final.log`): source AIR, generated evaluators/captures, runtime/CLI/replay,
+all API/CLI transcript hashes, native/recursive complete/deferred proving and current profile/setup
+checks. The first full run passed3,573 and exposed42 old expectations:14 decoder fixtures sharing
+one prefix-aware expected base,27 trace snapshots and one Memory-row shared-clock assertion.
+Corrections preserve exact decoder relationships and all independent Memory helpers/clocks. Every
+snapshot was structurally audited: only Core FNV, Chiplets FNV and Chiplets nonzero counts change;
+nonzeros decrease56=height64−Controller8. Widths/heights/outputs/entry D/raw lengths and complete
+Eidos/And8 summaries remain byte-identical. The fresh whole scope passes after these updates.
 
-The binding/setup capture passes12 checks, with only the expected old embedded identity parity
-failing (`pr15a-identity-setup-capture.log`). This independently validates both native relation pins,
-embedded ACE captures, all three VM setup commitments and PVM relation/setup. Both CURRENT_VM/PVM
-profile identities are then rebound from the actual derived full-core profiles; PVM relation and
-proof artifacts are unchanged. The Makefile handoff now names the existing identity parity test,
-preventing an obsolete filter from passing with zero tests. Independent binding review finds no
-bypass/fallback. All implementation/pin/artifact edits remain uncommitted at this checkpoint.
+Actual authenticated List inventories yield Library/Controller/raw/padded rows8/8/17/64,
+16/8/25/64 and24/8/33/64; mixed Memory1/ACE2/Bitwise1 yields8/8/21/64. Direct native raw accounting
+is asserted, not inferred from padding. Counter forgeries, padding/exit/reentry/A-B/phase controls,
+actual request/response lookup tampering and stopped/parallel logical-address replay pass.
+Source AIR396 passed before pin rebinding (`pr15a-canonical-capture.log`). Captured MAIN/ext maxima
+remain9; exact symbolic lookup metadata/degree checks pass, packed24/4/four AIRs/nine periodics/
+[4,4,3,2] remain. Canonical circuit shape stays790/7676/7920; only circuit/relation identities change.
+No performance, cross-target or full forged-proof counter campaign is inferred from these facts.
 
-The combined native/CLI/replay/proof/capture matrix is building its generated-drift binaries
-(`pr15a-runtime-proof-capture.log`); no passing runtime/height/parity result is claimed yet. Reuse
-that coherent build for drift checks, then finish strict/no_std/regeneration/PVM/focused adversarial
-and final PR15a gates before branch closeout. General goal/M1 and PR16/inherited gates remain.
+Normal generation succeeds (`pr15a-regenerate-constraints.log`). Independent canonical config/setup
+capture passes12 checks before expected old profile parity failure (`pr15a-identity-setup-capture.log`);
+both compatibility IDs are then rebound from actual full-core profiles and pass in the final scope.
+PVM relation artifacts remain unchanged; its profile changes through the shared mount. Makefile now
+uses the existing identity parity test. Independent AIR/native/test/binding reviews found no remaining
+material issue after strengthening two test oracles. Final strict14 all-target custom Clippy passes
+(`pr15a-final-clippy.log`); ten production no_std roots compile (`pr15a-no-std.log`), with unchanged
+feature/dependency graph and prior std-free normal graph audit. All24 changed Rust files pass pinned
+formatting; no unreviewed snapshot remains. Context commits are separate from implementation.
+
+Post-commit deterministic regeneration/PVM checks and final PR15a review description remain pending.
+General goal/M1 and PR16/inherited guest/security/fuzz/performance/final gates remain active. No PR,
+push or publication.
