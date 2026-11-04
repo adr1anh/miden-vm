@@ -185,3 +185,33 @@ where
         self.inner.eval_context()
     }
 }
+
+/// Shares one mapped evaluator instantiation across the private four-lane comparison policies.
+/// Keeping the policy data outside the mapper also preserves one primitive assertion order.
+pub(super) fn eval_with_base_replacements<
+    AB: miden_stark::air::LiftedAirBuilder<F = miden_core::Felt>,
+>(
+    air: miden_air::vm::MidenAir,
+    builder: &mut AB,
+    replacements: [(usize, AB::Expr); 4],
+) {
+    use miden_stark::air::LiftedAir;
+
+    let mut replaced = 0;
+    let mut adapter = EmissionAdapter::new(
+        builder,
+        |index: usize, original: AB::Expr| {
+            if let Some((_, replacement)) = replacements.iter().find(|(slot, _)| *slot == index) {
+                replaced += 1;
+                replacement.clone()
+            } else {
+                original
+            }
+        },
+        |_: usize, original: AB::ExprEF| original,
+    );
+    <miden_air::vm::MidenAir as LiftedAir<miden_core::Felt, AB::EF>>::eval(&air, &mut adapter);
+    let counts = adapter.counts();
+    assert!(replacements.iter().all(|(index, _)| *index < counts.total));
+    assert_eq!(replaced, replacements.len());
+}

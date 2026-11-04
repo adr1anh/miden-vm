@@ -19,8 +19,10 @@ use miden_vm_stark::{prover::prove, recursive::RecursiveVerifierInputs};
 
 mod comparison_air;
 mod comparison_core;
+mod comparison_library;
 mod comparison_runner;
 mod emission_adapter;
+mod syscall_fixture;
 
 pub(crate) use comparison_air::CoreMode;
 

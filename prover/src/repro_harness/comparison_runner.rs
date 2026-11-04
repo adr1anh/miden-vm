@@ -35,13 +35,24 @@ impl ReproTrace {
     /// Setup, proof construction and encoding failures are outer errors. A verifier rejection
     /// remains beside the constructed proof so callers can also test production consumers.
     pub(crate) fn prove_comparison(&self, mode: CoreMode) -> Result<ComparisonResult, String> {
+        self.prove_comparison_air(ComparisonMultiAir::new(mode))
+    }
+
+    pub(super) fn prove_syscall_comparison(&self) -> Result<ComparisonResult, String> {
+        self.prove_comparison_air(ComparisonMultiAir::without_syscall_namespace_check())
+    }
+
+    fn prove_comparison_air(
+        &self,
+        multi_air: ComparisonMultiAir,
+    ) -> Result<ComparisonResult, String> {
         let mut stark_config = eidos_config(config::pcs_params(), config::RELATION_DIGEST);
         stark_config.hash_lde_blocks = false;
 
         let public_inputs = PublicInputs::from_claim(&self.claim(), self.precompile_root);
         let (public_values, aux_inputs) = public_inputs.to_air_inputs();
         let statement = Statement::<Felt, QuadFelt, _>::new(
-            ComparisonMultiAir::new(mode),
+            multi_air,
             public_values.into_iter().enumerate().collect(),
             aux_inputs,
         )

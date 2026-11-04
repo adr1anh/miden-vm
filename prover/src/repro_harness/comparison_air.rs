@@ -24,12 +24,27 @@ pub(crate) enum CoreMode {
 pub(super) struct ComparisonAir {
     inner: MidenAir,
     mode: CoreMode,
+    compare_syscall_namespace: bool,
 }
 
 impl ComparisonAir {
     #[cfg(test)]
     pub(super) fn core(mode: CoreMode) -> Self {
-        Self { inner: MidenAir::CORE, mode }
+        Self {
+            inner: MidenAir::CORE,
+            mode,
+            compare_syscall_namespace: false,
+        }
+    }
+}
+
+impl ComparisonAir {
+    fn without_syscall_namespace_check() -> Self {
+        Self {
+            inner: MidenAir::CHIPLETS,
+            mode: CoreMode::Standard,
+            compare_syscall_namespace: true,
+        }
     }
 }
 
@@ -153,6 +168,8 @@ impl<EF: ExtensionField<Felt>> LiftedAir<Felt, EF> for ComparisonAir {
     fn eval<AB: LiftedAirBuilder<F = Felt>>(&self, builder: &mut AB) {
         if self.inner == MidenAir::CORE {
             super::comparison_core::eval(builder, self.mode);
+        } else if self.inner == MidenAir::CHIPLETS && self.compare_syscall_namespace {
+            super::comparison_library::eval(builder);
         } else {
             <MidenAir as LiftedAir<Felt, EF>>::eval(&self.inner, builder);
         }
@@ -200,9 +217,29 @@ pub(super) struct ComparisonMultiAir {
 impl ComparisonMultiAir {
     pub(super) fn new(mode: CoreMode) -> Self {
         Self {
-            airs: AIRS.map(|inner| ComparisonAir { inner, mode }),
+            airs: AIRS.map(|inner| ComparisonAir {
+                inner,
+                mode,
+                compare_syscall_namespace: false,
+            }),
         }
     }
+}
+
+impl ComparisonMultiAir {
+    pub(super) fn without_syscall_namespace_check() -> Self {
+        let mut result = Self::new(CoreMode::Standard);
+        result.airs[MidenAir::CHIPLETS.instance_index()] =
+            ComparisonAir::without_syscall_namespace_check();
+        result
+    }
+}
+
+#[test]
+fn comparison_namespace_policy_is_isolated() {
+    super::comparison_library::assert_namespace_policy_is_isolated(
+        ComparisonAir::without_syscall_namespace_check(),
+    );
 }
 
 impl<EF: ExtensionField<Felt>> MultiAir<Felt, EF> for ComparisonMultiAir {

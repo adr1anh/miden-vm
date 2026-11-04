@@ -11,7 +11,7 @@ use miden_air_definitions::vm::CoreCols;
 use miden_core::{Felt, field::PrimeCharacteristicRing};
 use miden_stark::air::{LiftedAir, LiftedAirBuilder, WindowAccess};
 
-use super::{comparison_air::CoreMode, emission_adapter::EmissionAdapter};
+use super::{comparison_air::CoreMode, emission_adapter::eval_with_base_replacements};
 
 // `system::enforce_main` emits these immediately after the four principal-load assertions.
 // The tests identify their actual equations independently and forbid any other changed emission.
@@ -25,23 +25,11 @@ pub(super) fn eval<AB: LiftedAirBuilder<F = Felt>>(builder: &mut AB, mode: CoreM
     }
 
     let replacements = principal_constraints(builder, mode);
-    let mut replaced = 0;
-    let mut adapter = EmissionAdapter::new(
+    eval_with_base_replacements(
+        MidenAir::CORE,
         builder,
-        |index: usize, original: AB::Expr| {
-            if let Some(replacement) = replacements.get(index.wrapping_sub(PRESERVE_START)) {
-                replaced += 1;
-                replacement.clone()
-            } else {
-                original
-            }
-        },
-        |_: usize, original: AB::ExprEF| original,
+        core::array::from_fn(|lane| (PRESERVE_START + lane, replacements[lane].clone())),
     );
-    <MidenAir as LiftedAir<Felt, AB::EF>>::eval(&MidenAir::CORE, &mut adapter);
-    let counts = adapter.counts();
-    assert!(counts.base >= PRESERVE_START + PRINCIPAL_LANES);
-    assert_eq!(replaced, PRINCIPAL_LANES);
 }
 
 fn principal_constraints<AB: LiftedAirBuilder<F = Felt>>(
