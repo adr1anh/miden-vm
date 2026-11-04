@@ -332,6 +332,8 @@ this ledger. Existing deferred checks remain required; cleanup is not a substitu
 
 **Branch:** `adr1anh/librarytree-16-qualification`. **Git base:** PR 15a. **Semantic dependencies:** all implementation PRs, completed PR 15a cleanup and resolved release gates. Qualify the final post-cleanup relation and regenerated identities.
 
+**User decision, 4 November 2026:** “I don’t care about running the fuzzing targets.” Fuzz-target execution and mutation/smoke campaigns are waived completion gates for this task, including inherited references to later fuzz runs. Do not build targets solely to enable those waived runs. Ordinary codec/resource/canonical and deterministic regression tests, plus every other proof/security/artifact/measurement gate, remain applicable. Existing target/tooling consistency fixes may be retained; no mutation campaign is claimed.
+
 **Existing files:** processor decoder/lookup/full-matrix harness and parallel tests, generated capture/drift/ACE tests, VM prove_verify integration, core-lib proof-order/security suites, Stark security/memory accounting and registered `miden-vm/benches/build_trace.rs`. **New:** `miden-vm/tests/integration/librarytree.rs`, registered in existing integration main; a real VM proof benchmark registered explicitly in `miden-vm/Cargo.toml` if no existing harness supplies the required measurements. Add a concise checked-in qualification report only once measured evidence exists.
 
 Qualify the actual implementation across shallow Lists/selective Merkle, mostly-unused large environments, repeated/cache-hit calls, equal-D aliases, changed authenticated implementations with stable callers, explicit self/helper bindings, root syscalls through nested List/Merkle grouping, ineligible Env descendants/private helpers, root modes, resumed/parallel traces and boundary/overflow attacks. Combine native and actual recursive malicious-child tests with forged trace/lookup matrices. Builder tests establish global executable-path uniqueness; caller-selected descriptor authority is explicit. Registered Latest/Pinned, randomized private-instance and Protocol admission/freshness fixtures apply only to future adopted adapters, not minimum VM completion. AIR membership must not claim those external properties.
@@ -340,7 +342,7 @@ Measure opening rows/compressions separately from invocation/context costs; repo
 
 **Final acceptance:** all required focused/adversarial tests pass; generated/manual/native/MASM/recursive constraints and identities agree; no host-only resolution, implicit digest authority, fifth AIR or old required wire layout remains; resource/security bounds and unresolved external obligations are documented. No deferred required check remains. Artifact regeneration leaves no diff and the final tip builds/lints/tests cleanly.
 
-**Checks after power guards:** repository `make exec`, `make exec-single`, `make format-check`, `make clippy`, `make test`, `make check-constraints`, `make check-pvm-proof-fixture`, `make test-masm-root-stability`; supported no_std surfaces including `cargo check -p miden-core -p miden-mast-package -p miden-assembly --no-default-features`; affected bounded fuzz/benchmark commands selected from the actual final changed graph. New test filters throughout this plan are provisional until registered test names exist; prefer the repository Make target where it supplies necessary features/stack settings. Resolve focused failures before broad suites, and repeat broad checks only for new changes/failures. Record exact commands/toolchains/features, commit SHAs and outcomes in the ledger/report. Verify deterministic regeneration with `git diff --exit-code` after intended generated changes are committed.
+**Checks after power guards:** repository `make exec`, `make exec-single`, `make format-check`, `make clippy`, `make test`, `make check-constraints`, `make check-pvm-proof-fixture`, `make test-masm-root-stability`; supported no_std surfaces including `cargo check -p miden-core -p miden-mast-package -p miden-assembly --no-default-features`; affected benchmark commands selected from the actual final changed graph. Fuzz-target runs are waived by the user decision above. New test filters throughout this plan are provisional until registered test names exist; prefer the repository Make target where it supplies necessary features/stack settings. Resolve focused failures before broad suites, and repeat broad checks only for new changes/failures. Record exact commands/toolchains/features, commit SHAs and outcomes in the ledger/report. Verify deterministic regeneration with `git diff --exit-code` after intended generated changes are committed.
 
 ## Resolved implementation decisions
 
@@ -529,7 +531,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
 | 15 API/CLI closure | implemented-awaiting-validation | Final source `a99264137`; checked links/CLI `ba651f64d`; review `8ba05fd00`; prior SHAs below; base `f4350360d` | Independent reviews; fresh combined runtime/CLI/witness/proof/flow3,179; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumers; six compiled doctests; standalone fuzz2 typechecks; earlier scoped evidence below | PR15 functional acceptance passes; PR15a/16 and inherited guest/security/fuzz/performance/final gates remain |
 | 15a AIR/Chiplets cleanup | implemented-awaiting-validation | Counter/rebinding `7d51bff1b`; review `cffb3f279`; base `1afb98f50` | Independent reviews; fresh combined3,615; MAIN/ext/lookup capture and generated/recursive parity; actual heights; strict14; production no_std10; clean post-commit generation/check; PVM constants/277756-byte fixture; root-stability policy | PR15a functional/artifact acceptance passes; inherited PR16 guest/security/fuzz/performance/final gates remain |
-| 16 Qualification | in-progress | Opening base `91011b897` | PR15a source/artifact qualification inherited; no new final campaign evidence yet | Close actual fuzz/tooling/measurement/adversarial gaps and all required final commands on the post-cleanup relation |
+| 16 Qualification | in-progress | Opening base `91011b897` | PR15a source/artifact qualification inherited; no new final campaign evidence yet | Close tooling/measurement/adversarial gaps and all required final commands; fuzz-target runs waived by user |
 
 ## Implementation evidence
 
@@ -3640,3 +3642,17 @@ proof harness with measured LibraryTree cases. Source-only/deterministic replay 
 memory limits are not substitutes for mutation/measurement. Bounded inherited-adversarial audit
 will identify remaining concrete controls before one coherent final private-prover/full-suite build.
 No new policy or external Protocol integration is selected. General goal/M1 remain active; no PR/push.
+
+
+### PR16 fuzz-run waiver and work routing, 4 November 2026
+
+The user waived running fuzz targets. No mutation campaign was started. Standard cargo-fuzz0.13.2
+was built offline into scratch; no further target-building/running is required for this goal.
+The task-owned fuzz build process tree is absent. Keep claims limited: neither source consistency
+nor deterministic replay is mutation evidence. The already prepared Make/workflow/README fixes
+retain all22registered targets and their sanitizer/limit settings and remain uncommitted.
+
+Continue measured proof/shape/session/recursive benchmark modes and local mathematical regression
+controls, then final repository gates. Benchmark review requires independent known outputs and
+honest entry-reservation/terminal-commit interval labels; those fixes are prepared and frozen.
+No production API or new dependency was added. The general goal/M1 remain active; no PR or push.
