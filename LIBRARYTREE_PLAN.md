@@ -522,7 +522,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
-| 14 Recursive verifier | in progress | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; base `52e914a9a` | Independent reviews; prior273 plus12 scoped regressions; native/MASM principal comparison; strict Clippy; VM/PVM generation/docs and sequential PVM fixture | Actual invalid non-root-syscall recursive qualification, isolated counterfactuals and remaining capture/public/no_std/final gates |
+| 14 Recursive verifier | in progress | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal isolation `3f6593ea9`; snapshot `8bd316dbe`; base `52e914a9a` | Independent reviews; prior273 plus12 scoped regressions; isolated principal3/native/MASM; capture20+corrected1; strict Clippy; VM/PVM generation/docs and sequential PVM fixture | Actual invalid non-root-syscall recursive qualification, other inherited counterfactuals and remaining public/no_std/final gates |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
@@ -3173,3 +3173,37 @@ incremental unit fixed its linker error. No build cache reset or shared temporar
 Isolated evaluator necessity and actual non-root-syscall recursive qualification remain open,
 alongside all inherited capture/public/no_std/guest/fuzz/performance/final gates. PR14/M1/general goal
 are not complete; no PR/push. Context changes remain separate from implementation.
+
+
+### PR14 isolated continuation-principal qualification, 4 November 2026
+
+`3f6593ea9` adds private cfg(test,std) evaluator/proof plumbing. Structural captures prove the
+comparison changes only four principal-preservation assertions; concrete full-field checks identify
+the equations and per-assertion degree checks stay within production. All other constraints, lookup
+construction, four matrices, expected claim, configuration, transcript and preprocessing pin remain
+fixed. The coarse-END principal selector accepts the continuation witness; current native and MASM
+verifiers reject that same artifact with StarkVerificationError and exact ACE circuit-nonzero. The
+ordinary-transition control still rejects under the comparison evaluator; honest wrapper artifacts
+verify in both production consumers. Three focused tests and five-crate all-target strict custom
+Clippy pass; independent source reviews and the signed commit verify. Logs:
+`.scratch/librarytree/pr14-principal-comparison.log` and `pr14-principal-comparison-clippy.log`.
+The first compile identified callback annotations, corrected before these passing checks.
+
+This closes the continuation-principal attribution gate only. Other inherited context/block-stack
+qualification remains distinct. The actual non-root-syscall fixture is separately in flight: it
+keeps both root/child SYS branches in one committed entry and preserves the expected descriptor,
+with exact compression/count deltas and an aggregate lookup-balance guard. No proof acceptance or
+rejection result is claimed for that unregistered fixture.
+
+The fresh bounded capture/drift/ACE/config run passed20/21; the remaining snapshot still described
+pre-cutover dimensions/digests. `8bd316dbe` changes only its five values to the independently
+computed and already production-pinned current circuit:790 inputs,7676 gates,7920 stream Felts.
+The exact failed test then passes, including its relation-pin equality after the snapshot. Thus
+20 unchanged checks plus the corrected1 qualify the21 selected active checks; no fresh whole21
+rerun is claimed. Logs: `pr14-fresh-capture.log` and `pr14-fresh-capture-final.log`. Canonical ACE,
+all24 proof orders, scalar/packed value/class/order/degree drift and production pins pass; runtime
+relation/constants/generated code are unchanged. Existing unchanged geometry/security scopes were
+not repeated merely for a larger fresh-check total.
+
+Public/no_std/guest/fuzz/performance/final gates, PR14/M1 and the general goal remain open. The
+separate `bb33b37e3` PR15 API cleanup card is preserved; no PR/push or branch change.
