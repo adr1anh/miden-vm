@@ -3656,3 +3656,10 @@ Continue measured proof/shape/session/recursive benchmark modes and local mathem
 controls, then final repository gates. Benchmark review requires independent known outputs and
 honest entry-reservation/terminal-commit interval labels; those fixes are prepared and frozen.
 No production API or new dependency was added. The general goal/M1 remain active; no PR or push.
+
+
+### PR16 bounded tooling and smoke evidence, 4 November 2026
+
+`fce7cbea7` removes five nonexistent fuzz targets from Make and registers the existing wire-view target in the workflow; `599cec712` updates its guide separately. Static comparison confirms all22registered bins match source files and Make targets; guide/workflow names are valid. User-waived fuzz runs were not performed.
+
+The uncommitted actual-VM benchmark passes all four test-dev list-small smoke modes: shape, completed public stepping session, real proof/native verification and actual MASM child verification. This is smoke evidence only; optimized measurements/RSS remain pending. Fifteen-package all-target strict Clippy passes using the existing custom flags/features plus the synthetic bench. Initial diagnostics were an unused test import and two redundant clones, corrected before the pass. Logs: `.scratch/librarytree/pr16-clippy-final.log`, `pr16-bench-smoke-{shape,session,proof,recursive}.{json,log}`. No production evaluator, generated artifact or identity changed.
