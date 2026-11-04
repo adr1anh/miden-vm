@@ -3699,3 +3699,8 @@ The ordinary capture executes four fixed handwritten sources before calibration/
 ### PR16 exact final checks checkpoint, 4 November 2026
 
 At source `93860cd0b`, exact `make format-check`, `make clippy` (stable1.98.0, full workspace/all targets/all features/custom lints with warnings denied), three-root no_std check and `make check-constraints` pass. Strict keep-going also passes; initial exact lint attempts identified only one unused clone (`91273a983`) and two unnecessary test qualifications (`93860cd0b`), corrected without behavior changes. Runner summary/logs: `.scratch/librarytree/pr16-final-gates/20261104T220033Z-3225352/`. PVM/executable/final full-test and review closeout gates remain required.
+
+
+### PR16 exact build/artifact gate completion, 4 November 2026
+
+All sequential final-run stages pass (source `93860cd0b`, later documentation-only HEAD `72085231d`): format2.794s; exact Make Clippy0.452s; three-root no_std9.060s; constraints93.143s; PVM proof fixture38.114s; MASM root policy0.202s; optimized exec350.038s; exec-single63.529s; tracked diff clean. Exact argv/env/source/guard/status logs remain in `.scratch/librarytree/pr16-final-gates/20261104T220033Z-3225352/summary.json`. No generated artifact drift or deferred check is inferred away. Corrected complete make test is running separately in `pr16-workspace-qualified.log`; final whole-test confirmation and final review/ledger closeout remain required.
