@@ -1023,7 +1023,10 @@ mod tests {
     use proptest::{strategy::ValueTree, test_runner::TestRunner};
 
     use super::*;
-    use crate::mast::{CallNode, MastNode, OpBatch, SubtreeIterator};
+    use crate::{
+        mast::{CallNode, MastNode, OpBatch, SubtreeIterator},
+        program::EnvironmentBinding,
+    };
 
     fn word(seed: u32) -> Word {
         Word::from([seed, seed + 1, seed + 2, seed + 3])
@@ -1166,14 +1169,14 @@ mod tests {
         let forest = fixture.forest();
         assert_eq!(immediate_invocations(forest).len(), 3);
         assert_eq!(forest.nodes().iter().filter(|node| node.is_dyn()).count(), 2);
-        assert!(forest.nodes().iter().any(|node| node.is_external()));
+        assert!(forest.nodes().iter().any(MastNode::is_external));
         let body = seeds.basic_blocks[1].digest();
         let aliases: BTreeSet<_> = fixture
             .environment()
             .bindings()
             .iter()
             .filter(|binding| binding.implementation().into_word() == body)
-            .map(|binding| binding.key())
+            .map(EnvironmentBinding::key)
             .collect();
         assert!(aliases.len() >= 5, "each invocation has an independently labeled alias");
         for procedure in fixture.procedures() {

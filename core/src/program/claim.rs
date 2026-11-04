@@ -141,10 +141,10 @@ mod tests {
     use super::{super::domain, *};
 
     fn test_claim() -> ExecutionClaim {
-        claim_from_elements(core::array::from_fn(|i| Felt::new_unchecked(i as u64 + 1)))
+        claim_from_elements(&core::array::from_fn(|i| Felt::new_unchecked(i as u64 + 1)))
     }
 
-    fn claim_from_elements(elements: [Felt; NUM_CLAIM_ELEMENTS]) -> ExecutionClaim {
+    fn claim_from_elements(elements: &[Felt; NUM_CLAIM_ELEMENTS]) -> ExecutionClaim {
         ExecutionClaim::new(
             ExecutionDescriptor::new(
                 ProcedureKey::new(Word::new(elements[0..4].try_into().unwrap())),
@@ -196,18 +196,18 @@ mod tests {
         for i in 0..NUM_CLAIM_ELEMENTS {
             let mut changed = elements;
             changed[i] = Felt::new_unchecked(999);
-            assert_ne!(claim_from_elements(changed).commitment(), commitment, "coordinate {i}");
+            assert_ne!(claim_from_elements(&changed).commitment(), commitment, "coordinate {i}");
         }
 
         let mut swapped = elements;
         swapped[0..4].copy_from_slice(&elements[4..8]);
         swapped[4..8].copy_from_slice(&elements[0..4]);
-        assert_ne!(claim_from_elements(swapped).commitment(), commitment, "descriptor order");
+        assert_ne!(claim_from_elements(&swapped).commitment(), commitment, "descriptor order");
 
         let mut swapped = elements;
         swapped[8..24].copy_from_slice(&elements[24..40]);
         swapped[24..40].copy_from_slice(&elements[8..24]);
-        assert_ne!(claim_from_elements(swapped).commitment(), commitment, "I/O order");
+        assert_ne!(claim_from_elements(&swapped).commitment(), commitment, "I/O order");
     }
 
     #[test]
