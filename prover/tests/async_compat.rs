@@ -4,9 +4,9 @@ use std::sync::Arc;
 mod named_source;
 use miden_debug_types::{Location, SourceFile, SourceSpan};
 use miden_processor::{
-    BaseHost, DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, ExecutionOptions, FastProcessor, Felt, FutureMaybeSend, Host,
-    LoadedMastForest, ProcessorState, ResolutionWitness,
+    BaseHost, DefaultHost, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
+    ExecutionOptions, FastProcessor, Felt, FutureMaybeSend, Host, LoadedMastForest, ProcessorState,
+    ResolutionWitness,
     advice::AdviceMutation,
     event::{EventError, EventName},
 };
@@ -17,7 +17,7 @@ use named_source::named_source;
 
 struct YieldingAsyncHost {
     event_calls: usize,
-    environment: Arc<dyn EnvironmentWitnessSource>,
+    environment: Arc<dyn EnvironmentSource>,
     code: LoadedMastForest,
 }
 

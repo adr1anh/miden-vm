@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeSet, sync::Arc};
+use alloc::collections::BTreeSet;
 use core::num::NonZeroU32;
 
 use miden_core::{
@@ -49,8 +49,7 @@ fn pinned_library(context: &TestContext, revision: u32) -> LinkLibrary {
         .unwrap()
         .assemble_library_modules("lib".into(), module, [], miden_project::TargetType::Library)
         .unwrap();
-    let naming = product.naming().clone();
-    LinkLibrary::from_package(product.into_artifact(true).unwrap().into(), naming).unwrap()
+    LinkLibrary::from_code_package(product.into_code_package(true).unwrap())
 }
 
 fn imported_key(linker: &Linker, module: &str, procedure: &str) -> ProcedureKey {
@@ -106,19 +105,9 @@ fn explicit_mounts_keep_equal_bodies_at_distinct_pinned_keys() {
             .unwrap();
         let product = Assembler::new(context.source_manager())
             .with_namespace_inputs(inputs)
-            .with_package_at(
-                first.package.clone(),
-                linkage,
-                first.naming().clone(),
-                mount("::lib", "::left"),
-            )
+            .with_package_at(first.code().clone(), linkage, mount("::lib", "::left"))
             .unwrap()
-            .with_package_at(
-                second.package.clone(),
-                linkage,
-                second.naming().clone(),
-                mount("::lib", "::right"),
-            )
+            .with_package_at(second.code().clone(), linkage, mount("::lib", "::right"))
             .unwrap()
             .assemble_library_modules(
                 "consumer".into(),
@@ -159,7 +148,7 @@ fn explicit_mounts_keep_equal_bodies_at_distinct_pinned_keys() {
 fn an_exact_artifact_can_be_mounted_twice_and_alias_renames_preserve_its_key() {
     let context = TestContext::default();
     let library = pinned_library(&context, 1);
-    let original_commitment = library.package.commitment();
+    let original_commitment = library.package().commitment();
     let mut linker = Linker::new(context.source_manager());
     linker.link_library_at(library.clone(), mount("::lib", "::left")).unwrap();
     linker
@@ -181,8 +170,8 @@ fn an_exact_artifact_can_be_mounted_twice_and_alias_renames_preserve_its_key() {
     linker.link_library_at(library.clone(), mount("::lib", "::right")).unwrap();
     assert_eq!(linker.modules().len(), 3, "repeating an exact route is idempotent");
     assert_eq!(linker.library_routes().count(), 3);
-    assert_eq!(library.package.commitment(), original_commitment);
-    assert_eq!(linker.libraries().next().unwrap().package.commitment(), original_commitment);
+    assert_eq!(library.package().commitment(), original_commitment);
+    assert_eq!(linker.libraries().next().unwrap().package().commitment(), original_commitment);
 }
 
 #[cfg(feature = "std")]
@@ -205,31 +194,16 @@ fn quoted_mount_bases_resolve_unquoted_imports_and_share_the_normalized_cache_ro
     let base = Assembler::new(context.source_manager()).with_namespace_inputs(inputs);
     let plain = base
         .clone()
-        .with_package_at(
-            library.package.clone(),
-            Linkage::Dynamic,
-            library.naming().clone(),
-            mount("::lib", "::left"),
-        )
+        .with_package_at(library.code().clone(), Linkage::Dynamic, mount("::lib", "::left"))
         .unwrap();
     let mut quoted = base
-        .with_package_at(
-            library.package.clone(),
-            Linkage::Dynamic,
-            library.naming().clone(),
-            mount("::\"lib\"", "::\"left\""),
-        )
+        .with_package_at(library.code().clone(), Linkage::Dynamic, mount("::\"lib\"", "::\"left\""))
         .unwrap();
     let cache = plain.project_cache_commitment("release").unwrap().unwrap();
     assert_eq!(quoted.project_cache_commitment("release").unwrap(), Some(cache));
     assert_eq!(imported_key(quoted.linker(), "::left", "foo"), expected);
     quoted
-        .link_package_at(
-            library.package.clone(),
-            Linkage::Dynamic,
-            library.naming().clone(),
-            mount("::lib", "::left"),
-        )
+        .link_package_at(library.code().clone(), Linkage::Dynamic, mount("::lib", "::left"))
         .unwrap();
     assert_eq!(quoted.linker().modules().len(), 1);
     assert_eq!(quoted.linker().library_routes().count(), 1);
@@ -276,12 +250,7 @@ fn project_cache_commits_to_route_assignment_and_is_independent_of_insertion_ord
         }
         for (library, source) in inputs {
             assembler
-                .link_package_at(
-                    library.package.clone(),
-                    Linkage::Dynamic,
-                    library.naming().clone(),
-                    mount("::lib", source),
-                )
+                .link_package_at(library.code().clone(), Linkage::Dynamic, mount("::lib", source))
                 .unwrap();
         }
         assembler.project_cache_commitment("release").unwrap().unwrap()
@@ -304,8 +273,7 @@ fn library_with_public_child(context: &TestContext) -> LinkLibrary {
         .with_namespace_inputs(inputs)
         .assemble_library_modules("lib".into(), root, [child], miden_project::TargetType::Library)
         .unwrap();
-    let naming = product.naming().clone();
-    LinkLibrary::from_package(product.into_artifact(true).unwrap().into(), naming).unwrap()
+    LinkLibrary::from_code_package(product.into_code_package(true).unwrap())
 }
 
 #[test]
@@ -393,9 +361,8 @@ fn explicit_mount_cannot_attach_a_kernel() {
         .unwrap()
         .assemble_library_modules("kernel".into(), kernel, [], miden_project::TargetType::Kernel)
         .unwrap();
-    let naming = product.naming().clone();
-    let kernel: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
-    let library = LinkLibrary::from_package(kernel.clone(), naming.clone()).unwrap();
+    let kernel = product.into_code_package(false).unwrap();
+    let library = LinkLibrary::from_code_package(kernel.clone());
     let mut linker = Linker::new(context.source_manager());
     assert!(linker.link_library_at(library, mount("::", "::alias")).is_err());
     assert!(!linker.has_kernel());
@@ -404,16 +371,11 @@ fn explicit_mount_cannot_attach_a_kernel() {
     let mut assembler = Assembler::new(context.source_manager());
     assert!(
         assembler
-            .link_package_at(
-                kernel.clone(),
-                Linkage::Static,
-                naming.clone(),
-                mount("::", "::alias"),
-            )
+            .link_package_at(kernel.clone(), Linkage::Static, mount("::", "::alias"))
             .is_err()
     );
     assert!(!assembler.has_kernel());
-    assembler.link_package(kernel, Linkage::Dynamic, naming).unwrap();
+    assembler.link_package(kernel, Linkage::Dynamic).unwrap();
     assert!(assembler.has_kernel());
 }
 
@@ -457,17 +419,16 @@ fn mounted_private_helpers_and_dynamic_reexports_keep_keys_and_original_debug_na
         defining.callables().selected_implementation(helper_key),
         defining.callables().selected_implementation(twin_key),
     );
-    let dependency: Arc<MastPackage> = product.into_artifact(true).unwrap().into();
+    let dependency = product.into_code_package(true).unwrap();
     let bridge = context.parse_module("namespace lib\npub use {foo as facade} from dep").unwrap();
     let bridge = Assembler::new(context.source_manager())
         .with_namespace_plan(home("bridge-home"))
-        .with_package(dependency, Linkage::Dynamic, defining.clone())
+        .with_package(dependency, Linkage::Dynamic)
         .unwrap()
         .assemble_library_modules("bridge".into(), bridge, [], miden_project::TargetType::Library)
         .unwrap();
-    let naming = bridge.naming().clone();
-    let bridge: Arc<MastPackage> = bridge.into_artifact(true).unwrap().into();
-    let bridge_debug = bridge.debug_info().unwrap().unwrap();
+    let bridge = bridge.into_code_package(true).unwrap();
+    let bridge_debug = bridge.package().debug_info().unwrap().unwrap();
     assert_eq!(debug_function(&bridge_debug, "::lib::facade").source_node.into_option(), None);
     for linkage in [Linkage::Static, Linkage::Dynamic] {
         // With run present, the compiled dependency is materialized before the reexport. Without
@@ -485,7 +446,7 @@ fn mounted_private_helpers_and_dynamic_reexports_keep_keys_and_original_debug_na
                 .unwrap();
             let assembler = Assembler::new(context.source_manager())
                 .with_namespace_inputs(inputs)
-                .with_package_at(bridge.clone(), linkage, naming.clone(), mount("::lib", "::left"))
+                .with_package_at(bridge.clone(), linkage, mount("::lib", "::left"))
                 .unwrap();
             assert!(assembler.linker().find_module(Path::new("::left::helper")).is_none());
             let product = assembler

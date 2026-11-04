@@ -3,7 +3,7 @@ use alloc::{sync::Arc, vec::Vec};
 use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceManager, SourceSpan};
 
 use crate::{
-    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    BaseHost, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
     LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState, ResolutionWitness,
     SyncHost, advice::AdviceMutation, event::EventError,
 };
@@ -22,7 +22,7 @@ pub struct NonTracingTestHost {
     /// Regular host event IDs received via [`SyncHost::on_event`], in emission order.
     pub events: Vec<u64>,
     source_manager: Arc<DefaultSourceManager>,
-    environment_source: Option<super::EnvironmentSource>,
+    environment_source: Option<super::TestEnvironmentSource>,
     store: MemMastForestStore,
 }
 
@@ -38,8 +38,8 @@ impl NonTracingTestHost {
     }
 
     /// Attaches a source of untrusted environment witnesses for explicit execution requests.
-    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentWitnessSource>) -> Self {
-        self.environment_source = Some(super::EnvironmentSource(source));
+    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentSource>) -> Self {
+        self.environment_source = Some(super::TestEnvironmentSource(source));
         self
     }
 

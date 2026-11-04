@@ -244,11 +244,9 @@ fn same_source_pinned_instances_keep_exact_keys_code_pool_and_runtime_records_co
                 .iter()
                 .find(|code| code.symbols().callables().binding(expected.key()) == Some(&expected))
                 .unwrap();
-            let package = code.package();
-            let naming = code.symbols();
             inventory
                 .link_library_at(
-                    LinkLibrary::from_package(package.clone(), naming.clone()).unwrap(),
+                    LinkLibrary::from_code_package(code.clone()),
                     PackageSourceMount::new(
                         crate::Path::new("::dep::lib"),
                         crate::Path::new(source),
@@ -258,10 +256,10 @@ fn same_source_pinned_instances_keep_exact_keys_code_pool_and_runtime_records_co
                 .unwrap();
             assert_eq!(
                 inventory
-                    .library_by_commitment(package.dependency_commitment())
+                    .library_by_commitment(code.package().dependency_commitment())
                     .unwrap()
                     .naming(),
-                naming,
+                code.symbols(),
             );
         }
         assert_eq!(inventory.libraries().count(), 2);

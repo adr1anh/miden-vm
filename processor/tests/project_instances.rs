@@ -26,7 +26,7 @@ use miden_mast_package::{
     CallableProcedurePath, CodePackage, NamespacePath, Package, ProcedureName,
 };
 use miden_processor::{
-    DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    DefaultHost, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
     FastProcessor, ResolutionWitness, StackInputs, StackOutputs,
 };
 use miden_utils_testing::librarytree::FixtureEnvironment;
@@ -170,11 +170,11 @@ fn exec_targets(package: &Package) -> BTreeSet<ProcedureKey> {
 }
 
 struct RecordingSource {
-    inner: Arc<dyn EnvironmentWitnessSource>,
+    inner: Arc<dyn EnvironmentSource>,
     requested: Mutex<BTreeSet<ProcedureKey>>,
 }
 
-impl EnvironmentWitnessSource for RecordingSource {
+impl EnvironmentSource for RecordingSource {
     fn get(
         &self,
         request: EnvironmentWitnessRequest,

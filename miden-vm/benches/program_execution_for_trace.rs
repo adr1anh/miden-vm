@@ -54,9 +54,8 @@ fn program_execution_for_trace(c: &mut Criterion) {
                     let mut assembler = Assembler::new(source_manager.clone());
                     assembler
                         .link_package(
-                            core_lib.package(),
+                            core_lib.code_package().clone(),
                             miden_assembly::Linkage::Dynamic,
-                            core_lib.naming().clone(),
                         )
                         .expect("failed to load core library");
 

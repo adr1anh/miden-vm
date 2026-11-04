@@ -22,7 +22,7 @@ use handlers::{EventError, TraceError};
 
 mod environment_source;
 pub use environment_source::{
-    EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
 };
 
 mod mast_forest_store;

@@ -11,9 +11,7 @@ use miden_core::{
     program::{ImplementationRoot, Namespace},
 };
 use miden_debug_types::{Location, SourceFile, SourceManager, SourceSpan};
-use miden_mast_package::{
-    CallableProcedurePath, CodePackage, Package, PackageSymbols, ProcedureName, TargetType,
-};
+use miden_mast_package::{CallableProcedurePath, CodePackage, ProcedureName, TargetType};
 use miden_utils_testing::{
     Test,
     crypto::{init_merkle_leaves, init_merkle_store},
@@ -113,15 +111,14 @@ fn diagnostic_library(
     source_manager: Arc<DefaultSourceManager>,
     module: Box<Module>,
     name: &str,
-) -> (Arc<Package>, PackageSymbols) {
+) -> CodePackage {
     let mut names = FixtureNamespace::assembly_tests();
     names.add_module(&module).unwrap();
     let assembler = names.configure(Assembler::new(source_manager), [module.as_ref()]).unwrap();
     let product = assembler
         .assemble_library_modules(name.into(), module, [], TargetType::Library)
         .unwrap();
-    let naming = product.naming().clone();
-    (Arc::from(product.into_artifact(true).unwrap()), naming)
+    product.into_code_package(true).unwrap()
 }
 
 /// Authorizes the missing procedure independently of withholding its implementation from the host.
@@ -131,10 +128,10 @@ fn missing_code_fixture(
 ) -> (NamedFixture, Word) {
     let module =
         parse_library_module(source_manager.clone(), "foo::bar", "pub proc dummy_proc push.1 end");
-    let (library, naming) = diagnostic_library(source_manager.clone(), module, "missing-code");
-    let implementation = library.mast_forest().procedure_digests().next().unwrap();
+    let library = diagnostic_library(source_manager.clone(), module, "missing-code");
+    let implementation = library.package().mast_forest().procedure_digests().next().unwrap();
     let assembler = Assembler::new(source_manager.clone())
-        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
+        .with_package(library, miden_assembly::Linkage::Dynamic)
         .unwrap();
     (diagnostic_fixture(source_manager, assembler, source), implementation)
 }
@@ -161,7 +158,7 @@ struct MalformedMastForestHost {
     entry_code: LoadedMastForest,
     source_manager: Arc<DefaultSourceManager>,
     mast_forest: Arc<MastForest>,
-    environment_source: Arc<dyn crate::EnvironmentWitnessSource>,
+    environment_source: Arc<dyn crate::EnvironmentSource>,
 }
 
 impl BaseHost for MalformedMastForestHost {
@@ -1086,10 +1083,10 @@ fn test_diagnostic_procedure_not_found_call() {
         end
     ";
 
-    let (library, naming) = diagnostic_library(source_manager.clone(), lib_module, "library");
-    let missing_root = library.mast_forest().procedure_digests().next().unwrap();
+    let library = diagnostic_library(source_manager.clone(), lib_module, "library");
+    let missing_root = library.package().mast_forest().procedure_digests().next().unwrap();
     let assembler = Assembler::new(source_manager.clone())
-        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
+        .with_package(library, miden_assembly::Linkage::Dynamic)
         .unwrap();
     let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
     let mut host = DefaultHost::default()
@@ -1139,10 +1136,10 @@ fn test_diagnostic_procedure_not_found_join() {
         end
     ";
 
-    let (library, naming) = diagnostic_library(source_manager.clone(), lib_module, "library");
-    let missing_root = library.mast_forest().procedure_digests().next().unwrap();
+    let library = diagnostic_library(source_manager.clone(), lib_module, "library");
+    let missing_root = library.package().mast_forest().procedure_digests().next().unwrap();
     let assembler = Assembler::new(source_manager.clone())
-        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
+        .with_package(library, miden_assembly::Linkage::Dynamic)
         .unwrap();
     let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
     let mut host = DefaultHost::default()
@@ -1194,10 +1191,10 @@ fn test_diagnostic_procedure_not_found_loop() {
         end
     ";
 
-    let (library, naming) = diagnostic_library(source_manager.clone(), lib_module, "library");
-    let missing_root = library.mast_forest().procedure_digests().next().unwrap();
+    let library = diagnostic_library(source_manager.clone(), lib_module, "library");
+    let missing_root = library.package().mast_forest().procedure_digests().next().unwrap();
     let assembler = Assembler::new(source_manager.clone())
-        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
+        .with_package(library, miden_assembly::Linkage::Dynamic)
         .unwrap();
     let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
     let mut host = DefaultHost::default()
@@ -1251,10 +1248,10 @@ fn test_diagnostic_procedure_not_found_split() {
         end
     ";
 
-    let (library, naming) = diagnostic_library(source_manager.clone(), lib_module, "library");
-    let missing_root = library.mast_forest().procedure_digests().next().unwrap();
+    let library = diagnostic_library(source_manager.clone(), lib_module, "library");
+    let missing_root = library.package().mast_forest().procedure_digests().next().unwrap();
     let assembler = Assembler::new(source_manager.clone())
-        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
+        .with_package(library, miden_assembly::Linkage::Dynamic)
         .unwrap();
     let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
     let mut host = DefaultHost::default()

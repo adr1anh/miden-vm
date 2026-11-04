@@ -681,12 +681,8 @@ pub fn generate_recursive_verifier_data(
                     .unwrap();
                 let kernel_naming = product.naming().clone();
                 let kernel_lib = product.into_code_package(false).unwrap();
-                let assembler = Assembler::with_kernel(
-                    context.source_manager(),
-                    kernel_lib.package().clone(),
-                    kernel_naming.clone(),
-                )
-                .unwrap();
+                let assembler =
+                    Assembler::with_kernel(context.source_manager(), kernel_lib.clone()).unwrap();
                 let program = assemble(assembler, "program", source, &[&kernel_naming]);
                 (program, Some(kernel_lib))
             },

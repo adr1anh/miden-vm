@@ -229,9 +229,7 @@ impl SourceSelection {
 fn assembler() -> Assembler {
     let mut assembler = Assembler::default();
     let core = CoreLibrary::default();
-    assembler
-        .link_package(core.package(), Linkage::Dynamic, core.naming().clone())
-        .unwrap();
+    assembler.link_package(core.code_package().clone(), Linkage::Dynamic).unwrap();
     assembler
 }
 
@@ -321,19 +319,24 @@ impl ProgramFixture {
         let mut assembler = match kernel {
             Some(kernel) => Assembler::with_kernel(
                 manager.clone(),
-                kernel.package.clone(),
-                kernel.naming.clone(),
+                miden_mast_package::CodePackage::new(kernel.package.clone(), kernel.naming.clone())
+                    .expect("fixture kernel retains exact symbols"),
             )
             .unwrap(),
             None => Assembler::new(manager.clone()),
         };
         let core = CoreLibrary::default();
-        assembler
-            .link_package(core.package(), Linkage::Dynamic, core.naming().clone())
-            .unwrap();
+        assembler.link_package(core.code_package().clone(), Linkage::Dynamic).unwrap();
         for library in libraries {
             assembler
-                .link_package(library.package.clone(), Linkage::Dynamic, library.naming.clone())
+                .link_package(
+                    miden_mast_package::CodePackage::new(
+                        library.package.clone(),
+                        library.naming.clone(),
+                    )
+                    .expect("fixture library retains exact symbols"),
+                    Linkage::Dynamic,
+                )
                 .unwrap();
         }
         let root = Module::parser(Some(ModuleKind::Executable))

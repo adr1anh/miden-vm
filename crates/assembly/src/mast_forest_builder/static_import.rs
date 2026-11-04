@@ -619,7 +619,7 @@ impl MastForestBuilder {
         mast_root: Word,
     ) -> Result<Option<DebugFunctionIdx>, Report> {
         if !self.imported_debug_tables.contains_key(&library_id) {
-            let imported = if let Some(debug) = library.package.debug_info().into_diagnostic()? {
+            let imported = if let Some(debug) = library.package().debug_info().into_diagnostic()? {
                 let static_index = self
                     .statically_linked_forest_indices_by_commitment
                     .get(&library_id)
@@ -671,7 +671,7 @@ impl MastForestBuilder {
             log::warn!(
                 target: "assembler::import_procedure_function",
                 "ambiguous debug declarations for {path} in library {} ({library_id}); omitting exec inline-call frame",
-                library.package.name,
+                library.package().name,
             );
             return Ok(None);
         }

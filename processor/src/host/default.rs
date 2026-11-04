@@ -9,9 +9,9 @@ use super::handlers::{
     EventError, EventHandler, EventHandlerRegistry, TraceError, TraceHandler, TraceHandlerRegistry,
 };
 use crate::{
-    BaseHost, CodeRequest, EnvironmentSourceError, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, ExecutionError, LoadedMastForest, MastForestStore,
-    MemMastForestStore, ProcessorState, ResolutionWitness, SyncHost, advice::AdviceMutation,
+    BaseHost, CodeRequest, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
+    ExecutionError, LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState,
+    ResolutionWitness, SyncHost, advice::AdviceMutation,
 };
 
 // DEFAULT HOST IMPLEMENTATION
@@ -24,14 +24,14 @@ pub struct DefaultHost<S: SourceManager = DefaultSourceManager> {
     event_handlers: EventHandlerRegistry,
     trace_handlers: TraceHandlerRegistry,
     source_manager: Arc<S>,
-    environment_source: Option<EnvironmentSource>,
+    environment_source: Option<EnvironmentSourceHandle>,
 }
 
-struct EnvironmentSource(Arc<dyn EnvironmentWitnessSource>);
+struct EnvironmentSourceHandle(Arc<dyn EnvironmentSource>);
 
-impl fmt::Debug for EnvironmentSource {
+impl fmt::Debug for EnvironmentSourceHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("EnvironmentWitnessSource").finish_non_exhaustive()
+        formatter.debug_struct("EnvironmentSource").finish_non_exhaustive()
     }
 }
 
@@ -71,8 +71,8 @@ where
     /// The host forwards each bounded request; its caller must authenticate returned candidates.
     /// An absent source or `None` response means evidence is unavailable, not nonmembership or
     /// authority to execute code by implementation digest.
-    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentWitnessSource>) -> Self {
-        self.environment_source = Some(EnvironmentSource(source));
+    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentSource>) -> Self {
+        self.environment_source = Some(EnvironmentSourceHandle(source));
         self
     }
 

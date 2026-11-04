@@ -523,7 +523,7 @@ fn manual_hashes_reject_forged_digest_advice() {
         );
         let program = assemble(
             Assembler::default()
-                .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
+                .with_package(library.code_package().clone(), Linkage::Dynamic)
                 .unwrap(),
             "forged_manual_hash",
             source,

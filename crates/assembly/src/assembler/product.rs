@@ -524,11 +524,11 @@ mod tests {
         let twin_key = dependency.callable_key_for_definition(twin_path).unwrap();
         assert_ne!(callback_key, twin_key);
         assert_eq!(naming.callables().selected_implementation(twin_key), Some(callback_root));
-        let dependency: Arc<Package> = dependency.into_artifact(false).unwrap().into();
+        let dependency = dependency.into_code_package(false).unwrap();
 
         for linkage in [Linkage::Static, Linkage::Dynamic] {
             let assembler = Assembler::new(context.source_manager())
-                .with_package(dependency.clone(), linkage, naming.clone())
+                .with_package(dependency.clone(), linkage)
                 .unwrap();
             let product = names
                 .configure(assembler, [&*caller])
@@ -663,19 +663,19 @@ mod tests {
             .unwrap()
             .assemble_library_modules("dep".into(), dependency, [], TargetType::Library)
             .unwrap();
-        let naming = dependency.naming().clone();
         let keys = ["::dep::callback", "::dep::twin"]
             .map(|path| dependency.callable_key_for_definition(Path::new(path)).unwrap());
-        let dependency: Arc<Package> = dependency.into_artifact(true).unwrap().into();
-        let dependency_debug = dependency.debug_info().unwrap().unwrap();
+        let dependency = dependency.into_code_package(true).unwrap();
+        let dependency_debug = dependency.package().debug_info().unwrap().unwrap();
         let expected_functions = keys.map(|key| {
-            let source = dependency.procedure_occurrence(key).unwrap().source_node().unwrap();
+            let source =
+                dependency.package().procedure_occurrence(key).unwrap().source_node().unwrap();
             let functions = function_names(&dependency_debug, source);
             assert!(!functions.is_empty());
             functions
         });
         let assembler = Assembler::new(context.source_manager())
-            .with_package(dependency, Linkage::Static, naming)
+            .with_package(dependency, Linkage::Static)
             .unwrap();
         let product = names
             .configure(assembler, [&*caller])

@@ -16,7 +16,7 @@ use miden_core::{
 use proptest::{prelude::*, strategy::ValueTree, test_runner::TestRunner};
 
 use crate::{
-    DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    DefaultHost, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
     ExecutionOptions, FastProcessor, LedgerLimits, OpeningLimits, OpeningStep, ResolutionLimits,
     ResolutionWitness, SessionLimits, test_utils::fixture_code,
 };
@@ -106,7 +106,7 @@ fn fixture_strategy() -> BoxedStrategy<ExecutableForestFixture> {
 
 struct FixtureSource(Arc<ExecutableForestFixture>);
 
-impl EnvironmentWitnessSource for FixtureSource {
+impl EnvironmentSource for FixtureSource {
     fn get(
         &self,
         request: EnvironmentWitnessRequest,

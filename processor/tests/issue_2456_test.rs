@@ -45,7 +45,7 @@ fn test_issue_2456_statically_linked_library_call() {
         )
         .unwrap();
     let library_naming = product.naming().clone();
-    let library = Arc::from(product.into_artifact(true).unwrap());
+    let library = product.into_code_package(true).unwrap();
 
     // This program calls a procedure from a statically linked library.
     let source = "
@@ -59,9 +59,7 @@ fn test_issue_2456_statically_linked_library_call() {
     ";
 
     let mut assembler = Assembler::new(source_manager.clone());
-    assembler
-        .link_package(library, miden_assembly::Linkage::Static, library_naming.clone())
-        .unwrap();
+    assembler.link_package(library, miden_assembly::Linkage::Static).unwrap();
     let root = Module::parser(Some(ModuleKind::Executable))
         .parse_str(None, source, source_manager)
         .unwrap();

@@ -618,9 +618,15 @@ impl Test {
             let _ = env_logger::Builder::from_env("MIDEN_LOG").format_timestamp(None).try_init();
         }
 
-        let (mut assembler, kernel_lib, kernel_naming) = if let Some(kernel) =
-            self.kernel_source.clone()
-        {
+        let import_code = self
+            .libraries
+            .iter()
+            .cloned()
+            .zip(import_naming)
+            .map(|(package, symbols)| CodePackage::new(package, Arc::new(symbols)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Report::msg)?;
+        let (mut assembler, kernel_code) = if let Some(kernel) = self.kernel_source.clone() {
             let mut parser = Module::parser(Some(ModuleKind::Kernel));
             let kernel = parser.parse(Some(Path::KERNEL), kernel, self.source_manager.clone())?;
             let base = Assembler::new(self.source_manager.clone());
@@ -633,19 +639,10 @@ impl Test {
                 [],
                 TargetType::Kernel,
             )?;
-            let naming = product.naming().clone();
-            let package = Arc::<Package>::from(product.into_artifact(true)?);
-            (
-                Assembler::with_kernel(
-                    self.source_manager.clone(),
-                    package.clone(),
-                    naming.clone(),
-                )?,
-                Some(package),
-                Some(naming),
-            )
+            let code = product.into_code_package(true)?;
+            (Assembler::with_kernel(self.source_manager.clone(), code.clone())?, Some(code))
         } else {
-            (Assembler::new(self.source_manager.clone()), None, None)
+            (Assembler::new(self.source_manager.clone()), None)
         };
 
         let program = self.source.clone().parse(false, self.source_manager.clone())?;
@@ -660,8 +657,8 @@ impl Test {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        for (package, naming) in self.libraries.iter().zip(&import_naming) {
-            assembler.link_package(package.clone(), Linkage::Dynamic, naming.clone())?;
+        for code in &import_code {
+            assembler.link_package(code.clone(), Linkage::Dynamic)?;
         }
         let mut fixture = FixtureNamespace::assembly_tests();
         fixture.add_module(&program)?;
@@ -676,33 +673,19 @@ impl Test {
             assembler.compile_and_statically_link(module)?;
         }
         let product = assembler.assemble_executable_modules("program".into(), program, [])?;
-        let local_naming = product.naming().clone();
-        let package = product.into_artifact(true)?;
-        let entry = local_naming
+        let local_code = product.into_code_package(true)?;
+        let entry = local_code
+            .symbols()
             .entry_key()
             .ok_or_else(|| Report::msg("compiled test has no explicit entry key"))?;
         let environment = librarytree::FixtureEnvironment::new_with_fragments(
             entry,
-            core::iter::once(&local_naming)
-                .chain(kernel_naming.iter())
-                .chain(import_naming.iter()),
+            core::iter::once(&local_code)
+                .chain(kernel_code.iter())
+                .chain(import_code.iter())
+                .map(|code| code.symbols().as_ref()),
             &self.environment_fragments,
         )?;
-        let local_code =
-            CodePackage::new(package.into(), Arc::new(local_naming)).map_err(Report::msg)?;
-        let kernel_code = kernel_lib
-            .zip(kernel_naming)
-            .map(|(package, symbols)| CodePackage::new(package, Arc::new(symbols)))
-            .transpose()
-            .map_err(Report::msg)?;
-        let import_code = self
-            .libraries
-            .iter()
-            .cloned()
-            .zip(import_naming)
-            .map(|(package, symbols)| CodePackage::new(package, Arc::new(symbols)))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(Report::msg)?;
         let result = PreparedTest {
             _source_manager: self.source_manager.clone(),
             local_code,

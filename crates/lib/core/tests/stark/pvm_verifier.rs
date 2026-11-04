@@ -200,7 +200,7 @@ fn pvm_verifies_a_session_mixing_every_precompile() {
     );
     let program = crate::naming::assemble(
         Assembler::default()
-            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
             .unwrap(),
         "pvm_mixed_session",
         source,

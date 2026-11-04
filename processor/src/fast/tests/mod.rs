@@ -601,8 +601,7 @@ fn source_debug_call_frames_preserve_external_tail_callers() {
             source_manager.clone(),
         )
         .unwrap();
-    let (library, library_naming) =
-        named_library("dep", source_manager.clone(), library_module, []);
+    let library = named_library("dep", source_manager.clone(), library_module, []);
     for (source, callers) in [
         (
             "use dep::math proc outer exec.math::inner end begin exec.outer push.9 drop end",
@@ -614,7 +613,7 @@ fn source_debug_call_frames_preserve_external_tail_callers() {
         ),
     ] {
         let assembler = Assembler::new(source_manager.clone())
-            .with_package(library.clone(), Linkage::Dynamic, library_naming.clone())
+            .with_package(library.clone(), Linkage::Dynamic)
             .unwrap();
         let fixture = named_module(
             assembler,
@@ -625,10 +624,7 @@ fn source_debug_call_frames_preserve_external_tail_callers() {
         )
         .unwrap();
         let mut host = DefaultHost::default();
-        host.load_library(
-            CodePackage::new(library.clone(), Arc::new(library_naming.clone())).unwrap(),
-        )
-        .unwrap();
+        host.load_library(library.clone()).unwrap();
         let chains = collect_package_debug_call_chains(fixture, host);
         assert!(
             chains.iter().any(|chain| chain.len() == callers.len() + 1
@@ -1298,8 +1294,9 @@ fn package_source_debug_explicit_inline_selects_identical_proc_from_called_file(
     let b = Module::parser(Some(ModuleKind::Library))
         .parse(None, b, source_manager.clone())
         .unwrap();
-    let (lib, lib_naming) = named_library("lib", source_manager.clone(), root, [a, b]);
+    let lib = named_library("lib", source_manager.clone(), root, [a, b]);
     let lib_debug_info = lib
+        .package()
         .debug_info()
         .expect("library debug info should decode")
         .expect("library should contain debug info");
@@ -1331,7 +1328,8 @@ fn package_source_debug_explicit_inline_selects_identical_proc_from_called_file(
     let main = Module::parser(Some(ModuleKind::Executable))
         .parse(None, main, source_manager.clone())
         .unwrap();
-    let selected_key = lib_naming
+    let selected_key = lib
+        .symbols()
         .callables()
         .key_for_visible_path(
             &miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
@@ -1343,9 +1341,9 @@ fn package_source_debug_explicit_inline_selects_identical_proc_from_called_file(
         )
         .unwrap();
     let selected_implementation =
-        lib_naming.callables().selected_implementation(selected_key).unwrap();
+        lib.symbols().callables().selected_implementation(selected_key).unwrap();
     let assembler = Assembler::new(source_manager)
-        .with_package(lib.clone(), Linkage::Static, lib_naming.clone())
+        .with_package(lib.clone(), Linkage::Static)
         .expect("library should link statically")
         .with_pinned_callable(Arc::from(Path::new("::lib::b::same")), selected_implementation)
         .expect("explicit inline pin should match the selected library code");
@@ -1374,9 +1372,7 @@ fn package_source_debug_explicit_inline_selects_identical_proc_from_called_file(
         "the uncalled identical procedure should not leak into the executable source map",
     );
 
-    let mut host = DefaultHost::default()
-        .with_library(CodePackage::new(lib, Arc::new(lib_naming)).unwrap())
-        .unwrap();
+    let mut host = DefaultHost::default().with_library(lib).unwrap();
     let output = FastProcessor::new(StackInputs::new(&[Felt::new_unchecked(41)]).unwrap())
         .with_options(ExecutionOptions::default().with_resolution_limits(program.resolution_limits))
         .unwrap()
@@ -1741,10 +1737,9 @@ fn external_exec_propagates_inline_context_into_the_loaded_package() {
             source_manager.clone(),
         )
         .unwrap();
-    let (library, library_naming) =
-        named_library("dep", source_manager.clone(), library_module, []);
+    let library = named_library("dep", source_manager.clone(), library_module, []);
     let assembler = Assembler::new(source_manager.clone())
-        .with_package(library.clone(), Linkage::Dynamic, library_naming.clone())
+        .with_package(library.clone(), Linkage::Dynamic)
         .unwrap();
     let mut program_parser = Module::parser(Some(ModuleKind::Executable));
     let mut program_module = program_parser
@@ -1779,8 +1774,7 @@ fn external_exec_propagates_inline_context_into_the_loaded_package() {
         .with_environment_source(fixture.source)
         .with_library(fixture.code)
         .unwrap();
-    host.load_library(CodePackage::new(library, Arc::new(library_naming)).unwrap())
-        .unwrap();
+    host.load_library(library).unwrap();
     let mut saw_target_context = false;
     let mut saw_context_cleared = false;
     loop {
@@ -1907,7 +1901,7 @@ fn named_library(
     manager: Arc<DefaultSourceManager>,
     root: Box<Module>,
     support: impl IntoIterator<Item = Box<Module>>,
-) -> (Arc<Package>, PackageSymbols) {
+) -> CodePackage {
     let support = support.into_iter().collect::<Vec<_>>();
     let mut names = miden_assembly::testing::FixtureNamespace::assembly_tests();
     for module in core::iter::once(root.as_ref()).chain(support.iter().map(Box::as_ref)) {
@@ -1922,8 +1916,7 @@ fn named_library(
     let product = assembler
         .assemble_library_modules(name.into(), root, support, TargetType::Library)
         .unwrap();
-    let naming = product.naming().clone();
-    (Arc::from(product.into_artifact(true).unwrap()), naming)
+    product.into_code_package(true).unwrap()
 }
 
 fn fixture_binding(path: &[&str]) -> miden_mast_package::ProcedureName {
@@ -1960,7 +1953,7 @@ fn synthetic_fixture(
 }
 
 trait FixtureHost {
-    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentWitnessSource>);
+    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentSource>);
     fn attach_fixture_code(&mut self, code: CodePackage);
 }
 
@@ -1968,7 +1961,7 @@ impl FixtureHost for DefaultHost {
     fn attach_fixture_code(&mut self, code: CodePackage) {
         self.load_library(code).expect("fixture code should register");
     }
-    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentWitnessSource>) {
+    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentSource>) {
         *self = core::mem::take(self).with_environment_source(source);
     }
 }
@@ -2189,7 +2182,7 @@ fn external_then_fail_program_for_digest(
 struct SameDigestEntrypointFixture {
     target: ExecutionTarget,
     resolution_limits: crate::ResolutionLimits,
-    source: Arc<dyn crate::EnvironmentWitnessSource>,
+    source: Arc<dyn crate::EnvironmentSource>,
     code: CodePackage,
     debug_info: PackageDebugInfo,
     entrypoint_source_node_id: DebugSourceNodeId,
@@ -2382,14 +2375,14 @@ struct MalformedExternalHost {
     entry_code: Option<LoadedMastForest>,
     source_manager: Arc<DefaultSourceManager>,
     loaded_mast_forest: LoadedMastForest,
-    environment_source: Option<Arc<dyn crate::EnvironmentWitnessSource>>,
+    environment_source: Option<Arc<dyn crate::EnvironmentSource>>,
 }
 
 struct CountingMastForestHost {
     entry_code: Option<LoadedMastForest>,
     mast_forests: Vec<LoadedMastForest>,
     code_requests: RefCell<Vec<CodeRequest>>,
-    environment_source: Option<Arc<dyn crate::EnvironmentWitnessSource>>,
+    environment_source: Option<Arc<dyn crate::EnvironmentSource>>,
 }
 
 impl CountingMastForestHost {
@@ -2416,7 +2409,7 @@ impl FixtureHost for CountingMastForestHost {
     fn attach_fixture_code(&mut self, code: CodePackage) {
         self.entry_code = Some(LoadedMastForest::from_code_package(code));
     }
-    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentWitnessSource>) {
+    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentSource>) {
         self.environment_source = Some(source);
     }
 }
@@ -2481,7 +2474,7 @@ impl FixtureHost for MalformedExternalHost {
     fn attach_fixture_code(&mut self, code: CodePackage) {
         self.entry_code = Some(LoadedMastForest::from_code_package(code));
     }
-    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentWitnessSource>) {
+    fn attach_fixture_source(&mut self, source: Arc<dyn crate::EnvironmentSource>) {
         self.environment_source = Some(source);
     }
 }

@@ -133,7 +133,7 @@ fn canonical_deferred_ecdsa4_keccak100_example_executes() {
     let source_manager = Arc::new(DefaultSourceManager::default());
     let named = assemble_fixture_program(
         Assembler::new(source_manager.clone())
-            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
             .expect("core library must link"),
         "deferred_ecdsa4_keccak100",
         source,

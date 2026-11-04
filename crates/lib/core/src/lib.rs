@@ -97,7 +97,7 @@ pub const PVM_PROOF_REQUEST_EVENT_NAME: EventName =
 ///
 /// let core_lib = CoreLibrary::default();
 /// let mut assembler = Assembler::new(source_manager);
-/// assembler.link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone()).unwrap();
+/// assembler.link_package(core_lib.code_package().clone(), Linkage::Dynamic).unwrap();
 /// ```
 ///
 /// For program execution, you'll also need to register the event handlers:

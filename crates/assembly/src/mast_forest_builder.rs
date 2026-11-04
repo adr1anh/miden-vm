@@ -199,10 +199,10 @@ impl<'a> StaticLibrary<'a> {
         library: &'a LinkLibrary,
         debug_info: Option<PackageDebugInfo>,
     ) -> Result<Self, ManifestValidationError> {
-        library.package.check_naming(library.naming())?;
+        library.package().check_naming(library.naming())?;
         let mut library_data = Self::from_mast_forest(library.mast().as_ref(), debug_info)
             .with_source_library_commitment(library.commitment());
-        library_data.procedure_occurrences = library.package.procedure_occurrences().to_vec();
+        library_data.procedure_occurrences = library.package().procedure_occurrences().to_vec();
         Ok(library_data)
     }
 

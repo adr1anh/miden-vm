@@ -16,7 +16,7 @@ use miden_mast_package::{
 use miden_utils_testing::librarytree::FixtureEnvironment;
 
 use super::{fixture_entry_digest, fixture_entry_root, native_fixture_environment};
-use crate::{EnvironmentWitnessSource, ExecutionTarget, ResolutionLimits};
+use crate::{EnvironmentSource, ExecutionTarget, ResolutionLimits};
 
 pub(crate) struct NamedFixture {
     pub package: Arc<Package>,
@@ -24,7 +24,7 @@ pub(crate) struct NamedFixture {
     pub code: CodePackage,
     pub target: ExecutionTarget,
     pub resolution_limits: ResolutionLimits,
-    pub source: Arc<dyn EnvironmentWitnessSource>,
+    pub source: Arc<dyn EnvironmentSource>,
 }
 
 /// Selects the shared source-fixture convention, independent of bodies or import source aliases.
@@ -60,17 +60,16 @@ pub(crate) fn named_module(
     let mut extra = assembler
         .linker()
         .libraries()
-        .map(|library| library.naming().clone())
+        .map(|library| library.code().clone())
         .collect::<Vec<_>>();
-    if let Some(kernel) = assembler.linker().kernel_naming() {
-        extra.push(kernel);
+    if let Some(kernel) = assembler.linker().kernel_code() {
+        extra.push(kernel.clone());
     }
     let product =
         assembler.assemble_executable_modules("processor-fixture".into(), root, support)?;
-    let naming = product.naming().clone();
-    let package = Arc::from(product.into_artifact(true)?);
-    let extra = extra.iter().map(Arc::as_ref).collect::<Vec<_>>();
-    named_package(package, naming, &extra)
+    let code = product.into_code_package(true)?;
+    let extra = extra.iter().map(|code| code.symbols().as_ref()).collect::<Vec<_>>();
+    named_code_package(code, &extra)
 }
 
 /// Uses exact caller-selected names and code selections, not a decoder-derived permission profile.
@@ -79,7 +78,16 @@ pub(crate) fn named_package(
     naming: PackageSymbols,
     extra: &[&PackageSymbols],
 ) -> Result<NamedFixture, Report> {
-    let code = CodePackage::new(package.clone(), Arc::new(naming.clone())).map_err(Report::msg)?;
+    let code = CodePackage::new(package, Arc::new(naming)).map_err(Report::msg)?;
+    named_code_package(code, extra)
+}
+
+fn named_code_package(
+    code: CodePackage,
+    extra: &[&PackageSymbols],
+) -> Result<NamedFixture, Report> {
+    let package = code.package().clone();
+    let naming = code.symbols().as_ref().clone();
     let entry = naming
         .entry_key()
         .ok_or_else(|| Report::msg("named fixture code must have an explicit entry"))?;

@@ -76,9 +76,8 @@ pub use fast::{
     DebugRuntimeFrameKind, ExecutionOutput, FastProcessor, ResumeContext,
 };
 pub use host::{
-    BaseHost, CodeRequest, EnvironmentSourceError, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, FutureMaybeSend, Host, LoadedMastForest, MastForestStore,
-    MemMastForestStore, SyncHost,
+    BaseHost, CodeRequest, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
+    FutureMaybeSend, Host, LoadedMastForest, MastForestStore, MemMastForestStore, SyncHost,
     debug::{StdoutWriter, format_value, write_interval, write_stack},
     default::{DefaultHost, HostLibrary},
 };

@@ -16,7 +16,7 @@ use miden_core::{
 };
 use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceSpan};
 
-use super::{EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource};
+use super::{EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest};
 use crate::{
     BaseHost, DefaultHost, FutureMaybeSend, Host, LedgerLimits, LoadedMastForest, OpeningError,
     OpeningLimits, OpeningStep, ProcessorState, ResolutionLimits, ResolutionWitness, SessionLimits,
@@ -196,7 +196,7 @@ struct RecordingSource<F> {
     reply: F,
 }
 
-impl<F> EnvironmentWitnessSource for RecordingSource<F>
+impl<F> EnvironmentSource for RecordingSource<F>
 where
     F: Fn() -> Result<Option<ResolutionWitness>, EnvironmentSourceError> + Send + Sync,
 {

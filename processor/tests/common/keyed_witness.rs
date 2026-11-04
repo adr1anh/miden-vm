@@ -14,8 +14,8 @@ use miden_mast_package::{
 
 use self::alloc::{sync::Arc, vec, vec::Vec};
 use super::processor::{
-    DefaultHost, EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, ExecutionOptions, ExecutionWitness, FastProcessor, Felt,
+    DefaultHost, EnvironmentSource, EnvironmentSourceError, EnvironmentTraceLimits,
+    EnvironmentWitnessRequest, ExecutionOptions, ExecutionWitness, FastProcessor, Felt,
     LedgerLimits, OpeningLimits, OpeningStep, ReplayReadLimits, ResolutionLimits,
     ResolutionWitness, SessionLimits, StackInputs,
 };
@@ -40,7 +40,7 @@ struct EntrySource {
     node: EnvNode,
 }
 
-impl EnvironmentWitnessSource for EntrySource {
+impl EnvironmentSource for EntrySource {
     fn get(
         &self,
         request: EnvironmentWitnessRequest,

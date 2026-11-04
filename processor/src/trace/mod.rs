@@ -2,7 +2,7 @@ use alloc::{format, vec::Vec};
 
 use miden_core::{
     deferred::{Digest, TRUE_DIGEST},
-    program::{ExecutionClaim, ExecutionTarget},
+    program::{ExecutionClaim, ExecutionTarget, ImplementationRoot},
     serde::{
         BudgetedReader, ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable,
         SliceReader,
@@ -87,6 +87,13 @@ impl ExecutionWitness {
     /// Returns the public claim associated with this witness.
     pub fn claim(&self) -> ExecutionClaim {
         self.vm.claim()
+    }
+
+    /// Returns the authenticated entry implementation for diagnostics.
+    ///
+    /// The caller's expected target and public claim remain independent of this code identity.
+    pub fn entry_implementation(&self) -> ImplementationRoot {
+        self.vm.trace.entry_implementation().expect("validated witness has an entry")
     }
 
     /// Returns whether this witness contains precompile work.

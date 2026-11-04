@@ -162,11 +162,8 @@ impl ProveCmd {
             host = host.with_source_manager(source_manager);
         }
         load_program_libraries(&mut host, &loaded, &libraries)?;
-        println!(
-            "Proving entry {} in environment {}...",
-            inputs.target().entry_key().as_word(),
-            inputs.target().environment_root().as_word()
-        );
+        println!("Entry key: {}", inputs.target().entry_key().as_word());
+        println!("Environment root: {}", inputs.target().environment_root().as_word());
         let now = Instant::now();
 
         // fetch the stack and program inputs from the arguments
@@ -184,6 +181,7 @@ impl ProveCmd {
         let witness = processor
             .execute_for_proving_sync(inputs.target(), &mut host)
             .wrap_err("Failed to execute program")?;
+        println!("Entry implementation: {}", witness.entry_implementation().as_word());
         let stack_outputs = *witness.claim().stack_outputs();
         let prover = self.prover(hash_fn, verification_limits);
         let proof = if self.complete || !self.deferred {

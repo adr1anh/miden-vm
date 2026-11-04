@@ -136,17 +136,10 @@ pub fn load_program(
                             let mut assembler = Assembler::new(source_manager.clone())
                                 .with_namespace_inputs(naming.source(NamingRole::Kernel)?);
                             let core = CoreLibrary::default();
-                            assembler.link_package(
-                                core.package(),
-                                Linkage::Dynamic,
-                                core.naming().clone(),
-                            )?;
+                            assembler
+                                .link_package(core.code_package().clone(), Linkage::Dynamic)?;
                             for library in &libraries.libraries {
-                                assembler.link_package(
-                                    library.package().clone(),
-                                    Linkage::Dynamic,
-                                    library.symbols().clone(),
-                                )?;
+                                assembler.link_package(library.clone(), Linkage::Dynamic)?;
                             }
                             let product = assembler
                                 .assemble_kernel_from_root_with_naming("kernel", kernel_path)?;

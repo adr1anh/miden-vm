@@ -76,27 +76,32 @@ fn nested_blocks() -> Result<(), Report> {
             admit_fixture_package(&kernel_lib, core::slice::from_ref(&kernel_home))?;
         let helper_naming =
             admit_fixture_package(&dummy_library, core::slice::from_ref(&helper_home))?;
-        let mut assembler =
-            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)?
-                .with_namespace_plan(program_home.clone())
-                .with_callable_path(Path::exec_path().join("$main").into(), entry_path)
-                .unwrap()
-                .with_callable_path(Path::exec_path().join("foo").into(), foo_path)
-                .unwrap()
-                .with_callable_path(Path::exec_path().join("bar").into(), bar_path)
-                .unwrap()
-                .with_callable_binding(
-                    Path::kernel_path().join("foo").into(),
-                    ProcedureName::new(kernel_home.clone(), kernel_foo_path).unwrap(),
-                )
-                .unwrap()
-                .with_callable_binding(
-                    Arc::from(Path::new("::libs::helpers::help")),
-                    ProcedureName::new(helper_home.clone(), helper_path).unwrap(),
-                )
-                .unwrap();
+        let mut assembler = Assembler::with_kernel(
+            context.source_manager(),
+            CodePackage::new(kernel_lib, kernel_naming.into()).unwrap(),
+        )?
+        .with_namespace_plan(program_home.clone())
+        .with_callable_path(Path::exec_path().join("$main").into(), entry_path)
+        .unwrap()
+        .with_callable_path(Path::exec_path().join("foo").into(), foo_path)
+        .unwrap()
+        .with_callable_path(Path::exec_path().join("bar").into(), bar_path)
+        .unwrap()
+        .with_callable_binding(
+            Path::kernel_path().join("foo").into(),
+            ProcedureName::new(kernel_home.clone(), kernel_foo_path).unwrap(),
+        )
+        .unwrap()
+        .with_callable_binding(
+            Arc::from(Path::new("::libs::helpers::help")),
+            ProcedureName::new(helper_home.clone(), helper_path).unwrap(),
+        )
+        .unwrap();
         assembler
-            .link_package(Arc::from(dummy_library), Linkage::Dynamic, helper_naming)
+            .link_package(
+                CodePackage::new(Arc::from(dummy_library), helper_naming.into()).unwrap(),
+                Linkage::Dynamic,
+            )
             .unwrap();
 
         assembler
@@ -637,7 +642,10 @@ fn explicit_fully_qualified_procedure_references() -> Result<(), Report> {
 
     let library_naming = naming.admit_package(&library)?;
     let assembler = Assembler::new(context.source_manager())
-        .with_package(library.into(), Linkage::Dynamic, library_naming)
+        .with_package(
+            CodePackage::new(library.into(), library_naming.into()).unwrap(),
+            Linkage::Dynamic,
+        )
         .unwrap();
 
     let program = context.parse_module(
@@ -680,7 +688,10 @@ fn re_exports() -> Result<(), Report> {
 
     let library_naming = naming.admit_package(&library)?;
     let assembler = Assembler::new(context.source_manager())
-        .with_package(library.into(), Linkage::Dynamic, library_naming)
+        .with_package(
+            CodePackage::new(library.into(), library_naming.into()).unwrap(),
+            Linkage::Dynamic,
+        )
         .unwrap();
 
     let program = context.parse_module(

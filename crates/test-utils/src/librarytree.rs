@@ -16,9 +16,9 @@ use miden_mast_package::{
     PackageProcedureOccurrence, PackageSymbols, ProcedureName, TargetType, Version,
 };
 use miden_processor::{
-    EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, LedgerLimits, OpeningError, OpeningLimits, OpeningResource,
-    OpeningStep, ResolutionLimits, ResolutionWitness, SessionLimits,
+    EnvironmentSource, EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
+    LedgerLimits, OpeningError, OpeningLimits, OpeningResource, OpeningStep, ResolutionLimits,
+    ResolutionWitness, SessionLimits,
 };
 
 use super::Report;
@@ -379,7 +379,7 @@ impl FixtureEnvironment {
     }
 
     /// Creates an independent source request budget for one host's execution.
-    pub fn source(&self) -> Arc<dyn EnvironmentWitnessSource> {
+    pub fn source(&self) -> Arc<dyn EnvironmentSource> {
         Arc::new(FixtureSource {
             fixture: self.clone(),
             requests: AtomicUsize::new(0),
@@ -568,7 +568,7 @@ fn preflight_path(
     Ok(())
 }
 
-impl EnvironmentWitnessSource for FixtureSource {
+impl EnvironmentSource for FixtureSource {
     fn get(
         &self,
         request: EnvironmentWitnessRequest,

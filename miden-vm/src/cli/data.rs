@@ -224,30 +224,18 @@ where
         I: IntoIterator<Item = CodePackage>,
     {
         let mut assembler = match kernel {
-            Some(kernel) => Assembler::with_kernel(
-                self.source_manager.clone(),
-                kernel.package().clone(),
-                kernel.symbols().clone(),
-            )?,
+            Some(kernel) => Assembler::with_kernel(self.source_manager.clone(), kernel.clone())?,
             None => Assembler::new(self.source_manager.clone()),
         }
         .with_namespace_inputs(inputs);
         let core_lib = CoreLibrary::default();
         assembler
-            .link_package(
-                core_lib.package(),
-                miden_assembly::Linkage::Dynamic,
-                core_lib.naming().clone(),
-            )
+            .link_package(core_lib.code_package().clone(), miden_assembly::Linkage::Dynamic)
             .wrap_err("Failed to load core library")?;
 
         for library in libraries {
             assembler
-                .link_package(
-                    library.package().clone(),
-                    miden_assembly::Linkage::Dynamic,
-                    library.symbols().clone(),
-                )
+                .link_package(library.clone(), miden_assembly::Linkage::Dynamic)
                 .wrap_err("Failed to load libraries")?;
         }
 
@@ -270,12 +258,16 @@ pub struct ProofFile;
 
 /// Helper methods to interact with proof file
 impl ProofFile {
-    /// Read stark proof from file
+    /// Default size limit for the entire execution proof transport, including precompile data.
+    pub const DEFAULT_MAX_FILE_SIZE: u64 = 512 * 1024 * 1024;
+
+    /// Reads an execution proof from a regular file of at most `max_file_size` bytes.
     #[instrument(name = "read_proof_file",
         fields(path = %proof_path.clone().unwrap_or(program_path.with_extension("proof")).display()), skip_all)]
     pub fn read(
         proof_path: &Option<PathBuf>,
         program_path: &Path,
+        max_file_size: usize,
     ) -> Result<ExecutionProof, String> {
         // If proof_path has been provided then use this as path.  Alternatively we will
         // replace the program_path extension with `.proof` and use this as a default.
@@ -285,7 +277,7 @@ impl ProofFile {
         };
 
         // read the file to bytes
-        let file = fs::read(&path)
+        let file = read_file_bounded(&path, max_file_size)
             .map_err(|err| format!("Failed to open proof file `{}` - {}", path.display(), err))?;
 
         // deserialize bytes into a versioned execution proof
@@ -316,6 +308,46 @@ impl ProofFile {
 
         write_file_atomically(&path, |file| file.write_all(&proof_bytes))
             .map_err(|err| format!("Failed to write proof file `{}` - {err}", path.display()))
+    }
+}
+
+#[cfg(test)]
+mod proof_file_tests {
+    use super::*;
+
+    #[test]
+    fn proof_file_read_decodes_at_the_limit_and_rejects_an_extra_byte() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let bytes = b"invalid proof";
+        file.write_all(bytes).unwrap();
+        let path = Some(file.path().to_path_buf());
+
+        // Invalid transport bytes at the exact limit reach the decoder.
+        let err = ProofFile::read(&path, file.path(), bytes.len()).unwrap_err();
+        assert!(err.starts_with("Failed to decode proof data"), "{err}");
+
+        file.write_all(b"!").unwrap();
+        let err = ProofFile::read(&path, file.path(), bytes.len()).unwrap_err();
+        assert!(err.starts_with("Failed to open proof file"), "{err}");
+        assert!(err.contains("size limit of 13 bytes"), "{err}");
+    }
+
+    #[test]
+    fn proof_file_read_preserves_zero_limit_and_missing_file_diagnostics() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        let path = Some(file.path().to_path_buf());
+        let err = ProofFile::read(&path, file.path(), 0).unwrap_err();
+        assert!(err.starts_with("Failed to decode proof data"), "{err}");
+
+        file.write_all(b"!").unwrap();
+        let err = ProofFile::read(&path, file.path(), 0).unwrap_err();
+        assert!(err.starts_with("Failed to open proof file"), "{err}");
+        assert!(err.contains("size limit of 0 bytes"), "{err}");
+
+        let missing = file.path().with_extension("missing");
+        let err = ProofFile::read(&Some(missing.clone()), &missing, 0).unwrap_err();
+        assert!(err.starts_with("Failed to open proof file"), "{err}");
+        assert!(!err.contains("size limit"), "{err}");
     }
 }
 

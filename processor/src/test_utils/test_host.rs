@@ -6,7 +6,7 @@ use miden_debug_types::{
 };
 
 use crate::{
-    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    BaseHost, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
     LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState, ResolutionWitness,
     SyncHost, Word,
     advice::AdviceMutation,
@@ -117,7 +117,7 @@ pub struct TestHost<S: SourceManager = DefaultSourceManager> {
     /// Source manager for debugging information
     pub source_manager: Arc<S>,
 
-    environment_source: Option<super::EnvironmentSource>,
+    environment_source: Option<super::TestEnvironmentSource>,
 }
 
 impl TestHost {
@@ -168,8 +168,8 @@ impl<S: SourceManager> TestHost<S> {
     }
 
     /// Attaches a source of untrusted environment witnesses for explicit execution requests.
-    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentWitnessSource>) -> Self {
-        self.environment_source = Some(super::EnvironmentSource(source));
+    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentSource>) -> Self {
+        self.environment_source = Some(super::TestEnvironmentSource(source));
         self
     }
 }

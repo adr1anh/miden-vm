@@ -17,10 +17,10 @@ pub(crate) use named::{NamedFixture, named_module, named_package, named_program,
 pub use test_host::{ProcessorStateSnapshot, TestHost};
 
 #[derive(Clone)]
-struct EnvironmentSource(alloc::sync::Arc<dyn crate::EnvironmentWitnessSource>);
+struct TestEnvironmentSource(alloc::sync::Arc<dyn crate::EnvironmentSource>);
 
-impl core::fmt::Debug for EnvironmentSource {
+impl core::fmt::Debug for TestEnvironmentSource {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.debug_struct("EnvironmentWitnessSource").finish_non_exhaustive()
+        formatter.debug_struct("EnvironmentSource").finish_non_exhaustive()
     }
 }

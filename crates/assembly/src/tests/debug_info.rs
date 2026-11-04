@@ -554,9 +554,8 @@ fn external_exec_records_inline_context_at_the_boundary() -> TestResult {
     add_debug_package_bindings(&mut bindings, &library, &foreign)?;
     let library_naming = foreign.admit_package(&library)?;
     let assembler = Assembler::new(context.source_manager()).with_package(
-        Arc::from(library),
+        CodePackage::new(Arc::from(library), library_naming.into()).unwrap(),
         Linkage::Dynamic,
-        library_naming,
     )?;
     let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
         .assemble_program("test", module)?;
@@ -611,7 +610,10 @@ fn compact_explicit_inline_ranges_survive_padding_and_pinned_static_linking() ->
     add_debug_package_bindings(&mut bindings, &library, &foreign)?;
     let library_naming = foreign.admit_package(&library)?;
     let assembler = Assembler::new(context.source_manager())
-        .with_package(Arc::from(library), Linkage::Static, library_naming)?
+        .with_package(
+            CodePackage::new(Arc::from(library), library_naming.into()).unwrap(),
+            Linkage::Static,
+        )?
         .with_pinned_callable(
             Arc::from(Path::new("::dep::math::callee")),
             expected_implementation,
@@ -686,7 +688,10 @@ fn many_explicit_inline_ranges_survive_padding_and_pinned_static_linking() -> Te
     add_debug_package_bindings(&mut bindings, &library, &foreign)?;
     let library_naming = foreign.admit_package(&library)?;
     let assembler = Assembler::new(context.source_manager())
-        .with_package(Arc::from(library), Linkage::Static, library_naming)?
+        .with_package(
+            CodePackage::new(Arc::from(library), library_naming.into()).unwrap(),
+            Linkage::Static,
+        )?
         .with_pinned_callable(
             Arc::from(Path::new("::dep::math::callee")),
             expected_implementation,
@@ -1035,9 +1040,9 @@ fn plain_exec_preserves_imported_alias_identity() -> TestResult {
         let mut bindings = FixtureNamespace::assembly_tests();
         add_debug_package_bindings(&mut bindings, &library, &foreign)?;
         let assembler = Assembler::new(context.source_manager()).with_package(
-            Arc::clone(&library),
+            CodePackage::new(Arc::clone(&library), foreign.admit_package(&library)?.into())
+                .unwrap(),
             linkage,
-            foreign.admit_package(&library)?,
         )?;
         let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
             .assemble_program("test", module)?;
@@ -1116,9 +1121,9 @@ fn plain_exec_preserves_reexported_function_identity() -> TestResult {
         let mut bindings = FixtureNamespace::assembly_tests();
         add_debug_package_bindings(&mut bindings, &library, &foreign)?;
         let assembler = Assembler::new(context.source_manager()).with_package(
-            Arc::clone(&library),
+            CodePackage::new(Arc::clone(&library), foreign.admit_package(&library)?.into())
+                .unwrap(),
             linkage,
-            foreign.admit_package(&library)?,
         )?;
         let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
             .assemble_program("test", module)?;
@@ -1210,9 +1215,9 @@ fn plain_exec_prefers_named_function_with_shared_provenance() -> TestResult {
         let mut bindings = FixtureNamespace::assembly_tests();
         add_debug_package_bindings(&mut bindings, &library, &foreign)?;
         let assembler = Assembler::new(context.source_manager()).with_package(
-            Arc::clone(&library),
+            CodePackage::new(Arc::clone(&library), foreign.admit_package(&library)?.into())
+                .unwrap(),
             linkage,
-            foreign.admit_package(&library)?,
         )?;
         let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
             .assemble_program("test", module)?;
@@ -1257,9 +1262,8 @@ fn plain_exec_preserves_dynamic_dependency_reexports() -> TestResult {
     add_debug_reexport_binding(&mut bridge_bindings, "::dep::other", "::bridge::baz")?;
     let dependency_naming = foreign.admit_package(&dependency)?;
     let assembler = Assembler::new(context.source_manager()).with_package(
-        Arc::from(dependency),
+        CodePackage::new(Arc::from(dependency), dependency_naming.into()).unwrap(),
         Linkage::Dynamic,
-        dependency_naming,
     )?;
     let bridge = configure_debug_fixture(assembler, &mut bridge_bindings, &[&bridge_module])?
         .assemble_library("bridge", bridge_module, None::<Box<Module>>)?;
@@ -1287,9 +1291,9 @@ fn plain_exec_preserves_dynamic_dependency_reexports() -> TestResult {
         let mut bindings = FixtureNamespace::assembly_tests();
         add_debug_package_bindings(&mut bindings, &bridge, &bridge_bindings)?;
         let assembler = Assembler::new(context.source_manager()).with_package(
-            Arc::clone(&bridge),
+            CodePackage::new(Arc::clone(&bridge), bridge_bindings.admit_package(&bridge)?.into())
+                .unwrap(),
             linkage,
-            bridge_bindings.admit_package(&bridge)?,
         )?;
         let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
             .assemble_program("test", module)?;
@@ -1351,9 +1355,9 @@ fn static_imports_preserve_runtime_keys_and_definition_provenance_in_either_orde
     let mut bridge_bindings = FixtureNamespace::assembly_tests();
     add_debug_package_bindings(&mut bridge_bindings, &dependency, &foreign)?;
     let assembler = Assembler::new(context.source_manager()).with_package(
-        Arc::clone(&dependency),
+        CodePackage::new(Arc::clone(&dependency), foreign.admit_package(&dependency)?.into())
+            .unwrap(),
         Linkage::Dynamic,
-        foreign.admit_package(&dependency)?,
     )?;
     let bridge: Arc<Package> =
         configure_debug_fixture(assembler, &mut bridge_bindings, &[&bridge_module])?
@@ -1372,14 +1376,20 @@ fn static_imports_preserve_runtime_keys_and_definition_provenance_in_either_orde
         add_debug_package_bindings(&mut bindings, &bridge, &bridge_bindings)?;
         let assembler = Assembler::new(context.source_manager())
             .with_package(
-                Arc::clone(&dependency),
+                CodePackage::new(
+                    Arc::clone(&dependency),
+                    foreign.admit_package(&dependency)?.into(),
+                )
+                .unwrap(),
                 Linkage::Static,
-                foreign.admit_package(&dependency)?,
             )?
             .with_package(
-                Arc::clone(&bridge),
+                CodePackage::new(
+                    Arc::clone(&bridge),
+                    bridge_bindings.admit_package(&bridge)?.into(),
+                )
+                .unwrap(),
                 Linkage::Static,
-                bridge_bindings.admit_package(&bridge)?,
             )?;
         let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
             .assemble_program("test", module)?;
@@ -1448,9 +1458,8 @@ fn linking_does_not_invent_definitions_for_source_less_functions() -> TestResult
     add_debug_package_bindings(&mut bridge_bindings, &dependency, &foreign)?;
     let dependency_naming = foreign.admit_package(&dependency)?;
     let assembler = Assembler::new(context.source_manager()).with_package(
-        Arc::from(dependency),
+        CodePackage::new(Arc::from(dependency), dependency_naming.into()).unwrap(),
         Linkage::Dynamic,
-        dependency_naming,
     )?;
     let bridge = configure_debug_fixture(assembler, &mut bridge_bindings, &[&bridge_module])?
         .assemble_library("bridge", bridge_module, None::<Box<Module>>)?;
@@ -1460,9 +1469,8 @@ fn linking_does_not_invent_definitions_for_source_less_functions() -> TestResult
     add_debug_package_bindings(&mut bindings, &bridge, &bridge_bindings)?;
     let bridge_naming = bridge_bindings.admit_package(&bridge)?;
     let assembler = Assembler::new(context.source_manager()).with_package(
-        Arc::from(bridge),
+        CodePackage::new(Arc::from(bridge), bridge_naming.into()).unwrap(),
         Linkage::Static,
-        bridge_naming,
     )?;
     let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
         .assemble_program("test", module)?;
@@ -1581,9 +1589,9 @@ fn literal_key_exec_does_not_choose_an_ambiguous_alias() -> TestResult {
         let mut bindings = FixtureNamespace::assembly_tests();
         add_debug_package_bindings(&mut bindings, &library, &foreign)?;
         let assembler = Assembler::new(context.source_manager()).with_package(
-            Arc::clone(&library),
+            CodePackage::new(Arc::clone(&library), foreign.admit_package(&library)?.into())
+                .unwrap(),
             linkage,
-            foreign.admit_package(&library)?,
         )?;
         let package = configure_debug_fixture(assembler, &mut bindings, &[&module])?
             .assemble_program("test", module)?;

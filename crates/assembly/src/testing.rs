@@ -494,7 +494,10 @@ impl TestContext {
     #[track_caller]
     pub fn add_library(&mut self, package: Arc<Package>) -> Result<(), Report> {
         let naming = self.fixture_namespace.admit_package(&package)?;
-        self.assembler.link_package(package, miden_project::Linkage::Dynamic, naming)
+        self.assembler.link_package(
+            CodePackage::new(package, naming.into()).map_err(Report::msg)?,
+            miden_project::Linkage::Dynamic,
+        )
     }
 
     /// Adds a foreign fixture package using explicitly supplied binding metadata.
@@ -518,7 +521,10 @@ impl TestContext {
             fixture_namespace.add_binding(export.path.clone(), binding.clone())?;
         }
         let naming = bindings.admit_package(&package)?;
-        self.assembler.link_package(package, miden_project::Linkage::Dynamic, naming)?;
+        self.assembler.link_package(
+            CodePackage::new(package, naming.into()).map_err(Report::msg)?,
+            miden_project::Linkage::Dynamic,
+        )?;
         self.fixture_namespace = fixture_namespace;
         Ok(())
     }

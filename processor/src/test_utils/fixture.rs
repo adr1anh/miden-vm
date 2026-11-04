@@ -5,15 +5,15 @@ use alloc::sync::Arc;
 use miden_utils_testing::{librarytree::FixtureEnvironment, processor as dependency_processor};
 
 use crate::{
-    EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, ExecutionTarget, LedgerLimits, OpeningLimits, OpeningStep,
-    ResolutionLimits, ResolutionWitness, SessionLimits,
+    EnvironmentSource, EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
+    ExecutionTarget, LedgerLimits, OpeningLimits, OpeningStep, ResolutionLimits, ResolutionWitness,
+    SessionLimits,
 };
 
 /// Preserves the fixture's core descriptor, native policies and bounded witness source.
 pub(crate) fn native_fixture_environment(
     fixture: &FixtureEnvironment,
-) -> (ExecutionTarget, ResolutionLimits, Arc<dyn EnvironmentWitnessSource>) {
+) -> (ExecutionTarget, ResolutionLimits, Arc<dyn EnvironmentSource>) {
     let limits = fixture.resolution_limits();
     let opening = limits.opening_limits();
     let ledger = limits.ledger_limits();
@@ -46,7 +46,7 @@ pub(crate) fn native_fixture_environment(
     (fixture.target(), limits, Arc::new(FixtureSource(fixture.source())))
 }
 
-struct FixtureSource(Arc<dyn dependency_processor::EnvironmentWitnessSource>);
+struct FixtureSource(Arc<dyn dependency_processor::EnvironmentSource>);
 
 pub(crate) fn native_trace_limits() -> EnvironmentTraceLimits {
     let limits = miden_utils_testing::librarytree::trace_limits();
@@ -58,7 +58,7 @@ pub(crate) fn native_trace_limits() -> EnvironmentTraceLimits {
     }
 }
 
-impl EnvironmentWitnessSource for FixtureSource {
+impl EnvironmentSource for FixtureSource {
     fn get(
         &self,
         request: EnvironmentWitnessRequest,

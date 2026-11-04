@@ -340,7 +340,7 @@ pub(super) fn load_tx_fixtures(
     scenario: &str,
 ) -> Vec<TxProofFixture> {
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("link core library");
     let (code, environment) =
         assemble_fixture_program(assembler, "tx_fixture", source, &[core_lib.naming()]);

@@ -78,7 +78,7 @@ fn debug_handlers_with_writer(writer: SharedBuf) -> Vec<(EventName, Arc<dyn Even
 fn run(source: &str, advice: AdviceInputs) -> (String, ExecutionOutput) {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
@@ -118,7 +118,7 @@ fn run_and_capture(source: &str, advice: AdviceInputs) -> String {
 fn run_with_default_core_handlers(source: &str, advice: AdviceInputs) -> ExecutionOutput {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let mut host = DefaultHost::default()
@@ -304,7 +304,7 @@ fn print_mem_rejects_out_of_bounds_range_end() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary::new(core_lib.code_package().clone())
@@ -346,7 +346,7 @@ fn print_mem_rejects_oversized_range() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary::new(core_lib.code_package().clone())
@@ -388,7 +388,7 @@ fn print_mem_rejects_full_range() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary::new(core_lib.code_package().clone())
@@ -590,7 +590,7 @@ fn debug_handlers_compose_with_default_core_handlers() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
@@ -661,7 +661,7 @@ fn noop_debug_handlers_run_print_stack_without_output() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib =

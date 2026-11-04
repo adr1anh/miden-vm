@@ -191,8 +191,7 @@ fn kernel_validates_compiled_exports_without_restricting_foreign_helpers() {
                 TargetType::Library,
             )
             .unwrap();
-        let naming = product.naming().clone();
-        let package = product.into_artifact(false).unwrap();
+        let package = product.into_code_package(false).unwrap();
         for exported in [false, true] {
             let source = if exported {
                 "use dep\npub use {run as published} from ::dep\npub proc service exec.dep::run end"
@@ -206,7 +205,7 @@ fn kernel_validates_compiled_exports_without_restricting_foreign_helpers() {
                     ("::dep::run", foreign.clone()),
                 ],
             )
-            .with_package(package.clone().into(), Linkage::Static, naming.clone())
+            .with_package(package.clone(), Linkage::Static)
             .unwrap()
             .assemble_library_modules(
                 "kernel".into(),

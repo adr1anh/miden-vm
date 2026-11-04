@@ -211,7 +211,7 @@ fn test_keccak_precompile_wrapper_prove_verify_final() {
     let source_manager = Arc::new(DefaultSourceManager::default());
     let named = assemble_fixture_program(
         Assembler::new(source_manager.clone())
-            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
             .expect("failed to link core library"),
         "keccak_precompile_wrapper_test",
         source,
@@ -339,7 +339,7 @@ fn test_eidos_recursive_verify_with_precompile_requests() {
     let source_manager = Arc::new(DefaultSourceManager::default());
     let mut assembler = Assembler::new(source_manager.clone());
     assembler
-        .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .link_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to link core library package");
     let named =
         assemble_fixture_program(assembler, "program", source, &[core_lib.naming().as_ref()]);

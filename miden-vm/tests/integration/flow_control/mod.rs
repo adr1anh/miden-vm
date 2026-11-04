@@ -698,11 +698,7 @@ fn procref() -> Result<(), Report> {
         let module_foo_key = fixture.binding(&module.path().join("foo")).unwrap().key();
         let assembler = fixture.configure(Assembler::new(source_manager), [&*module])?;
         let product = assembler
-            .with_package(
-                core_lib.package(),
-                miden_assembly::Linkage::Dynamic,
-                core_lib.naming().clone(),
-            )
+            .with_package(core_lib.code_package().clone(), miden_assembly::Linkage::Dynamic)
             .unwrap()
             .assemble_library_modules("test".into(), module, [], TargetType::Library)?;
         let naming = Arc::new(product.naming().clone());
@@ -761,12 +757,12 @@ fn procref() -> Result<(), Report> {
     // Equal bodies do not merge the independently declared module and program identities.
     let named = assemble_fixture_program(
         Assembler::new(test.source_manager.clone())
+            .with_package(core_lib.code_package().clone(), miden_assembly::Linkage::Dynamic)?
             .with_package(
-                core_lib.package(),
+                miden_assembly::CodePackage::new(library, library_naming.clone())
+                    .map_err(Report::msg)?,
                 miden_assembly::Linkage::Dynamic,
-                core_lib.naming().clone(),
-            )?
-            .with_package(library, miden_assembly::Linkage::Dynamic, library_naming.clone())?,
+            )?,
         "procref_identities",
         test.source.clone(),
         &[core_lib.naming().as_ref(), library_naming.as_ref()],

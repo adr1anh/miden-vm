@@ -1,7 +1,7 @@
-use alloc::{format, sync::Arc, vec::Vec};
+use alloc::{format, vec::Vec};
 
 use miden_assembly_syntax::diagnostics::Report;
-use miden_mast_package::{Dependency as PackageDependency, Package as MastPackage, PackageSymbols};
+use miden_mast_package::{CodePackage, Dependency as PackageDependency};
 use miden_project::Linkage;
 
 use crate::project::ResolvedPackage;
@@ -12,7 +12,7 @@ use crate::project::ResolvedPackage;
 #[derive(Default)]
 pub(super) struct RuntimeDependencies {
     pub deps: Vec<PackageDependency>,
-    pub kernel: Option<(Arc<MastPackage>, Arc<PackageSymbols>)>,
+    pub kernel: Option<CodePackage>,
 }
 
 impl RuntimeDependencies {
@@ -21,16 +21,15 @@ impl RuntimeDependencies {
         dependency: ResolvedPackage,
         linkage: Linkage,
     ) -> Result<(), Report> {
+        dependency
+            .code
+            .package()
+            .check_naming(dependency.code.symbols())
+            .map_err(Report::msg)?;
         if dependency.code.package().is_kernel() {
-            self.record_linked_kernel_dependency(
-                dependency.code.package().clone(),
-                dependency.code.symbols().clone(),
-            )?;
+            self.record_linked_kernel_dependency(dependency.code.clone())?;
         } else if let Some(kernel) = &dependency.linked_kernel_package {
-            self.record_linked_kernel_dependency(
-                kernel.package().clone(),
-                kernel.symbols().clone(),
-            )?;
+            self.record_linked_kernel_dependency(kernel.clone())?;
         }
 
         // We record the dynamic/runtime dependencies of a package here.
@@ -58,17 +57,17 @@ impl RuntimeDependencies {
         Ok(())
     }
 
-    pub fn record_linked_kernel_dependency(
-        &mut self,
-        package: Arc<MastPackage>,
-        naming: Arc<PackageSymbols>,
-    ) -> Result<(), Report> {
-        debug_assert!(package.is_kernel());
-        package.check_naming(&naming).map_err(|error| Report::msg(format!("{error}")))?;
+    pub fn record_linked_kernel_dependency(&mut self, code: CodePackage) -> Result<(), Report> {
+        let package = code.package();
+        if !package.is_kernel() {
+            return Err(Report::msg("linked kernel dependency must be a kernel package"));
+        }
+        package.check_naming(code.symbols()).map_err(Report::msg)?;
 
-        if let Some((existing, _)) = &self.kernel
+        if let Some(existing) = self.kernel.as_ref().map(CodePackage::package)
             && (existing.name != package.name
                 || existing.version != package.version
+                || existing.kind != package.kind
                 || existing.dependency_commitment() != package.dependency_commitment())
         {
             return Err(Report::msg(format!(
@@ -84,7 +83,7 @@ impl RuntimeDependencies {
 
         self.merge_dependency(package.to_dependency());
         if self.kernel.is_none() {
-            self.kernel = Some((package, naming));
+            self.kernel = Some(code);
         }
         Ok(())
     }
@@ -106,7 +105,7 @@ impl RuntimeDependencies {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{string::ToString, vec};
+    use alloc::{string::ToString, sync::Arc, vec};
 
     use miden_core::{
         Word,
@@ -115,8 +114,9 @@ mod tests {
         program::{CanonicalLabel, ImplementationRoot},
     };
     use miden_mast_package::{
-        CallableProcedurePath, CodePackage, NamespacePath, PackageCallables, PackageExport,
-        PackageId, ProcedureExport, ProcedureName, TargetType, Version,
+        CallableProcedurePath, NamespacePath, Package as MastPackage, PackageCallables,
+        PackageExport, PackageId, PackageSymbols, ProcedureExport, ProcedureName, TargetType,
+        Version,
     };
 
     use super::*;
@@ -235,20 +235,13 @@ mod tests {
         let kernel = package(TargetType::Kernel, Operation::Add, vec![]);
         let conflicting = package(TargetType::Kernel, Operation::Mul, vec![]);
         let mut runtime = RuntimeDependencies::default();
-        runtime
-            .record_linked_kernel_dependency(
-                kernel.code.package().clone(),
-                kernel.code.symbols().clone(),
-            )
-            .unwrap();
-        runtime
-            .record_linked_kernel_dependency(
-                kernel.code.package().clone(),
-                kernel.code.symbols().clone(),
-            )
-            .unwrap();
+        runtime.record_linked_kernel_dependency(kernel.code.clone()).unwrap();
+        runtime.record_linked_kernel_dependency(kernel.code.clone()).unwrap();
         let original_deps = runtime.deps.clone();
         assert_eq!(original_deps, vec![kernel.code.package().to_dependency()]);
+        let retained = runtime.kernel.as_ref().unwrap();
+        assert!(Arc::ptr_eq(retained.package(), kernel.code.package()));
+        assert!(Arc::ptr_eq(retained.symbols(), kernel.code.symbols()));
 
         let mut consumer = package(TargetType::Library, Operation::Add, vec![dependency(3)]);
         consumer.linked_kernel_package = Some(conflicting.code);
@@ -256,10 +249,23 @@ mod tests {
             let error = runtime.merge_package(consumer.clone(), linkage).unwrap_err();
             assert!(error.to_string().contains("conflicting linked kernel packages"));
             assert_eq!(runtime.deps, original_deps);
-            assert_eq!(
-                runtime.kernel.as_ref().unwrap().0.dependency_commitment(),
-                kernel.code.package().dependency_commitment()
-            );
+            let retained = runtime.kernel.as_ref().unwrap();
+            assert!(Arc::ptr_eq(retained.package(), kernel.code.package()));
+            assert!(Arc::ptr_eq(retained.symbols(), kernel.code.symbols()));
         }
+    }
+
+    #[test]
+    fn non_kernel_attachment_is_atomic_before_supply_mutation() {
+        let library = package(TargetType::Library, Operation::Add, vec![dependency(3)]);
+        let mut runtime = RuntimeDependencies::default();
+        runtime.merge_dependency(dependency(1));
+        let original_deps = runtime.deps.clone();
+
+        let error = runtime.record_linked_kernel_dependency(library.code).unwrap_err();
+
+        assert!(error.to_string().contains("must be a kernel package"));
+        assert_eq!(runtime.deps, original_deps);
+        assert!(runtime.kernel.is_none());
     }
 }

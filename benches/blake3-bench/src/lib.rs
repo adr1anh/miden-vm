@@ -66,11 +66,7 @@ impl Blake3Fixture {
         let core_lib = CoreLibrary::default();
         let mut assembler = Assembler::new(source_manager.clone());
         assembler
-            .link_package(
-                core_lib.package(),
-                miden_vm::assembly::Linkage::Dynamic,
-                core_lib.naming().clone(),
-            )
+            .link_package(core_lib.code_package().clone(), miden_vm::assembly::Linkage::Dynamic)
             .expect("failed to load core library");
         let (code, environment) =
             assemble_fixture_program(assembler, "program", ast, &[core_lib.naming()]);

@@ -35,8 +35,8 @@ pub use miden_precompiles::{
     default_verification_precompile_limits,
 };
 pub use miden_processor::{
-    BaseHost, CodeRequest, DefaultHost, EnvironmentSourceError, EnvironmentTraceLimits,
-    EnvironmentWitnessRequest, EnvironmentWitnessSource, ExecutionError, ExecutionOptions,
+    BaseHost, CodeRequest, DefaultHost, EnvironmentSource, EnvironmentSourceError,
+    EnvironmentTraceLimits, EnvironmentWitnessRequest, ExecutionError, ExecutionOptions,
     ExecutionOutput, ExecutionWitness, FastProcessor, FutureMaybeSend, Host, LedgerLimits,
     OpeningLimits, OpeningStep, ProgramExecutor, ResolutionLimits, ResolutionWitness,
     SessionLimits, SyncHost, VmWitness, advice, crypto, field, serde, trace, trace::VmTrace, utils,

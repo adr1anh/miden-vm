@@ -71,7 +71,7 @@ fn test_memcopy_words() {
 
     let core_lib = CoreLibrary::default();
     let assembler = miden_assembly::Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
 
     let named =
@@ -197,7 +197,7 @@ fn test_memcopy_elements() {
 
     let core_lib = CoreLibrary::default();
     let assembler = miden_assembly::Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
 
     let named =

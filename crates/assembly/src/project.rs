@@ -552,22 +552,12 @@ where
                 // We do not link the package here, as by definition a required library is only
                 // present for executable targets, and we always unconditionally link kernel
                 // dependencies just prior to assembling the package
-                runtime_dependencies.record_linked_kernel_dependency(
-                    required_lib.code.package().clone(),
-                    required_lib.code.symbols().clone(),
-                )?;
+                runtime_dependencies.record_linked_kernel_dependency(required_lib.code)?;
             },
             Some(required_lib) => {
-                assembler.link_package(
-                    required_lib.code.package().clone(),
-                    Linkage::Static,
-                    required_lib.code.symbols().clone(),
-                )?;
+                assembler.link_package(required_lib.code, Linkage::Static)?;
                 if let Some(kernel) = required_lib.linked_kernel_package {
-                    runtime_dependencies.record_linked_kernel_dependency(
-                        kernel.package().clone(),
-                        kernel.symbols().clone(),
-                    )?;
+                    runtime_dependencies.record_linked_kernel_dependency(kernel)?;
                 }
             },
             None => (),
@@ -597,17 +587,12 @@ where
             if !dependency_package.code.package().is_kernel() {
                 if let Some(mount) = &edge.source_mount {
                     assembler.link_package_at(
-                        dependency_package.code.package().clone(),
+                        dependency_package.code.clone(),
                         edge.linkage,
-                        dependency_package.code.symbols().clone(),
                         mount.clone(),
                     )?;
                 } else {
-                    assembler.link_package(
-                        dependency_package.code.package().clone(),
-                        edge.linkage,
-                        dependency_package.code.symbols().clone(),
-                    )?;
+                    assembler.link_package(dependency_package.code.clone(), edge.linkage)?;
                 }
             } else if edge.source_mount.is_some() {
                 return Err(Report::msg(
@@ -629,14 +614,14 @@ where
             },
         };
 
-        if let Some((kernel_package, kernel_naming)) = runtime_dependencies.kernel.clone() {
+        if let Some(kernel) = runtime_dependencies.kernel.clone() {
             if matches!(target.ty, TargetType::Kernel) {
                 return Err(Report::msg(format!(
                     "kernel targets cannot depend on a kernel, dependency '{}' is a kernel",
-                    kernel_package.name
+                    kernel.package().name
                 )));
             }
-            assembler.link_package(kernel_package, Linkage::Dynamic, kernel_naming)?;
+            assembler.link_package(kernel, Linkage::Dynamic)?;
         }
 
         let selected_binding =
@@ -829,10 +814,7 @@ where
             expected.check(&naming)?;
         }
         let code = CodePackage::new(Arc::from(package), naming).map_err(Report::msg)?;
-        let linked_kernel_package = runtime_dependencies
-            .kernel
-            .map(|(package, symbols)| CodePackage::new(package, symbols).map_err(Report::msg))
-            .transpose()?;
+        let linked_kernel_package = runtime_dependencies.kernel;
 
         let resolved = ResolvedPackage {
             code,

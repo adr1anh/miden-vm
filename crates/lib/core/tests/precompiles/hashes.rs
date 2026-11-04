@@ -285,7 +285,7 @@ fn sha512_hash_bytes_mem_rejects_a_forged_upper_digest_half() {
     );
     let program = assemble(
         Assembler::default()
-            .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
+            .with_package(library.code_package().clone(), Linkage::Dynamic)
             .unwrap(),
         "sha512_forged_digest",
         source,
@@ -371,7 +371,7 @@ fn sha256_hash_bytes_mem_rejects_a_forged_digest() {
     );
     let program = assemble(
         Assembler::default()
-            .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
+            .with_package(library.code_package().clone(), Linkage::Dynamic)
             .unwrap(),
         "sha256_forged_digest",
         source,

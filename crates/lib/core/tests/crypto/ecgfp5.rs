@@ -610,9 +610,7 @@ fn callable_from_a_kernel_procedure() {
             .unwrap();
         let core = CoreLibrary::default();
         let mut assembler = Assembler::new(source_manager.clone());
-        assembler
-            .link_package(core.package(), Linkage::Dynamic, core.naming().clone())
-            .unwrap();
+        assembler.link_package(core.code_package().clone(), Linkage::Dynamic).unwrap();
         let mut kernel_fixture = FixtureNamespace::assembly_tests();
         kernel_fixture.add_kernel_modules(&assembler, &[kernel.as_ref()]).unwrap();
         let kernel_product = kernel_fixture
@@ -622,9 +620,7 @@ fn callable_from_a_kernel_procedure() {
             .unwrap();
         let kernel_naming = kernel_product.naming().clone();
         let kernel = kernel_product.into_code_package(true).unwrap();
-        let assembler =
-            Assembler::with_kernel(source_manager, kernel.package().clone(), kernel_naming.clone())
-                .unwrap();
+        let assembler = Assembler::with_kernel(source_manager, kernel.clone()).unwrap();
         let named = crate::naming::assemble(
             assembler,
             "kernel-dh",

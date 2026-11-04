@@ -347,7 +347,7 @@ fn run_program_with_handler(
 ) -> Result<ExecutionOutput, ExecutionError> {
     let library = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
+        .with_package(library.code_package().clone(), Linkage::Dynamic)
         .unwrap();
     let named =
         crate::naming::assemble(assembler, "ed25519_test", source, &[library.naming().as_ref()]);

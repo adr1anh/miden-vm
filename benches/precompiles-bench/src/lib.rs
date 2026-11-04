@@ -36,11 +36,7 @@ impl PrecompileFixture {
         let source = generate_program_source(workload);
         let core_lib = CoreLibrary::default();
         let assembler = Assembler::default()
-            .with_package(
-                core_lib.package(),
-                miden_vm::assembly::Linkage::Dynamic,
-                core_lib.naming().clone(),
-            )
+            .with_package(core_lib.code_package().clone(), miden_vm::assembly::Linkage::Dynamic)
             .expect("failed to link core library");
         let (code, environment) = assemble_fixture_program(
             assembler,

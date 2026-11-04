@@ -31,9 +31,9 @@ use miden_core::{
     serde::Serializable,
 };
 use miden_mast_package::{
-    CallableProcedurePath, ConstantExport, NamespacePath, Package, PackageDebugInfoError,
-    PackageExport, PackageId, PackageModule, PackageSubmodule, PackageSymbols, ProcedureExport,
-    Section, SectionId, TypeExport,
+    CallableProcedurePath, CodePackage, ConstantExport, NamespacePath, Package,
+    PackageDebugInfoError, PackageExport, PackageId, PackageModule, PackageSubmodule,
+    PackageSymbols, ProcedureExport, Section, SectionId, TypeExport,
     debug_info::{DebugSourceNodeId, PackageDebugInfo},
 };
 use miden_project::{Linkage, PackageSourceMount, TargetType};
@@ -210,13 +210,12 @@ impl Assembler {
 
     /// Start building an [`Assembler`] with a kernel defined by the provided kernel package.
     ///
-    /// `naming` must be retained from compilation or admitted with an explicit selected profile.
+    /// The code owner retains exact checked symbols, advice and source metadata.
     pub fn with_kernel(
         source_manager: Arc<dyn SourceManager>,
-        kernel: Arc<Package>,
-        naming: impl Into<Arc<PackageSymbols>>,
+        kernel: CodePackage,
     ) -> Result<Self, Report> {
-        let linker = Box::new(Linker::with_kernel(source_manager.clone(), kernel, naming)?);
+        let linker = Box::new(Linker::with_kernel(source_manager.clone(), kernel)?);
         Ok(Self {
             source_manager,
             linker,
@@ -410,30 +409,19 @@ impl Assembler {
         Ok(())
     }
 
-    /// Link against `package` with the specified linkage mode during assembly.
+    /// Link against `code` with the specified linkage mode during assembly.
     ///
-    /// `naming` must match the package's required metadata exactly and come from compilation or
-    /// explicit selected-profile admission of its raw transport.
-    pub fn with_package(
-        mut self,
-        package: Arc<Package>,
-        linkage: Linkage,
-        naming: impl Into<Arc<PackageSymbols>>,
-    ) -> Result<Self, Report> {
-        self.link_package(package, linkage, naming)?;
+    /// The code owner retains exact checked symbols, advice and source metadata.
+    pub fn with_package(mut self, code: CodePackage, linkage: Linkage) -> Result<Self, Report> {
+        self.link_package(code, linkage)?;
         Ok(self)
     }
 
-    /// Link against `package` with the specified linkage mode during assembly.
+    /// Link against `code` with the specified linkage mode during assembly.
     ///
-    /// `naming` must match the package's required metadata exactly and come from compilation or
-    /// explicit selected-profile admission of its raw transport.
-    pub fn link_package(
-        &mut self,
-        package: Arc<Package>,
-        linkage: Linkage,
-        naming: impl Into<Arc<PackageSymbols>>,
-    ) -> Result<(), Report> {
+    /// The code owner retains exact checked symbols, advice and source metadata.
+    pub fn link_package(&mut self, code: CodePackage, linkage: Linkage) -> Result<(), Report> {
+        let package = code.package();
         match package.kind {
             TargetType::Kernel => {
                 if self.has_kernel() {
@@ -443,54 +431,45 @@ impl Assembler {
                     )));
                 }
 
-                self.linker.link_with_kernel(package, naming)?;
+                self.linker.link_with_kernel(code)?;
                 Ok(())
             },
             TargetType::Executable => {
                 Err(Report::msg("cannot add executable packages to an assembler"))
             },
             _ => {
-                self.linker.link_library(
-                    LinkLibrary::from_package(package, naming)
-                        .map_err(Report::msg)?
-                        .with_linkage(linkage),
-                )?;
+                self.linker
+                    .link_library(LinkLibrary::from_code_package(code).with_linkage(linkage))?;
                 Ok(())
             },
         }
     }
 
-    /// Links a library package at an explicit source prefix, retaining its exact canonical naming.
+    /// Links a library package at an explicit source prefix, retaining its exact canonical symbols.
     ///
     /// Kernel attachment remains a separate operation through [`Self::link_package`].
     pub fn with_package_at(
         mut self,
-        package: Arc<Package>,
+        code: CodePackage,
         linkage: Linkage,
-        naming: impl Into<Arc<PackageSymbols>>,
         mount: PackageSourceMount,
     ) -> Result<Self, Report> {
-        self.link_package_at(package, linkage, naming, mount)?;
+        self.link_package_at(code, linkage, mount)?;
         Ok(self)
     }
 
     /// Links a library package at an explicit source prefix without rebasing its callable keys.
     ///
-    /// Naming admission and every route/surface/capacity check complete before linker mutation.
+    /// Every route/surface/capacity check completes before linker mutation.
     /// Kernel packages require separate attachment through [`Self::link_package`].
     pub fn link_package_at(
         &mut self,
-        package: Arc<Package>,
+        code: CodePackage,
         linkage: Linkage,
-        naming: impl Into<Arc<PackageSymbols>>,
         mount: PackageSourceMount,
     ) -> Result<(), Report> {
-        self.linker.link_library_at(
-            LinkLibrary::from_package(package, naming)
-                .map_err(Report::msg)?
-                .with_linkage(linkage),
-            mount,
-        )?;
+        self.linker
+            .link_library_at(LinkLibrary::from_code_package(code).with_linkage(linkage), mount)?;
         Ok(())
     }
 }
@@ -1352,14 +1331,14 @@ impl Assembler {
         self.linker
             .static_libraries()
             .map(|lib| {
-                lib.package.check_procedure_occurrences(lib.naming()).into_diagnostic()?;
-                let debug_info = match lib.package.debug_info() {
+                lib.package().check_procedure_occurrences(lib.naming()).into_diagnostic()?;
+                let debug_info = match lib.package().debug_info() {
                     Ok(debug_info) => debug_info,
                     Err(PackageDebugInfoError::UntrustedSections) => None,
                     Err(err) => {
                         return Err(Report::msg(format!(
                             "failed to decode debug info for statically linked package '{}': {err}",
-                            lib.package.name
+                            lib.package().name
                         )));
                     },
                 };

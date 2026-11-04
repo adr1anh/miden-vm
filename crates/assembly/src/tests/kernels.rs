@@ -157,7 +157,10 @@ fn can_assemble_a_multi_module_kernel() -> Result<(), Report> {
     bindings.add_module(&program)?;
     bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)?,
+            Assembler::with_kernel(
+                context.source_manager(),
+                CodePackage::new(kernel_lib, kernel_naming.into()).unwrap(),
+            )?,
             [&*program],
         )?
         .assemble_program("program", program)?;
@@ -209,9 +212,12 @@ fn kernel_candidate_with_private_submodule_code_cannot_become_a_runnable_kernel(
         .check_kernel_code(&naming)
         .expect_err("private code cannot manufacture a runnable root kernel surface");
     assert_diagnostic!(error, "invalid kernel package: does not export any procedures");
-    let error = Assembler::with_kernel(context.source_manager(), candidate, naming)
-        .err()
-        .expect("a code candidate with no root kernel exports cannot be attached as a kernel");
+    let error = Assembler::with_kernel(
+        context.source_manager(),
+        CodePackage::new(candidate, naming.into()).unwrap(),
+    )
+    .err()
+    .expect("a code candidate with no root kernel exports cannot be attached as a kernel");
     assert_diagnostic!(error, "invalid kernel package: does not export any procedures");
 }
 
@@ -359,7 +365,11 @@ fn syscall_of_public_kernel_submodule_export_uses_its_root_binding() {
     let kernel_naming = bindings.admit_package(&kernel).unwrap();
     let assembler = bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel, kernel_naming).unwrap(),
+            Assembler::with_kernel(
+                context.source_manager(),
+                CodePackage::new(kernel, kernel_naming.into()).unwrap(),
+            )
+            .unwrap(),
             [&*program],
         )
         .unwrap();
@@ -488,7 +498,10 @@ fn test_syscall_resolution_uses_kernel_module() -> TestResult {
     bindings.add_module(&program)?;
 
     let kernel_naming = bindings.admit_package(&kernel)?;
-    let mut assembler = Assembler::with_kernel(context.source_manager(), kernel, kernel_naming)?;
+    let mut assembler = Assembler::with_kernel(
+        context.source_manager(),
+        CodePackage::new(kernel, kernel_naming.into()).unwrap(),
+    )?;
     assembler.compile_and_statically_link(lib)?;
     let assembler = bindings.configure(assembler, [&*program])?;
     let package = assembler.assemble_program("program", program)?;
@@ -585,13 +598,13 @@ fn test_syscall_resolution_to_non_kernel_path_is_checked() -> TestResult {
             bindings.add_binding(Arc::from(Path::new("::userspace::bar")), target.clone())?;
             let assembler = Assembler::with_kernel(
                 context.source_manager(),
-                kernel.clone(),
-                kernel_bindings.admit_package(&kernel)?,
+                CodePackage::new(kernel.clone(), kernel_bindings.admit_package(&kernel)?.into())
+                    .unwrap(),
             )?
             .with_package(
-                package.clone(),
+                CodePackage::new(package.clone(), lib_bindings.admit_package(&package)?.into())
+                    .unwrap(),
                 Linkage::Static,
-                lib_bindings.admit_package(&package)?,
             )?;
             let result =
                 bindings.configure(assembler, [&*program])?.assemble_program("program", program);
@@ -683,8 +696,11 @@ end
     let kernel_naming = bindings.admit_package(&kernel_lib).unwrap();
     let assembler = bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)
-                .expect("test package should be valid"),
+            Assembler::with_kernel(
+                context.source_manager(),
+                CodePackage::new(kernel_lib, kernel_naming.into()).unwrap(),
+            )
+            .expect("test package should be valid"),
             [&*program],
         )
         .unwrap();
@@ -737,8 +753,11 @@ end
     let kernel_naming = bindings.admit_package(&kernel_lib).unwrap();
     let assembler = bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)
-                .expect("test kernel should be valid"),
+            Assembler::with_kernel(
+                context.source_manager(),
+                CodePackage::new(kernel_lib, kernel_naming.into()).unwrap(),
+            )
+            .expect("test kernel should be valid"),
             [&*program],
         )
         .unwrap();
@@ -838,8 +857,11 @@ end
             .configure(
                 Assembler::with_kernel(
                     context.source_manager(),
-                    Arc::clone(&kernel),
-                    kernel_bindings.admit_package(&kernel).unwrap(),
+                    CodePackage::new(
+                        Arc::clone(&kernel),
+                        kernel_bindings.admit_package(&kernel).unwrap().into(),
+                    )
+                    .unwrap(),
                 )
                 .expect("test kernel should be valid"),
                 [&*program],

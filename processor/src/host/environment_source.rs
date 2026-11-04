@@ -24,7 +24,7 @@ pub type EnvironmentSourceError = Box<dyn Error + Send + Sync + 'static>;
 ///
 /// Code availability, debug metadata and a successful retrieval do not authenticate a binding.
 /// Every returned candidate must be independently verified against the requested root and key.
-pub trait EnvironmentWitnessSource: Send + Sync {
+pub trait EnvironmentSource: Send + Sync {
     /// Retrieves a candidate opening under the request's explicit construction limits.
     ///
     /// `Ok(None)` means evidence is unavailable. It is not authenticated nonmembership and must

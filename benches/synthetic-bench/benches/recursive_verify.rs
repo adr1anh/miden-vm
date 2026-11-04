@@ -150,7 +150,7 @@ fn assemble_recursive_program(
     fragment: Arc<ValidatedEnvironment>,
 ) -> (CodePackage, FixtureEnvironment) {
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("link core library");
     let (code, _) =
         assemble_fixture_program(assembler, "recursive_verifier", source, &[core_lib.naming()]);

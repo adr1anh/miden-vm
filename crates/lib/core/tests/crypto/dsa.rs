@@ -648,7 +648,7 @@ fn run_core_program(
 ) -> Result<ExecutionOutput, ExecutionError> {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to link core library");
     let named = crate::naming::assemble(
         assembler,

@@ -96,7 +96,7 @@ async fn batch_settles_deferred_obligations_with_one_pvm_proof() {
 
 fn assemble_batch(core_lib: &CoreLibrary) -> NamedProgram {
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .unwrap();
 
     let source = r#"

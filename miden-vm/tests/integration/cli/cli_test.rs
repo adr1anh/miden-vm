@@ -105,11 +105,31 @@ fn cli_run() {
 
     cmd.arg("-n").arg("1").arg("-m").arg("8192").arg("-e").arg("8192");
 
+    let expected = inputs.named.1.target();
+    let implementation = inputs
+        .named
+        .0
+        .symbols()
+        .callables()
+        .selected_implementation(expected.entry_key())
+        .unwrap();
     let output = cmd.unwrap();
 
     output
         .assert()
-        .stdout(predicate::str::contains("Executed the program with hash"))
+        .stdout(predicate::str::contains(format!(
+            "Entry key: {}",
+            expected.entry_key().as_word()
+        )))
+        .stdout(predicate::str::contains(format!(
+            "Environment root: {}",
+            expected.environment_root().as_word()
+        )))
+        .stdout(predicate::str::contains(format!(
+            "Entry implementation: {}",
+            implementation.as_word()
+        )))
+        .stdout(predicate::str::contains("Executed the program in"))
         .stdout(predicate::str::contains("VM trace rows:"))
         .stdout(predicate::str::contains("Core rows:"))
         .stdout(predicate::str::contains("Byte-pair lookup rows:"));

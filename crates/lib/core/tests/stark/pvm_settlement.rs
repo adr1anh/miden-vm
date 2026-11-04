@@ -123,7 +123,7 @@ fn prove_signature_execution(
     );
     let program = assemble(
         Assembler::default()
-            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
             .expect("core library must link"),
         "signature_deferred_settlement",
         source,
@@ -217,7 +217,7 @@ fn assemble_settlement_program(core_lib: &CoreLibrary) -> NamedProgram {
     let source = format!("{}\n{source}", verifier_identity_constants(core_lib));
     let program = assemble(
         Assembler::default()
-            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
             .expect("core library must link"),
         "async_pvm_settlement",
         source,

@@ -103,14 +103,12 @@ impl RunCmd {
 
         let naming = self.naming.read()?;
         let libraries = Libraries::new(&self.library_paths, &naming)?;
-        let (trace, program_hash) =
-            run_program(self, execution_options, &inputs, &naming, &libraries)?;
+        let trace = run_program(self, execution_options, &inputs, &naming, &libraries)?;
 
-        println!(
-            "Executed the program with hash {} in {} ms",
-            hex::encode(program_hash),
-            now.elapsed().as_millis()
-        );
+        println!("Entry key: {}", inputs.target().entry_key().as_word());
+        println!("Environment root: {}", inputs.target().environment_root().as_word());
+        println!("Entry implementation: {}", trace.entry_implementation().as_word());
+        println!("Executed the program in {} ms", now.elapsed().as_millis());
 
         if let Some(output_path) = &self.output_file {
             // write outputs to file if one was specified
@@ -173,7 +171,7 @@ fn run_program(
     inputs: &AdmittedExecutionInputs,
     naming: &miden_vm::internal::naming_inputs::NamingInputs,
     libraries: &Libraries,
-) -> Result<(VmTrace, [u8; 32]), Report> {
+) -> Result<VmTrace, Report> {
     let loaded = load_program(
         &params.program_file,
         libraries,
@@ -199,6 +197,5 @@ fn run_program(
     let (vm_witness, _) = witness.into_parts();
     let trace = build_trace(vm_witness, &canonical_budget(params.max_prover_memory))
         .wrap_err("Failed to build trace")?;
-    let implementation = (*trace.entry_implementation().as_word()).into();
-    Ok((trace, implementation))
+    Ok(trace)
 }

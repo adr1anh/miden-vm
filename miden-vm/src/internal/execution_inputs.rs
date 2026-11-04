@@ -21,8 +21,8 @@ use miden_core::{
     program::{EnvNode, EnvironmentRoot, ExecutionTarget, ProcedureKey},
 };
 use miden_processor::{
-    EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, OpeningLimits, OpeningStep, ResolutionLimits, ResolutionWitness,
+    EnvironmentSource, EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
+    OpeningLimits, OpeningStep, ResolutionLimits, ResolutionWitness,
 };
 use serde::{
     Deserialize,
@@ -509,7 +509,7 @@ impl AdmittedExecutionInputs {
         self.trace_limits
     }
     /// Each host gets a fresh request budget; clones of that Arc share the budget.
-    pub fn source(&self) -> Arc<dyn EnvironmentWitnessSource> {
+    pub fn source(&self) -> Arc<dyn EnvironmentSource> {
         Arc::new(LocalSource {
             data: self.data.clone(),
             requests: AtomicUsize::new(0),
@@ -583,7 +583,7 @@ struct LocalSource {
     data: Arc<SourceData>,
     requests: AtomicUsize,
 }
-impl EnvironmentWitnessSource for LocalSource {
+impl EnvironmentSource for LocalSource {
     fn get(
         &self,
         request: EnvironmentWitnessRequest,

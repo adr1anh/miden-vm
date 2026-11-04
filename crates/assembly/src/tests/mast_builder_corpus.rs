@@ -165,7 +165,10 @@ pub proc foo exec.::test::mod1::bar end"
         naming.add_module(&mod2)?;
         let mut assembler = Assembler::new(context.source_manager());
         let vendor_naming = naming.admit_package(&vendor_lib)?;
-        assembler.link_package(Arc::from(vendor_lib), Linkage::Static, vendor_naming)?;
+        assembler.link_package(
+            CodePackage::new(Arc::from(vendor_lib), vendor_naming.into()).unwrap(),
+            Linkage::Static,
+        )?;
         let assembler = naming.configure(assembler, [&*mod2])?;
         Arc::<Package>::from(assembler.assemble_library("lib", mod2, None::<Box<Module>>).unwrap())
     };
@@ -220,8 +223,8 @@ pub proc foo exec.::test::mod1::bar end"
     // 4. Verify we can create an assembler that successfully links the vendored library
     let mut assembler_with_vendored_lib = Assembler::default();
     let lib_naming = crate::testing::FixtureNamespace::assembly_tests().admit_package(&lib)?;
-    let link_result =
-        assembler_with_vendored_lib.link_package(lib.clone(), Linkage::Static, lib_naming);
+    let link_result = assembler_with_vendored_lib
+        .link_package(CodePackage::new(lib.clone(), lib_naming.into()).unwrap(), Linkage::Static);
     assert!(link_result.is_ok(), "Should be able to link the vendored library");
 
     // 5. Test that a simple program can be assembled with the linked library

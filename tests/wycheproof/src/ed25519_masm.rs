@@ -21,7 +21,7 @@ fn ed25519_wycheproof_vectors_verify_in_masm() {
         .expect("Ed25519 Wycheproof vectors should load");
     let library = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
+        .with_package(library.code_package().clone(), Linkage::Dynamic)
         .unwrap();
     let (code, environment) = assemble_fixture_program(
         assembler,

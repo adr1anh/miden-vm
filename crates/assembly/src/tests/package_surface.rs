@@ -50,8 +50,8 @@ fn package_module_surface_allows_downstream_import_of_root_module() -> TestResul
 
     naming.add_module(&consumer)?;
     let dep_naming = naming.admit_package(&dep)?;
-    let assembler =
-        Assembler::new(context.source_manager()).with_package(dep, Linkage::Static, dep_naming)?;
+    let assembler = Assembler::new(context.source_manager())
+        .with_package(CodePackage::new(dep, dep_naming.into()).unwrap(), Linkage::Static)?;
     let package = naming.configure(assembler, [&*consumer])?.assemble_library(
         "consumer",
         consumer,
@@ -130,8 +130,8 @@ fn package_module_surface_omits_private_submodules() -> TestResult {
 
     naming.add_module(&consumer)?;
     let dep_naming = naming.admit_package(&dep)?;
-    let assembler =
-        Assembler::new(context.source_manager()).with_package(dep, Linkage::Static, dep_naming)?;
+    let assembler = Assembler::new(context.source_manager())
+        .with_package(CodePackage::new(dep, dep_naming.into()).unwrap(), Linkage::Static)?;
     naming.configure(assembler, [&*consumer])?.assemble_library(
         "consumer",
         consumer,
@@ -196,11 +196,12 @@ fn package_link_rejects_missing_module_surface_metadata() -> TestResult {
     let dep = package_with_single_proc_export(&context, "::dep::foo", [])?;
 
     let naming = FixtureNamespace::assembly_tests().admit_package(&dep)?;
-    let err =
-        match Assembler::new(context.source_manager()).with_package(dep, Linkage::Static, naming) {
-            Ok(_) => panic!("compiled packages without module surfaces should be rejected"),
-            Err(err) => err,
-        };
+    let err = match Assembler::new(context.source_manager())
+        .with_package(CodePackage::new(dep, naming.into()).unwrap(), Linkage::Static)
+    {
+        Ok(_) => panic!("compiled packages without module surfaces should be rejected"),
+        Err(err) => err,
+    };
 
     assert_diagnostic!(&err, "invalid module surface metadata for package 'dep'");
     assert_diagnostic!(&err, "package manifest declares export '::dep::foo' in module '::dep'");
@@ -222,11 +223,12 @@ fn package_link_rejects_incomplete_declared_submodule_surface_metadata() -> Test
     )?;
 
     let naming = FixtureNamespace::assembly_tests().admit_package(&dep)?;
-    let err =
-        match Assembler::new(context.source_manager()).with_package(dep, Linkage::Static, naming) {
-            Ok(_) => panic!("compiled packages with incomplete module surfaces should be rejected"),
-            Err(err) => err,
-        };
+    let err = match Assembler::new(context.source_manager())
+        .with_package(CodePackage::new(dep, naming.into()).unwrap(), Linkage::Static)
+    {
+        Ok(_) => panic!("compiled packages with incomplete module surfaces should be rejected"),
+        Err(err) => err,
+    };
 
     assert_diagnostic!(&err, "invalid module surface metadata for package 'dep'");
     assert_diagnostic!(

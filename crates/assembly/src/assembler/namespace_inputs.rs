@@ -494,7 +494,7 @@ impl Assembler {
         append_cache_len(&mut bytes, libraries.len())?;
         for library in libraries {
             // The full artifact includes debug/other sections as well as exact required naming.
-            bytes.extend_from_slice(&library.package.commitment().as_bytes());
+            bytes.extend_from_slice(&library.package().commitment().as_bytes());
             bytes.push(match library.linkage {
                 miden_project::Linkage::Static => 0,
                 miden_project::Linkage::Dynamic => 1,
