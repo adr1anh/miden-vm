@@ -499,7 +499,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
-| 14 Recursive verifier | in progress | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; base `52e914a9a` | Independent reviews; 273 disjoint unit/recursive/consumer checks; final ten-crate all-target strict Clippy; fresh VM/PVM generation/check and generated docs | Actual invalid non-root-syscall recursive qualification, inherited counterfactuals, sequential PVM fixture and remaining capture/public/no_std/final gates |
+| 14 Recursive verifier | in progress | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; base `52e914a9a` | Independent reviews; prior273 plus12 scoped regressions; native/MASM principal comparison; strict Clippy; VM/PVM generation/docs and sequential PVM fixture | Actual invalid non-root-syscall recursive qualification, isolated counterfactuals and remaining capture/public/no_std/final gates |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
@@ -3127,3 +3127,26 @@ counterfactuals, fresh capture/public/no_std/final gates remain. The determinist
 requires a sequential, non-concurrent build; its fresh check remains pending for that dedicated
 build. This source slice reused the concurrent test cache. No gate is waived or M1/general-goal completion
 claimed. No PR/push; context changes remain separate.
+
+
+### PR14 retained-proof principal checkpoint, 4 November 2026
+
+`0a3f97a8e` adds test-only artifact/result plumbing and correct nonzero K_entry baselines. The
+principal cases use authenticated equal-D aliases, preserve first/final entry principal and every
+non-Core matrix, and require actual proof construction before Native StarkVerificationError and
+MASM's exact ACE circuit-nonzero rejection. Honest artifacts verify in both consumers. The core
+library dependency is dev-only; production evaluation/authority is unchanged. Independent review,
+ten retained controls plus two final comparison cases and five-crate all-target strict custom Clippy
+pass. Logs: `pr14-principal-{balanced-checks,native-masm-checks,native-masm-final}.log` and
+`pr14-prover-repro-clippy-final.log` under `.scratch/librarytree/`. Earlier unbalanced root-principal
+cases stopped at lookup construction; that outcome is not credited as native verifier evidence.
+
+The exact release/sequential `pvm-proof-fixture --check` passes with277756 unchanged bytes;
+`pr14-sequential-pvm-fixture.log` records the guarded release/sequential check. A disconnected
+build was confirmed stopped before retry. /tmp quota blocked sandbox launch; workspace TMPDIR and
+scoped exec escalation preserved shared sources. Quarantining only the interrupted precompile test
+incremental unit fixed its linker error. No build cache reset or shared temporary-source deletion.
+
+Isolated evaluator necessity and actual non-root-syscall recursive qualification remain open,
+alongside all inherited capture/public/no_std/guest/fuzz/performance/final gates. PR14/M1/general goal
+are not complete; no PR/push. Context changes remain separate from implementation.
