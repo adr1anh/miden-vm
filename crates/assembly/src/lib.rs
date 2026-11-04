@@ -41,18 +41,18 @@ pub use miden_assembly_syntax::{
 /// Merkelized abstract syntax tree (MAST) components defining Miden VM programs.
 pub use miden_core::{mast, serde, utils};
 pub use miden_mast_package as package;
-pub use miden_mast_package::ProcedureName;
+pub use miden_mast_package::{CodePackage, ProcedureName};
 pub use miden_project::PackageSourceMount;
 
 #[doc(hidden)]
 pub use self::linker::LinkerError;
 #[cfg(feature = "std")]
 pub use self::project::{
-    AssemblyInterrupted, CodePackage, DependencyNamingRequest, InterruptedTargetRole,
-    MasmSourceProvider, PackagePostProcessor, PostProcessContext, ProjectAssembler,
-    ProjectSourceInputs, ProjectSourceProvenanceInputs, ProjectSourceProvider,
-    ProjectTargetSelector, ResolvedPackage, SourceFileProvenance, SourcePackageCache,
-    SourcePackageCacheKey, SourceProviderRegistry, TargetAssemblyContext,
+    AssemblyInterrupted, DependencyNamingRequest, InterruptedTargetRole, MasmSourceProvider,
+    PackagePostProcessor, PostProcessContext, ProjectAssembler, ProjectSourceInputs,
+    ProjectSourceProvenanceInputs, ProjectSourceProvider, ProjectTargetSelector, ResolvedPackage,
+    SourceFileProvenance, SourcePackageCache, SourcePackageCacheKey, SourceProviderRegistry,
+    TargetAssemblyContext,
 };
 pub use self::{
     assembler::{Assembler, AssemblyProduct, NamespaceInputs},

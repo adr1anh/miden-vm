@@ -596,7 +596,7 @@ mod package_features {
         sync::{Arc, Mutex},
     };
 
-    use miden_mast_package::{Package, PackageId};
+    use miden_mast_package::{CodePackage, Package, PackageId};
     use miden_package_registry::{
         PackageCache, PackageIndex, PackageProvider, PackageRecord, PackageRegistry, PackageStore,
         PackageVersions, Version, VersionRequirement,
@@ -836,7 +836,7 @@ mod package_features {
             &mut self,
             manifest_path: impl AsRef<std::path::Path>,
             profile: Option<&str>,
-        ) -> Result<Arc<Package>, Report> {
+        ) -> Result<CodePackage, Report> {
             let mut project_assembler = self.project_assembler_for_path(manifest_path)?;
             project_assembler.assemble(ProjectTargetSelector::Library, profile.unwrap_or("dev"))
         }
@@ -855,7 +855,7 @@ mod package_features {
             manifest_path: impl AsRef<std::path::Path>,
             name: Option<&str>,
             profile: Option<&str>,
-        ) -> Result<Arc<Package>, Report> {
+        ) -> Result<CodePackage, Report> {
             let mut project_assembler = self.project_assembler_for_path(manifest_path)?;
             project_assembler.assemble(
                 ProjectTargetSelector::Executable(name.unwrap_or(Path::EXEC_PATH)),

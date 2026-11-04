@@ -82,10 +82,13 @@ fn assemble_source(
 /// Change only the independently untrusted package-default metadata, preserving valid bindings,
 /// the exact body supply, and source provenance. The raw package must carry the changed naming.
 fn package_with_default_home(original: &ResolvedPackage, home: NamespacePath) -> ResolvedPackage {
-    let naming =
-        PackageSymbols::new(home, original.naming.callables().clone(), original.naming.entry_key())
-            .unwrap();
-    let source = &original.package;
+    let naming = PackageSymbols::new(
+        home,
+        original.code.symbols().callables().clone(),
+        original.code.symbols().entry_key(),
+    )
+    .unwrap();
+    let source = original.code.package();
     let mut package = MastPackage::create_with_modules(
         source.name.clone(),
         source.version.clone(),
@@ -106,8 +109,7 @@ fn package_with_default_home(original: &ResolvedPackage, home: NamespacePath) ->
         PackageBuildProvenance::from_package(source).unwrap()
     );
     ResolvedPackage {
-        package: Arc::new(package),
-        naming: Arc::new(naming),
+        code: CodePackage::new(Arc::new(package), Arc::new(naming)).unwrap(),
         linked_kernel_package: original.linked_kernel_package.clone(),
         dependency_packages: original.dependency_packages.clone(),
     }
@@ -146,35 +148,50 @@ fn configured_library_and_executable_name_required_library_aliases_private_helpe
     let library = assembler
         .assemble_with_naming(ProjectTargetSelector::Library, "release")
         .unwrap();
-    assert_eq!(library.naming.namespace_plan(), &home("library-home"));
+    assert_eq!(library.code.symbols().namespace_plan(), &home("library-home"));
     assert_eq!(
-        library
-            .naming
-            .callables()
-            .key_for_visible_path(&path(&["configured", "lib", "renamed"])),
+        library.code.symbols().callables().key_for_visible_path(&path(&[
+            "configured",
+            "lib",
+            "renamed"
+        ])),
         Some(run.key())
     );
     for expected in [&run, &hidden, &wrapper] {
-        assert_eq!(library.naming.callables().binding(expected.key()), Some(expected));
-        assert!(library.naming.callables().selected_implementation(expected.key()).is_some());
+        assert_eq!(library.code.symbols().callables().binding(expected.key()), Some(expected));
+        assert!(
+            library
+                .code
+                .symbols()
+                .callables()
+                .selected_implementation(expected.key())
+                .is_some()
+        );
     }
-    assert_eq!(library.naming.callables().key_for_visible_path(hidden.path()), None);
-    assert!(has_exec(&library.package, hidden.key()));
-    assert!(has_exec(&library.package, run.key()));
+    assert_eq!(library.code.symbols().callables().key_for_visible_path(hidden.path()), None);
+    assert!(has_exec(library.code.package(), hidden.key()));
+    assert!(has_exec(library.code.package(), run.key()));
 
     // Selecting the executable also builds and links its required library without a provider.
     let executable = assembler
         .assemble_with_naming(ProjectTargetSelector::Executable("main"), "release")
         .unwrap();
-    assert_eq!(executable.naming.namespace_plan(), &home("program-home"));
-    assert_eq!(executable.naming.entry_key(), Some(entry.key()));
+    assert_eq!(executable.code.symbols().namespace_plan(), &home("program-home"));
+    assert_eq!(executable.code.symbols().entry_key(), Some(entry.key()));
     for expected in [&run, &hidden, &wrapper, &entry] {
-        assert_eq!(executable.naming.callables().binding(expected.key()), Some(expected));
-        assert!(executable.naming.callables().selected_implementation(expected.key()).is_some());
+        assert_eq!(executable.code.symbols().callables().binding(expected.key()), Some(expected));
+        assert!(
+            executable
+                .code
+                .symbols()
+                .callables()
+                .selected_implementation(expected.key())
+                .is_some()
+        );
     }
-    assert!(has_exec(&executable.package, run.key()));
-    assert!(has_exec(&executable.package, wrapper.key()));
-    executable.package.check_naming(&executable.naming).unwrap();
+    assert!(has_exec(executable.code.package(), run.key()));
+    assert!(has_exec(executable.code.package(), wrapper.key()));
+    executable.code.package().check_naming(executable.code.symbols()).unwrap();
 }
 
 #[test]
@@ -229,16 +246,20 @@ fn configured_home_keeps_provider_bound_overrides_and_rejects_mismatch_before_so
     let mut cache = BTreeMap::new();
     let first =
         assemble_source(&mut assembler, InterruptedTargetRole::Dependency, &mut cache).unwrap();
-    assert_eq!(first.naming.callables().binding(foreign.key()), Some(&foreign));
+    assert_eq!(first.code.symbols().callables().binding(foreign.key()), Some(&foreign));
     assert_eq!(
-        first.naming.callables().key_for_visible_path(&path(&["provider", "run"])),
+        first
+            .code
+            .symbols()
+            .callables()
+            .key_for_visible_path(&path(&["provider", "run"])),
         Some(foreign.key())
     );
-    assert_eq!(first.naming.callables().binding(conventional_run.key()), None);
-    assert!(has_exec(&first.package, foreign.key()));
+    assert_eq!(first.code.symbols().callables().binding(conventional_run.key()), None);
+    assert!(has_exec(first.code.package(), foreign.key()));
     let second =
         assemble_source(&mut assembler, InterruptedTargetRole::Dependency, &mut cache).unwrap();
-    assert!(Arc::ptr_eq(&first.package, &second.package));
+    assert!(Arc::ptr_eq(first.code.package(), second.code.package()));
     assert_eq!(calls.get(), 2);
 
     wrong_home.set(true);
@@ -258,7 +279,7 @@ fn configured_home_keeps_provider_bound_overrides_and_rejects_mismatch_before_so
     wrong_home.set(false);
     let reloaded =
         assemble_source(&mut assembler, InterruptedTargetRole::Dependency, &mut cache).unwrap();
-    assert_eq!(reloaded.naming.callables().binding(foreign.key()), Some(&foreign));
+    assert_eq!(reloaded.code.symbols().callables().binding(foreign.key()), Some(&foreign));
     let loads = assembler.store.loaded_packages().len();
     assert!(loads > 0, "positive control must exercise the registered artifact path");
     cache.clear();
@@ -278,11 +299,11 @@ fn configured_home_keeps_provider_bound_overrides_and_rejects_mismatch_before_so
     wrong_home.set(false);
     let forged = package_with_default_home(&first, forged_home);
     assert_eq!(
-        admit_fixture_package(&forged.package, &admission_homes).unwrap(),
-        *forged.naming
+        admit_fixture_package(forged.code.package(), &admission_homes).unwrap(),
+        **forged.code.symbols()
     );
-    assert_eq!(forged.naming.callables(), first.naming.callables());
-    assert_eq!(forged.package.code_commitment(), first.package.code_commitment());
+    assert_eq!(forged.code.symbols().callables(), first.code.symbols().callables());
+    assert_eq!(forged.code.package().code_commitment(), first.code.package().code_commitment());
     let id = *assembler.dependency_graph.root();
     let target = assembler.project.library_target().unwrap().inner();
     cache.insert(SourcePackageCacheKey::new(id, target), forged.clone());
@@ -294,7 +315,7 @@ fn configured_home_keeps_provider_bound_overrides_and_rejects_mismatch_before_so
 
     cache.clear();
     assembler.source_candidates.clear();
-    assembler.store.replace_semver_package(forged.package);
+    assembler.store.replace_semver_package(forged.code.package().clone());
     let error = assemble_source(&mut assembler, InterruptedTargetRole::Dependency, &mut cache)
         .err()
         .expect("admitted raw registered metadata must still match the configured default home");
@@ -383,18 +404,28 @@ fn explicit_parent_source_selection_overrides_target_fallback_without_changing_s
                 .find(|(key, _)| key.instance == instance)
                 .map(|(_, dependency)| dependency)
                 .unwrap();
-            assert_eq!(dependency.naming.namespace_plan(), &request.namespace_plan());
+            assert_eq!(dependency.code.symbols().namespace_plan(), &request.namespace_plan());
             assert_eq!(
-                dependency.naming.callables().key_for_visible_path(&path(&["dep", "alias"])),
+                dependency
+                    .code
+                    .symbols()
+                    .callables()
+                    .key_for_visible_path(&path(&["dep", "alias"])),
                 Some(run.key())
             );
             for expected in [&run, &hidden] {
-                assert_eq!(dependency.naming.callables().binding(expected.key()), Some(expected));
-                assert_eq!(resolved.naming.callables().binding(expected.key()), Some(expected));
+                assert_eq!(
+                    dependency.code.symbols().callables().binding(expected.key()),
+                    Some(expected)
+                );
+                assert_eq!(
+                    resolved.code.symbols().callables().binding(expected.key()),
+                    Some(expected)
+                );
             }
-            assert_eq!(dependency.naming.callables().binding(fallback_run.key()), None);
-            assert!(has_exec(&resolved.package, run.key()));
-            assert_eq!(has_exec(&resolved.package, hidden.key()), linkage == "static");
+            assert_eq!(dependency.code.symbols().callables().binding(fallback_run.key()), None);
+            assert!(has_exec(resolved.code.package(), run.key()));
+            assert_eq!(has_exec(resolved.code.package(), hidden.key()), linkage == "static");
         }
     }
 }
@@ -430,32 +461,42 @@ fn configured_kernel_names_root_exports_public_submodules_and_private_helpers_wi
     let kernel = assembler
         .assemble_with_naming(ProjectTargetSelector::Library, "release")
         .unwrap();
-    assert_eq!(kernel.naming.namespace_plan(), &home("kernel-helper-home"));
+    assert_eq!(kernel.code.symbols().namespace_plan(), &home("kernel-helper-home"));
     for expected in [&run, &child, &hidden] {
-        assert_eq!(kernel.naming.callables().binding(expected.key()), Some(expected));
-        assert!(kernel.naming.callables().selected_implementation(expected.key()).is_some());
+        assert_eq!(kernel.code.symbols().callables().binding(expected.key()), Some(expected));
+        assert!(
+            kernel
+                .code
+                .symbols()
+                .callables()
+                .selected_implementation(expected.key())
+                .is_some()
+        );
     }
     for (visible, expected) in [
         (path(&["$kernel", "run"]), &run),
         (path(&["$kernel", "api", "child"]), &child),
         (path(&["$kernel", "promoted"]), &child),
     ] {
-        assert_eq!(kernel.naming.callables().key_for_visible_path(&visible), Some(expected.key()));
+        assert_eq!(
+            kernel.code.symbols().callables().key_for_visible_path(&visible),
+            Some(expected.key())
+        );
     }
-    assert_eq!(kernel.naming.callables().key_for_visible_path(hidden.path()), None);
-    assert!(has_exec(&kernel.package, hidden.key()));
-    assert!(has_exec(&kernel.package, child.key()));
-    kernel.package.check_kernel_code(&kernel.naming).unwrap();
+    assert_eq!(kernel.code.symbols().callables().key_for_visible_path(hidden.path()), None);
+    assert!(has_exec(kernel.code.package(), hidden.key()));
+    assert!(has_exec(kernel.code.package(), child.key()));
+    kernel.code.package().check_kernel_code(kernel.code.symbols()).unwrap();
 
     let executable = assembler
         .assemble_with_naming(ProjectTargetSelector::Executable("main"), "release")
         .unwrap();
-    assert_eq!(executable.naming.entry_key(), Some(entry.key()));
-    assert!(has_syscall(&executable.package, run.key()));
-    assert!(has_syscall(&executable.package, child.key()));
-    let (_, linked_naming) = executable.linked_kernel_package.as_ref().unwrap();
+    assert_eq!(executable.code.symbols().entry_key(), Some(entry.key()));
+    assert!(has_syscall(executable.code.package(), run.key()));
+    assert!(has_syscall(executable.code.package(), child.key()));
+    let linked_naming = executable.linked_kernel_package.as_ref().unwrap().symbols();
     assert_eq!(linked_naming.callables().binding(hidden.key()), Some(&hidden));
-    executable.package.check_naming(&executable.naming).unwrap();
+    executable.code.package().check_naming(executable.code.symbols()).unwrap();
 }
 
 #[test]

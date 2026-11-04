@@ -8,7 +8,7 @@ use std::{
 use miden_assembly_syntax::{ast::ModuleKind, diagnostics::Report};
 use miden_core::serde::Deserializable;
 use miden_mast_package::{
-    NamespacePath, Package as MastPackage, PackageSymbols, SectionId, TargetType,
+    CodePackage, NamespacePath, Package as MastPackage, PackageSymbols, SectionId, TargetType,
 };
 use miden_package_registry::{PackageCache, PackageId, Version as PackageVersion};
 use miden_project::{
@@ -167,9 +167,6 @@ impl SourcePackageCacheKey {
 }
 
 pub type SourcePackageCache = BTreeMap<SourcePackageCacheKey, ResolvedPackage>;
-
-/// Owned code and exact naming retained together, without granting execution authority.
-pub type CodePackage = (Arc<MastPackage>, Arc<PackageSymbols>);
 
 pub struct ProjectSourceInputs {
     pub root: Box<Module>,
@@ -385,17 +382,16 @@ where
         &mut self,
         target_selector: ProjectTargetSelector<'_>,
         profile_name: &str,
-    ) -> Result<Arc<MastPackage>, Report> {
+    ) -> Result<CodePackage, Report> {
         self.assemble_with_naming(target_selector, profile_name)
-            .map(|resolved| resolved.package)
+            .map(|resolved| resolved.code)
     }
 
-    /// Like [`Self::assemble`], retaining the compiler's complete canonical naming inventory.
+    /// Like [`Self::assemble`], also retaining the available dependency and linked kernel code.
     ///
-    /// The result includes private declarations, source-visible aliases and the executable entry
-    /// key, together with any required linked kernel package and its naming. This metadata is
-    /// structurally checked against the exact package; it does not grant home/profile admission
-    /// or execution authority.
+    /// Every code package retains its exact checked symbols, including private declarations,
+    /// source-visible aliases and the executable entry key. This metadata does not grant
+    /// home/profile admission or execution authority.
     pub fn assemble_with_naming(
         &mut self,
         target_selector: ProjectTargetSelector<'_>,
@@ -432,12 +428,12 @@ where
         &mut self,
         target_selector: ProjectTargetSelector<'_>,
         profile_name: &str,
-    ) -> Result<ControlFlow<AssemblyInterrupted, Arc<MastPackage>>, Report> {
+    ) -> Result<ControlFlow<AssemblyInterrupted, CodePackage>, Report> {
         self.assemble_interruptible_with_naming(target_selector, profile_name)
-            .map(|resolved| resolved.map_continue(|r| r.package))
+            .map(|resolved| resolved.map_continue(|r| r.code))
     }
 
-    /// Like [`Self::assemble_interruptible`], retaining the complete naming described by
+    /// Like [`Self::assemble_interruptible`], retaining the complete code supply described by
     /// [`Self::assemble_with_naming`] when assembly succeeds.
     pub fn assemble_interruptible_with_naming(
         &mut self,
@@ -552,22 +548,26 @@ where
             "expected required_lib only for executable targets"
         );
         match required_lib {
-            Some(required_lib) if required_lib.package.is_kernel() => {
+            Some(required_lib) if required_lib.code.package().is_kernel() => {
                 // We do not link the package here, as by definition a required library is only
                 // present for executable targets, and we always unconditionally link kernel
                 // dependencies just prior to assembling the package
-                runtime_dependencies
-                    .record_linked_kernel_dependency(required_lib.package, required_lib.naming)?;
+                runtime_dependencies.record_linked_kernel_dependency(
+                    required_lib.code.package().clone(),
+                    required_lib.code.symbols().clone(),
+                )?;
             },
             Some(required_lib) => {
                 assembler.link_package(
-                    required_lib.package.clone(),
+                    required_lib.code.package().clone(),
                     Linkage::Static,
-                    required_lib.naming.clone(),
+                    required_lib.code.symbols().clone(),
                 )?;
-                if let Some((kernel_package, kernel_naming)) = required_lib.linked_kernel_package {
-                    runtime_dependencies
-                        .record_linked_kernel_dependency(kernel_package, kernel_naming)?;
+                if let Some(kernel) = required_lib.linked_kernel_package {
+                    runtime_dependencies.record_linked_kernel_dependency(
+                        kernel.package().clone(),
+                        kernel.symbols().clone(),
+                    )?;
                 }
             },
             None => (),
@@ -586,26 +586,27 @@ where
                 ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
                 ControlFlow::Continue(pkg) => pkg,
             };
-            if !dependency_package.package.is_library() {
+            if !dependency_package.code.package().is_library() {
                 return Err(Report::msg(format!(
                     "dependency '{}' resolved to executable package '{}', but only library-like packages can be linked",
-                    edge.alias, dependency_package.package.name
+                    edge.alias,
+                    dependency_package.code.package().name
                 )));
             }
 
-            if !dependency_package.package.is_kernel() {
+            if !dependency_package.code.package().is_kernel() {
                 if let Some(mount) = &edge.source_mount {
                     assembler.link_package_at(
-                        dependency_package.package.clone(),
+                        dependency_package.code.package().clone(),
                         edge.linkage,
-                        dependency_package.naming.clone(),
+                        dependency_package.code.symbols().clone(),
                         mount.clone(),
                     )?;
                 } else {
                     assembler.link_package(
-                        dependency_package.package.clone(),
+                        dependency_package.code.package().clone(),
                         edge.linkage,
-                        dependency_package.naming.clone(),
+                        dependency_package.code.symbols().clone(),
                     )?;
                 }
             } else if edge.source_mount.is_some() {
@@ -720,14 +721,15 @@ where
             && package_role == InterruptedTargetRole::Dependency
             && let Some(expected) = &build_provenance
             && let Some(cached) = cache.get(&cache_key)
-            && cached.package.kind == target.ty
-            && PackageBuildProvenance::from_package(&cached.package)?.as_ref() == Some(expected)
+            && cached.code.package().kind == target.ty
+            && PackageBuildProvenance::from_package(cached.code.package())?.as_ref()
+                == Some(expected)
         {
-            Self::check_source_dependency_sections(&cached.package)?;
-            cached.package.check_naming(&cached.naming).map_err(Report::msg)?;
-            Self::check_selected_source_home(target, &cached.naming, &selected_home)?;
+            Self::check_source_dependency_sections(cached.code.package())?;
+            cached.code.package().check_naming(cached.code.symbols()).map_err(Report::msg)?;
+            Self::check_selected_source_home(target, cached.code.symbols(), &selected_home)?;
             if let Some(expected) = expected_callables {
-                expected.check(&cached.naming)?;
+                expected.check(cached.code.symbols())?;
             }
             let mut cached = cached.clone();
             cached.dependency_packages = dependency_packages;
@@ -737,7 +739,7 @@ where
             && package_role == InterruptedTargetRole::Dependency
             && let Some(cached) = self.source_candidates.get(&cache_key)
         {
-            if PackageBuildProvenance::from_package(&cached.package)?.as_ref()
+            if PackageBuildProvenance::from_package(cached.code.package())?.as_ref()
                 != build_provenance.as_ref()
             {
                 return Err(Report::msg(format!(
@@ -745,11 +747,11 @@ where
                     project.version()
                 )));
             }
-            Self::check_source_dependency_sections(&cached.package)?;
-            cached.package.check_naming(&cached.naming).map_err(Report::msg)?;
-            Self::check_selected_source_home(target, &cached.naming, &selected_home)?;
+            Self::check_source_dependency_sections(cached.code.package())?;
+            cached.code.package().check_naming(cached.code.symbols()).map_err(Report::msg)?;
+            Self::check_selected_source_home(target, cached.code.symbols(), &selected_home)?;
             if let Some(expected) = expected_callables {
-                expected.check(&cached.naming)?;
+                expected.check(cached.code.symbols())?;
             }
             let mut cached = cached.clone();
             cached.dependency_packages = dependency_packages;
@@ -771,9 +773,9 @@ where
         if let RegisteredSourcePackage::Loaded(resolved) = &reuse {
             let mut resolved = resolved.clone();
             resolved.dependency_packages = dependency_packages;
-            Self::check_selected_source_home(target, &resolved.naming, &selected_home)?;
+            Self::check_selected_source_home(target, resolved.code.symbols(), &selected_home)?;
             if let Some(expected) = expected_callables {
-                expected.check(&resolved.naming)?;
+                expected.check(resolved.code.symbols())?;
             }
             self.source_candidates.insert(cache_key.clone(), resolved.clone());
             cache.insert(cache_key, resolved.clone());
@@ -826,18 +828,21 @@ where
         if let Some(expected) = expected_callables {
             expected.check(&naming)?;
         }
-        let package = Arc::from(package);
+        let code = CodePackage::new(Arc::from(package), naming).map_err(Report::msg)?;
+        let linked_kernel_package = runtime_dependencies
+            .kernel
+            .map(|(package, symbols)| CodePackage::new(package, symbols).map_err(Report::msg))
+            .transpose()?;
 
         let resolved = ResolvedPackage {
-            package,
-            naming,
-            linked_kernel_package: runtime_dependencies.kernel,
+            code,
+            linked_kernel_package,
             dependency_packages,
         };
         if let RegisteredSourcePackage::IndexedButUnreadable(expected) = reuse {
             let actual = PackageVersion::new(
-                resolved.package.version.clone(),
-                resolved.package.dependency_commitment(),
+                resolved.code.package().version.clone(),
+                resolved.code.package().dependency_commitment(),
             );
             if actual != expected {
                 return Err(Report::msg(format!(
@@ -848,16 +853,16 @@ where
         }
         if package_role == InterruptedTargetRole::Dependency {
             if let Some(previous) = self.source_candidates.get(&cache_key) {
-                if PackageBuildProvenance::from_package(&previous.package)?
-                    != PackageBuildProvenance::from_package(&resolved.package)?
+                if PackageBuildProvenance::from_package(previous.code.package())?
+                    != PackageBuildProvenance::from_package(resolved.code.package())?
                 {
                     return Err(Report::msg(format!(
                         "package '{package_name}' version '{}' was already built in this instance with different source provenance; bump the semantic version",
                         project.version()
                     )));
                 }
-                if previous.package.dependency_commitment()
-                    != resolved.package.dependency_commitment()
+                if previous.code.package().dependency_commitment()
+                    != resolved.code.package().dependency_commitment()
                 {
                     return Err(Report::msg(format!(
                         "package '{package_name}' version '{}' was already built in this instance with a different artifact; bump the semantic version",
@@ -891,27 +896,22 @@ where
         candidates: &mut Vec<CodePackage>,
         dependency: &ResolvedPackage,
     ) -> Result<(), Report> {
-        let packages = core::iter::once((&dependency.package, &dependency.naming))
-            .chain(dependency.dependency_packages.iter().map(|(package, naming)| (package, naming)))
-            .chain(
-                dependency
-                    .linked_kernel_package
-                    .iter()
-                    .map(|(package, naming)| (package, naming)),
-            );
-        for (package, naming) in packages {
-            package.check_naming(naming).map_err(Report::msg)?;
-            if let Some((_, previous)) = candidates
+        let packages = core::iter::once(&dependency.code)
+            .chain(dependency.dependency_packages.iter())
+            .chain(dependency.linked_kernel_package.iter());
+        for code in packages {
+            code.package().check_naming(code.symbols()).map_err(Report::msg)?;
+            if let Some(previous) = candidates
                 .iter()
-                .find(|(candidate, _)| candidate.commitment() == package.commitment())
+                .find(|candidate| candidate.package().commitment() == code.package().commitment())
             {
-                if previous != naming {
+                if previous.symbols() != code.symbols() {
                     return Err(Report::msg(
                         "conflicting naming for an exact code-supply candidate",
                     ));
                 }
             } else {
-                candidates.push((package.clone(), naming.clone()));
+                candidates.push(code.clone());
             }
         }
         Ok(())
@@ -1019,12 +1019,12 @@ where
         };
 
         if let Some(expected) = expected_callables {
-            expected.check(&package.naming)?;
+            expected.check(package.code.symbols())?;
         }
         // Custom requests constrain only the exact package-default metadata, independently of
         // the complete public mapping and any retained private or foreign binding homes.
         if let Some(miden_project::DependencyBinding::Custom(home)) = requested_binding
-            && package.naming.namespace_plan() != home
+            && package.code.symbols().namespace_plan() != home
         {
             return Err(Report::msg(format!(
                 "dependency '{package_name}' default home differs from its explicit custom home"
@@ -1053,11 +1053,10 @@ where
 
     fn resolve_loaded_package(&self, package: Arc<MastPackage>) -> Result<ResolvedPackage, Report> {
         let naming = self.naming_for_loaded_package(&package)?;
-        let linked_kernel_package =
-            self.resolve_linked_kernel_package(package.clone(), naming.clone())?;
+        let code = CodePackage::new(package, naming).map_err(Report::msg)?;
+        let linked_kernel_package = self.resolve_linked_kernel_package(&code)?;
         Ok(ResolvedPackage {
-            package,
-            naming,
+            code,
             linked_kernel_package,
             dependency_packages: Vec::new(),
         })
@@ -1065,11 +1064,11 @@ where
 
     fn resolve_linked_kernel_package(
         &self,
-        package: Arc<MastPackage>,
-        naming: Arc<PackageSymbols>,
-    ) -> Result<Option<(Arc<MastPackage>, Arc<PackageSymbols>)>, Report> {
+        code: &CodePackage,
+    ) -> Result<Option<CodePackage>, Report> {
+        let package = code.package();
         if package.is_kernel() {
-            return Ok(Some((package, naming)));
+            return Ok(Some(code.clone()));
         }
 
         let Some(kernel_dependency) = package.kernel_runtime_dependency()? else {
@@ -1091,7 +1090,9 @@ where
                         )));
                     }
                     let kernel_naming = self.naming_for_loaded_package(&kernel_package)?;
-                    return Ok(Some((kernel_package, kernel_naming)));
+                    return CodePackage::new(kernel_package, kernel_naming)
+                        .map(Some)
+                        .map_err(Report::msg);
                 },
                 Err(load_error) => {
                     if let Some(kernel_package) = package
@@ -1099,7 +1100,9 @@ where
                         .map(|kernel_package| kernel_package.map(Arc::from))?
                     {
                         let kernel_naming = self.naming_for_loaded_package(&kernel_package)?;
-                        return Ok(Some((kernel_package, kernel_naming)));
+                        return CodePackage::new(kernel_package, kernel_naming)
+                            .map(Some)
+                            .map_err(Report::msg);
                     }
                     return Err(load_error);
                 },
@@ -1111,7 +1114,7 @@ where
             .map(|kernel_package| {
                 let kernel_package: Arc<MastPackage> = Arc::from(kernel_package);
                 let kernel_naming = self.naming_for_loaded_package(&kernel_package)?;
-                Ok((kernel_package, kernel_naming))
+                CodePackage::new(kernel_package, kernel_naming).map_err(Report::msg)
             })
             .transpose()
     }
@@ -1174,12 +1177,12 @@ where
         candidate: &ResolvedPackage,
         selected_home: &NamespacePath,
     ) -> bool {
-        candidate.naming.namespace_plan() != selected_home
+        candidate.code.symbols().namespace_plan() != selected_home
             && self.dependency_graph.has_other_source_home(
                 instance,
-                &candidate.package.name,
-                &candidate.package.version,
-                candidate.naming.namespace_plan(),
+                &candidate.code.package().name,
+                &candidate.code.package().version,
+                candidate.code.symbols().namespace_plan(),
             )
     }
 
@@ -1189,10 +1192,12 @@ where
         selected_home: &NamespacePath,
         resolved: &ResolvedPackage,
     ) -> Result<(), Report> {
-        if let Some(record) =
-            self.store.get_by_semver(&resolved.package.name, &resolved.package.version)
-            && record.version().digest != Some(resolved.package.dependency_commitment())
-            && let Ok(package) = self.store.load_package(&resolved.package.name, record.version())
+        if let Some(record) = self
+            .store
+            .get_by_semver(&resolved.code.package().name, &resolved.code.package().version)
+            && record.version().digest != Some(resolved.code.package().dependency_commitment())
+            && let Ok(package) =
+                self.store.load_package(&resolved.code.package().name, record.version())
         {
             let candidate = self.resolve_loaded_package(package)?;
             if self.is_other_source_binding(instance, &candidate, selected_home) {
@@ -1248,11 +1253,11 @@ where
     }
 
     fn cache_resolved_package(&mut self, package: &ResolvedPackage) -> Result<(), Report> {
-        self.cache_package(package.package.clone())?;
-        if let Some((kernel_package, _)) = package.linked_kernel_package.clone()
-            && self.should_cache_linked_kernel_package(kernel_package.as_ref())
+        self.cache_package(package.code.package().clone())?;
+        if let Some(kernel) = &package.linked_kernel_package
+            && self.should_cache_linked_kernel_package(kernel.package())
         {
-            self.cache_package(kernel_package)?;
+            self.cache_package(kernel.package().clone())?;
         }
         Ok(())
     }
@@ -1419,11 +1424,11 @@ where
 
 #[derive(Clone)]
 pub struct ResolvedPackage {
-    pub package: Arc<MastPackage>,
-    pub naming: Arc<PackageSymbols>,
-    pub linked_kernel_package: Option<(Arc<MastPackage>, Arc<PackageSymbols>)>,
-    /// Available dependency code and exact naming, including local builds which are not canonical
-    /// registry publications. Loading these candidates grants no environment or binding authority.
+    pub code: CodePackage,
+    pub linked_kernel_package: Option<CodePackage>,
+    /// Available dependency code and exact checked symbols, including local builds which are not
+    /// canonical registry publications. Loading these candidates grants no environment or binding
+    /// authority.
     pub dependency_packages: Vec<CodePackage>,
 }
 

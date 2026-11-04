@@ -196,21 +196,32 @@ fn workspace_catalogs_lower_supplied_ids_and_preserve_keys_across_readable_renam
                 .assemble_with_naming(ProjectTargetSelector::Library, "release")
                 .unwrap();
             assert_eq!(fs::read_to_string(temp.path().join("app/mod.masm")).unwrap(), SOURCE);
-            assert_eq!(resolved.naming.namespace_plan(), &app_home());
-            assert_eq!(resolved.naming.callables().binding(owner.run.key()), Some(&owner.run));
+            assert_eq!(resolved.code.symbols().namespace_plan(), &app_home());
             assert_eq!(
-                resolved.naming.callables().binding(owner.caller.key()),
+                resolved.code.symbols().callables().binding(owner.run.key()),
+                Some(&owner.run)
+            );
+            assert_eq!(
+                resolved.code.symbols().callables().binding(owner.caller.key()),
                 Some(&owner.caller)
             );
-            assert_eq!(resolved.naming.callables().binding(fallback.key()), None);
-            assert!(has_exec(&resolved.package, owner.run.key()));
-            assert!(!has_exec(&resolved.package, fallback.key()));
-            let callee =
-                resolved.naming.callables().selected_implementation(owner.run.key()).unwrap();
-            let caller =
-                resolved.naming.callables().selected_implementation(owner.caller.key()).unwrap();
+            assert_eq!(resolved.code.symbols().callables().binding(fallback.key()), None);
+            assert!(has_exec(resolved.code.package(), owner.run.key()));
+            assert!(!has_exec(resolved.code.package(), fallback.key()));
+            let callee = resolved
+                .code
+                .symbols()
+                .callables()
+                .selected_implementation(owner.run.key())
+                .unwrap();
+            let caller = resolved
+                .code
+                .symbols()
+                .callables()
+                .selected_implementation(owner.caller.key())
+                .unwrap();
             assert_ne!(owner.run.key().as_word(), callee.as_word());
-            resolved.package.check_naming(&resolved.naming).unwrap();
+            resolved.code.package().check_naming(resolved.code.symbols()).unwrap();
             results.push((owner.run.key(), callee, caller));
             callee_bodies.push(callee);
         }

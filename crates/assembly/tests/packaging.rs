@@ -54,7 +54,8 @@ fn assemble_protocol_userspace_dynamic_dependencies() -> Result<(), Report> {
 
     let mut assembler = context.project_assembler_for_path(&manifest_path)?;
     configure_protocol_fixture(&mut assembler);
-    let package = assembler.assemble(miden_assembly::ProjectTargetSelector::Library, "dev")?;
+    let code = assembler.assemble(miden_assembly::ProjectTargetSelector::Library, "dev")?;
+    let package = code.package();
     assert_eq!(&package.name, "miden-protocol");
     assert_eq!(package.kind, TargetType::Library);
 

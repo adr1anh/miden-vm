@@ -1,7 +1,7 @@
 use miden_assembly_syntax::PathComponent;
 use miden_core::mast::MastForest;
 use miden_mast_package::{
-    Dependency, PackageCallables, PackageProcedureOccurrence, PackageSymbols,
+    CodePackage, Dependency, PackageCallables, PackageProcedureOccurrence, PackageSymbols,
     debug_info::PackageDebugInfo,
 };
 
@@ -325,13 +325,33 @@ impl AssemblyProduct {
         Ok(())
     }
 
+    /// Finalizes this compilation as owned package code and its exact checked symbols.
+    ///
+    /// The package retains advice, callable occurrences and optional source metadata together.
+    /// These code-supply hints do not grant selected-profile admission or execution authority.
+    pub fn into_code_package(self, emit_debug_info: bool) -> Result<CodePackage, Report> {
+        let (package, symbols) = self.finalize_artifact(emit_debug_info)?;
+        CodePackage::new(Arc::from(package), Arc::new(symbols)).map_err(Report::msg)
+    }
+
     /// Extracts the Package10 artifact, retaining required callable, home and entry metadata.
     ///
     /// Required naming persists independently of optional debug information. Decoding its raw
     /// transport still requires explicit selected-profile policy, context and resource limits.
     pub fn into_artifact(self, emit_debug_info: bool) -> Result<Box<Package>, Report> {
+        self.finalize_artifact(emit_debug_info).map(|(package, _)| package)
+    }
+
+    fn finalize_artifact(
+        self,
+        emit_debug_info: bool,
+    ) -> Result<(Box<Package>, PackageSymbols), Report> {
         let Self {
-            mut package, kernel_package, debug_info, ..
+            mut package,
+            kernel_package,
+            debug_info,
+            naming,
+            ..
         } = self;
         // Section: embedded kernel package
         if package.is_program()
@@ -367,7 +387,7 @@ impl AssemblyProduct {
             package.strip_debug_info().into_diagnostic()?;
         }
 
-        Ok(package)
+        Ok((package, naming))
     }
 }
 
@@ -431,7 +451,9 @@ mod tests {
             let mut product = executable_product(&context);
             product.kernel_package = Some(kernel.clone());
             product.extend_dependencies(requirements).unwrap();
-            let artifact = product.into_artifact(false).unwrap();
+            let code = product.into_code_package(false).unwrap();
+            let artifact = code.package();
+            artifact.check_naming(code.symbols()).unwrap();
             let dependencies = artifact.manifest.dependencies().cloned().collect::<Vec<_>>();
 
             assert_eq!(dependencies, vec![ordinary_supply.clone(), exact_kernel.clone()]);
@@ -455,7 +477,7 @@ mod tests {
             let mut product = executable_product(&context);
             product.kernel_package = Some(kernel.clone());
             product.extend_dependencies(requirements).unwrap();
-            assert!(product.into_artifact(false).is_err());
+            assert!(product.into_code_package(false).is_err());
         }
     }
 
@@ -561,7 +583,7 @@ mod tests {
     }
 
     #[test]
-    fn artifact_retains_exact_local_occurrences_for_equal_digest_private_helpers() {
+    fn code_package_retains_exact_local_occurrences_for_equal_digest_private_helpers() {
         for emit_debug_info in [false, true] {
             let context = TestContext::default();
             let module = context
@@ -587,7 +609,11 @@ mod tests {
             assert_ne!(expected[0].1.1, expected[1].1.1);
             let entry_key = product.entry_key().unwrap();
             let entry_source = product.package.entrypoint_source_node();
-            let package = product.into_artifact(emit_debug_info).unwrap();
+            let symbols = product.naming().clone();
+            let code = product.into_code_package(emit_debug_info).unwrap();
+            assert_eq!(**code.symbols(), symbols);
+            let package = code.package();
+            package.check_naming(code.symbols()).unwrap();
             for (key, (exec_node, source_node)) in expected {
                 let occurrence = package.procedure_occurrence(key).unwrap();
                 assert_eq!(occurrence.exec_node(), exec_node);

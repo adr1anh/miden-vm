@@ -21,15 +21,16 @@ impl RuntimeDependencies {
         dependency: ResolvedPackage,
         linkage: Linkage,
     ) -> Result<(), Report> {
-        if dependency.package.is_kernel() {
+        if dependency.code.package().is_kernel() {
             self.record_linked_kernel_dependency(
-                dependency.package.clone(),
-                dependency.naming.clone(),
+                dependency.code.package().clone(),
+                dependency.code.symbols().clone(),
             )?;
-        } else if let Some((kernel_package, kernel_naming)) =
-            dependency.linked_kernel_package.clone()
-        {
-            self.record_linked_kernel_dependency(kernel_package, kernel_naming)?;
+        } else if let Some(kernel) = &dependency.linked_kernel_package {
+            self.record_linked_kernel_dependency(
+                kernel.package().clone(),
+                kernel.symbols().clone(),
+            )?;
         }
 
         // We record the dynamic/runtime dependencies of a package here.
@@ -47,10 +48,10 @@ impl RuntimeDependencies {
         //
         // Distinct exact code-supply records may share a package name. Only equivalent records
         // coalesce; these requirements do not authorize a callable key-to-implementation binding.
-        if matches!(linkage, Linkage::Dynamic) && !dependency.package.is_kernel() {
-            self.merge_dependency(dependency.package.to_dependency());
+        if matches!(linkage, Linkage::Dynamic) && !dependency.code.package().is_kernel() {
+            self.merge_dependency(dependency.code.package().to_dependency());
         }
-        for dep in dependency.package.manifest.dependencies() {
+        for dep in dependency.code.package().manifest.dependencies() {
             self.merge_dependency(dep.clone());
         }
 
@@ -114,8 +115,8 @@ mod tests {
         program::{CanonicalLabel, ImplementationRoot},
     };
     use miden_mast_package::{
-        CallableProcedurePath, NamespacePath, PackageCallables, PackageExport, PackageId,
-        ProcedureExport, ProcedureName, TargetType, Version,
+        CallableProcedurePath, CodePackage, NamespacePath, PackageCallables, PackageExport,
+        PackageId, ProcedureExport, ProcedureName, TargetType, Version,
     };
 
     use super::*;
@@ -179,8 +180,7 @@ mod tests {
         )
         .unwrap();
         ResolvedPackage {
-            package: Arc::new(package),
-            naming: Arc::new(naming),
+            code: CodePackage::new(Arc::new(package), Arc::new(naming)).unwrap(),
             linked_kernel_package: None,
             dependency_packages: Vec::new(),
         }
@@ -216,7 +216,7 @@ mod tests {
     fn runtime_merge_retains_transitive_dynamic_supplies_across_linkage() {
         let transitive = dependency(1);
         let package = package(TargetType::Library, Operation::Add, vec![transitive.clone()]);
-        let direct = package.package.to_dependency();
+        let direct = package.code.package().to_dependency();
         assert_eq!(direct.name, transitive.name);
         let mut static_runtime = RuntimeDependencies::default();
         static_runtime.merge_package(package.clone(), Linkage::Static).unwrap();
@@ -236,23 +236,29 @@ mod tests {
         let conflicting = package(TargetType::Kernel, Operation::Mul, vec![]);
         let mut runtime = RuntimeDependencies::default();
         runtime
-            .record_linked_kernel_dependency(kernel.package.clone(), kernel.naming.clone())
+            .record_linked_kernel_dependency(
+                kernel.code.package().clone(),
+                kernel.code.symbols().clone(),
+            )
             .unwrap();
         runtime
-            .record_linked_kernel_dependency(kernel.package.clone(), kernel.naming.clone())
+            .record_linked_kernel_dependency(
+                kernel.code.package().clone(),
+                kernel.code.symbols().clone(),
+            )
             .unwrap();
         let original_deps = runtime.deps.clone();
-        assert_eq!(original_deps, vec![kernel.package.to_dependency()]);
+        assert_eq!(original_deps, vec![kernel.code.package().to_dependency()]);
 
         let mut consumer = package(TargetType::Library, Operation::Add, vec![dependency(3)]);
-        consumer.linked_kernel_package = Some((conflicting.package.clone(), conflicting.naming));
+        consumer.linked_kernel_package = Some(conflicting.code);
         for linkage in [Linkage::Static, Linkage::Dynamic] {
             let error = runtime.merge_package(consumer.clone(), linkage).unwrap_err();
             assert!(error.to_string().contains("conflicting linked kernel packages"));
             assert_eq!(runtime.deps, original_deps);
             assert_eq!(
                 runtime.kernel.as_ref().unwrap().0.dependency_commitment(),
-                kernel.package.dependency_commitment()
+                kernel.code.package().dependency_commitment()
             );
         }
     }

@@ -129,11 +129,17 @@ fn compile_owner(directory: &FsPath, owner: &Owner, body: u32) -> ResolvedPackag
     let resolved = assembler
         .assemble_with_naming(ProjectTargetSelector::Library, "release")
         .unwrap();
-    owner.expected().check(&resolved.naming).unwrap();
-    assert_eq!(resolved.naming.namespace_plan(), &owner.default_home);
-    assert_eq!(resolved.naming.callables().binding(owner.private.key()), Some(&owner.private));
-    assert_eq!(resolved.naming.callables().key_for_visible_path(owner.private.path()), None);
-    assert!(has_exec(&resolved.package, owner.private.key()));
+    owner.expected().check(resolved.code.symbols()).unwrap();
+    assert_eq!(resolved.code.symbols().namespace_plan(), &owner.default_home);
+    assert_eq!(
+        resolved.code.symbols().callables().binding(owner.private.key()),
+        Some(&owner.private)
+    );
+    assert_eq!(
+        resolved.code.symbols().callables().key_for_visible_path(owner.private.path()),
+        None
+    );
+    assert!(has_exec(resolved.code.package(), owner.private.key()));
     resolved
 }
 
@@ -204,7 +210,7 @@ fn artifact_expectations_preserve_owner_bindings_aliases_and_private_helpers() {
     for linkage in ["static", "dynamic"] {
         let directory = temp.path().join(linkage);
         let manifest = client_project(&directory, &binding, Some(&expected), linkage);
-        fs::write(directory.join("dep.masp"), artifact.package.to_bytes()).unwrap();
+        fs::write(directory.join("dep.masp"), artifact.code.package().to_bytes()).unwrap();
         let mut registry = TestRegistry::default();
         let resolved = {
             let mut assembler =
@@ -214,12 +220,13 @@ fn artifact_expectations_preserve_owner_bindings_aliases_and_private_helpers() {
                 .assemble_with_naming(ProjectTargetSelector::Library, "release")
                 .unwrap()
         };
-        let callables = resolved.naming.callables();
+        let callables = resolved.code.symbols().callables();
         assert_eq!(callables.binding(owner.public.key()), Some(&owner.public));
         assert_eq!(callables.binding(owner.private.key()), Some(&owner.private));
-        assert!(has_exec(&resolved.package, owner.public.key()));
+        assert!(has_exec(resolved.code.package(), owner.public.key()));
         let private_root = artifact
-            .naming
+            .code
+            .symbols()
             .callables()
             .selected_implementation(owner.private.key())
             .unwrap();
@@ -227,9 +234,9 @@ fn artifact_expectations_preserve_owner_bindings_aliases_and_private_helpers() {
             callables.selected_implementation(owner.private.key()),
             (linkage == "static").then_some(private_root),
         );
-        assert_eq!(has_exec(&resolved.package, owner.private.key()), linkage == "static");
+        assert_eq!(has_exec(resolved.code.package(), owner.private.key()), linkage == "static");
         assert_eq!(
-            resolved.package.manifest.dependencies().count(),
+            resolved.code.package().manifest.dependencies().count(),
             usize::from(linkage == "dynamic")
         );
         assert_eq!(registry.cached_packages().len(), 1, "accepted artifact is promoted once");
@@ -264,8 +271,12 @@ fn latest_and_pinned_artifacts_keep_keys_and_exec_across_bodies_and_linkage() {
         let mut caller_roots = Vec::new();
         for body in [1, 2] {
             let artifact = compile_owner(&temp.path().join(format!("owner-{body}")), &owner, body);
-            let root =
-                artifact.naming.callables().selected_implementation(owner.public.key()).unwrap();
+            let root = artifact
+                .code
+                .symbols()
+                .callables()
+                .selected_implementation(owner.public.key())
+                .unwrap();
             assert_ne!(
                 owner.public.key().as_word(),
                 root.as_word(),
@@ -275,7 +286,7 @@ fn latest_and_pinned_artifacts_keep_keys_and_exec_across_bodies_and_linkage() {
             for linkage in ["static", "dynamic"] {
                 let directory = temp.path().join(format!("client-{body}-{linkage}"));
                 let manifest = client_project(&directory, &binding, Some(&expected), linkage);
-                fs::write(directory.join("dep.masp"), artifact.package.to_bytes()).unwrap();
+                fs::write(directory.join("dep.masp"), artifact.code.package().to_bytes()).unwrap();
                 let mut registry = TestRegistry::default();
                 let mut assembler =
                     Assembler::default().for_project_at_path(&manifest, &mut registry).unwrap();
@@ -283,22 +294,27 @@ fn latest_and_pinned_artifacts_keep_keys_and_exec_across_bodies_and_linkage() {
                 let resolved = assembler
                     .assemble_with_naming(ProjectTargetSelector::Library, "release")
                     .unwrap();
-                assert!(has_exec(&resolved.package, owner.public.key()));
+                assert!(has_exec(resolved.code.package(), owner.public.key()));
                 assert_eq!(
-                    resolved.naming.callables().binding(owner.private.key()),
+                    resolved.code.symbols().callables().binding(owner.private.key()),
                     Some(&owner.private)
                 );
                 let caller =
                     ProcedureName::new(home("client"), path(&["client", "entry"])).unwrap();
                 caller_roots.push(
-                    resolved.naming.callables().selected_implementation(caller.key()).unwrap(),
+                    resolved
+                        .code
+                        .symbols()
+                        .callables()
+                        .selected_implementation(caller.key())
+                        .unwrap(),
                 );
                 assert_eq!(
-                    resolved.naming.callables().selected_implementation(owner.public.key()),
+                    resolved.code.symbols().callables().selected_implementation(owner.public.key()),
                     Some(root),
                     "the selected commitment is independent of code availability",
                 );
-                let forest = resolved.package.mast_forest();
+                let forest = resolved.code.package().mast_forest();
                 let supplied_root = forest
                     .find_procedure_root(root.into_word())
                     .expect("selected supply retains either the body or its external descriptor");
@@ -359,7 +375,7 @@ fn invalid_artifact_expectations_never_promote_code_to_the_registry() {
     for (case, expected, message) in cases {
         let directory = temp.path().join(case);
         let manifest = client_project(&directory, &binding, expected.as_deref(), "static");
-        fs::write(directory.join("dep.masp"), artifact.package.to_bytes()).unwrap();
+        fs::write(directory.join("dep.masp"), artifact.code.package().to_bytes()).unwrap();
         let mut registry = TestRegistry::default();
         let error = match Assembler::default().for_project_at_path(&manifest, &mut registry) {
             Err(error) => error,
@@ -378,7 +394,7 @@ fn invalid_artifact_expectations_never_promote_code_to_the_registry() {
     let directory = temp.path().join("unadmitted-private-home");
     let expected = expectation_config(&correct);
     let manifest = client_project(&directory, &binding, Some(&expected), "static");
-    fs::write(directory.join("dep.masp"), artifact.package.to_bytes()).unwrap();
+    fs::write(directory.join("dep.masp"), artifact.code.package().to_bytes()).unwrap();
     let mut registry = TestRegistry::default();
     {
         let mut assembler =
@@ -454,7 +470,7 @@ fn source_expectations_are_checked_before_cold_promotion_memory_and_registered_r
     let first = assemble_source(&mut assembler, &mut cache, &expected).unwrap();
     let second = assemble_source(&mut assembler, &mut cache, &expected).unwrap();
     assert!(
-        Arc::ptr_eq(&first.package, &second.package),
+        Arc::ptr_eq(first.code.package(), second.code.package()),
         "unchanged expectations allow a memory hit"
     );
     assert_eq!(assembler.store.cached_packages().len(), 1);
@@ -468,8 +484,8 @@ fn source_expectations_are_checked_before_cold_promotion_memory_and_registered_r
         "this rejection exercised the memory hit"
     );
     assert!(Arc::ptr_eq(
-        &first.package,
-        &assemble_source(&mut assembler, &mut cache, &expected).unwrap().package
+        first.code.package(),
+        assemble_source(&mut assembler, &mut cache, &expected).unwrap().code.package()
     ));
 
     cache.clear();
@@ -484,7 +500,7 @@ fn source_expectations_are_checked_before_cold_promotion_memory_and_registered_r
     );
     assert!(cache.is_empty(), "rejected registered reuse must not populate the memory cache");
     let registered = assemble_source(&mut assembler, &mut cache, &expected).unwrap();
-    assert!(Arc::ptr_eq(&first.package, &registered.package));
+    assert!(Arc::ptr_eq(first.code.package(), registered.code.package()));
     assert_eq!(
         assembler.store.cached_packages().len(),
         1,
