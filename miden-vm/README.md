@@ -22,7 +22,7 @@ Miden assembler compiles assembly source code in a [program MAST](https://docs.m
 
 #### Program hash
 
-All Miden programs can be reduced to a single 32-byte value, called program hash. Once a `Program` object is constructed, you can access this hash via `Program::hash()` method. This hash value is used by a verifier when they verify program execution. This ensures that the verifier verifies execution of a specific program (e.g. a program which the prover had committed to previously). The methodology for computing program hash is described [here](https://docs.miden.xyz/miden-vm/design/programs#program-hash-computation).
+A `Program` exposes the MAST root of its entry implementation through `Program::hash()`. Verification uses an `ExecutionTarget` containing the expected entry procedure key `K_entry` and environment root `R_E`, together with public stack inputs and outputs. The caller selects and authorizes this target independently of the proof and supplied code; the authenticated environment binds callable keys to implementations.
 
 ### Inputs / outputs
 
@@ -178,12 +178,12 @@ assert_eq!(8, outputs.first().unwrap().as_canonical_u64());
 
 To verify program execution, use `Verifier::new().verify(&claim, &proof)`. The verifier borrows:
 
-- `claim: &ExecutionClaim`. The program information and public stack inputs and outputs.
+- `claim: &ExecutionClaim`. The expected execution target (`K_entry`, `R_E`) and public stack inputs and outputs.
 - `proof: &ExecutionProof`. The deferred or complete execution proof artifacts.
 
-Stack inputs are expected to be ordered as if they would be pushed onto the stack one by one. Thus, their expected order on the stack will be the reverse of the order in which they are provided, and the last value in the `stack_inputs` is expected to be the value at the top of the stack.
+The caller must independently choose and authorize the expected entry key and environment root, and supply the expected public inputs and outputs. Host-loaded code and environment lookup evidence provide witnesses for this claim.
 
-Stack outputs are expected to be ordered as if they would be popped off the stack one by one. Thus, the value at the top of the stack is expected to be in the first position of the `stack_outputs`, and the order of the rest of the output elements will also match the order on the stack. This is the reverse of the order of the `stack_inputs`.
+The claim stores both stack inputs and outputs top-of-stack first, in their canonical zero-padded 16-element form. The first element of each stored stack is its top value.
 
 The verifier returns `Result<VerificationOutcome, VerificationError>`. A successful deferred outcome
 evaluates the carried witness and authenticates its outstanding VM root; a successful
@@ -193,27 +193,27 @@ graph under the configured per-witness limits. Precompile proving imports the pr
 directly into a shared Session. See the
 [deferred-proof semantics](../docs/src/design/deferred/semantics.md) for transport and limit details.
 
-> If a program with the provided hash is executed against some secret inputs and the provided public inputs, it will produce the provided outputs.
+> A complete verified proof attests that execution from the expected entry key under the fixed expected environment root, with the supplied public inputs and some private advice, produced the expected outputs.
 
-The verifier needs only the program hash. It does not need the program itself.
+The verifier takes the expected target and public stack inputs and outputs through the claim. It does not need the program code or environment lookup witnesses.
 
 #### Proof verification example
 
-Here is a simple example of verifying execution of the program from the previous example:
+Here is a simple example using the proof from the previous example and a target independently authorized by the verifying application:
 
 ```rust,ignore
 use miden_vm::{
-    ExecutionClaim, ProgramInfo, StackInputs, StackOutputs, Verifier, field::Felt,
+    EnvironmentRoot, ExecutionClaim, ExecutionTarget, ProcedureKey, StackInputs, StackOutputs,
+    Verifier, field::Felt,
 };
 
-let program =   /* value from previous example */;
-let proof =     /* value from previous example */;
-let expected_outputs = StackOutputs::new(&[Felt::new(8).unwrap()]).unwrap();
-let claim = ExecutionClaim::from_program_info(
-    ProgramInfo::from(program),
-    StackInputs::default(),
-    expected_outputs,
-);
+let proof = /* value from previous example */;
+let expected_entry_key: ProcedureKey = /* independently chosen entry key */;
+let expected_environment_root: EnvironmentRoot = /* independently authorized environment root */;
+let expected_target = ExecutionTarget::new(expected_entry_key, expected_environment_root);
+let expected_inputs = StackInputs::default();
+let expected_outputs = StackOutputs::new(&[Felt::from_u32(8)]).unwrap();
+let claim = ExecutionClaim::new(expected_target, expected_inputs, expected_outputs);
 
 match Verifier::new().verify(&claim, &proof) {
     Ok(outcome) if outcome.is_complete() => println!("Execution verified and complete!"),

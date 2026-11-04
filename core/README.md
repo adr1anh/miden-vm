@@ -4,7 +4,8 @@ This crate contains core components used by Miden VM. These components include:
 * Miden VM instruction set, defined in the [Operation](./src/operations/mod.rs) struct.
 * Miden VM program kernel, defined in [KernelDescriptor](./src/program/kernel.rs) struct which contains a set of roots of kernel routines.
 * Miden VM program structure, defined in [Program](./src/program/mod.rs) struct and described [here](https://docs.miden.xyz/miden-vm/design/programs).
-* Miden VM program metadata, defined in [ProgramInfo](./src/program/mod.rs) struct which contains a program's MAST root and the kernel used by the program.
+* Miden VM execution target, defined in [ExecutionTarget](./src/program/environment.rs), which contains the caller's expected entry procedure key and environment root.
+* Miden VM public execution claim, defined in [ExecutionClaim](./src/program/claim.rs), which combines the expected execution target with public stack inputs and outputs.
 * Input and output containers for Miden VM programs, defined in [StackInputs](./src/program/stack/inputs.rs) and [StackOutputs](./src/program/stack/outputs.rs) structs.
 * Constants describing the shape of the VM's execution trace.
 * Various minor utility functions used by other VM crates.
