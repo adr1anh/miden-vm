@@ -225,6 +225,7 @@ fn validate_hasher_trace(trace: &ChipletsTrace, expected_len: usize, controller_
     let controller_padded = hasher_trace_len(controller_rows);
     assert_eq!(expected_len, controller_padded);
     for row in prefix..prefix + controller_padded {
+        assert_eq!(trace[CHIPLETS_CLK_COL][row], Felt::from_u32((row - prefix + 1) as u32));
         assert_eq!(trace[0][row], ZERO);
         assert_eq!(trace[1][row], ONE);
     }
@@ -262,8 +263,8 @@ fn validate_bitwise_trace(trace: &ChipletsTrace, start: usize, end: usize) {
         // Internal bitwise operation selector (XOR)
         assert_eq!(BITWISE_XOR, trace[NUM_BITWISE_SELECTORS][row], "bitwise op at row {row}");
 
-        // Columns beyond bitwise trace should be zero (chip_clk excluded; see chip_clk.rs).
-        for col in bitwise_used_cols..CHIPLETS_WIDTH - 1 {
+        // The Controller address is canonically zero outside its own band.
+        for col in bitwise_used_cols..CHIPLETS_WIDTH {
             assert_eq!(
                 trace[col][row], ZERO,
                 "bitwise padding col {col} at row {row} should be zero"
@@ -286,8 +287,8 @@ fn validate_memory_trace(trace: &ChipletsTrace, start: usize, end: usize) {
             assert_eq!(trace[col][row], ZERO);
         }
 
-        // Columns beyond memory trace should be zero (chip_clk excluded; see chip_clk.rs).
-        for col in memory_used_cols..CHIPLETS_WIDTH - 1 {
+        // The independent Memory operation clock remains in its payload.
+        for col in memory_used_cols..CHIPLETS_WIDTH {
             assert_eq!(
                 trace[col][row], ZERO,
                 "memory padding col {col} at row {row} should be zero"
@@ -309,10 +310,8 @@ fn validate_padding(trace: &ChipletsTrace, start: usize, end: usize) {
         for col in 3..6 {
             assert_eq!(ONE, trace[col][row], "padding s{col} at row {row}");
         }
-        // chip_clk at CHIPLETS_WIDTH - 1 is non-zero by design.
-        for col in 6..CHIPLETS_WIDTH - 1 {
+        for col in 6..CHIPLETS_WIDTH {
             assert_eq!(ZERO, trace[col][row], "padding data col {col} at row {row} should be zero");
         }
-        assert_ne!(ZERO, trace[CHIPLETS_CLK_COL][row], "padding chip_clk at row {row}");
     }
 }

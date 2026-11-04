@@ -43,7 +43,7 @@ impl ControllerRow {
     }
 }
 
-/// A nullable one-based logical Controller address, before any physical prefix is applied.
+/// A nullable one-based Controller address, independent of physical Chiplets placement.
 ///
 /// Zero means absent; Controller row zero is present and encodes as one. Operation-log indices
 /// are separate values and must never use this codec.
@@ -97,22 +97,6 @@ impl ChipletBand {
 
     pub(crate) fn len(self) -> usize {
         self.len
-    }
-
-    /// The caller indexes a row in this band, whose complete extent was checked by the layout.
-    pub(crate) fn clock_at(self, row: usize) -> Felt {
-        debug_assert!(row < self.len);
-        Felt::from_u32((self.start + row + 1) as u32)
-    }
-}
-
-/// A nullable physical address. It deliberately has no logical decoder or advance operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PhysicalControllerAddress(Felt);
-
-impl PhysicalControllerAddress {
-    pub(crate) fn to_felt(self) -> Felt {
-        self.0
     }
 }
 
@@ -182,21 +166,18 @@ impl ChipletsLayout {
         })
     }
 
-    pub(crate) fn controller_address(
+    /// Checks that a present address names a materialized Controller row. Its one-based encoding
+    /// is already final and does not depend on the Library prefix.
+    pub(crate) fn validate_controller_address(
         self,
         address: LogicalControllerAddress,
-    ) -> Result<PhysicalControllerAddress, ExecutionError> {
-        match address.0 {
-            None => Ok(PhysicalControllerAddress(Felt::from_u32(0))),
-            Some(row) => {
-                if row.position() >= self.controller.len {
-                    return Err(ExecutionError::Internal(
-                        "Controller address is outside its materialized band",
-                    ));
-                }
-                Ok(PhysicalControllerAddress(self.controller.clock_at(row.position())))
-            },
+    ) -> Result<(), ExecutionError> {
+        if address.0.is_some_and(|row| row.position() >= self.controller.len) {
+            return Err(ExecutionError::Internal(
+                "Controller address is outside its materialized band",
+            ));
         }
+        Ok(())
     }
 
     pub(crate) fn library(self) -> ChipletBand {
@@ -306,22 +287,17 @@ mod tests {
     }
 
     #[test]
-    fn physical_layout_preserves_absence_and_logical_zero() {
+    fn physical_layout_preserves_controller_addresses_without_retagging() {
         for prefix in [0, 16] {
             let layout = ChipletsLayout::new(prefix, 8, 8, 1, 2, 3).unwrap();
             assert_eq!(layout.library().start(), 0);
             assert_eq!(layout.library().len(), prefix);
-            assert_eq!(
-                layout.controller_address(LogicalControllerAddress::ABSENT).unwrap().to_felt(),
-                Felt::from_u32(0)
-            );
+            layout.validate_controller_address(LogicalControllerAddress::ABSENT).unwrap();
+            assert_eq!(LogicalControllerAddress::ABSENT.to_felt(), Felt::from_u32(0));
             for row in 0..8 {
                 let logical = ControllerRow::new(row).unwrap().logical_address();
-                let physical = layout.controller_address(logical).unwrap().to_felt();
-                assert_eq!(physical, Felt::from_u32((prefix + row + 1) as u32));
-                if prefix == 0 {
-                    assert_eq!(physical, logical.to_felt());
-                }
+                layout.validate_controller_address(logical).unwrap();
+                assert_eq!(logical.to_felt(), Felt::from_u32(row as u32 + 1));
             }
             assert_eq!(layout.aead().start(), prefix + 8);
             assert_eq!(layout.memory().start(), prefix + 16);
@@ -330,27 +306,34 @@ mod tests {
             assert_eq!(layout.trace_len(), prefix + 23);
             assert!(
                 layout
-                    .controller_address(ControllerRow::new(8).unwrap().logical_address())
+                    .validate_controller_address(ControllerRow::new(8).unwrap().logical_address())
                     .is_err()
             );
         }
     }
 
     #[test]
+    fn empty_controller_band_accepts_only_absence() {
+        let layout = ChipletsLayout::new(16, 0, 8, 0, 0, 0).unwrap();
+        layout.validate_controller_address(LogicalControllerAddress::ABSENT).unwrap();
+        assert!(
+            layout
+                .validate_controller_address(ControllerRow::default().logical_address())
+                .is_err()
+        );
+    }
+
+    #[test]
     fn physical_bounds_are_separate_from_representable_end_cursors() {
         let layout = ChipletsLayout::new(0, MAX_TRACE_LEN - 8, 0, 7, 0, 0).unwrap();
         let last = ControllerRow::new(MAX_TRACE_LEN - 9).unwrap().logical_address();
-        assert_eq!(
-            layout.controller_address(last).unwrap().to_felt(),
-            Felt::from_u32(MAX_TRACE_LEN as u32 - 8)
-        );
-        assert_eq!(
-            layout.padding(MAX_TRACE_LEN).unwrap().clock_at(0),
-            Felt::from_u32(MAX_TRACE_LEN as u32)
-        );
+        layout.validate_controller_address(last).unwrap();
+        assert_eq!(last.to_felt(), Felt::from_u32(MAX_TRACE_LEN as u32 - 8));
+        assert_eq!(layout.padding(MAX_TRACE_LEN).unwrap().start(), MAX_TRACE_LEN - 1);
+        assert_eq!(layout.padding(MAX_TRACE_LEN).unwrap().len(), 1);
         let end_cursor = ControllerRow::new(MAX_TRACE_LEN).unwrap().logical_address();
         assert_eq!(LogicalControllerAddress::from_felt(end_cursor.to_felt()).unwrap(), end_cursor);
-        assert!(layout.controller_address(end_cursor).is_err());
+        assert!(layout.validate_controller_address(end_cursor).is_err());
         assert_trace_len_exceeded(ChipletsLayout::new(0, MAX_TRACE_LEN, 0, 0, 0, 0));
         assert_trace_len_exceeded(ChipletsLayout::new(MAX_TRACE_LEN, 0, 0, 0, 0, 0));
         assert_trace_len_exceeded(ChipletsLayout::new(MAX_TRACE_LEN + 8, 8, 0, 0, 0, 0));

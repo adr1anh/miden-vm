@@ -9,7 +9,7 @@ use core::borrow::BorrowMut;
 use miden_air_definitions::vm::{
     LibraryCols,
     trace::{
-        CHIPLETS_CLK_COL, CHIPLETS_WIDTH,
+        CHIPLETS_WIDTH,
         chiplets::library::{
             EMPTY_LIST, ENV, LIBRARY_COL_RANGE, LIST_CONTINUE, LIST_START, MAST, MERKLE,
         },
@@ -143,9 +143,8 @@ impl<'a> LibraryTrace<'a> {
             ));
         }
         prefix.fill(ZERO);
-        for (index, row) in prefix.as_chunks_mut::<CHIPLETS_WIDTH>().0.iter_mut().enumerate() {
+        for row in prefix.as_chunks_mut::<CHIPLETS_WIDTH>().0 {
             row[0] = ONE;
-            row[CHIPLETS_CLK_COL] = bounded_felt(index.checked_add(1).ok_or_else(length_error)?)?;
         }
         self.walk(
             |offset, pair| {

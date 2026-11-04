@@ -1,7 +1,7 @@
 use alloc::{vec, vec::Vec};
 use core::borrow::Borrow;
 
-use miden_air_definitions::vm::trace::chiplets::library::PAD;
+use miden_air_definitions::vm::trace::{CHIPLETS_CLK_COL, chiplets::library::PAD};
 use miden_core::program::{CanonicalLabel, ExecutionTarget, ImplementationRoot, LabelCommitment};
 
 use super::*;
@@ -510,7 +510,7 @@ fn assert_prefix(cells: &[Felt], active: usize) {
     assert!(cells.len() / CHIPLETS_WIDTH >= active + 2);
     for (index, row) in cells.as_chunks::<CHIPLETS_WIDTH>().0.iter().enumerate() {
         assert_eq!(row[0], ONE);
-        assert_eq!(row[CHIPLETS_CLK_COL], Felt::from_u32(index as u32 + 1));
+        assert_eq!(row[CHIPLETS_CLK_COL], ZERO);
         if index >= active {
             assert_eq!(cols(cells, index).k, PAD);
             assert!(row[LIBRARY_COL_RANGE].iter().all(|value| *value == ZERO));

@@ -40,7 +40,7 @@ use crate::{
     test_utils::{
         NamedFixture, fixture_code, fixture_entry_digest, named_program, native_trace_limits,
     },
-    trace::{VmTrace, build_trace, chiplets::LibraryTrace},
+    trace::{VmTrace, build_trace},
 };
 
 // CONSTANTS
@@ -60,14 +60,12 @@ const TRACE_EVENT: EventName = EventName::new("test::emit::trace");
 type SystemTrace = Vec<Vec<Felt>>;
 struct DecoderTrace {
     columns: Vec<Vec<Felt>>,
-    library_prefix: usize,
 }
 
 impl DecoderTrace {
-    /// Convert logical Controller row zero to its one-based physical address.
-    /// The prefix comes from the completed authenticated session, independently of core rows.
+    /// Controller addresses start at one, independently of the physical Library prefix.
     fn initial_address(&self) -> Felt {
-        Felt::from_u32(u32::try_from(self.library_prefix).unwrap()) + ONE
+        ONE
     }
 }
 
@@ -1707,16 +1705,13 @@ fn build_trace_helper(stack_inputs: &[u64], program: &NamedFixture) -> (DecoderT
 
     let execution_witness = processor.execute_for_proving_sync(program.target, &mut host).unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
-    let library_prefix = LibraryTrace::new(&vm_witness.trace_replay().resolution_session)
-        .unwrap()
-        .prefix_len();
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap();
 
     // `core_rows()` is the actual program row count before padding.
     let trace_len = trace.trace_len_summary().core_rows();
 
     // Extract decoder trace columns
-    let decoder_trace = extract_decoder_trace(&trace, library_prefix);
+    let decoder_trace = extract_decoder_trace(&trace);
 
     (decoder_trace, trace_len)
 }
@@ -1744,22 +1739,19 @@ fn build_call_trace_helper(program: &NamedFixture) -> (SystemTrace, DecoderTrace
 
     let execution_witness = processor.execute_for_proving_sync(program.target, &mut host).unwrap();
     let (vm_witness, _) = execution_witness.into_parts();
-    let library_prefix = LibraryTrace::new(&vm_witness.trace_replay().resolution_session)
-        .unwrap()
-        .prefix_len();
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap();
 
     // `core_rows()` is the actual program row count before padding.
     let trace_len = trace.trace_len_summary().core_rows();
 
     let sys_trace = extract_system_trace(&trace);
-    let decoder_trace = extract_decoder_trace(&trace, library_prefix);
+    let decoder_trace = extract_decoder_trace(&trace);
 
     (sys_trace, decoder_trace, trace_len)
 }
 
 /// Extracts the decoder trace columns from the execution trace.
-fn extract_decoder_trace(trace: &VmTrace, library_prefix: usize) -> DecoderTrace {
+fn extract_decoder_trace(trace: &VmTrace) -> DecoderTrace {
     use miden_air_definitions::vm::trace::{DECODER_TRACE_WIDTH, SYS_TRACE_WIDTH};
 
     let main_segment = trace.main_trace();
@@ -1768,7 +1760,6 @@ fn extract_decoder_trace(trace: &VmTrace, library_prefix: usize) -> DecoderTrace
         columns: (start..start + DECODER_TRACE_WIDTH)
             .map(|i| main_segment.get_column(i).to_vec())
             .collect(),
-        library_prefix,
     }
 }
 

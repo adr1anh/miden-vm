@@ -54,7 +54,7 @@ fn assert_single_mast_prefix(
     for (index, row) in rows.into_iter().enumerate() {
         let shared = main.chiplet_cols(row);
         assert_eq!(shared.chiplet_selectors()[0], ONE);
-        assert_eq!(shared.chip_clk, Felt::new_unchecked(index as u64 + 1));
+        assert_eq!(shared.chip_clk, ZERO, "Library rows do not carry Controller addresses");
         if index < 2 {
             assert_eq!(shared.library().k, MAST);
             assert_eq!(shared.library().d, ZERO);
@@ -83,9 +83,9 @@ fn assert_single_mast_prefix(
     let first_controller = RowIndex::from(8);
     assert!(main.is_hash_row(first_controller));
     assert_eq!(main.chiplet_cols(first_controller).chiplet_selectors()[..2], [ZERO, ONE]);
-    assert_eq!(main.chiplet_clk(first_controller), Felt::new_unchecked(9));
+    assert_eq!(main.chiplet_clk(first_controller), ONE);
     assert_eq!(main.addr(RowIndex::from(0)), ZERO, "the absent root address stays zero");
-    assert_eq!(main.addr(RowIndex::from(1)), Felt::new_unchecked(9));
+    assert_eq!(main.addr(RowIndex::from(1)), ONE);
 
     let entry = descriptor.entry_key().into_word().into_elements();
     assert_eq!(main.fn_hash(RowIndex::from(0)), entry);
@@ -669,7 +669,7 @@ fn memory_write_helpers_survive_native_trace_materialization() {
         let shared = main.chiplet_cols(memory_row);
         assert_eq!(shared.chiplet_selectors()[..4], [ZERO, ZERO, ZERO, ZERO]);
         let memory = shared.memory();
-        assert_eq!(shared.chip_clk, Felt::from(memory_row + 1));
+        assert_eq!(shared.chip_clk, ZERO, "Memory rows do not carry Controller addresses");
         assert_eq!(main.get_op_code(core_row), Felt::new_unchecked(u64::from(op.op_code())));
         assert_eq!(memory.ctx, main.ctx(core_row));
         assert_eq!(memory.clk, main.clk(core_row));

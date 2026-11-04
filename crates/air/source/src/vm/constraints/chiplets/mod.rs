@@ -27,8 +27,6 @@ pub mod selectors;
 
 use core::borrow::Borrow;
 
-use miden_core::field::PrimeCharacteristicRing;
-use miden_stark::air::AirBuilder;
 use selectors::ChipletSelectors;
 
 use crate::vm::{ChipletCols, MidenAirBuilder};
@@ -47,12 +45,6 @@ pub fn enforce_main<AB>(
 {
     // Selector constraints (including hasher internal selectors) are enforced in
     // build_chiplet_selectors (called by ChipletsAir).
-
-    // Chiplet-trace row counter `chip_clk`: starts at 1 and increments by 1 each row.
-    builder.when_first_row().assert_eq(local.chip_clk, AB::Expr::ONE);
-    builder
-        .when_transition()
-        .assert_eq(next.chip_clk.into(), local.chip_clk.into() + AB::Expr::ONE);
 
     let periodic: &columns::PeriodicCols<_> = builder.periodic_values().borrow();
     let library_context = library::LibraryRowContext {

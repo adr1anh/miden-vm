@@ -358,7 +358,7 @@ recursive-verifier-regeneration-handoff:
 		'' \
 		'Required manual post-regeneration steps:' \
 		'  1. Rebuild generated MASM docs: MIDEN_BUILD_LIB_DOCS=1 cargo build -p miden-core-lib' \
-		'  2. Check embedded roots: cargo test -p miden-core-lib --lib proof_compatibility_roots_match_the_embedded_core_library' \
+		'  2. Check embedded identities: cargo test -p miden-core-lib --lib proof_compatibility_identities_match_the_embedded_core_library' \
 		'  3. Verify the pinned PVM fixture: make check-pvm-proof-fixture' \
 		'Review generated docs; update roots or the fixture only when the corresponding change is intentional.'
 

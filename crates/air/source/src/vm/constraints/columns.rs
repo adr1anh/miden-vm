@@ -86,7 +86,8 @@ impl<T> CoreCols<T> {
 #[derive(Clone, Debug)]
 pub struct ChipletCols<T> {
     pub(crate) chiplets: [T; CHIPLETS_DATA_WIDTH],
-    /// Chiplet-trace row counter: starts at 1 on the first row, increments by 1 each row.
+    /// Controller-local address: starts at 1 on section entry and increments through padding.
+    /// Unused outside Controller; native traces write zero there.
     pub chip_clk: T,
 }
 

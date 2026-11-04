@@ -64,7 +64,7 @@ pub(crate) struct CoreTraceGenerationTracer<'a> {
     writer: RowMajorTraceWriter<'a, Felt>,
     /// The index of the next row to write in the trace fragment.
     row_write_index: usize,
-    /// Shared immutable physical placement, applied only when writing final trace rows.
+    /// Shared immutable Chiplets layout, used to check final Controller address bounds.
     layout: ChipletsLayout,
 
     /// The decoder state being replayed, tracking the current and parent block addresses.
@@ -795,7 +795,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
                         &processor.stack,
                         operation,
                         op_idx_in_group,
-                        op_helper_registers.to_physical_user_op_helpers(self.layout)?,
+                        op_helper_registers.checked_user_op_helpers(self.layout)?,
                         &mut basic_block_context,
                     )?;
                 },

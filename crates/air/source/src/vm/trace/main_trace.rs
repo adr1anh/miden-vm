@@ -528,7 +528,9 @@ impl MainTrace {
         ctrl.merkle_node_index() - ctrl.merkle_node_index_next().double()
     }
 
-    /// Returns the chiplet row clock at row i.
+    /// Returns the one-based Controller-local address at row i.
+    ///
+    /// The cell is unused outside Controller; native traces write zero there.
     pub fn chiplet_clk(&self, i: RowIndex) -> Felt {
         self.chiplet_cols(i).chip_clk
     }

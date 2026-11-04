@@ -80,8 +80,8 @@ pub mod log_deferred {
 
 // Chiplets trace
 // 23 shared chiplet cells + chip_clk = 24.
-// `chip_clk` is the chiplet-trace row counter (value `row_index + 1`); it sources the
-// hasher responder address on the chiplet side.
+// `chip_clk` is the one-based Controller-local address, including Controller padding; it
+// sources the hasher responder address on Controller rows. Outside Controller the cell is unused.
 pub const CHIPLETS_DATA_WIDTH: usize = 23;
 pub const CHIPLETS_CLK_COL: usize = CHIPLETS_DATA_WIDTH;
 pub const CHIPLETS_WIDTH: usize = CHIPLETS_CLK_COL + 1;

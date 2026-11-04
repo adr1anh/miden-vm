@@ -1229,16 +1229,21 @@ fn chiplet_preflight_caps_combined_trace_len() {
     );
 }
 
-/// Synthetic physical prefixes exercise the real parallel core writer after authenticated
-/// execution. The selected prefixes are writer/serde evidence, not proof-acceptance evidence.
+/// Synthetic placements exercise the real parallel core writer after authenticated execution.
+/// Prefix zero is a standalone writer case; production traces retain a nonempty Library prefix.
+/// These comparisons cover replay/materialization, not proof acceptance.
 #[test]
-fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments() {
+fn controller_addresses_ignore_library_prefix_across_resumed_parallel_fragments() {
     fn core(prefix: u8, fragment_size: usize, root_block: bool) -> Vec<Felt> {
         let program = if root_block {
             let mut forest = MastForest::new();
-            let root = BasicBlockNodeBuilder::new(vec![Operation::Swap, Operation::Swap])
-                .add_to_forest(&mut forest)
-                .unwrap();
+            let root = BasicBlockNodeBuilder::new(vec![
+                Operation::Compress,
+                Operation::Swap,
+                Operation::Swap,
+            ])
+            .add_to_forest(&mut forest)
+            .unwrap();
             forest.make_root(root);
             synthetic_fixture(fixture_code(Arc::new(forest), root), [])
         } else {
@@ -1309,46 +1314,30 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
     for root_block in [false, true] {
         let logical = core(0, 32, root_block);
         let executed_rows = logical.len() / CORE_STORAGE_WIDTH - 1;
-        for prefix in [0, 8, 16] {
-            let physical = core(prefix, 32, root_block);
+        for prefix in [0, 8, 16, 24] {
+            let relocated = core(prefix, 32, root_block);
             // Each possible first cut resumes at that clock; this includes block starts,
             // operations and END rows in both root forms. The final HALT row is appended.
             for fragment_size in 1..executed_rows {
                 assert_eq!(
-                    physical,
+                    relocated,
                     core(prefix, fragment_size, root_block),
                     "prefix={prefix}, fragment_size={fragment_size}, root_block={root_block}"
                 );
             }
-            assert_eq!(logical.len(), physical.len());
-            // This independent row oracle adds the synthetic prefix exactly once to the
-            // one-based Controller address encoding; zero is the absent sentinel.
-            let relocate = |address| {
-                if address == ZERO {
-                    ZERO
-                } else {
-                    address + Felt::from_u8(prefix)
-                }
-            };
+            // Compare the complete Core rows, including helpers, parent addresses and the
+            // independent operation clock. No final materialization path may retag any address.
+            assert_eq!(logical, relocated, "prefix={prefix}, root_block={root_block}");
             let mut saw_absent_parent = false;
             let mut saw_present_parent = false;
-            for (logical, physical) in logical
-                .as_chunks::<CORE_STORAGE_WIDTH>()
-                .0
-                .iter()
-                .zip(physical.as_chunks::<CORE_STORAGE_WIDTH>().0)
-            {
-                let logical: &CoreCols<Felt> = logical.as_slice().borrow();
-                let physical: &CoreCols<Felt> = physical.as_slice().borrow();
-                let mut expected = (*logical).clone();
-                expected.decoder.addr = relocate(logical.decoder.addr);
-                if logical.decoder.in_span == ONE {
-                    let parent = logical.decoder.hasher_state[1];
-                    expected.decoder.hasher_state[1] = relocate(parent);
+            for (index, row) in relocated.as_chunks::<CORE_STORAGE_WIDTH>().0.iter().enumerate() {
+                let row: &CoreCols<Felt> = row.as_slice().borrow();
+                assert_eq!(row.system.clk, Felt::from_u32(index as u32));
+                if row.decoder.in_span == ONE {
+                    let parent = row.decoder.hasher_state[1];
                     saw_absent_parent |= parent == ZERO;
                     saw_present_parent |= parent != ZERO;
                 }
-                assert_eq!(physical.as_slice(), expected.as_slice());
             }
             assert_eq!(saw_present_parent, !root_block);
             assert_eq!(saw_absent_parent, root_block);
@@ -1366,10 +1355,14 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
 }
 
 #[test]
-fn buffered_and_prebuilt_controllers_share_the_checked_physical_writer() {
-    use miden_air_definitions::vm::trace::{CHIPLETS_CLK_COL, CHIPLETS_WIDTH};
+fn buffered_and_prebuilt_controllers_share_the_checked_local_counter_writer() {
+    use miden_ace::instruction::{Op, encode_instruction};
+    use miden_air_definitions::vm::{
+        ChipletCols,
+        trace::{CHIPLETS_CLK_COL, CHIPLETS_WIDTH},
+    };
 
-    use crate::trace::chiplets::layout::ControllerRow;
+    use crate::trace::chiplets::{CircuitEvaluation, layout::ControllerRow};
 
     #[allow(dead_code)]
     mod common {
@@ -1394,7 +1387,16 @@ fn buffered_and_prebuilt_controllers_share_the_checked_physical_writer() {
         let mut bitwise = BitwiseReplay::default();
         bitwise.record_u32xor(ONE, ONE);
         let mut memory = MemoryWritesReplay::default();
-        memory.record_write_element(ONE, Felt::from_u8(4), ContextId::root(), RowIndex::from(0));
+        let memory_clk = RowIndex::from(7);
+        memory.record_write_element(ONE, Felt::from_u8(4), ContextId::root(), memory_clk);
+        let ace_clk = RowIndex::from(11);
+        let mut evaluation = CircuitEvaluation::new(ContextId::root(), ace_clk, 1, 1);
+        evaluation.do_read(ZERO, Word::default());
+        evaluation
+            .do_eval(Felt::from_u8(4), encode_instruction(2, 1, Op::Sub).unwrap())
+            .unwrap();
+        let mut ace = AceReplay::default();
+        ace.record_circuit_evaluation(evaluation).unwrap();
         let chiplets = initialize_chiplets(
             &library,
             &[],
@@ -1402,7 +1404,7 @@ fn buffered_and_prebuilt_controllers_share_the_checked_physical_writer() {
             bitwise,
             hasher_requests,
             prebuilt_hasher,
-            AceReplay::default(),
+            ace,
             &[],
             MAX_TRACE_LEN,
         )
@@ -1412,24 +1414,38 @@ fn buffered_and_prebuilt_controllers_share_the_checked_physical_writer() {
         let (chiplets, eidos, counts) = chiplets
             .into_traces(&library, layout, pad_to_trace_length(layout.trace_len()), eidos_height)
             .unwrap();
-        for row in 0..layout.trace_len() {
-            assert_eq!(
-                chiplets.trace[row * CHIPLETS_WIDTH + CHIPLETS_CLK_COL],
-                Felt::from_u32(row as u32 + 1)
-            );
+        assert_eq!(prefix, 8);
+        assert_eq!(layout.controller().start(), prefix);
+        assert_eq!(layout.controller().len(), 8);
+        assert_eq!(layout.memory().start(), prefix + 8);
+        assert_eq!(layout.memory().len(), 1);
+        assert_eq!(layout.ace().start(), prefix + 9);
+        assert_eq!(layout.ace().len(), 2);
+        assert_eq!(layout.bitwise().start(), prefix + 11);
+        assert_eq!(layout.bitwise().len(), 1);
+        assert_eq!(layout.trace_len(), 21);
+        assert_eq!(chiplets.trace.len() / CHIPLETS_WIDTH, MIN_TRACE_LEN);
+        for row in 0..chiplets.trace.len() / CHIPLETS_WIDTH {
+            let controller_offset = row.checked_sub(prefix).filter(|&offset| offset < 8);
+            let expected =
+                controller_offset.map_or(ZERO, |offset| Felt::from_u32(offset as u32 + 1));
+            assert_eq!(chiplets.trace[row * CHIPLETS_WIDTH + CHIPLETS_CLK_COL], expected);
         }
         let row_zero = ControllerRow::default().logical_address();
-        assert_eq!(
-            layout.controller_address(row_zero).unwrap().to_felt(),
-            chiplets.trace[prefix * CHIPLETS_WIDTH + CHIPLETS_CLK_COL]
-        );
-        assert_eq!(
-            layout
-                .controller_address(chiplets::layout::LogicalControllerAddress::ABSENT)
-                .unwrap()
-                .to_felt(),
-            ZERO
-        );
+        layout.validate_controller_address(row_zero).unwrap();
+        assert_eq!(row_zero.to_felt(), chiplets.trace[prefix * CHIPLETS_WIDTH + CHIPLETS_CLK_COL]);
+        let absent = chiplets::layout::LogicalControllerAddress::ABSENT;
+        layout.validate_controller_address(absent).unwrap();
+        assert_eq!(absent.to_felt(), ZERO);
+        let memory_start = layout.memory().start() * CHIPLETS_WIDTH;
+        let memory: &ChipletCols<Felt> =
+            chiplets.trace[memory_start..memory_start + CHIPLETS_WIDTH].borrow();
+        assert_eq!(memory.memory().clk, Felt::from_u32(memory_clk.into()));
+        for offset in 0..layout.ace().len() {
+            let start = (layout.ace().start() + offset) * CHIPLETS_WIDTH;
+            let row: &ChipletCols<Felt> = chiplets.trace[start..start + CHIPLETS_WIDTH].borrow();
+            assert_eq!(row.ace().clk, Felt::from_u32(ace_clk.into()));
+        }
         for row in 0..prefix {
             assert_eq!(chiplets.trace[row * CHIPLETS_WIDTH], ONE);
         }
