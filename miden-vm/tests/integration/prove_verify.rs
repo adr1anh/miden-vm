@@ -86,34 +86,60 @@ fn assert_prove_verify(
 }
 
 fn assert_recursive_verify(claim: &ExecutionClaim, proof: &ExecutionProof) {
-    let verifier_root = CoreLibrary::default().vm_recursive_verifier_root();
-    let verifier_inputs = generate_request_inputs(verifier_root, proof, claim)
+    let core_lib = CoreLibrary::default();
+    let profile = core_lib
+        .vm_recursive_verifier_profile()
+        .expect("embedded VM verifier profile construction failed");
+    let expected_verifier = profile.identity();
+    let verifier_inputs = generate_request_inputs(expected_verifier, proof, claim)
         .expect("recursive verifier request construction failed");
+    let verifier_identity = masm_push_felts(expected_verifier.as_word().as_slice());
 
-    let source = "
+    let source = format!(
+        "
         use miden::core::sys
         use miden::core::sys::vm
 
         begin
             # Initial stack: [CLAIM_COMMITMENT].
             dupw
-            procref.vm::verify_proof exec.sys::build_proof_request_key
+            {verifier_identity}
+            exec.sys::build_proof_request_key
             adv.push_mapval dropw
             exec.vm::verify_proof
             # => [security_descriptor, D]
             exec.sys::truncate_stack
         end
-    ";
+    "
+    );
 
-    let core_lib = CoreLibrary::default();
     let test = crate::build_test!(
-        source,
+        source.as_str(),
         &verifier_inputs.initial_stack(),
         &verifier_inputs.advice_stack(),
         verifier_inputs.store,
         verifier_inputs.advice_map
     )
-    .with_library_and_naming(core_lib.package(), core_lib.naming().clone());
+    .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
+    .with_environment_fragment(profile.shared_fragment());
+    let fixture = test
+        .fixture_environment()
+        .expect("recursive verifier environment must assemble");
+    let environment = fixture.validated_environment();
+    let mut effective_advice = test.advice_inputs.map().clone();
+    for package in &test.libraries {
+        effective_advice
+            .merge(package.mast_forest().advice_map())
+            .expect("recursive verifier package and request advice must not conflict");
+    }
+    profile
+        .authorize(
+            fixture.execution().descriptor().environment_root(),
+            environment,
+            &effective_advice,
+            environment.visits(),
+        )
+        .expect("recursive verifier environment and resources must authorize");
     test.execute().expect("recursive verifier execution failed");
 }
 

@@ -12,7 +12,7 @@ use miden_core::{
     advice::AdviceInputs,
     crypto::hash::Blake3_256,
     field::QuotientMap,
-    program::{ExecutionClaim, ExecutionDescriptor},
+    program::{ExecutionClaim, ExecutionDescriptor, VerifierIdentity},
     proof::{PrecompileProof, PrecompileStatus},
     serde::{Deserializable, Serializable},
     utils::to_hex,
@@ -445,7 +445,7 @@ pub(super) fn load_tx_fixtures(
 
 pub(super) fn recursive_proof_advice(
     fixture: &TxProofFixture,
-    verifier_root: Word,
+    expected_verifier: VerifierIdentity,
 ) -> RecursiveProofAdvice {
     let claim = ExecutionClaim::new(
         fixture.fixture.program.environment.execution().descriptor(),
@@ -453,7 +453,7 @@ pub(super) fn recursive_proof_advice(
         fixture.stack_outputs,
     );
     let (advice_inputs, claim_commitment) =
-        RecursiveVerifierInputs::for_request(verifier_root, &fixture.proof, &claim)
+        RecursiveVerifierInputs::for_request(expected_verifier, &fixture.proof, &claim)
             .expect("build MVM recursive request package")
             .into_parts();
 
@@ -466,8 +466,10 @@ pub(super) fn load_pvm_advice(
     ecdsa_count: usize,
 ) -> RecursiveProofAdvice {
     let proof = load_pvm_proof(config, ecdsa_count);
-    let verifier_root = core_lib.pvm_recursive_verifier_root();
-    let inputs = PvmRecursiveVerifierInputs::for_request(verifier_root, &proof)
+    let profile = core_lib
+        .pvm_recursive_verifier_profile()
+        .expect("build embedded PVM verifier profile");
+    let inputs = PvmRecursiveVerifierInputs::for_request(profile.identity(), &proof)
         .expect("build PVM recursive advice");
     let (advice_inputs, claim_commitment) = inputs.into_parts();
 

@@ -9,7 +9,7 @@ use miden_stark::pcs::PcsParams;
 use miden_vm::{HashFunction, ProgramInfo};
 
 const TX_PROOF_CACHE_KEY_VERSION: &[u8] =
-    b"miden-synthetic-recursive-tx-proof-cache-v6-environment-eidos";
+    b"miden-synthetic-recursive-tx-proof-cache-v7-verifier-identity-eidos";
 pub(super) const INNER_PROOF_HASH: HashFunction = HashFunction::Eidos;
 
 pub(super) fn tx_proof_cache_key(
@@ -23,8 +23,8 @@ pub(super) fn tx_proof_cache_key(
     for digest in program_info.kernel_procedures() {
         program_bytes.extend_from_slice(&digest.as_bytes());
     }
-    // This local cache must distinguish authorized environments even while legacy claims still
-    // expose ProgramInfo. Neither the implementation root nor the source identifies K_entry/R_E.
+    // This local cache must distinguish authorized environments in addition to the code/debug
+    // metadata. Neither the implementation root nor the source identifies K_entry/R_E.
     let mut environment_bytes = Vec::with_capacity(64);
     environment_bytes.extend_from_slice(&descriptor.entry_key().into_word().as_bytes());
     environment_bytes.extend_from_slice(&descriptor.environment_root().into_word().as_bytes());
@@ -42,10 +42,10 @@ pub(super) fn tx_proof_cache_key(
     {
         chunk.copy_from_slice(&element.as_canonical_u64().to_le_bytes());
     }
-    // Native verification checks these roots even when the MVM proof has no deferred work.
+    // Native verification checks these identities even when the MVM proof has no deferred work.
     let mut compatibility_bytes = vec![compatibility.format()];
-    compatibility.vm_verifier_roots().write_into(&mut compatibility_bytes);
-    compatibility.pvm_verifier_roots().write_into(&mut compatibility_bytes);
+    compatibility.vm_verifier_identities().write_into(&mut compatibility_bytes);
+    compatibility.pvm_verifier_identities().write_into(&mut compatibility_bytes);
     let hash_fn_byte = [INNER_PROOF_HASH as u8];
     let parameters = pcs_params_bytes(&miden_air::vm::config::pcs_params());
     let digest: [u8; 32] = Blake3_256::hash_iter(
