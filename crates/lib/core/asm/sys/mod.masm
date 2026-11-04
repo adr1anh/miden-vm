@@ -7,9 +7,10 @@ pub mod vm
 # CONSTANTS
 # =================================================================================================
 
-# Eidos chaining word for one proof-request key block under the registered domain tag 0x01000201.
+# PROOF_REQUEST_DOMAIN_TAG = 0x01000202
+# Eidos chaining word for one proof-request key block under the registered v2 domain tag.
 const PROOF_REQUEST_INIT_CV = [
-    13503953893964382721,
+    13503953893964382722,
     11912009168875159560,
     11170449401267093504,
     6620516959492505600
@@ -53,23 +54,25 @@ pub proc drop_stack_top(top: word, upper_mid: word, lower_mid: word, bottom: wor
     dropw dropw dropw dropw
 end
 
-#! Computes the advice-map key addressing a proof package under a verifier.
+#! Computes the advice-map key addressing a proof package under an expected verifier identity.
 #!
-#! The key is the domain-tagged hash of `claim_commitment ‖ verifier_root` (exactly one Eidos
+#! The v2 key is the domain-tagged hash of `claim_commitment ‖ expected_verifier` (one Eidos
 #! block, so a single compression with no memory). It is a lookup address, not a trust anchor: the
-#! verifier re-checks the retrieved package, so a wrong package fails verification. Both inputs are
-#! program-owned: the verifier's MAST root comes from `procref`, while the claim commitment
-#! comes from an authenticated verifier output or the program's own inputs. Mirrors
-#! `miden_core::program::proof_request_key`.
+#! verifier re-checks the retrieved package against its statement. Both inputs are program-owned:
+#! the caller supplies its expected identity, committing to relation, entry key, and configuration,
+#! and obtains the claim commitment from an authenticated verifier output or its own computation.
+#! An implementation root or `procref` procedure key alone is not a verifier identity. Computing
+#! this key does not authorize the identity or its configuration, or settle deferred obligations.
+#! Mirrors `miden_core::program::proof_request_key`.
 #!
-#! Inputs:  [VERIFIER_ROOT, CLAIM_COMMITMENT, ...]
+#! Inputs:  [EXPECTED_VERIFIER, CLAIM_COMMITMENT, ...]
 #! Outputs: [PROOF_REQUEST_KEY, ...]
 pub proc build_proof_request_key(
-    verifier_root: types::Digest,
+    expected_verifier: types::Digest,
     claim_commitment: types::Digest,
 ) -> types::Digest
     swapw
-    # => [CLAIM_COMMITMENT, VERIFIER_ROOT, ...]
+    # => [CLAIM_COMMITMENT, EXPECTED_VERIFIER, ...]
     push.PROOF_REQUEST_INIT_CV
     exec.eidos::compress_double_word
     # => [PROOF_REQUEST_KEY, ...]

@@ -123,6 +123,11 @@ fn masm_domain_tags_match_rust_registries() {
         masm_scalar(CLAIM, "EXECUTION_CLAIM_DOMAIN_TAG"),
         domain_tag(EXECUTION_CLAIM).as_canonical_u64(),
     );
+    assert_eq!(masm_scalar(SYS, "PROOF_REQUEST_DOMAIN_TAG"), 0x0100_0202);
+    assert_eq!(
+        masm_scalar(SYS, "PROOF_REQUEST_DOMAIN_TAG"),
+        domain_tag(PROOF_REQUEST).as_canonical_u64(),
+    );
     assert_eq!(
         masm_scalar(KECCAK, "DOMAIN_TAG"),
         u64::from(Keccak256Precompile::domain().as_u32()),

@@ -200,15 +200,17 @@ proc store_preprocessed_commitment
     exec.layout::preprocessed_com_ptr mem_storew_le dropw
 end
 
-#! Requests and stages a PVM proof package for the deferred root.
+#! Requests and stages a PVM proof package for the deferred root under an expected verifier identity.
 #!
 #! This procedure does not authenticate the root or enforce call order. The caller must first
-#! obtain `D` from a successful verifier or another trusted part of its own computation.
+#! obtain `D` from a successful verifier or another trusted part of its own computation. The caller
+#! supplies `V`, its authorized expected verifier identity committing to the relation, entry key,
+#! and exact configuration. Neither this request nor identity derivation authorizes that choice.
 #!
-#! The event exposes the PVM verifier root followed by `D` to the host. Async hosts may suspend
+#! The event exposes `V` followed by `D` to the host. Async hosts may suspend
 #! execution while they obtain the proof and return advice-map and Merkle-store mutations. Once the
 #! host returns, this procedure fetches the proof stream by
-#! `sys::build_proof_request_key(verifier_root, D)` and
+#! `sys::build_proof_request_key(V, D)` and
 #! stages it on the advice stack. The response remains untrusted until the caller invokes
 #! `pvm::verify_proof` against the unchanged root.
 #!
@@ -216,15 +218,15 @@ end
 #! deferred state or another witness source for `D`.
 #!
 #! Fails if the host has not populated the advice map under
-#! `build_proof_request_key(verifier_root, D)` by the time its event handler returns.
+#! `build_proof_request_key(V, D)` by the time its event handler returns.
 #!
-#! Inputs:  [D]
-#! Outputs: [D]
+#! Inputs:  [V, D, ...]
+#! Outputs: [D, ...]
 #!
 #! Invocation: exec
-pub proc request_proof(root: types::Digest) -> types::Digest
-    dupw
-    procref.::miden::core::sys::pvm::verify_proof
+pub proc request_proof(expected_verifier: types::Digest, root: types::Digest) -> types::Digest
+    dupw.1 swapw
+    # => [V, D, D, ...]
     emit.PROOF_REQUEST_EVENT
     exec.::miden::core::sys::build_proof_request_key
     adv.push_mapval dropw

@@ -251,10 +251,14 @@ fn generic_eidos_initializer_rejects_two_pow_32_in_every_slot() {
 }
 
 /// The MASM `sys::build_proof_request_key` must agree with the native `proof_request_key` on the
-/// same `(verifier_root, claim_commitment)` pair.
+/// same `(expected_verifier, claim_commitment)` pair under the v2 request domain.
 #[test]
 fn masm_build_proof_request_key_matches_native() {
-    use miden_core::{Felt, Word, program::proof_request_key};
+    use miden_core::{
+        Felt, Word,
+        program::{domain::PROOF_REQUEST, proof_request_key},
+    };
+    use miden_crypto::hash::eidos::{DomainTag, Eidos, EidosFrame};
 
     let word = |a: u64, b: u64, c: u64, d: u64| -> Word {
         [
@@ -265,10 +269,29 @@ fn masm_build_proof_request_key_matches_native() {
         ]
         .into()
     };
-    let verifier_root = word(101, 102, 103, 104);
+    let expected_verifier = proof_request_test_identity();
     let claim_commitment = word(201, 202, 203, 204);
 
-    // Push CLAIM_COMMITMENT then VERIFIER_ROOT so VERIFIER_ROOT ends on top (word 0).
+    let request_key = proof_request_key(expected_verifier, claim_commitment);
+    let initial = Word::new(
+        [
+            0xbb67_ae85_0100_0202,
+            0xa54f_f53a_0000_0008,
+            0x9b05_688c_0000_0000,
+            0x5be0_cd19_0000_0000,
+        ]
+        .map(Felt::new_unchecked),
+    );
+    let mut payload = [Felt::ZERO; 8];
+    payload[..4].copy_from_slice(claim_commitment.as_slice());
+    payload[4..].copy_from_slice(expected_verifier.as_word().as_slice());
+    assert_eq!(Eidos::init_chaining_word(PROOF_REQUEST, 8), initial);
+    assert_eq!(request_key, Eidos::compress(initial, payload));
+    assert_ne!(request_key, Eidos::hash_elements(&payload));
+    let legacy_frame = EidosFrame::new(DomainTag::from_u32(0x0100_0201).unwrap(), [8, 0, 0]);
+    assert_ne!(request_key, Eidos::compress(legacy_frame.initial_chaining_word(), payload));
+
+    // Push CLAIM_COMMITMENT then EXPECTED_VERIFIER so EXPECTED_VERIFIER is word 0.
     let push = |w: Word| -> String {
         let e = w.as_elements();
         format!(
@@ -290,20 +313,17 @@ fn masm_build_proof_request_key_matches_native() {
         end
         ",
         push(claim_commitment),
-        push(verifier_root),
+        push(expected_verifier.into_word()),
     );
 
-    let mut expected: Vec<u64> = proof_request_key(verifier_root, claim_commitment)
-        .as_elements()
-        .iter()
-        .map(Felt::as_canonical_u64)
-        .collect();
+    let mut expected: Vec<u64> =
+        request_key.as_elements().iter().map(Felt::as_canonical_u64).collect();
     expected.resize(16, 0);
     build_test!(source.as_str(), &[]).expect_stack(&expected);
 }
 
 /// End-to-end request round-trip: the host registers a package stream under
-/// `proof_request_key(verifier_root, claim_commitment)`, and a consumer that holds only those
+/// `proof_request_key(expected_verifier, claim_commitment)`, and a consumer that holds only those
 /// two words computes the same key and retrieves the stream with `adv.push_mapval`. Proves the
 /// host helper and the MASM `build_proof_request_key` address the same advice-map entry.
 #[test]
@@ -319,7 +339,7 @@ fn proof_request_round_trip_retrieves_registered_package() {
         ]
         .into()
     };
-    let verifier_root = word(11, 12, 13, 14);
+    let expected_verifier = proof_request_test_identity();
     let claim_commitment = word(21, 22, 23, 24);
     let stream: [Felt; 4] = [
         Felt::new_unchecked(100),
@@ -328,7 +348,7 @@ fn proof_request_round_trip_retrieves_registered_package() {
         Felt::new_unchecked(400),
     ];
 
-    let key = proof_request_key(verifier_root, claim_commitment);
+    let key = proof_request_key(expected_verifier, claim_commitment);
     let values: Vec<Felt> = stream.to_vec();
 
     let push = |w: Word| -> String {
@@ -341,9 +361,9 @@ fn proof_request_round_trip_retrieves_registered_package() {
             e[0].as_canonical_u64()
         )
     };
-    // Consumer holds (claim_commitment, verifier_root) from its own inputs; pushes them in the
-    // proof_request_key contract order (verifier on top), derives the key, fetches the stream, and
-    // reads the four values back onto the operand stack.
+    // The consumer owns its expected identity and claim. It pushes them in the proof_request_key
+    // contract order (identity on top), derives the key, fetches the stream, and reads the four
+    // values back onto the operand stack.
     let source = format!(
         "
         use miden::core::sys
@@ -360,7 +380,7 @@ fn proof_request_round_trip_retrieves_registered_package() {
         end
         ",
         push(claim_commitment),
-        push(verifier_root),
+        push(expected_verifier.into_word()),
         push(claim_commitment),
     );
 
@@ -377,4 +397,26 @@ fn proof_request_round_trip_retrieves_registered_package() {
         advice_map
     )
     .expect_stack(&expected);
+}
+
+/// A synthetic owner-selected identity; the request consumer receives its word independently of
+/// the proof response and does not derive it from the request procedure's own root.
+fn proof_request_test_identity() -> miden_core::program::VerifierIdentity {
+    use miden_core::{
+        Felt, Word,
+        program::{ImplementationRoot, ProcedureKey, VerifierConfiguration, VerifierIdentity},
+    };
+
+    let word = |values: [u64; 4]| Word::new(values.map(Felt::new_unchecked));
+    let configuration = VerifierConfiguration::new(
+        ImplementationRoot::new(word([1, 2, 3, 4])),
+        vec![],
+        word([9, 10, 11, 12]),
+    )
+    .unwrap();
+    VerifierIdentity::derive(
+        word([13, 14, 15, 16]),
+        ProcedureKey::new(word([5, 6, 7, 8])),
+        configuration.commitment().unwrap(),
+    )
 }

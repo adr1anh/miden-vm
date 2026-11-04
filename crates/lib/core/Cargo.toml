@@ -90,6 +90,7 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 [build-dependencies]
 env_logger.workspace = true
 fs-err = { version = "3.1" }
+miden-air = { workspace = true, features = ["std"] }
 miden-assembly = { workspace = true, features = ["std"] }
 miden-assembly-syntax = { workspace = true, features = ["std"] }
 miden-core = { workspace = true, features = ["std"] }
