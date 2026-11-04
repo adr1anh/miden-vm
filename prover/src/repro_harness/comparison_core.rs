@@ -50,7 +50,7 @@ fn principal_constraints<AB: LiftedAirBuilder<F = Felt>>(
         * (AB::Expr::ONE - bits[0].clone()))
         * local.decoder.extra[0];
     let restore = match mode {
-        CoreMode::Standard | CoreMode::CoarseContext => {
+        CoreMode::Standard | CoreMode::CoarseContext | CoreMode::TaglessFrames => {
             f_end * local.decoder.end_block_flags().restores_caller_frame
         },
         CoreMode::Alternate => f_end,

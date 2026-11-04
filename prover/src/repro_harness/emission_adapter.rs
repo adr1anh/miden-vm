@@ -195,9 +195,21 @@ pub(super) fn eval_with_base_replacements<
     builder: &mut AB,
     replacements: &[(usize, AB::Expr)],
 ) {
+    eval_with_adjustments(air, builder, replacements, &[]);
+}
+
+/// Maps selected base equations and adds selected extension-field corrections in one evaluator.
+pub(super) fn eval_with_adjustments<
+    AB: miden_stark::air::LiftedAirBuilder<F = miden_core::Felt>,
+>(
+    air: miden_air::vm::MidenAir,
+    builder: &mut AB,
+    replacements: &[(usize, AB::Expr)],
+    adjustments: &[(usize, AB::ExprEF)],
+) {
     use miden_stark::air::LiftedAir;
 
-    let mut replaced = 0;
+    let (mut replaced, mut adjusted) = (0, 0);
     let mut adapter = EmissionAdapter::new(
         builder,
         |index: usize, original: AB::Expr| {
@@ -208,10 +220,19 @@ pub(super) fn eval_with_base_replacements<
                 original
             }
         },
-        |_: usize, original: AB::ExprEF| original,
+        |index: usize, original: AB::ExprEF| {
+            if let Some((_, adjustment)) = adjustments.iter().find(|(slot, _)| *slot == index) {
+                adjusted += 1;
+                original + adjustment.clone()
+            } else {
+                original
+            }
+        },
     );
     <miden_air::vm::MidenAir as LiftedAir<miden_core::Felt, AB::EF>>::eval(&air, &mut adapter);
     let counts = adapter.counts();
     assert!(replacements.iter().all(|(index, _)| *index < counts.total));
+    assert!(adjustments.iter().all(|(index, _)| *index < counts.total));
     assert_eq!(replaced, replacements.len());
+    assert_eq!(adjusted, adjustments.len());
 }

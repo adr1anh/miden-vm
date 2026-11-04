@@ -19,6 +19,7 @@ pub(crate) enum CoreMode {
     Standard,
     Alternate,
     CoarseContext,
+    TaglessFrames,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -131,13 +132,18 @@ impl<EF: ExtensionField<Felt>> LiftedAir<Felt, EF> for ComparisonAir {
         aux_inputs: &[Felt],
         challenges: &[EF],
     ) -> (RowMajorMatrix<EF>, Vec<EF>) {
-        <MidenAir as LiftedAir<Felt, EF>>::build_aux_trace(
+        let (aux, values) = <MidenAir as LiftedAir<Felt, EF>>::build_aux_trace(
             &self.inner,
             main,
             air_inputs,
             aux_inputs,
             challenges,
-        )
+        );
+        if self.inner == MidenAir::CORE && self.mode == CoreMode::TaglessFrames {
+            super::comparison_tag::adjust_aux(main, challenges, aux, values)
+        } else {
+            (aux, values)
+        }
     }
 
     fn build_aux_trace_with_preprocessed(
@@ -148,14 +154,19 @@ impl<EF: ExtensionField<Felt>> LiftedAir<Felt, EF> for ComparisonAir {
         aux_inputs: &[Felt],
         challenges: &[EF],
     ) -> (RowMajorMatrix<EF>, Vec<EF>) {
-        <MidenAir as LiftedAir<Felt, EF>>::build_aux_trace_with_preprocessed(
+        let (aux, values) = <MidenAir as LiftedAir<Felt, EF>>::build_aux_trace_with_preprocessed(
             &self.inner,
             main,
             preprocessed,
             air_inputs,
             aux_inputs,
             challenges,
-        )
+        );
+        if self.inner == MidenAir::CORE && self.mode == CoreMode::TaglessFrames {
+            super::comparison_tag::adjust_aux(main, challenges, aux, values)
+        } else {
+            (aux, values)
+        }
     }
 
     fn air_layout(&self) -> AirLayout {
@@ -170,6 +181,7 @@ impl<EF: ExtensionField<Felt>> LiftedAir<Felt, EF> for ComparisonAir {
         if self.inner == MidenAir::CORE {
             match self.mode {
                 CoreMode::CoarseContext => super::comparison_context::eval(builder),
+                CoreMode::TaglessFrames => super::comparison_tag::eval(builder),
                 mode => super::comparison_core::eval(builder, mode),
             }
         } else if self.inner == MidenAir::CHIPLETS && self.compare_syscall_namespace {
@@ -237,6 +249,13 @@ impl ComparisonMultiAir {
             ComparisonAir::without_syscall_namespace_check();
         result
     }
+}
+
+#[test]
+fn comparison_tag_policy_is_isolated() {
+    super::comparison_tag::assert_tag_policy_is_isolated(ComparisonAir::core(
+        CoreMode::TaglessFrames,
+    ));
 }
 
 #[test]

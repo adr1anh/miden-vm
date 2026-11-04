@@ -22,6 +22,7 @@ mod comparison_context;
 mod comparison_core;
 mod comparison_library;
 mod comparison_runner;
+mod comparison_tag;
 mod emission_adapter;
 mod syscall_fixture;
 
