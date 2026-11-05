@@ -1,0 +1,273 @@
+# LibraryTree VM implementation plan
+
+This plan is the current execution backlog for implementing the selected LibraryTree model in this repository. Once the plan is established, start implementation under the workflow below. This initial plan snapshot contains documentation only: no production implementation, compilation, tests, benchmarks or regeneration is claimed.
+
+The repository baseline is `00b12150715891582864d256ef51c5ea46bfb282`, inspected on 2 November 2026. The design chapters use the earlier baseline `a3d9bc09ef8a956774eb4ec0e6e734428e194a8c`; source paths and interfaces below follow this checkout. The live design Pages remain unchanged.
+
+## Sources and authority
+
+Read the linked design chapters when implementing their contracts. This plan selects implementation boundaries; it does not silently decide remaining Protocol policy or compiler ABI questions.
+
+- [LibraryTree design workspace](https://chatgpt.com/space/page_2e2830d3aca081919395850e2d6425c3), [design overview](https://chatgpt.com/space/page_78e4c04efdb48191a07eb544f8729784), and [decisions and next steps](https://chatgpt.com/space/page_a19f6685aeb88191a31a35296a82e48b).
+- [Namespaced execution shared contracts](https://chatgpt.com/space/page_11597d3254d8819196b4f5b3d0d13718), [execution, MAST and processor design](https://chatgpt.com/space/page_6260aefe8dd481919833c1414f870d34), and [environment execution model](https://chatgpt.com/space/page_0cb8fddb96a88191809388bf83fe686a).
+- [Library chiplet and authenticated resolution AIR](https://chatgpt.com/space/page_b955981e1f588191a1e3274f1bd6a3c3), [proof statements and protocol integration](https://chatgpt.com/space/page_077d46e54c908191a760066e259ad09c), and [implementation and verification design](https://chatgpt.com/space/page_28e54e1ae6a881918a137de353478cda).
+- [Assembly, linking and package contracts](https://chatgpt.com/space/page_8f108eb2fcf88191922e49df0dff6e31), [EXEC and explicit inline opt-in](https://chatgpt.com/space/page_6d5de3bc86fc8191bf08070f21ab4eb6), and [compiler and toolchain handoff](https://chatgpt.com/space/page_9bfed3770b6881919c72ccbbed3e85af).
+- [VM–Protocol execution and release contract](https://chatgpt.com/space/page_97a099703b9c81919476a98e51550cd4), [private account code and environment binding](https://chatgpt.com/space/page_8b7ff9039cb08191ad573b8333bf230d), and [VM contract and feasibility review](https://chatgpt.com/space/page_9183e46c5e648191939ffc4cb4bffb9d).
+
+## Scope and invariants
+
+Breaking changes are accepted. Implement one new callable/statement model and rebuild its consumers; do not create a permanent dual-target executor or digest fallback to ease the transition.
+
+1. **Environment authority:** execution is defined by immutable `(K_entry, R_E, N_kernel)`. Entry and every retained runtime invocation authenticate a binding in R_E. Code availability at implementation root D does not authorize execution. The environment root never switches on account/library calls.
+2. **Uniform callable keys:** EXEC/CALL/SYSCALL and dynamic targets use ProcedureKey K; `procref` produces K. Separate newtypes distinguish K, D, R_E, N and label commitment L. Structural JOIN/SPLIT/LOOP/SPAN and `ExternalNode(D)` remain structural code commitments. Immediate keyed nodes have no callee child.
+3. **Invocation modes:** EXEC/DYN preserve context and established principal; CALL/DYNCALL create a new user context and establish the requested K; SYSCALL enters root context while preserving principal. Entry initializes K_entry in the existing initial context. Matching returns restore frames/forests. Same-context execution shares RAM, overflow and FMP; namespaces do not isolate memory.
+4. **Kernel authorization:** actual SYSCALL requires the authenticated immediate parent namespace to equal the authorized full accumulated N_kernel. Ordinary modes and entry may use the same exports. No privilege class, descendant wildcard, ordinary inequality test or kernel-string authority is introduced.
+5. **Canonical authentication:** reuse standard Eidos FeltSequence framing and the agreed typed label codec/domains. Env extends N; Merkle/List preserve it; Mast(L,D) derives K under inherited N. DATA never emits an executable binding. Global executable-path uniqueness is a builder/admission obligation; selective membership is not its proof.
+6. **Runtime exec:** every retained source exec, including local/bundled helpers, becomes real keyed EXEC (`0x5f`). Structural inline expansion requires explicit eligible fixed-body opt-in. Latest implementations are not silently frozen. Runtime recursion is distinct from forbidden structural inline cycles.
+7. **Packed proof relation:** Library/Controller/AEAD/Memory/ACE/Bitwise/PAD share Chiplets24/4, the selected 22-cell Library overlay, nine fixed periodic columns and `[4,4,3,2]` lookup capacity. Four production AIRs remain. Degree bounds, lookup multiplicities and physical prefix relocation require actual capture/testing.
+8. **Statement cutover:** claim44 v2, Core36 public Felts, Chiplets8 public Felts and deferred-only aux4 replace the present claim40/Core32/kernel-list authority. Expected public claims come from the verifier caller. Root END authenticates K_entry/D_root and closes the initial binding; all-HALT is invalid. Transport format 3 is separate from claim v2.
+9. **Toolchain separation:** declarations/interface identity, release selection, canonical namespace home, code materialization and source aliases are separate. Latest can compile without D; pinned selection does not imply inlining. Retain all public/helper/address-taken callable roots. Final runnable artifacts contain no unresolved namespace relocations.
+10. **Witness and resource trust:** host resolution/code loading supplies witnesses. AIR authenticates resolution; guest resource loaders must authenticate advice values before use. Code loading retains current requested-D/procedure-root checks and merge-advice-once behavior. Debug metadata never grants authority.
+
+Included: core identities/MAST, processor and replay, packed AIR/proofs, assembler/project/package changes, supported runtime ABI/resource contracts, core library, public API/CLI, adversarial qualification and measured costs. Protocol registry/publisher authorization, inclusion freshness and concrete account policy remain external integrations with explicit required contracts and fixtures. Upstream Rust compiler lowering is a tracked handoff where its source is outside this repository. Do not implement a new registry or claim these external obligations are solved by the VM.
+
+## Workflow and completion rules
+
+The first goal commit contains this plan only. Subagents perform the main research, implementation and review work; the orchestrator owns integration, signed commits, branch transitions and acceptance. Assign an independent reviewer who did not implement the change. Subagents must not commit or switch branches unless the orchestrator explicitly delegates that responsibility.
+
+Use one local branch per proposed PR in a **linear stack**: PR NN has PR NN−1 as its Git parent/base, even when its semantic dependency list is shorter. Research and design can proceed in parallel according to semantic dependencies; shared-worktree edits must have clear ownership. Branch names below are exact defaults using the required `adr1anh/` prefix. PR 00 starts from the baseline. Keep incomplete/noncompiling units as an unsubmitted local stack with deferred checks recorded. **Do not create any GitHub PR, including a draft, until the user explicitly says to do so.** No push or publication is required to execute the local stack.
+
+Intermediate tips may fail to compile during the intentional breaking cutover. Record the exact known failure and the PR expected to resolve it. That permission does not waive soundness, malicious-input, native/recursive or final tests. Do not expose or release host-only keyed dispatch as a completed proof system. The final tip must build, lint, test and regenerate cleanly.
+
+Choose many focused, reviewable commits as work proceeds; do not freeze commit counts now. Before each slice, identify the invariant/refactor it delivers, touched consumers and focused acceptance evidence. Prefer refactor/remove/reuse over duplicate resolvers, interpreters, codecs, builders or compatibility layers. If newly discovered coupling changes a boundary, update this plan in a **separate signed documentation commit**, never mixed with implementation.
+
+Local uncommitted scratch files are allowed. Stage explicit file paths for each intended commit so scratch files and unrelated work are not swept into it. When a material shared design, product, ABI, security, policy or scope decision is needed, stop the affected work and ask the user a concise, concrete question to resolve together. Continue independent preparation only while waiting; do not silently choose a scope or weaken a selected contract to proceed. Routine implementation choices remain delegated within the agreed contracts.
+
+Maintain root `PR_DESCRIPTION.md` as the rolling description of the current PR. Before switching branches, finalize and commit it separately from implementation and plan changes. Describe only the final scope: problem/resulting behavior, stack base and semantic dependencies, checks passed/deferred with reasons, and material risks/open gates. Do not preserve abandoned approaches or use a passing happy path as completion evidence.
+
+The status ledger below is authoritative for progress. Allowed states are `planned`, `in-progress`, `implemented-awaiting-validation`, `complete`, and `blocked`. Add actual implementation commit SHAs and concrete test/capture/regeneration evidence. `complete` means its acceptance criteria are met; a branch with unrun required tests is `implemented-awaiting-validation`. Record exact external/decision blockers without guessing a policy to clear them.
+
+### Power and privilege rules
+
+Before compiling or testing Rust, run `systemd-ac-power`. Exit 0 permits proceeding subject to the heavy-work guard; any other exit requires reporting battery power and waiting for user approval. Before CPU-intensive compilation, suites, benchmarks, generation or similar work, run `/usr/local/bin/headless-power-policy check-heavy`: exit 0 permits proceeding; exit 75 defers heavy work while lightweight work continues and the guard is retried later; any other exit defers until the guard works. Do not ask to bypass exit 75 unless the user explicitly requests an override. Recheck after a meaningful delay or changed power state, and avoid simultaneous local heavy suites.
+
+For approved root commands use `sudo /usr/local/sbin/codex-duo-run /absolute/command [args...]` in a PTY and ask the user to approve Duo; otherwise use normal password-based sudo. Never ask for a password or configure NOPASSWD. Codex permissions are separate. Do not suspend or hibernate the remote machine.
+
+## Stage 1 Shared contracts and foundations
+
+### PR 00 Commit the implementation plan
+
+**Branch:** `adr1anh/librarytree-00-plan`. **Git base:** baseline `00b121507`. **Semantic dependencies:** none.
+
+**Files:** new root `LIBRARYTREE_PLAN.md` only in the first commit. Validate design/source links, baseline, sequencing, open gates and acceptance coverage. Later plan edits remain separate signed docs commits. **Checks:** independent review against the design chapters and current source; after staging the explicit plan path, `git diff --cached --check` (a bare `git diff --check` does not inspect an untracked plan). **Acceptance:** a durable standalone plan with no production code changes and no claimed build/test result.
+
+### PR 01 Canonical identities and execution contracts
+
+**Branch:** `adr1anh/librarytree-01-identities`. **Git base:** PR 00. **Semantic dependencies:** 00.
+
+**Existing files:** `core/src/program/{mod,domain,claim,request}.rs`, `core/src/lib.rs`, existing Eidos helpers under `crates/crypto/src/hash/eidos/`. **New:** `core/src/program/environment.rs` or a small module directory if warranted.
+
+Define distinct K/D/R_E/N/L types, typed label bytes, canonical environment objects, namespace/key derivation, bounded decode/build and duplicate executable-path validation. Establish the immutable execution descriptor and typed verifier identity/configuration contract. Coordinate actual claim activation with PR 12; keep one canonical codec rather than two authoritative statement models. AccountId parsing and registry policy stay outside core.
+
+**Acceptance:** byte-exact Rust vectors cover every label tag, quoted/Unicode components, empty/multiblock collections, object domains and namespace/key distinctions. Unknown versions/tags, malformed fields, trailing data, duplicate executable paths and domain substitution reject. The vector set is consumable by MASM tests. **Checks:** `cargo test -p miden-core --lib program`; `cargo test -p miden-core --lib crypto_and_vm_registries_are_disjoint`.
+
+### PR 02 Keyed MAST and wire format
+
+**Branch:** `adr1anh/librarytree-02-keyed-mast`. **Git base:** PR 01. **Semantic dependencies:** 01.
+
+**Existing files:** `core/src/operations/{mod,tests}.rs`, `core/src/mast/node/{mod,call_node,dyn_node,mast_forest_contributor}.rs`, `core/src/mast/{mod,dense_builder,dense_order,multi_forest_node_iterator,sparse,untrusted}.rs`, merger and serialization modules/tests. **New:** `core/src/mast/node/exec_node.rs`. Update affected `tools/miden-core-fuzz/fuzz_targets/` and seed/arbitrary generators.
+
+Add EXEC control opcode 0x5f and target-only Exec/Call/SysCall nodes that hash K/mode without a structural callee. Replace dead callee-ID traversal assumptions directly. Preserve real structural External(D). Bump dense MAST 0.0.5 → 0.0.6 across safe/trusted/view/hashless/sparse readers/writers together.
+
+**Acceptance:** canonical round trips and malformed count/offset/version rejection; changing environment D leaves caller MAST unchanged; equal-D/different-K remains distinct; runtime recursion is representable and structural cycles reject. **Checks:** `cargo test -p miden-core --lib mast`; `cargo test -p miden-core --lib operations`; run affected fuzz smoke checks at final qualification with explicit bounds.
+
+### PR 03 Chiplet refactor and address ownership
+
+**Branch:** `adr1anh/librarytree-03-chiplet-foundation`. **Git base:** PR 02. **Semantic dependencies:** 00 and selected layout/address contract; research can parallel PRs 01–02.
+
+**Existing files:** `crates/air/source/src/vm/constraints/chiplets/{columns,selectors,memory,ace}.rs`, `crates/air/source/src/vm/constraints/chiplets/hasher_control/mod.rs`, lookup messages/chiplet AIR and buses, `processor/src/trace/chiplets/` and sequential/parallel trace/address state. **New if useful:** `processor/src/trace/chiplets/layout.rs` for one checked layout owner.
+
+Extract logical Controller-address handling and checked relocation/sentinel rules; do not shift VM clocks, context IDs or memory/overflow addresses. Simplify Memory equations and reusable degree-reduced arithmetic with equivalence evidence. Preserve current relation behavior where possible and explicit lookup multiplicity ownership.
+
+**Acceptance:** sequential/parallel traces agree; old/new Memory equations agree in context-change cases; writes preserve untouched slots/read-only/range rules; address conversion occurs once including valid logical zero and saved/replayed states; native/generated evaluator values/order/degrees agree. **Checks:** `cargo test -p miden-air-definitions --lib vm::constraints::chiplets`; `cargo test -p miden-processor --lib --features concurrent trace::parallel`; `cargo test -p miden-air --test constraint_capture --test generated_drift --test ace_codegen`.
+
+### PR 04 Namespace plans and declaration-only interfaces
+
+**Branch:** `adr1anh/librarytree-04-toolchain-contracts`. **Git base:** PR 03. **Semantic dependencies:** 01; interface/home codecs require the recorded Protocol contract.
+
+**Existing files:** `crates/assembly-syntax/src/{module.rs,ast/invocation_target.rs,ast/instruction/mod.rs,ast/instruction/print.rs,parser/cst/instructions.rs}`, parser/sema tests, `crates/mast-package/src/{lib.rs,package/manifest.rs,package/mod.rs}`. **New:** `crates/mast-package/src/{interface.rs,namespace_plan.rs,interface/serialization.rs}` as needed. Touch CST lexer/parser only if selected explicit-key/inline syntax requires it.
+
+Separate canonical declarations and optional body availability; add validated NamespacePlan/interface-only artifact and explicit key/inline forms. Preserve exact-byte optional ABI metadata separately from tooling FunctionType. Do not invent placeholder D/forest or activate a partially migrated package9 executable. Reuse existing parsed Path components and core hashes.
+
+**Acceptance:** declaration-only Latest keys need no D; quoted `::`, exact Unicode bytes, typed labels and absent/present-empty ABI differ correctly; unknown versions/malformed homes reject; old bare digest syntax gets migration diagnostics. **Checks:** `make test-assembly-syntax`; `cargo test -p miden-mast-package --lib interface`; CST tests only if changed.
+
+## Stage 2 Authenticated execution and relation
+
+### PR 05 Keyed runtime and atomic transitions
+
+**Branch:** `adr1anh/librarytree-05-keyed-execution`. **Git base:** PR 04. **Semantic dependencies:** 01, 02; agree resolver/Resolve ledger schema with PRs 06–07.
+
+**Existing files:** `processor/src/execution/{mod,call,dyn,external}.rs`, `processor/src/fast/{mod,operation,execution_api,step}.rs`, processor/executor/options/errors/continuation stack, host/default/forest store and public exports. **New:** small shared resolver/EXEC modules and bounded environment witness provider; focused `processor/src/fast/tests/environment.rs`.
+
+Resolve `(R_E,K)->(N,D,opening)` before typed D-indexed code loading. Share prepare/commit transitions across pure/source-aware and sync/async execution; authenticate before state changes and make retries idempotent. Implement ENTRY/all runtime modes, requested-key caller/principals, context/FMP/overflow/return behavior and checked budgets. Remove kernel-ROM/digest dispatch authority. Cache bindings by `(R_E,K)`, code by D, and preserve code-root checks/advice merge-once.
+
+**Acceptance:** complete mode/context/principal/local/host-loaded matrix; same-D aliases distinct; no fallback; wrong syscall namespace/descendant rejects; unknown key versus unavailable/bad D differ; cache/root/limit boundaries and failures/retries do not double-pop/save/charge. **Checks:** `cargo test -p miden-processor --lib environment`; `cargo test -p miden-processor --lib fast::tests`; focused existing source-debug/cache/aggregate-stack regressions. Runtime success alone is not proof acceptance.
+
+### PR 06 Packed Library witness and authenticated lookup
+
+**Branch:** `adr1anh/librarytree-06-packed-library`. **Git base:** PR 05. **Semantic dependencies:** 01, 03 and PR 05 ledger contract; synthetic ledgers allow earlier research.
+
+**New:** `crates/air/source/src/vm/constraints/chiplets/library/{mod,columns,tests}.rs`, `crates/air/source/src/vm/constraints/lookup/buses/library.rs`, `crates/air/source/src/vm/trace/chiplets/library.rs`, `processor/src/trace/chiplets/library/{mod,trace,tests}.rs`. **Existing:** chiplet selectors/columns/Memory/ACE/hasher control, lookup messages/buses, main trace schema, chiplet/parallel assembly and `processor/src/trace/tests/lookup.rs`.
+
+Implement two-row Env/Merkle/Mast, complete reverse Lists, unit Open edges, normal/syscall Resolve frequencies, local four-coordinate syscall equations, compression interning and checked counts. Realize selected packed bands, 22 Library cells, ninth periodic column and `[4,4,3,2]` lookup groups without a fifth AIR or new Chiplets auxiliary column. Finalize prefix before physical address conversion.
+
+**Acceptance:** forged full matrices reject list early-exit/midchain/CV/namespace/depth/padding changes, unrooted Open, false selectors/prefix exit, missing PAD/Controller initialization, cross-band/cyclic transitions and weighted namespace cancellation after dependent helpers are recomputed. Capture complete base/extension constraint and lookup degrees; degree ≤9 and capacity are measured gates. **Checks:** `cargo test -p miden-air-definitions --lib library`; `cargo test -p miden-processor --lib library`; generated capture/drift checks and `cargo test -p miden-processor --lib trace::tests::lookup`.
+
+### PR 07 Core invocation binding and root completion
+
+**Branch:** `adr1anh/librarytree-07-core-resolution`. **Git base:** PR 06. **Semantic dependencies:** 02, 05, 06. Production enablement also requires PR 12.
+
+**Existing files:** `crates/air/source/src/vm/constraints/{columns.rs,decoder/,op_flags/,system/,lookup/}`, Core trace schema, processor block stack/tracer/state/parallel fragments and decoder/lookup tests. **New:** `crates/air/source/src/vm/constraints/lookup/buses/resolution.rs` for the dedicated Core Resolve column.
+
+Add resolved-D columns and bind literal/memory K, mode, Resolve request and actually executed D on the same row. Demand one resolution per invocation including cache hits. Constrain requested principals/restoration and actual EXEC. Root END demands entry resolution using actual root hash/next principal; forbid initial HALT and require authenticated END into absorbing HALT. Remove old digest invocation equations.
+
+**Acceptance:** trace-cell mutations reject wrong K/D/tag/child, omitted/doubled/cache-hit demand, principal/return mismatch, all-HALT/skipped completion and forged END frames. Recompute dependent hashes/helpers so tests exercise the intended equation. **Checks:** `cargo test -p miden-processor --lib trace::tests::decoder`; `cargo test -p miden-processor --lib trace::tests::lookup`; `cargo test -p miden-air-definitions --lib vm::constraints::system`; generated degree/drift capture.
+
+### PR 08 Deterministic replay, prefix relocation and debugger
+
+**Branch:** `adr1anh/librarytree-08-replay-debug`. **Git base:** PR 07. **Semantic dependencies:** 05–07.
+
+**Existing files:** `processor/src/{tracer.rs,trace/mod.rs,trace/execution_tracer.rs,trace/trace_state.rs,trace/block_stack.rs}`, trace-state serde/tests, `processor/src/trace/parallel/`, chiplets integration, fast/host debug and continuation stack; coordinate `crates/mast-package/src/debug_info/`.
+
+Extend the existing versioned execution witness with immutable descriptor, entry binding, requested K/resolved D/mode/principal, bounded opening ledger and resolution IDs. Replay without host I/O, retaining multiplicities across cache hits/fragments. Use one checked final P_L conversion of typed logical Controller addresses, preserving stopped/resumed state and sentinels. Distinguish real EXEC activations from inline source frames and display K/D separately.
+
+**Acceptance:** sequential/parallel/buffered/streamed/no-source parity at each invocation/pending/return cut; malformed/missing ledger IDs reject; normal+syscall shared opening counts survive; zero/sentinel/eight-row prefix boundaries and omitted/doubled offsets reject. Old/inconsistent witness versions fail clearly. **Checks:** `cargo test -p miden-processor --lib --features concurrent trace::parallel`; `cargo test -p miden-processor --lib trace::trace_state`; focused existing source-debug/step regressions and trace lookup checks.
+
+## Stage 3 Toolchain and runtime contracts
+
+### PR 09 Keyed assembly and package9 cutover
+
+**Branch:** `adr1anh/librarytree-09-keyed-packages`. **Git base:** PR 08. **Semantic dependencies:** 02, 04, 05; proof checks require PR 12.
+
+**Existing files:** `crates/assembly/src/{assembler.rs,procedure.rs,mast_forest_builder.rs,fmp.rs,instruction/procedures.rs,linker/}`, `crates/assembly-syntax/src/sema/passes/verify_invoke.rs`, `crates/mast-package/src/package/{manifest.rs,mod.rs,serialization/}`, debug-info provenance. Extend assembly tests for procref/procedures/dynamic/kernels/root calls/link cycles/imports/packages/locals; add `crates/assembly/src/tests/namespaced_execution.rs`.
+
+Split identity resolution from body supply, runtime reachability/SCCs from acyclic inline dependencies, and retain all public/helper/address-taken roots. Emit K for every retained invocation/procref; explicit inline alone composes a body. Activate validated namespaced package9 metadata and MAST0.0.6 together across trusted/safe readers, commitments and strip-debug. Replace root-centric Program/kernel reconstruction, root-call lowering and hardcoded `$kernel` authority rather than wrap them.
+
+**Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old callable formats reject and required metadata survives debug stripping. **Checks:** `make test-assembly test=namespaced_execution`; `cargo test -p miden-mast-package --lib package::serialization`; then `make test-assembly` and package lib tests after focused failures resolve.
+
+### PR 10 Revision-aware projects and code supply
+
+**Branch:** `adr1anh/librarytree-10-project-imports`. **Git base:** PR 09. **Semantic dependencies:** 04, 09 and exact release identity codec; model research can parallel PR 09.
+
+**Existing files:** `crates/project/src/{dependencies.rs,dependencies/graph.rs,linkage.rs,package.rs,ast/dependency.rs,ast/package.rs,ast/parsing.rs}`, project tests, `crates/mast-package/src/dependency/mod.rs`, manifest, `crates/assembly/src/project/{dependency_graph.rs,runtime_dependencies.rs,build_provenance.rs,post_process.rs,tests.rs}`, linker module ownership and packaging fixtures. **New if justified:** `crates/project/src/library_import.rs`.
+
+Separate source aliases, interface/release instances and code/artifact identity. Replace PackageId-only graph/manifest/cache ownership; encode independent Latest/Pinned selection and External/Bundle supply. Latest initially requires external supply. Replace single embedded-kernel-package propagation with ordinary declaration/mount requirements and separately authorized N_kernel. Reuse existing source/package registry infrastructure without turning it into an on-chain resolver.
+
+**Acceptance:** two pinned revisions coexist with equal module paths/D; same `(I,r,R)` deduplicates and conflicting R rejects; Latest aliases share canonical identity; bundling never inlines/changes K; semver/Git revisions never become Protocol revisions; canonical self/helper mount requirements propagate. **Checks:** `make test-project`; `make test-assembly test=project::tests`; `cargo test -p miden-assembly --test packaging`.
+
+### PR 11 Runtime ABI profiles and immutable resources
+
+**Branch:** `adr1anh/librarytree-11-runtime-contracts`. **Git base:** PR 10. **Semantic dependencies:** 01, 04, 09, 10; affected code waits for open ABI/resource gates below.
+
+**Existing files:** assembly syntax advice-map/sema, assembly FMP/memory lowering, mast-package manifest/serialization/commitments, `core/src/mast/mod.rs`, core-lib memory/hash helpers. **New if useful:** `crates/mast-package/src/package/resources.rs`, `crates/lib/core/asm/sys/resources.masm` and focused adversarial integration tests.
+
+Encode the agreed runtime-base/profile/init/resource contracts in required metadata. Reuse current advice-map bytes and build a canonical validated public content inventory; private/transaction advice remains supported. Runtime immutable loads check compiled/authenticated length/codec and hash/assert expected content before use. Track upstream compiler lowering separately. Preserve EXEC/DYN modes; no implicit per-library memory isolation or runtime namespace inferred from caller principal.
+
+**Acceptance:** the agreed randomized private-instance profile preserves committed C/D without patching code; resource key with malicious value/length rejects before use; inventory survives retention/debug stripping/export; invalid content-addressed public entries reject. **Checks:** focused new resource/ABI tests; `cargo test -p miden-mast-package --lib resources`; `make test-core-lib test=sys`; changed assembly suites. Undefined ABI choices remain gates, not untested assumptions.
+
+## Stage 4 Statements, library and public interfaces
+
+### PR 12 Native statement and proof transport cutover
+
+**Branch:** `adr1anh/librarytree-12-native-statement`. **Git base:** PR 11. **Semantic dependencies:** 01, 06, 07; namespaced end-to-end fixtures use 09.
+
+**Existing files:** `core/src/program/{mod,claim,domain,kernel}.rs`, `core/src/proof.rs`, `crates/air/source/src/vm/{inputs,statement,tests}.rs`, AIRs/public inputs/lookup miden AIR, generated VM adapters/config/security, `crates/stark/vm/src/{prover,verifier,security,memory}.rs`, setup/preprocessed, processor trace, prover/verifier APIs. **New:** `crates/stark/vm/tests/librarytree_statement.rs` or equivalent existing unit module.
+
+Activate claim44/domain v2 in canonical order `K_entry[4] || R_E[4] || N_kernel[4] || I[16] || O[16]` and proof format3. Explicitly derive Core36 as `I || O || K_entry` and Chiplets8 as `R_E || N_kernel` from the expected caller claim, retaining deferred-only aux4. Replace program/kernel external terms with singleton root Open and keep two deferred terms. Remove variable kernel-list/count/security authority. This is the production relation enablement point; earlier runtime slices remain incomplete until these bindings close.
+
+**Acceptance:** exact field/order/tail vectors; every mutated R_E/N_kernel/K_entry/I/O fails, including ordinary-only execution; old claims/transport/public shapes/fifth AIR reject; three external terms and one combined Chiplets normalized sum close; deferred/empty/complete precompile obligations persist. **Checks:** `cargo test -p miden-core --lib program::claim`; `cargo test -p miden-air-definitions --lib vm`; `cargo test -p miden-vm-stark --lib`; `cargo test -p miden-verifier --lib`; focused native prove/verify cases.
+
+### PR 13 Core-library packaging and runtime migration
+
+**Branch:** `adr1anh/librarytree-13-core-library`. **Git base:** PR 12. **Semantic dependencies:** 09–12 and supported ABI profile; final recursive identity follows in 14.
+
+**Existing files:** `crates/lib/core/{build.rs,src/lib.rs,src/bin/generate-package.rs,asm/miden-project.toml}`, MASM public/helpers/callback tables including `asm/sys/vm/{mod,ood_frames}.masm` and `asm/stark/utils.masm`, core-lib tests/helpers/sys/forest merge, assembly packaging fixtures and affected generated-assembly builders.
+
+Build the library at an explicit canonical home with declaration/release/mount/resource metadata. Retain callback/helper callable roots and migrate ordinary package/build/host consumers to keys. Choose inline opt-ins deliberately rather than auto-inline existing exec. Prepare verifier bundle metadata contracts; PR 14 owns recursive mathematics, final verifier identities/configurations and related generated artifacts to avoid overlapping ownership.
+
+**Acceptance:** external/bundled pinned library executes equivalently; private callbacks survive retention/export; pinned-only helpers and Latest callers work; package/resource inventory survives artifact export; source-root stability tests reflect intentional new semantics. **Checks:** `make test-core-lib` for ordinary/core-library scopes that are runnable at this stage; `make test-masm-root-stability`; record recursive checks precisely as deferred to 14 where necessary.
+
+### PR 14 Recursive verification and generated identities
+
+**Branch:** `adr1anh/librarytree-14-recursive-verifier`. **Git base:** PR 13. **Semantic dependencies:** 06, 07, 09, 12, 13; native relation must be settled.
+
+**Existing files:** `crates/stark/vm/src/recursive/mod.rs`, core-lib `asm/sys/vm/{mod,claim,public_inputs,layout,parameters,aux_trace,ood_frames,constraints_eval,deep_queries}.masm`, regeneration binaries/helpers, `crates/air/generated/{build.rs,src/vm/}`, core proof compatibility, generated core-lib docs and proof-order/scatter/security tests. **New:** `crates/lib/core/tests/stark/librarytree_claim.rs`, registered in existing test module.
+
+Read exactly44 advice Felts into safe48-cell staging/isolated tail; hash six blocks with zero tail and no overread. Stage Core36/Chiplets8/three external terms; remove kernel-list materialization while retaining security/deferred results and all24 proof permutations. Regenerate evaluators/ACE/layouts/constants/docs/setup/relation roots; bind verifier entry and helper/resource/mount configuration, including N_kernel, rather than D alone. Replace old `procref == verifier root` APIs/docs with typed identities/request v2.
+
+**Acceptance:** native/MASM/recursive claims match; adjacent scratch cannot affect hash; old/missing/excess advice fails; malicious child/rebound entry/helper/root/N_kernel and omitted deferred obligation reject. Captured degrees/shape/security counts match generated assets and rebuilt identity. **Checks:** `make regenerate-constraints`; `make check-constraints`; generated capture/drift/ACE tests; `cargo test -p miden-core-lib --test core-lib stark`; `cargo test -p miden-core-lib --lib proof_compatibility_roots_match_the_embedded_core_library`; `make check-pvm-proof-fixture`. Regenerate generated MASM docs with `MIDEN_BUILD_LIB_DOCS=1 cargo build -p miden-core-lib` when changed, following repository CI. Regenerate PVM constants/root only if its emitted code/relation changed.
+
+### PR 15 Public API, CLI and consumer closure
+
+**Branch:** `adr1anh/librarytree-15-cli-integration`. **Git base:** PR 14. **Semantic dependencies:** 08–14.
+
+**Existing files:** `miden-vm/src/{lib,internal}.rs`, `miden-vm/src/cli/{compile,bundle,run,prove,verify,data,utils}.rs`, processor public API, `crates/test-utils/`, integration exec/prove_verify/flow_control/CLI suites, examples, fixtures and user/developer documentation.
+
+Replace root-only verification flags and implicit Program/kernel reconstruction with explicit versioned expected descriptor/claim inputs. Share run/prove/verify validation; separate environment preimages from code bundles and report K_entry/R_E/N_kernel/D distinctly. Migrate remaining root consumers; report Library authentication metrics instead of kernel-ROM counts. Preserve atomic output, security estimator and precompile preparation/resource guards introduced since the design baseline.
+
+**Acceptance:** run/prove/verify round trips across supported transcript hashes, stopped witnesses and deferred/complete proof paths; changed expected descriptor fields/legacy flags/artifacts fail explicitly; allocation/budget checks precede execution; optional code hints cannot override bindings. **Checks:** `make test-vm test=cli::`; focused `prove_verify::`/`flow_control::` filters in the existing `miden-cli` integration test binary; compile supported public and no_std surfaces. Run the final commands in PR 16 before declaring release readiness.
+
+## Stage 5 Qualification and release evidence
+
+### PR 16 Adversarial, performance and final qualification
+
+**Branch:** `adr1anh/librarytree-16-qualification`. **Git base:** PR 15. **Semantic dependencies:** all implementation PRs and resolved release gates.
+
+**Existing files:** processor decoder/lookup/full-matrix harness and parallel tests, generated capture/drift/ACE tests, VM prove_verify integration, core-lib proof-order/security suites, Stark security/memory accounting and registered `miden-vm/benches/build_trace.rs`. **New:** `miden-vm/tests/integration/librarytree.rs`, registered in existing integration main; a real VM proof benchmark registered explicitly in `miden-vm/Cargo.toml` if no existing harness supplies the required measurements. Add a concise checked-in qualification report only once measured evidence exists.
+
+Qualify the actual implementation across shallow Lists/selective Merkle, mostly-unused large environments, repeated/cache-hit calls, equal-D aliases, Latest changes with stable callers, pinned self/helpers, randomized private instances, nested N_kernel/private descendants, root modes, resumed/parallel traces and boundary/overflow attacks. Combine native and actual recursive malicious-child tests with forged trace/lookup matrices. Builder/Protocol fixtures cover global uniqueness, trusted namespace admission and freshness; AIR membership tests must not claim those properties.
+
+Measure opening rows/compressions separately from invocation/context and Protocol construction costs; report prefix rounding, combined padded Chiplets height, proving time/peak memory/proof bytes, native/recursive verification and DEEP/lookup/security counts. Compare cold/warm code and opening caches. Avoid unsupported speed/minimality claims.
+
+**Final acceptance:** all required focused/adversarial tests pass; generated/manual/native/MASM/recursive constraints and identities agree; no host-only resolution, implicit digest authority, fifth AIR or old required wire layout remains; resource/security bounds and unresolved external obligations are documented. No deferred required check remains. Artifact regeneration leaves no diff and the final tip builds/lints/tests cleanly.
+
+**Checks after power guards:** repository `make exec`, `make exec-single`, `make format-check`, `make clippy`, `make test`, `make check-constraints`, `make check-pvm-proof-fixture`, `make test-masm-root-stability`; supported no_std surfaces including `cargo check -p miden-core -p miden-mast-package -p miden-assembly --no-default-features`; affected bounded fuzz/benchmark commands selected from the actual final changed graph. New test filters throughout this plan are provisional until registered test names exist; prefer the repository Make target where it supplies necessary features/stack settings. Resolve focused failures before broad suites, and repeat broad checks only for new changes/failures. Record exact commands/toolchains/features, commit SHAs and outcomes in the ledger/report. Verify deterministic regeneration with `git diff --exit-code` after intended generated changes are committed.
+
+## Open decisions and external gates
+
+| Gate | Required decision/evidence | Blocks |
+| --- | --- | --- |
+| Canonical cross-team wire contract | Confirm domain allocation collision check; Protocol/user/random wrappers; interface/release/resource codecs and full namespace provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
+| Frontend syntax and eligibility | Agree explicit key/inline grammar, fixed-body inline eligibility and migration diagnostics; source alias versus published alias versus wrapper semantics. | 04, 09 |
+| Private reusable-instance ABI | Freeze runtime-base handle transport, typed relative suffix/procref lowering and validation. C/D must remain identical across randomized user mounts; no implicit relocation or caller-derived namespace. | 11, private-instance acceptance |
+| Shared/fresh-context ABI | Specify supported value/pointer layouts, global/heap/function-table ownership, initialization and reentrancy for supported libraries. Namespace authentication supplies no RAM isolation. Do not guess a fresh-context-only/stateless-only scope. | 11, 13, final supported launch claim |
+| Protocol authority and admission | Agree canonical homes, user U reconstruction, root binding on public input stack, uniqueness checks, exact N_kernel authorization, release/resource admission and inclusion freshness evidence. | Protocol integration fixtures and release adoption |
+| AIR feasibility | Capture actual global degree ≤9, namespace degree and complete `[4,4,3,2]` lookup groups; prove unit rooted provenance/no-wrap under combined bounds and typed address relocation. | 06–08, 12, 14, 16 |
+| Verifier closure | Canonical entry/config/helper/resource/mount identity including authorized N_kernel; no self-identity fixed point or entry-D-only trust. | 12–14, recursive acceptance |
+| Measured costs and limits | Agree representative workload/limit matrix; report actual overhead and guard allocations/counts/replay. | 16, release readiness |
+
+If a gate requires a material shared decision, stop its dependent work, ask the user the concrete questions and record the exact unresolved choice. Continue independent preparation while waiting. Do not silently weaken the selected execution modes, security contract or supported scope to bypass it.
+
+## Status ledger
+
+All implementation rows begin planned. The first plan commit SHA and later exact evidence are filled by the orchestrator after commits/checks occur. No test was run to prepare this initial snapshot; later evidence must be recorded as implementation proceeds.
+
+| PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
+| --- | --- | --- | --- | --- |
+| 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
+| 01 Identities | planned | — | — | Wire allocation/codec gate |
+| 02 MAST | planned | — | — | Depends on 01 |
+| 03 Chiplet foundation | planned | — | — | Address/layout contract |
+| 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
+| 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
+| 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
+| 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
+| 08 Replay/debug | planned | — | — | Depends on 05–07 |
+| 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
+| 10 Projects/imports | planned | — | — | Depends on 04,09; release identity codec |
+| 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
+| 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
+| 13 Core library | planned | — | — | Depends on 09–12 and supported ABI |
+| 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
+| 15 API/CLI closure | planned | — | — | Depends on 08–14 |
+| 16 Qualification | planned | — | — | Entire stack and release gates |
