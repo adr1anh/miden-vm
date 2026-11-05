@@ -27,6 +27,7 @@ pub(super) struct ComparisonAir {
     inner: MidenAir,
     mode: CoreMode,
     compare_syscall_namespace: bool,
+    compare_controller_entry: bool,
 }
 
 impl ComparisonAir {
@@ -36,6 +37,7 @@ impl ComparisonAir {
             inner: MidenAir::CORE,
             mode,
             compare_syscall_namespace: false,
+            compare_controller_entry: false,
         }
     }
 }
@@ -46,6 +48,18 @@ impl ComparisonAir {
             inner: MidenAir::CHIPLETS,
             mode: CoreMode::Standard,
             compare_syscall_namespace: true,
+            compare_controller_entry: false,
+        }
+    }
+}
+
+impl ComparisonAir {
+    fn without_controller_entry_check() -> Self {
+        Self {
+            inner: MidenAir::CHIPLETS,
+            mode: CoreMode::Standard,
+            compare_syscall_namespace: false,
+            compare_controller_entry: true,
         }
     }
 }
@@ -186,6 +200,8 @@ impl<EF: ExtensionField<Felt>> LiftedAir<Felt, EF> for ComparisonAir {
             }
         } else if self.inner == MidenAir::CHIPLETS && self.compare_syscall_namespace {
             super::comparison_library::eval(builder);
+        } else if self.inner == MidenAir::CHIPLETS && self.compare_controller_entry {
+            super::comparison_counter::eval(builder);
         } else {
             <MidenAir as LiftedAir<Felt, EF>>::eval(&self.inner, builder);
         }
@@ -237,6 +253,7 @@ impl ComparisonMultiAir {
                 inner,
                 mode,
                 compare_syscall_namespace: false,
+                compare_controller_entry: false,
             }),
         }
     }
@@ -249,6 +266,22 @@ impl ComparisonMultiAir {
             ComparisonAir::without_syscall_namespace_check();
         result
     }
+}
+
+impl ComparisonMultiAir {
+    pub(super) fn without_controller_entry_check() -> Self {
+        let mut result = Self::new(CoreMode::Standard);
+        result.airs[MidenAir::CHIPLETS.instance_index()] =
+            ComparisonAir::without_controller_entry_check();
+        result
+    }
+}
+
+#[test]
+fn comparison_controller_entry_policy_is_isolated() {
+    super::comparison_counter::assert_entry_policy_is_isolated(
+        ComparisonAir::without_controller_entry_check(),
+    );
 }
 
 #[test]

@@ -103,18 +103,29 @@ pub fn slugify(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use crate::{
-        calibrator::calibrate,
-        snapshot::{DEFAULT_SCENARIOS, TraceSnapshot},
+        calibrator::{calibrate, measure_program},
+        producer::{DEFAULT_SCENARIOS, SNAPSHOT_PATH, VM_WORKLOADS},
+        snapshot::TraceSnapshot,
     };
 
     #[test]
-    fn default_protocol_workloads_match_all_four_air_heights() {
+    fn default_vm_workloads_match_all_four_air_heights() {
         let calibration = calibrate().expect("calibrate snippets");
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("snapshots/bench-tx.json");
-        for (name, snapshot) in TraceSnapshot::load_all(path).expect("load measured snapshots") {
-            if DEFAULT_SCENARIOS.contains(&name.as_str()) {
-                super::synthesize(&calibration, &snapshot);
-            }
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(SNAPSHOT_PATH);
+        let scenarios = TraceSnapshot::load_all(path).expect("load measured VM snapshots");
+        assert_eq!(scenarios.len(), DEFAULT_SCENARIOS.len());
+        assert_eq!(VM_WORKLOADS.len(), DEFAULT_SCENARIOS.len());
+        for producer in VM_WORKLOADS {
+            assert!(DEFAULT_SCENARIOS.contains(&producer.name));
+            let (_, snapshot) = scenarios
+                .iter()
+                .find(|(name, _)| name == producer.name)
+                .unwrap_or_else(|| panic!("missing producer workload: {}", producer.name));
+            // Re-execute the independent source. A solver-generated target cannot satisfy this
+            // assertion merely by agreeing with its own synthesized output.
+            let measured = measure_program(producer.source).expect("measure producer source");
+            assert_eq!(snapshot.shape(), measured, "{}: producer capture changed", producer.name);
+            super::synthesize(&calibration, snapshot);
         }
     }
 }

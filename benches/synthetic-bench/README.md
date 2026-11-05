@@ -1,14 +1,19 @@
-# Synthetic transaction benchmarks
+# Synthetic VM benchmarks
 
-This package generates MASM programs with the same padded AIR heights as measured protocol
-transactions. `synthetic_bench` measures their execution, witness preparation, proving, and native
-verification. `recursive_verify` measures the cost of verifying X MVM proofs and one PVM proof
-inside another MVM program.
+This package generates MASM programs with the same padded AIR heights as independently
+measured generic VM workloads. `synthetic_bench` measures their execution, witness preparation,
+proving, and native verification. `recursive_verify` measures the cost of verifying X MVM
+proofs and one PVM proof inside another MVM program.
 
-The standalone MVM defaults cover consuming one P2ID note, consuming two notes, and creating one
-note, each with Falcon or ECDSA signing. Recursive benchmarks default to the two-note consumption
-workloads. Use `SYNTH_SCENARIO` to select a workload. The standalone MVM benchmark also supports
-the other scenarios in the snapshot.
+The standalone defaults cover arithmetic/memory, bitwise/memory, memory/compression, and
+compression/arithmetic workloads. Their fixed assembly sources live in
+[`snapshots/sources`](snapshots/sources). Recursive benchmarks default to bitwise/memory and
+compression/arithmetic. Use `SYNTH_SCENARIO` to select a workload.
+
+The pre-cutover protocol transaction capture and its provenance remain byte-for-byte in
+[`snapshots/archive/eidos-four-air-v1`](snapshots/archive/eidos-four-air-v1), outside default
+snapshot discovery. Current measurements describe generic VM assembly; they do not measure
+protocol transaction construction or execution.
 
 ## MVM benchmarks
 
@@ -34,25 +39,22 @@ verification of a proof generated during setup.
 ## Recursive benchmarks
 
 Each case verifies X distinct MVM proofs and one PVM proof, for X = 3, 4, 5, 6, 7. All X MVM
-proofs use the same P2ID scenario and signing scheme.
+proofs use the same generic VM scenario.
 
-The single PVM proof covers X secp256k1 ECDSA verifications and their X Keccak prehashes, each
-over a distinct 32-byte message. Both signing schemes use this PVM workload for comparison;
-Falcon transactions verify their signatures inside the MVM.
+The separate PVM proof covers X secp256k1 ECDSA verifications and their X Keccak prehashes, each
+over a distinct 32-byte message. The synthetic MVM programs contain no deferred work. This
+measures proof verification cost without checking settlement of deferred work or exercising
+PVM proofs with multiple public roots.
 
-The synthetic MVM programs contain no deferred work. The PVM proof is generated separately from
-one witness. This measures verification cost without checking settlement of the transactions'
-deferred work or exercising PVM proofs with multiple public roots.
-
-The defaults run two-note consumption separately for Falcon and ECDSA, with five proof counts
-per scheme: ten cases in total.
+The defaults run bitwise/memory and compression/arithmetic separately, with five proof counts
+per scenario: ten cases in total.
 
 ```sh
 cargo bench -p miden-vm-synthetic-bench --bench recursive_verify --profile optimized
 ```
 
-Set `SYNTH_SCENARIO="consume single P2ID note"` or `SYNTH_SCENARIO="create single P2ID note"`
-to run the other P2ID workloads. `SYNTH_SCENARIO=signing` selects all six scenarios.
+Set `SYNTH_SCENARIO="arithmetic and memory"` or `SYNTH_SCENARIO="memory and compression"`
+to run the other defaults. `SYNTH_SCENARIO=VM` selects all four scenarios.
 
 Before timing, the benchmark loads or generates all inner proofs and verifies them natively.
 It prepares one PVM proof for each X and reuses it across scenarios with the same X.
@@ -102,8 +104,9 @@ and proof size. Outer-proof verification happens outside the timer.
 
 ## Results
 
-These measurements predate the packed Library cutover and remain historical reference data.
-They must be recaptured before making performance claims about the current relation.
+These protocol-shaped measurements predate the packed Library cutover and remain historical
+reference data associated with the archived protocol snapshot. They do not report results for
+the current generic VM dataset or the current relation.
 
 Each time is the mean of 20 samples from two separate process runs, excluding warmup.
 Peak RSS is the larger whole-process peak from those runs.
@@ -219,30 +222,39 @@ The chiplet counts must satisfy
 `library_rows` includes the complete aligned Library prefix and its terminal PAD pairs;
 `hasher_rows` counts the aligned Controller band, and `aead_rows` counts the separate AEAD band.
 
-The checked-in snapshot contains pre-cutover producer output and requires a real recapture
-after the producer migrates to the packed Library/AEAD schema. The loader rejects its obsolete
-kernel-ROM field; replacement band counts must come from execution. The
-[capture metadata](snapshots/provenance/bench-tx.json) records the protocol and VM revisions and
-the snapshot hash.
+## Capturing the current VM dataset
 
-To reproduce the capture, run the following from the VM checkout root:
+The fixed producer sources are inputs to measurement, independent of the solver and runtime
+calibration matrix. To recapture them from the VM checkout root:
 
 ```sh
-VM_CHECKOUT="$PWD"
-CAPTURE_WORKDIR=$(mktemp -d)
-git clone https://github.com/0xMiden/protocol.git "$CAPTURE_WORKDIR/protocol"
-cd "$CAPTURE_WORKDIR/protocol"
-git fetch origin e9852edb7a77c4b350873ee2453ade850dbb6513
-git checkout --detach FETCH_HEAD
-cargo run --locked --profile test-dev -p bench-transaction --features concurrent
-
-cp bin/bench-transaction/bench-tx.json \
-  "$VM_CHECKOUT/benches/synthetic-bench/snapshots/bench-tx.json"
+cargo +1.99.0 run --offline --locked --profile test-dev \
+  -p miden-vm-synthetic-bench --example capture_vm_snapshots
 ```
 
-For a new capture, select the protocol revision to measure and use its checked-in lockfile.
-Update the capture metadata and expected default AIR heights in `src/snapshot.rs` from the new
-data. All six P2ID workloads must pass the trace checks before recording timings.
+The capture uses the existing real execution and trace builder, checks each padded AIR formula
+against the processor's authoritative height, then calibrates and synthesizes a separate program
+for each measured target. It writes `snapshots/vm-components.json` and its source metadata under
+`snapshots/provenance/` only after all four AIR heights match for every workload. The metadata
+records the exact producer source text. Record the VM source revision and snapshot hash with the
+capture before committing it.
+
+Copy the capture's printed height pins into `SCENARIO_HEIGHTS` in `src/snapshot.rs`, then run:
+
+```sh
+cargo +1.99.0 nextest run --offline --locked --cargo-profile test-dev \
+  -p miden-vm-synthetic-bench
+```
+
+The default workload test re-executes every independent source, requires its complete raw totals
+and six-band breakdown to equal the committed capture, and checks synthesized programs against
+all four padded AIR heights. The snapshot test independently pins those four captured heights.
+Recapturing never derives producer measurements from the solver's output.
+
+The [archived protocol capture](snapshots/archive/eidos-four-air-v1/README.md) retains its original
+protocol/VM revisions, producer command, and hash. Its retired kernel-ROM schema is intentionally
+rejected by the current loader. Replacing that capture with current transaction measurements
+requires a real protocol adapter and a separate transaction recapture.
 
 ## License
 

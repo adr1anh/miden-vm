@@ -28,7 +28,7 @@ pub const CALIBRATION_ITERS: u64 = 1000;
 /// assembler + fast processor + trace builder.
 pub fn measure_program(source: &str) -> Result<TraceShape, MeasurementError> {
     let source_manager = Arc::new(DefaultSourceManager::default());
-    let assembler = Assembler::new(source_manager.clone());
+    let assembler = Assembler::new(source_manager);
     let module = Parse::parse(source, assembler.warnings_as_errors(), assembler.source_manager())
         .map_err(|e| MeasurementError::Assembly(format!("{e}")))?;
     // This is an explicit local fixture policy, independent of publication admission.
@@ -88,18 +88,27 @@ pub fn measure_program(source: &str) -> Result<TraceShape, MeasurementError> {
             derived: derived_chiplets,
         });
     }
-    let derived_padded = totals.padded_total();
-    let processor_padded = summary
-        .core_height()
-        .max(summary.chiplets_height())
-        .max(summary.eidos_compression_height())
-        .max(summary.byte_pair_lookup_rows()) as u64;
-    if derived_padded != processor_padded {
-        return Err(MeasurementError::InvariantDrift {
-            quantity: "padded_total",
-            processor: processor_padded,
-            derived: derived_padded,
-        });
+    for (quantity, derived, processor) in [
+        ("core_height", totals.padded_core(), summary.core_height()),
+        ("chiplets_height", totals.padded_chiplets(), summary.chiplets_height()),
+        (
+            "eidos_compression_height",
+            totals.padded_eidos_compression(),
+            summary.eidos_compression_height(),
+        ),
+        (
+            "byte_pair_lookup_height",
+            totals.padded_and8_lookup(),
+            summary.byte_pair_lookup_rows(),
+        ),
+    ] {
+        if derived != processor as u64 {
+            return Err(MeasurementError::InvariantDrift {
+                quantity,
+                processor: processor as u64,
+                derived,
+            });
+        }
     }
 
     Ok(TraceShape::new(totals, breakdown))

@@ -177,7 +177,7 @@ fn expect_non_u32_execution_error(test: Test) {
             ..
         } => assert!(
             err_code == miden_core::mast::error_code_from_msg(INVALID_SHA256_MESSAGE_WORD)
-                && err_msg.is_none()
+                && err_msg.as_deref() == Some(INVALID_SHA256_MESSAGE_WORD)
                 && invalid_values.iter().any(|value| value.as_canonical_u64() == NON_U32_WORD),
             "expected SHA256 message word assertion for {NON_U32_WORD}, got code {err_code}, message {err_msg:?}, and values {invalid_values:?}"
         ),

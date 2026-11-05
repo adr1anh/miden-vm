@@ -1,0 +1,25 @@
+# Independent generic VM producer fixture. Iteration counts are fixed inputs,
+# not synthesized from a target snapshot or the runtime calibration matrix.
+begin
+    padw padw padw
+    repeat.2250
+        compress
+    end
+    dropw dropw dropw
+
+    push.1
+    repeat.300
+        push.3 u32xor
+    end
+    drop
+
+    padw push.1024
+    repeat.300
+        dup.4 mem_storew_le dup.4 mem_loadw_le movup.4 push.4 add movdn.4
+    end
+    drop dropw
+
+    repeat.2000
+        push.3 add swap dup.1 add
+    end
+end

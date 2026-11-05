@@ -20,6 +20,7 @@ use miden_vm_stark::{prover::prove, recursive::RecursiveVerifierInputs};
 mod comparison_air;
 mod comparison_context;
 mod comparison_core;
+mod comparison_counter;
 mod comparison_library;
 mod comparison_runner;
 mod comparison_tag;

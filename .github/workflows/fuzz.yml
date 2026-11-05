@@ -28,6 +28,7 @@ jobs:
           - mast_forest_deserialize
           - mast_forest_validate
           - mast_node_info
+          - mast_forest_wire_view_new
           - basic_block_data
           - debug_info
           - kernel_deserialize

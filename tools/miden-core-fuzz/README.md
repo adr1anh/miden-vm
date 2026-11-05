@@ -31,16 +31,18 @@ The **`mast_forest_deserialize`** target tests `MastForest::read_from_bytes` wit
 cargo +nightly fuzz run mast_forest_deserialize --fuzz-dir tools/miden-core-fuzz
 ```
 
-The **`mast_forest_serde_deserialize`** target tests `MastForest` JSON deserialization via `serde_json`.
-
-```bash
-cargo +nightly fuzz run mast_forest_serde_deserialize --fuzz-dir tools/miden-core-fuzz
-```
-
 The **`mast_forest_validate`** target tests the full untrusted pipeline from decoding through validation.
 
 ```bash
 cargo +nightly fuzz run mast_forest_validate --fuzz-dir tools/miden-core-fuzz
+```
+
+The **`mast_forest_wire_view_new`** target checks wire-backed structural inspection, procedure
+roots and keyed invocation targets. Generated fixtures compare accessors with values captured
+before serialization and check full and hashless materialization.
+
+```bash
+cargo +nightly fuzz run mast_forest_wire_view_new --fuzz-dir tools/miden-core-fuzz
 ```
 
 ### Core deserialization targets
@@ -55,12 +57,6 @@ The **`kernel_deserialize`** target tests `KernelDescriptor::read_from_bytes`.
 cargo +nightly fuzz run kernel_deserialize --fuzz-dir tools/miden-core-fuzz
 ```
 
-The **`kernel_serde_deserialize`** target tests `KernelDescriptor` JSON deserialization via `serde_json`.
-
-```bash
-cargo +nightly fuzz run kernel_serde_deserialize --fuzz-dir tools/miden-core-fuzz
-```
-
 The **`stack_io_deserialize`** target tests `StackInputs` and `StackOutputs` deserialization.
 
 ```bash
@@ -73,22 +69,10 @@ The **`advice_inputs_deserialize`** target tests `AdviceInputs` and `AdviceMap` 
 cargo +nightly fuzz run advice_inputs_deserialize --fuzz-dir tools/miden-core-fuzz
 ```
 
-The **`advice_map_serde_deserialize`** target tests `AdviceMap` JSON deserialization via `serde_json`.
-
-```bash
-cargo +nightly fuzz run advice_map_serde_deserialize --fuzz-dir tools/miden-core-fuzz
-```
-
 The **`operation_deserialize`** target tests `Operation::read_from_bytes`.
 
 ```bash
 cargo +nightly fuzz run operation_deserialize --fuzz-dir tools/miden-core-fuzz
-```
-
-The **`operation_serde_deserialize`** target tests `Operation` JSON deserialization via `serde_json`.
-
-```bash
-cargo +nightly fuzz run operation_serde_deserialize --fuzz-dir tools/miden-core-fuzz
 ```
 
 The **`execution_proof_deserialize`** target tests canonical `ExecutionProof` decoding without a
@@ -97,14 +81,6 @@ same bytes and decode to the same proof.
 
 ```bash
 make fuzz-execution-proof
-```
-
-The **`execution_proof_serde_deserialize`** target exercises the derived Serde parsers for
-`ExecutionProof` and its `Vec` and `Option` containers. It does not establish proof validity or
-claim allocation-bounded generic Serde.
-
-```bash
-cargo +nightly fuzz run execution_proof_serde_deserialize --fuzz-dir tools/miden-core-fuzz
 ```
 
 The **`execution_witness_deserialize`** target reads a fuzz-only caller envelope:
@@ -150,6 +126,14 @@ The **`package_deserialize`** target tests `Package::read_from_bytes`.
 cargo +nightly fuzz run package_deserialize --fuzz-dir tools/miden-core-fuzz
 ```
 
+The **`package_semantic_deserialize`** target exercises admitted package sections, naming,
+embedded kernels, debug diagnostics and canonical round trips through safe and trusted readers.
+Its synthetic naming profile does not establish Protocol admission.
+
+```bash
+cargo +nightly fuzz run package_semantic_deserialize --fuzz-dir tools/miden-core-fuzz
+```
+
 The **`callable_inventory_codec`** target combines hostile v1 bytes with 1–4 valid callable
 bindings, optional aliases and shared implementation selections. It checks exact canonical round
 trips, changed-context rejection and trailing bytes under explicit 4 KiB/32-record/32-component/
@@ -183,6 +167,29 @@ wasmi's own wasmparser dependency drifted apart.
 
 ```bash
 cargo +nightly fuzz run wasm_section_walk_differential --fuzz-dir tools/miden-core-fuzz
+```
+
+### Project targets
+
+The **`project_toml_parse`** target exercises manifest parsing and TOML round trips, including
+workspace/package variant stability.
+
+```bash
+cargo +nightly fuzz run project_toml_parse --fuzz-dir tools/miden-core-fuzz
+```
+
+The **`project_load`** target loads temporary package and workspace trees, including project
+references and checks against known workspace-inherited values.
+
+```bash
+cargo +nightly fuzz run project_load --fuzz-dir tools/miden-core-fuzz
+```
+
+The **`project_assemble`** target assembles controlled library, executable and kernel layouts
+under development and release profiles, then exercises emitted package and debug APIs.
+
+```bash
+cargo +nightly fuzz run project_assemble --fuzz-dir tools/miden-core-fuzz
 ```
 
 ### Component targets

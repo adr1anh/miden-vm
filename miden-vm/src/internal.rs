@@ -805,9 +805,8 @@ mod tests {
         let file = tempfile::NamedTempFile::new().unwrap();
         file.as_file().set_len(InputFile::MAX_FILE_SIZE as u64 + 1).unwrap();
         let err = InputFile::read(&Some(file.path().to_path_buf()), file.path()).unwrap_err();
-        let message = format!("{err:?}");
-        assert!(message.contains("size limit of 67108864 bytes"), "{message}");
-        assert!(message.contains(&file.path().display().to_string()), "{message}");
+        assert_eq!(err.root_cause().to_string(), "file exceeds size limit of 67108864 bytes");
+        assert_eq!(err.to_string(), format!("Failed to open input file {}", file.path().display()));
 
         // The exact limit reaches the JSON parser, which rejects the sparse file's zero bytes.
         file.as_file().set_len(InputFile::MAX_FILE_SIZE as u64).unwrap();
@@ -833,8 +832,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn input_file_read_accepts_symlinks_to_regular_files_and_rejects_sockets() {
-        // The default macOS temporary path can exceed the Unix socket path limit.
-        let dir = tempfile::tempdir_in("/tmp").unwrap();
+        // Honor TMPDIR when its socket path fits, including workspace-local temporary storage.
+        // Fall back to /tmp for long paths, such as the default macOS temporary directory.
+        let dir = tempfile::tempdir().unwrap();
+        let dir = if dir.path().join("socket.inputs").as_os_str().as_encoded_bytes().len() >= 104 {
+            tempfile::tempdir_in("/tmp").unwrap()
+        } else {
+            dir
+        };
         let target = dir.path().join("target.inputs");
         let link = dir.path().join("link.inputs");
         fs::write(&target, br#"{"operand_stack":["7"]}"#).unwrap();

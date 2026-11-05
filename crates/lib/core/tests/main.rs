@@ -81,7 +81,8 @@ macro_rules! expect_assert_error_code_from_msg {
                 },
                 ..
             }
-            if err_code == ::miden_core::mast::error_code_from_msg($msg) && err_msg.is_none()
+            if err_code == ::miden_core::mast::error_code_from_msg($msg)
+                && err_msg.as_deref() == Some($msg)
         );
     };
 }

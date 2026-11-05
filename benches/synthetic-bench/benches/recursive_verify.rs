@@ -1,10 +1,10 @@
-//! Homogeneous protocol-shaped MVM batches with one PVM proof of an ECDSA verification per MVM.
+//! Homogeneous generic VM batches with one PVM proof of an ECDSA verification per MVM.
 //!
-//! `SYNTH_SNAPSHOT` and `SYNTH_SCENARIO` select measured protocol workloads through the same
+//! `SYNTH_SNAPSHOT` and `SYNTH_SCENARIO` select measured VM workloads through the same
 //! calibration and synthesis pipeline as `synthetic_bench`. Each case contains distinct proofs
-//! of one Falcon or ECDSA P2ID workload. Each ECDSA verification includes its Keccak prehash.
-//! Inner proofs use Eidos and are prepared before timing.
-//! Without a scenario filter, runs the two-note consumption workloads for Falcon and ECDSA.
+//! of one generic VM workload. Each independent PVM ECDSA verification includes its Keccak
+//! prehash. Inner proofs use Eidos and are prepared before timing.
+//! Without a scenario filter, runs the bitwise/memory and compression/arithmetic workloads.
 //!
 //! `RECURSION_PROOF_COUNTS` selects counts from 3 through 7 (default: all five).
 //! `RECURSION_PROFILE_ONLY` prints trace shapes without Criterion timing.
@@ -275,12 +275,9 @@ fn bench_recursive_verify(c: &mut Criterion) {
         .map(|composition| composition.mvm_count())
         .max()
         .expect("proof compositions");
-    let mut scenarios = load_scenarios(&[
-        "consume two P2ID notes with Falcon signing",
-        "consume two P2ID notes with ECDSA signing",
-    ]);
+    let mut scenarios = load_scenarios(&["VM bitwise and memory", "VM compression and arithmetic"]);
     scenarios.retain(|scenario| DEFAULT_SCENARIOS.contains(&scenario.name.as_str()));
-    assert!(!scenarios.is_empty(), "recursion requires a Falcon or ECDSA P2ID scenario");
+    assert!(!scenarios.is_empty(), "recursion requires a default generic VM scenario");
     let calibration = calibrate().expect("calibrate synthetic workloads");
     let pvm_fixtures: Vec<_> = config
         .compositions()

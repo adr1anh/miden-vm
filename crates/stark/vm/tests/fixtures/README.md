@@ -1,6 +1,6 @@
 `vm_eidos_v3.bin` is a canonical serialized `VmProof` for the descriptor-based VM protocol 5
 statement. It executes `begin push.5 push.8 add drop end`, assembled with source name
-`advice_fixture`, and has zero stack inputs/outputs and the authenticated true deferred root.
+`prover-integration`, and has zero stack inputs/outputs and the authenticated true deferred root.
 The file is the low-level VM proof, not an `ExecutionProof` transport envelope.
 
 `vm_eidos_v3.claim` is fixture-owner metadata: exactly 320 canonical bytes containing 40 Felts in
@@ -13,11 +13,12 @@ recursive-advice content/order against an independently decoded native transcrip
 without the prover feature. The old `vm_eidos_v1_0.bin` and `.program` files remain legacy
 program/kernel-statement rejection artifacts; `.program` cannot select current execution authority.
 
-Regenerate into a separate directory after following the repository power guards:
+Regenerate into a separate directory after following the repository power guards whenever the
+pinned VM relation or transcript profile changes:
 
 ```sh
 MIDEN_VM_FIXTURE_OUTPUT_DIR=/tmp/miden-vm-advice-fixture RUST_MIN_STACK=16777216 \
-  cargo test --profile test-dev --locked -p miden-prover --test vm_advice_fixture \
+  cargo test --profile test-dev --offline --locked -p miden-prover --test vm_advice_fixture \
   regenerate_vm_eidos_v3_advice_fixture -- --ignored --exact
 ```
 

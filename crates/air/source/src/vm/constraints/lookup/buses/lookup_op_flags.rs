@@ -614,7 +614,8 @@ mod tests {
             let mut row = generate_test_row(opcode);
             row.decoder.hasher_state[7] = ONE;
             let next = generate_test_row(opcodes::HALT.into());
-            let flags = LookupOpFlags::<Felt>::from_main_cols(&row.decoder, &row.stack, &next.decoder);
+            let flags =
+                LookupOpFlags::<Felt>::from_main_cols(&row.decoder, &row.stack, &next.decoder);
             let ordinary = flags.exec() + flags.call() + flags.dyn_op() + flags.dyncall();
             let syscall = flags.syscall();
             let root = flags.end();

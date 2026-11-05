@@ -97,11 +97,11 @@ fn assert_resource_error(test: Test, message: &str) {
     };
     assert!(
         matches!(
-            error,
+            &error,
             ExecutionError::OperationError {
-                err: OperationError::FailedAssertion { err_code, err_msg: None },
+                err: OperationError::FailedAssertion { err_code, err_msg },
                 ..
-            } if err_code == error_code_from_msg(message)
+            } if *err_code == error_code_from_msg(message) && err_msg.as_deref() == Some(message)
         ),
         "expected the resource assertion {message:?}, got {error:?}"
     );

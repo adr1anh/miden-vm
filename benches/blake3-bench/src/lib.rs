@@ -64,7 +64,7 @@ impl Blake3Fixture {
             });
 
         let core_lib = CoreLibrary::default();
-        let mut assembler = Assembler::new(source_manager.clone());
+        let mut assembler = Assembler::new(source_manager);
         assembler
             .link_package(core_lib.code_package().clone(), miden_vm::assembly::Linkage::Dynamic)
             .expect("failed to load core library");
