@@ -3,6 +3,9 @@
 //! Numeric tags use the `miden-vm` namespace allocated by `miden-crypto`. MAST control nodes keep
 //! their opcode-based framing; those tags are below 256 and therefore disjoint from every
 //! registered domain tag.
+//!
+//! Local ID `0x0000` and tag `0x0100_0001` (numbered version 1) belonged to the retired
+//! kernel-inventory commitment. This allocation remains reserved and must never be reused.
 
 pub use miden_crypto::hash::eidos::DomainTag;
 #[cfg(test)]
@@ -21,13 +24,6 @@ miden_crypto::eidos_domain_registry! {
     pub registry MidenVmDomainRegistry {
         namespace: namespace::MIDEN_VM;
         domains: {
-            pub KERNEL_COMMITMENT: KernelCommitmentDomain {
-                local_id: 0x0000,
-                version: DomainVersion::numbered(1),
-                encoding: FeltSequence,
-                description: "Miden VM kernel commitment.",
-                schema: "param0 = number of Felts; param1 = 0; param2 = 0; payload = procedure digests in canonical order",
-            }
             // Version 1 committed a program root and kernel commitment. Its tag is retired;
             // the environment-bound statement uses a distinct v2 commitment at the same length.
             pub EXECUTION_CLAIM: ExecutionClaimDomain {

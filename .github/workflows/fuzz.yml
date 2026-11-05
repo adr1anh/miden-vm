@@ -31,7 +31,6 @@ jobs:
           - mast_forest_wire_view_new
           - basic_block_data
           - debug_info
-          - kernel_deserialize
           - stack_io_deserialize
           - advice_inputs_deserialize
           - operation_deserialize
@@ -60,7 +59,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           GENERATED_CORPUS_TARGETS: >-
-            mast_forest_deserialize kernel_deserialize
+            mast_forest_deserialize
             stack_io_deserialize advice_inputs_deserialize operation_deserialize
             execution_proof_deserialize execution_witness_deserialize
             deferred_state_wire_deserialize

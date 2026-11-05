@@ -1,6 +1,6 @@
 # LibraryTree VM implementation plan
 
-This plan owns the selected LibraryTree scope, dependencies, acceptance and durable implementation evidence. The approved generic VM/toolchain scope is complete as of 4 November 2026; see the completion ledger and final PR16 closeout below. The initial plan commit was documentation only; later evidence records implementation and validation.
+This plan owns the selected LibraryTree scope, dependencies, acceptance and durable implementation evidence. The original approved generic VM/toolchain scope qualified on 4 November 2026. The user-requested PR17 retirement/Blake3-comparison follow-up completed on 5 November 2026; see its card and ledger. PR18 is a newly requested specification for host retrieval and a bounded in-memory source, not started implementation or a reopening of those completed scopes. Historical PR16 evidence remains valid for its recorded source. The initial plan commit was documentation only; later evidence records implementation and validation.
 
 The repository baseline is `00b12150715891582864d256ef51c5ea46bfb282`, inspected on 2 November 2026. The design chapters use the earlier baseline `a3d9bc09ef8a956774eb4ec0e6e734428e194a8c`; source paths and interfaces below follow this checkout. The live design Pages remain unchanged.
 
@@ -346,6 +346,84 @@ Measure opening rows/compressions separately from invocation/context costs; repo
 
 **Checks after power guards:** repository `make exec`, `make exec-single`, `make format-check`, `make clippy`, `make test`, `make check-constraints`, `make check-pvm-proof-fixture`, `make test-masm-root-stability`; supported no_std surfaces including `cargo check -p miden-core -p miden-mast-package -p miden-assembly --no-default-features`; affected benchmark commands selected from the actual final changed graph. Fuzz-target runs are waived by the user decision above. New test filters throughout this plan are provisional until registered test names exist; prefer the repository Make target where it supplies necessary features/stack settings. Resolve focused failures before broad suites, and repeat broad checks only for new changes/failures. Record exact commands/toolchains/features, commit SHAs and outcomes in the ledger/report. Verify deterministic regeneration with `git diff --exit-code` after intended generated changes are committed.
 
+### PR 17 Retire obsolete comparison code and compare Blake3 costs
+
+**Branch:** `adr1anh/librarytree-17-cleanup`, base `18d4a347d`. **User scope, 5 November 2026:** retire unused/old implementation code retained just for comparisons. Compare a program computing Blake3 on pinned origin/next and HEAD; prepare in parallel with cleanup, execute all heavy builds/runs sequentially. No GitHub PR/push; fuzz runs remain waived.
+
+Remove private alternate-AIR comparison modules/adapters while preserving current-production honest and malicious trace tests, independently captured claims, lookup-delta/resource/boundary oracles and exact native/MASM rejection where an artifact exists. A production lookup-construction rejection is the retained tag/frame case's expected boundary; historical alternate acceptance/isolated-rule-necessity evidence is not a reason to ship an old evaluator. Retire unused KernelDescriptor metadata/codec/exports/domain APIs and descriptor-only generator/seed/fuzz plumbing; reserve its old domain number permanently. Preserve active root-namespace kernel semantics and structural MAST generation. Remove the old full-parser test oracle and unused tree parsing helpers; use typed current crypto fixtures for independent expected results. Keep active format rejection and provenance consumers.
+
+Pin benchmark revisions: origin/next `00b12150715891582864d256ef51c5ea46bfb282`, HEAD-at-request `18d4a347d96b63118e9c93af760f077d76493d52`. Build both isolated revisions with the same package-only optimized command, Rust/profile/no native CPU flags; retain cached exploratory results separately. Use common Blake3 input/source/output assertions, Eidos proof hashing, worker/sample counts. Report actual times, proof bytes, trace/security differences and timing boundaries; no historical timing substitution or simultaneous heavy runs. Validate changed production APIs/generators, production-only adversarial proofs, parser budgets and all target references, plus appropriate formatting/lints/artifact checks. Source and context commits stay separate.
+
+## Stage 6 Host retrieval follow-up
+
+### PR 18 Explicit host environment access and bounded in-memory openings
+
+**State:** planned; specification only. **Planned branch:** `adr1anh/librarytree-18-host-environment-access`. **Git base:** completed PR17 documentation tip; revalidate before creating the branch. Research checkpoint: `fd1007dfc8050d759277ae7a81b15974f6ef0e55`, qualified source `f1879315a`. **Dependencies:** 01/05/08/15 and qualified PR16/17. This follows the completed stack; it does not revoke its evidence. No implementation, new goal, GitHub PR or push is requested by this specification.
+
+#### Problem and resulting behavior
+
+Current hosts expose opening retrieval through `EnvironmentWitnessRequest` and code retrieval through `CodeRequest::{Procedure,External}`. Callers constructing a validated environment still need a custom bounded opening adapter. Expose the three actual operations directly, preserve code/source ownership, and provide one production in-memory opening source. Custom hosts may retrieve dynamically without materializing an entire tree or implementing library insertion.
+
+Protocol research informs placement: local Protocol `next` at `a7a7607` creates and consumes a `TransactionExecutorHost` per transaction; its executor/DataStore/authenticator are reusable. The `7bd9493` kernel fork shares this ownership pattern. Their VM dependencies are 0.36 and 1.0.0-rc.0, not this checkout. Retain a bounded handoff example for that pattern, not a claim of Protocol integration or a change to its repository. Keep retrieval on the VM-facing host. Retain `EnvironmentSource` as an optional opening-composition helper; no mandatory public `Environment` trait, unified owned graph or `Host::environment_for` factory in this PR.
+
+#### Public contract and budget decision
+
+Proposed minimal synchronous contract; `Host` mirrors it with the existing `FutureMaybeSend` convention:
+
+```rust
+fn open_procedure(
+    &mut self,
+    root: EnvironmentRoot,
+    key: ProcedureKey,
+    limits: OpeningLimits,
+) -> Result<Option<ResolutionWitness>, EnvironmentSourceError>;
+
+fn load_procedure(
+    &self,
+    key: ProcedureKey,
+    implementation: ImplementationRoot,
+) -> Option<LoadedMastForest>;
+
+fn load_external(&self, implementation: ImplementationRoot)
+    -> Option<LoadedMastForest>;
+```
+
+`ResolutionWitness` remains `Vec<OpeningStep>` inside its existing path owner: each step is an `EnvNode` preimage plus an optional selected child slot. `LoadedMastForest` retains raw forest or complete owning CodePackage, checked symbols, exact keyed source occurrence, advice, debug decode failures and immutable owner identity. Do not replace it with a forest/hash pair. Keyed loading follows verified K-to-D resolution and syscall authorization; structural external loading introduces no key or principal.
+
+**Budget choice pending user review:** the proposed default retains the plain `OpeningLimits` argument. Applications configure limits once in `ExecutionOptions`; the processor forwards the immutable session cap internally. This preserves preallocation checks without a new host lifecycle. If the user instead selects exactly `open_procedure(root,key)`, settle execution-scoped immutable policy binding before changing the signature: shared backends may serve two same-root/key computations with different limits. Preserve independent VM verification, support tighter limits and interleaved resumes, and reject mismatches before source allocation. A mutable host-wide current-policy field is insufficient. Do not silently omit the cap or add a mandatory public factory.
+
+Source/ledger/session/trace budgets remain distinct. Current opening caps are fixed per execution, not the remaining ledger allowance. Preserve existing source-attempt limits and clone-sharing semantics; do not substitute committed invocation counts for source attempts. Stored-source limits may be stricter but cannot relax execution policy. Source allocation is bounded before copy/decode; the consumer rechecks the returned capacities and commits no VM state on rejection. Add no undefined generic `CodeLimits` group.
+
+Migrate `EnvironmentSource` and code-store helpers to explicit operations too; remove superseded public request wrappers/reexports once all callers migrate. An internal operation discriminator may remain for caches. Preserve the current opening defaults, missing/error mapping, malformed-forest diagnostics and code `Option` result. A transport-specific code-error API is separate scope. Preserve sync-to-async forwarding, async-only hosts, native/wasm future bounds, `no_std` plus `alloc`, diagnostic `dyn BaseHost` and current runtime-selectable opening-source composition. No executor dependency or unconditional new Send/Sync/Clone host bound. Do not add async retrieval to BaseHost.
+
+#### Bounded production source
+
+Build an in-memory `EnvironmentSource` from `Arc<ValidatedEnvironment>`. Index only occurrences reachable from its selected root; `get()` can expose unrelated retained nodes that its validation does not cover. Use iterative traversal, a sorted K-to-route table and retained `(node commitment, exact selected slot)` steps. Preserve inherited namespaces and physical slots through shared subtrees; do not deduplicate routes by digest. Cache opening statistics, then preflight each advertised route before publishing the ready source and each candidate before copying. Lookup must use the bounded index, not an unbounded fallback scan.
+
+Specify one expanded index policy with finite `max_visits`, `max_paths`, `max_path_steps`, `max_retained_bytes` and `max_build_peak_bytes`. Check arithmetic/layout overflow and fallible reservations before allocation, then actual capacities. These bound additional index work/storage; account the shared input environment separately and count it once when reporting combined storage. Do not describe these logical/requested bounds as RSS guarantees. Construction must reject an index that cannot serve an advertised route under its selected opening policy. Misses/wrong roots mean unavailable evidence, never authenticated nonmembership.
+
+Code remains in the existing loaded-code store or a custom host backend; package insertion/atomic event registration stays a concrete host capability, not a required retrieval operation. Keep exact `(K,D)` owner preference, digest-only availability after authentication, and callback-visible availability updates. No eager advice publication during lookup.
+
+#### Implementation slices and migration
+
+1. Finalize the budget choice and review the exact sync/async/error contract before affected implementation; do not infer a decision from this draft.
+2. Split host/source/store methods and migrate dispatch, caches and reexports while preserving successful execution and failure boundaries.
+3. Add the bounded in-memory source and an async delegating test host. A deterministic on-demand stub demonstrates dynamic retrieval; no production network client is required.
+4. Migrate ordinary/custom hosts, CLI source, test utilities, prover async host, core-lib settlement host, benchmarks and public documentation. Add a complete local example from checked packages/validated tree through host installation and execution, plus a delegating-host example. Explain every new public field/type.
+
+**Expected files:** processor `host/{mod,default,environment_source,mast_forest_store}.rs`, a focused in-memory-source module, `fast/execution_api{.rs,/resolution.rs}`, affected preparation/tests/errors/reexports; `crates/test-utils/src/librarytree.rs`; VM CLI execution-input source/public exports/docs; existing custom hosts in prover/core-lib/integration/benches. Audit actual paths at branch start. Do not mix Protocol repository edits into this PR.
+
+#### Acceptance and checks
+
+- Constructor exact-bound and one-short failures for every index budget; overflow/allocation failure; an unservable advertised path rejects before ready publication. Wrong-root requests, unrelated retained nodes, root Mast, nested Env/List/Merkle, complete Lists, shared occurrences and repeated commitments/slots behave correctly; Data never resolves as code.
+- Preserve independent witness verification and the exact configured cap before allocation. Test same root/key under tighter policies and reused hosts; if the no-argument policy is selected, test distinct execution views and interleaved resumes explicitly. Unavailable openings never authorize available code.
+- Preserve same-D/different-K owners, exact source/root selection in both insertion orders, absent source, malformed code and external-only placeholders. Existing callbacks, atomic advice/cache publication and every logical invocation count remain correct.
+- Preserve keyed missing-data/cancellation retries, verified pending evidence and source/debug frames exactly once. Keep current structural-external failure behavior; adding resumability is separate work.
+- Native execute/prove and sync/async paths yield the same expected claims/results. Replay a completed witness with backend methods that panic if called; no new provider IO during replay. Keep package/source owners across stops and resumes.
+- Run focused host/source/store, preparation, keyed execution, tracer/replay, custom-host and CLI/prover regressions; changed-crate strict Clippy and repository formatting; supported `no_std`/concurrent/wasm surfaces. Record exact commands/results/deferred external checks. Apply existing AC/heavy guards and avoid parallel Cargo jobs. Do not run waived fuzz campaigns solely for this refactor.
+
+Commitments, canonical node/MAST/package/witness formats, fixed-N0 syscall rules, expected claims, AIR/STARK/MASM/PVM relations and generated identities must remain unchanged. Audit drift; regenerate/qualify only if an actual change requires it rather than importing stale artifacts. This PR does not implement a new partial-code wire format, arbitrary blob API, forest node kind, tree rebalancing, uniform external retry, Protocol publication policy or implicit namespace mounting. Sparse/full/remote describe retrieval availability, not authorization or completeness claims. Documentation/specification commits stay separate from source; no GitHub PR or push without an explicit subsequent request.
+
 ## Resolved implementation decisions
 
 **D1 Environment-node preimage codec, agreed with the user on 2 November 2026:** own a VM v1
@@ -534,6 +612,8 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 15 API/CLI closure | complete | Final source `a99264137`; checked links/CLI `ba651f64d`; review `8ba05fd00`; prior SHAs below; base `f4350360d` | Independent reviews; fresh combined runtime/CLI/witness/proof/flow3,179; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumers; six compiled doctests; standalone fuzz2 typechecks; earlier scoped evidence below; final PR16: full8,106/exact gates and measured qualification below | Inherited gates closed by final PR16 qualification; fuzz execution waived by user. |
 | 15a AIR/Chiplets cleanup | complete | Counter/rebinding `7d51bff1b`; review `cffb3f279`; base `1afb98f50` | Independent reviews; fresh combined3,615; MAIN/ext/lookup capture and generated/recursive parity; actual heights; strict14; production no_std10; clean post-commit generation/check; PVM constants/277756-byte fixture; root-stability policy; final PR16: full8,106/exact gates and measured qualification below | Inherited gates closed by final PR16 qualification; fuzz execution waived by user. |
 | 16 Qualification | complete | Base `91011b897`; benchmark `02784740f`; proof controls `5fa34aeb7`; loop migration/measurement source `ae045c199` | Actual28release measurements, new native/MASM proof controls and polynomial guards, affected loop7, strict15 and pinned formatting; report/evidence below; final PR16: full8,106/exact gates and measured qualification below | No required check remains. Fuzz runs were waived; unadopted external integrations remain outside scope. |
+| 17 Retirement follow-up | complete | Base `18d4a347d`; source `03d5f11cf`, `d8c1fedbc`, `f1879315a` | 94 affected tests + 2 final processor properties; exact Make formatting/Clippy, three-root no_std, static/reference/artifact audits; 60 measured proofs from paired package-only builds on one CPU; evidence/report below | No required PR17 work remains; recorded fixture-layout/performance opportunities are follow-up scope |
+| 18 Host environment access | planned | Research `fd1007dfc`; specification only, no source | Read-only VM/Protocol host and bounds review; no build/test or implementation evidence | Budget-contract choice before implementation; then explicit host methods, bounded in-memory source and consumer migration under the PR18 card |
 
 ## Implementation evidence
 
@@ -3717,3 +3797,33 @@ All required exact build/lint/artifact/no_std gates also pass in the final runne
 [Measured qualification](LIBRARYTREE_QUALIFICATION.md) records actual28release samples, process-RSS/timing/security scope and exact provenance. Current ordinary VM producer snapshots independently match all four AIR heights and six-band/raw summaries; historical Protocol data remain byte-exact reference archives. The current native proof is verified with identical independently selected expected claim. Independent source, oracle, artifact and data reviews pass; all implementation and context commits are separately scoped and signed. Final branch review description is `56dbd49e3` in PR_DESCRIPTION.md.
 
 PR01–16, including15a, and milestone M1 are complete within the latest approved generic VM/toolchain scope. No required repository check or implementation remains deferred. User-waived fuzz execution/campaigns were not run; tool/source consistency is not described as mutation evidence. External Protocol registry/identity/admission/freshness, optional publication-profile production inputs and upstream compiler integrations retain the plan's conditional/handoff scope. Their validation is not weakened and is not claimed as a VM proof property. No GitHub PR, push or publication occurred.
+
+
+### PR17 retirement source checkpoint — 5 November 2026
+
+Signed, verified source commits: `03d5f11cf` removes all eight private alternate-evaluator/adapter modules, moving retained Controller regressions to the current production harness; `d8c1fedbc` removes unused KernelDescriptor/codec/errors/exports/domain API and descriptor-only arbitrary/seed/fuzz plumbing; `f1879315a` replaces the legacy full-parser test oracle with independent typed crypto fixtures and deletes three unused helpers. The old numeric kernel allocation remains reserved. Root/private-helper placement and authenticated syscall authority remain the selected D8 semantics.
+
+Three independent source reviews found no blocking issue. All 94 selected tests pass, including all 23 retained current-production proof regressions, domain/claim/generator tests, seven core-lib integration controls, root/miss/hit syscall authority, and CLI budget/parser/witness cases. Balanced malformed traces still construct actual proofs and get exact native/MASM rejection. Combined tag/frame cases permit only the existing narrowly checked aggregate-lookup construction rejection; no malicious-artifact MASM result is claimed where construction stops. Historical alternate-evaluator necessity evidence above remains historical and does not require retaining old implementations.
+
+Validation at the frozen source later committed through `f1879315a`: `make format-check` 2.837s; bounded five-package nextest (CI/test-dev, concurrent/testing/executable, two test workers) 94/94 in20.442s (27.628s including its warm build); exact `make clippy` 13.775s, stable1.98/all-target/all-feature/custom warning-denied recipe; three-root no_std 2.399s. Commands, feature/filter expressions, guards and full logs are in `.scratch/librarytree/pr17-checks/summary.json` and adjacent logs. Initial checked field-constructor fixture errors and one now-redundant struct update were fixed before these final passes. Fuzz builds/runs were not performed; static validation finds21registered remaining source paths and no retired-target registration in Make/CI/guide.
+
+Tracked source is clean after the three commits. Direct comparison against18d confirms no changed AIR, STARK/profile/fixture or production core-lib MASM artifact paths; `git diff --check` passes. No new qualification run is claimed for the whole historical workspace. The original8,106-test qualification remains separately dated evidence. Pinned Blake3 measurement remains pending: cached-head exploratory samples revealed workspace feature-unification differences, so both isolated revisions are built with the same package-only command before the authoritative sequential comparison.
+
+
+The final processor initializer cleanup additionally passes both existing executable-forest tests on `f1879315a`: every retained invocation mode and arbitrary valid input stacks. Nextest CI/test-dev with the same five-package feature graph runs2/2 in4.252s after6.62s warm compilation; log `.scratch/librarytree/pr17-checks/final-processor-generators.log`. This closes the test-only struct-update consumer change after the94-case run. Measurement builds completed; final samples additionally pin both processes/worker pools to performance-class CPU4 and counterbalance revision order. Unpinned exploratory timings are not final comparison evidence.
+
+
+### PR17 comparison and closeout — 5 November 2026
+
+The authoritative CPU-pinned run `.scratch/librarytree/blake3-comparison/runs/20261105T075815.832527Z` completes all 12 records/60 measured proofs plus 12 warmups. Independent review recomputes every median/ratio and verifies binary/fixture hashes, complete outcomes, 96-bit conjectured security, CPU 4 inheritance, counterbalanced revision ordering and nonoverlapping process intervals, with zero discrepancies. No further heavy work is active.
+
+Pinned local origin/next `00b12150715891582864d256ef51c5ea46bfb282` and requested pre-cleanup HEAD `18d4a347d96b63118e9c93af760f077d76493d52` use the same isolated package-only optimized build command, Rust 1.99.0/LTO/codegen1/empty flags, Eidos, one performance CPU/worker and five measured samples per case. Inherent fixture-support dependency differences remain disclosed. Total execution-for-proving plus proving is 1.150→2.042s (+77.57%), 3.149→4.406s (+39.89%) and 11.462→13.208s (+15.24%) for 1/8/32 chained 32-byte Blake3 computations. Detailed phase medians, proof sizes/heights, nohash controls and limitations live in [the measurement report](LIBRARYTREE_QUALIFICATION.md#blake3-revision-comparison--5-november-2026); this ledger owns durable completion evidence rather than another competing measurement/status table.
+
+Current benchmark fixtures load full corelib and authenticate every selected implementation in program/import naming inventories through a broad root List, without used-code trimming or Merkle construction. This source-supported fixture choice contributes inventory-width-dependent opening work even to the nohash control. It is not a production profile default, and the report does not assign exact observed milliseconds to a single cause or claim an intrinsic LibraryTree lower bound. Smaller/Merkle fixture environments and runtime-call costs are recorded optimization opportunities, not uncompleted PR17 acceptance.
+
+Both temporary source worktrees were verified clean and removed after source/provenance review; binary hashes, build/feature manifests, independent oracle, common fixtures and raw measurement logs remain in untracked scratch. Old cached/unpinned runs and superseded preparation guidance are excluded from current evidence. Shared /tmp sources and the Page-provenance reference cache were preserved. No old alternate evaluator or kernel inventory codec remains in tracked implementation. Production AIR/STARK/MASM artifact paths remain byte-identical to 18d. Root source commits and plan/context/report commits are separate, all local; no PR or push was created. Original qualified goal remains complete and was not reopened. PR17 now satisfies its selected retirement, validation and comparison acceptance.
+
+
+### Fork-only PR visualization publication, 5 November 2026
+
+The user explicitly authorized publishing the LibraryTree stack to adr1anh/miden-vm while keeping0xMiden untouched. All19branches (00–17 including15a) were pushed atomically without force; fork next fast-forwarded to upstream26c11f8c37cc08b1abfd8268997fb0d02fe33214. Original stack baseline00b1215/history and all implementation SHAs are preserved. Remotes are origin=user fork and upstream=0xMiden; existing local tracking relationships were preserved and the other worktree's local next was not moved. Draft PRs#3–#21 use consecutive branch bases; every description has linked navigation and the complete index. [LIBRARYTREE_PRS.md](LIBRARYTREE_PRS.md) owns the publication map. Fork automation was temporarily paused for setup, then saved repository permissions restored while previously inactive fuzz/link-check workflows remain disabled; no upstream dispatch/mutation or merge is requested. Publication adds documentation only, no new integration/performance claim against the six newer upstream commits. Prior validation remains tied to its exact recorded source snapshots.

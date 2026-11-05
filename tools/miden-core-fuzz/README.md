@@ -51,12 +51,6 @@ These targets exercise core deserializers directly.
 
 Executable code uses the bounded package deserializers below; the legacy Program wire format is retired.
 
-The **`kernel_deserialize`** target tests `KernelDescriptor::read_from_bytes`.
-
-```bash
-cargo +nightly fuzz run kernel_deserialize --fuzz-dir tools/miden-core-fuzz
-```
-
 The **`stack_io_deserialize`** target tests `StackInputs` and `StackOutputs` deserialization.
 
 ```bash

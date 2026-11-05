@@ -355,41 +355,27 @@ fn assert_lookup_delta(honest: &ReproTrace, forged: &ReproTrace) {
 
 #[test]
 fn actual_nonroot_syscall_fails_native_and_masm() {
-    use super::CoreMode;
-
     let (honest, mut forged) = build_nonroot_syscall_fixture();
-    let baseline = honest
-        .prove_comparison(CoreMode::Standard)
-        .expect("honest root SYS proof construction must finish");
-    assert!(
-        baseline.verification.is_ok(),
-        "honest root SYS must verify: {:?}",
-        baseline.verification
-    );
-    honest.assert_native_and_recursive_accept(baseline.proof);
+    let expected_claim = honest.claim();
+    let baseline = honest.prove_current().expect("honest root SYS proof construction must finish");
+    honest.assert_native_and_recursive_accept(baseline);
 
-    let comparison = forged
-        .prove_syscall_comparison()
-        .expect("the lookup-balanced child SYS witness must finish proof construction");
-    assert!(
-        comparison.verification.is_ok(),
-        "only the namespace policy must reject this witness: {:?}",
-        comparison.verification
-    );
-    forged.assert_native_and_recursive_air_rejection(comparison.proof);
+    assert_eq!(forged.claim(), expected_claim);
+    let proof = forged
+        .prove_current()
+        .expect("the lookup-balanced child SYS witness must finish production proof construction");
+    forged.assert_native_and_recursive_air_rejection(proof);
 
-    // A HALT-only clock mutation adds an unrelated defect without changing lookup demands or
-    // expected public inputs. Removing the namespace equations must not turn off clock checks.
+    // Adding an unrelated HALT clock defect preserves lookup demands and expected public inputs.
+    // This combined mutation must also reach rejection in both production consumers.
     let last = forged.core.height() - 1;
     assert_eq!(decode_opcode(&core_row(&forged.core, last).decoder.op_bits), opcodes::HALT);
     core_row_mut(&mut forged.core, last).system.clk += Felt::ONE;
+    assert_eq!(forged.claim(), expected_claim);
     let control = forged
-        .prove_syscall_comparison()
-        .expect("the clock control must also finish proof construction");
-    assert!(
-        control.verification.is_err(),
-        "the isolated evaluator must still reject the unrelated clock defect"
-    );
+        .prove_current()
+        .expect("the lookup-balanced clock control must finish production proof construction");
+    forged.assert_native_and_recursive_air_rejection(control);
 }
 
 fn decode_opcode(bits: &[Felt; 7]) -> u8 {

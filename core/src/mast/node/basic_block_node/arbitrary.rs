@@ -20,8 +20,7 @@ use crate::{
     operations::Operation,
     program::{
         CanonicalLabel, EnvNode, EnvironmentBuildError, EnvironmentBuildLimits, EnvironmentBuilder,
-        ImplementationRoot, KernelDescriptor, LabelCommitment, Namespace, ProcedureKey,
-        ValidatedEnvironment,
+        ImplementationRoot, LabelCommitment, Namespace, ProcedureKey, ValidatedEnvironment,
     },
 };
 
@@ -285,13 +284,11 @@ pub enum GenerationMode {
 /// - externals resolve to earlier procedure roots of the same forest, so the combined runtime
 ///   invocation/external graph is acyclic.
 ///
-/// The plain [`Arbitrary`] implementation for [`MastForest`] and [`forest_kernel_strategy`] accept
-/// only [`GenerationMode::StructureOnly`], the default. A bare forest cannot carry execution
-/// authority. Structure-only samples retain implementation bodies separately from their childless
-/// symbolic invocation nodes and make no execution guarantee.
-///
-/// `kernel_procedures` supplies digest-only descriptor metadata. It does not authorize or select
-/// symbolic invocation keys.
+/// The plain [`Arbitrary`] implementation for [`MastForest`] and
+/// [`structure_only_forest_strategy`] accept only [`GenerationMode::StructureOnly`], the default.
+/// A bare forest cannot carry execution authority. Structure-only samples retain implementation
+/// bodies separately from their childless symbolic invocation nodes and make no execution
+/// guarantee.
 ///
 /// Samples of both modes are pruned: every node is reachable from a procedure root.
 #[derive(Clone, Debug)]
@@ -316,11 +313,6 @@ pub struct MastForestParams {
     pub max_dyns: usize,
     /// Guarantees the samples provide.
     pub mode: GenerationMode,
-    /// Procedure hashes of a caller-supplied legacy kernel descriptor. When `None`, the descriptor
-    /// is empty. These implementation digests are independent of generated procedure keys.
-    /// Duplicate hashes or more than [`KernelDescriptor::MAX_NUM_PROCEDURES`] entries make
-    /// [`forest_kernel_strategy`] panic.
-    pub kernel_procedures: Option<Vec<Word>>,
 }
 
 impl Default for MastForestParams {
@@ -336,7 +328,6 @@ impl Default for MastForestParams {
             max_externals: 1,
             max_dyns: 0,
             mode: GenerationMode::StructureOnly,
-            kernel_procedures: None,
         }
     }
 }
@@ -358,8 +349,8 @@ pub struct ExecutableForestProcedure {
 /// An executable arbitrary sample, including the environment required to authenticate every root
 /// and retained invocation. This is a synthetic test environment, not a deployment profile.
 ///
-/// Processor consumers explicitly select an entry key and all runtime resource limits. In
-/// particular, a legacy [`KernelDescriptor`] is never used to derive syscall authority.
+/// Processor consumers explicitly select an entry key and all runtime resource limits.
+/// Syscall bindings use the fixed initial namespace.
 #[derive(Debug)]
 pub struct ExecutableForestFixture {
     forest: Arc<MastForest>,
@@ -836,10 +827,7 @@ fn add_local_externals(
 // STRUCTURE-ONLY MODE
 // ================================================================================================
 
-fn build_structure_only_forest(
-    seeds: &ForestSeeds,
-    kernel: Option<&KernelDescriptor>,
-) -> (MastForest, KernelDescriptor) {
+fn build_structure_only_forest(seeds: &ForestSeeds) -> MastForest {
     let Skeleton { mut forest, mut node_ids, mut roots } = build_skeleton(seeds, false);
 
     let mut digests = BTreeSet::new();
@@ -860,43 +848,33 @@ fn build_structure_only_forest(
     }
 
     promote_unreachable(&mut forest, &mut roots);
-    let forest = forest.build().expect("generated forest is valid");
-    (forest, kernel.cloned().unwrap_or_default())
+    forest.build().expect("generated forest is valid")
 }
 
 // STRATEGIES
 // ================================================================================================
 
-/// Strategy yielding structure-only `(MastForest, KernelDescriptor)` pairs. The descriptor
-/// preserves supplied implementation hashes independently of symbolic keys. It does not
-/// authenticate invocation bindings. See [`MastForestParams`] for what each [`GenerationMode`]
-/// guarantees.
+/// Generates structure-only forests without authenticating invocation bindings. See
+/// [`MastForestParams`] for what each [`GenerationMode`] guarantees.
 ///
 /// # Panics
 ///
 /// Panics for [`GenerationMode::Executable`]; use [`executable_forest_strategy`] to retain its
-/// required environment. Also panics if `params.kernel_procedures` is rejected by
-/// [`KernelDescriptor::from_hashes`]. These checks run once before sampling.
-pub fn forest_kernel_strategy(
-    params: MastForestParams,
-) -> BoxedStrategy<(MastForest, KernelDescriptor)> {
+/// required environment. This check runs once before sampling.
+pub fn structure_only_forest_strategy(params: MastForestParams) -> BoxedStrategy<MastForest> {
     assert_eq!(
         params.mode,
         GenerationMode::StructureOnly,
         "Executable generation requires executable_forest_strategy and its owned environment",
     );
-    let kernel = params.kernel_procedures.clone().map(|hashes| {
-        KernelDescriptor::from_hashes(hashes)
-            .unwrap_or_else(|err| panic!("MastForestParams::kernel_procedures is invalid: {err}"))
-    });
     forest_seeds_strategy(&params)
-        .prop_map(move |seeds| build_structure_only_forest(&seeds, kernel.as_ref()))
+        .prop_map(|seeds| build_structure_only_forest(&seeds))
         .boxed()
 }
 
 /// Generates forests with complete authenticated bindings and a terminating runtime target graph.
-/// All procedure roots and invocation aliases are bound under a full nested synthetic namespace;
-/// that namespace is the fixture's explicit syscall authority.
+/// All procedure roots and invocation aliases are bound under the fixed initial namespace,
+/// including the bindings used by syscalls.
 ///
 /// Environment construction errors are strategy values, never filtered samples. Callers select
 /// sufficient explicit build limits and handle any returned resource error. Processor execution
@@ -904,17 +882,12 @@ pub fn forest_kernel_strategy(
 ///
 /// # Panics
 ///
-/// Panics unless `params.mode` is [`GenerationMode::Executable`] and `kernel_procedures` is absent:
-/// digest-only legacy kernel metadata cannot define the fixture's namespace authority.
+/// Panics unless `params.mode` is [`GenerationMode::Executable`].
 pub fn executable_forest_strategy(
     params: MastForestParams,
     limits: EnvironmentBuildLimits,
 ) -> BoxedStrategy<Result<ExecutableForestFixture, EnvironmentBuildError>> {
     assert_eq!(params.mode, GenerationMode::Executable, "executable fixture mode is required");
-    assert!(
-        params.kernel_procedures.is_none(),
-        "executable fixtures use explicit namespace authority"
-    );
     forest_seeds_strategy(&params)
         .prop_map(move |seeds| build_executable_forest(&seeds, limits))
         .boxed()
@@ -927,7 +900,7 @@ impl Arbitrary for MastForest {
     /// Produces structure-only forests. Executable samples require the owned environment returned
     /// by [`executable_forest_strategy`]; requesting that mode here fails explicitly.
     fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
-        forest_kernel_strategy(params).prop_map(|(forest, _)| forest).boxed()
+        structure_only_forest_strategy(params)
     }
 }
 
@@ -960,21 +933,6 @@ impl Arbitrary for AdviceMap {
     }
 }
 
-impl Arbitrary for KernelDescriptor {
-    type Parameters = ();
-    type Strategy = BoxedStrategy<Self>;
-
-    fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-        // Distinct random words, well below `MAX_NUM_PROCEDURES`.
-        prop::collection::btree_set(any::<Word>(), 0..=3)
-            .prop_map(|words| {
-                KernelDescriptor::from_hashes(words.into_iter().collect())
-                    .expect("Generated kernel should be valid")
-            })
-            .boxed()
-    }
-}
-
 impl Arbitrary for AdviceInputs {
     type Parameters = ();
     type Strategy = BoxedStrategy<Self>;
@@ -1001,7 +959,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        mast::{CallNode, MastNode, OpBatch, SubtreeIterator},
+        mast::{MastNode, OpBatch, SubtreeIterator},
         program::EnvironmentBinding,
     };
 
@@ -1011,13 +969,6 @@ mod tests {
 
     fn sample<T: Debug>(strategy: &BoxedStrategy<T>, runner: &mut TestRunner) -> T {
         strategy.new_tree(runner).expect("strategy does not reject").current()
-    }
-
-    fn syscalls(forest: &MastForest) -> impl Iterator<Item = &CallNode> {
-        forest.nodes().iter().filter_map(|node| match node {
-            MastNode::Call(call) if call.is_syscall() => Some(call),
-            _ => None,
-        })
     }
 
     fn invocation_seeds(body_op: Operation) -> ForestSeeds {
@@ -1102,7 +1053,6 @@ mod tests {
     fn bare_forest_defaults_to_structure_only() {
         let params = MastForestParams::default();
         assert_eq!(params.mode, GenerationMode::StructureOnly);
-        assert_eq!(params.kernel_procedures, None);
         assert_eq!(
             (
                 params.max_calls,
@@ -1182,27 +1132,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "kernel_procedures is invalid")]
-    fn duplicate_kernel_procedures_panic() {
-        let _ = forest_kernel_strategy(MastForestParams {
-            kernel_procedures: Some(vec![word(0), word(0)]),
-            ..Default::default()
-        });
-    }
-
-    #[test]
-    #[should_panic(expected = "kernel_procedures is invalid")]
-    fn oversized_kernel_procedures_panic() {
-        let hashes = (0..=KernelDescriptor::MAX_NUM_PROCEDURES as u32).map(word).collect();
-        let _ = forest_kernel_strategy(MastForestParams {
-            kernel_procedures: Some(hashes),
-            ..Default::default()
-        });
-    }
-
-    #[test]
     fn structure_only_emits_every_node_kind() {
-        let strategy = forest_kernel_strategy(MastForestParams {
+        let strategy = structure_only_forest_strategy(MastForestParams {
             mode: GenerationMode::StructureOnly,
             max_syscalls: 3,
             max_externals: 3,
@@ -1213,7 +1144,7 @@ mod tests {
         // dyn, dyncall, external, syscall, call, exec
         let mut seen = [false; 6];
         for _ in 0..256 {
-            let (forest, _) = sample(&strategy, &mut runner);
+            let forest = sample(&strategy, &mut runner);
             for node in forest.nodes() {
                 match node {
                     MastNode::Dyn(dyn_node) => seen[usize::from(dyn_node.is_dyncall())] = true,
@@ -1232,23 +1163,6 @@ mod tests {
     }
 
     #[test]
-    fn kernel_descriptor_digests_do_not_select_symbolic_targets() {
-        let seeds = invocation_seeds(Operation::Incr);
-        let first = KernelDescriptor::from_hashes(vec![word(1), word(10)]).expect("kernel");
-        let second = KernelDescriptor::from_hashes(vec![word(20)]).expect("replacement kernel");
-        let (first_forest, first_descriptor) = build_structure_only_forest(&seeds, Some(&first));
-        let (second_forest, second_descriptor) = build_structure_only_forest(&seeds, Some(&second));
-
-        assert_eq!(first_descriptor, first);
-        assert_eq!(second_descriptor, second);
-        assert_eq!(first_forest, second_forest);
-        assert_eq!(
-            syscalls(&first_forest).next().expect("syscall").target(),
-            ProcedureKey::new(word(300))
-        );
-    }
-
-    #[test]
     fn symbolic_invocation_hashes_are_independent_of_implementation_bodies() {
         let first_seeds = invocation_seeds(Operation::Incr);
         let second_seeds = invocation_seeds(Operation::Pad);
@@ -1256,8 +1170,8 @@ mod tests {
         let second_body = second_seeds.basic_blocks[1].digest();
         assert_ne!(first_body, second_body);
 
-        let (first, first_kernel) = build_structure_only_forest(&first_seeds, None);
-        let (second, second_kernel) = build_structure_only_forest(&second_seeds, None);
+        let first = build_structure_only_forest(&first_seeds);
+        let second = build_structure_only_forest(&second_seeds);
         let invocations = immediate_invocations(&first);
         assert_eq!(invocations.len(), 3);
         let targets: BTreeSet<_> =
@@ -1271,7 +1185,6 @@ mod tests {
             ])
         );
         assert_eq!(invocations, immediate_invocations(&second));
-        assert!(first_kernel.is_empty() && second_kernel.is_empty());
         for (_, target, _) in invocations {
             assert_ne!(target.into_word(), first_body);
             assert_ne!(target.into_word(), second_body);
@@ -1300,7 +1213,7 @@ mod tests {
             assert!(skeleton.find_procedure_root(body_digest).is_some());
         }
 
-        let (forest, _) = build_structure_only_forest(&seeds, None);
+        let forest = build_structure_only_forest(&seeds);
         assert!(forest.find_procedure_root(body_digest).is_some());
         for node in forest.nodes() {
             if matches!(node, MastNode::Call(_) | MastNode::Exec(_)) {
@@ -1312,7 +1225,7 @@ mod tests {
 
     #[test]
     fn blocks_range_lower_bound_is_respected() {
-        let strategy = forest_kernel_strategy(MastForestParams {
+        let strategy = structure_only_forest_strategy(MastForestParams {
             blocks: 4..=4,
             max_joins: 0,
             max_splits: 0,
@@ -1324,7 +1237,7 @@ mod tests {
         });
         let mut runner = TestRunner::default();
         for _ in 0..16 {
-            let (forest, _) = sample(&strategy, &mut runner);
+            let forest = sample(&strategy, &mut runner);
             assert_eq!(forest.nodes().iter().filter(|node| node.is_basic_block()).count(), 4);
         }
     }
@@ -1492,29 +1405,6 @@ mod tests {
             for &root in roots {
                 prop_assert!(acyclic(root, &edges, &mut path, &mut done), "cycle through runtime targets");
             }
-        }
-
-        #[test]
-        fn supplied_kernel_descriptor_preserves_implementation_digests(
-            (forest, kernel) in forest_kernel_strategy(MastForestParams {
-                kernel_procedures: Some(vec![word(1), word(10)]),
-                mode: GenerationMode::StructureOnly,
-                ..Default::default()
-            })
-        ) {
-            let listed: BTreeSet<Word> = kernel.proc_hashes().iter().copied().collect();
-            prop_assert_eq!(listed, BTreeSet::from([word(1), word(10)]));
-            assert_pruned(&forest);
-        }
-
-        #[test]
-        fn absent_kernel_descriptor_stays_empty_for_symbolic_forests(
-            (_, kernel) in forest_kernel_strategy(MastForestParams {
-                mode: GenerationMode::StructureOnly,
-                ..Default::default()
-            })
-        ) {
-            prop_assert!(kernel.is_empty());
         }
 
         #[test]

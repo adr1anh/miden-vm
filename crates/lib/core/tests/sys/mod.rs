@@ -92,10 +92,14 @@ fn masm_claim_commitment_matches_native() {
 }
 
 /// The MASM `eidos::hash_elements_in_domain` must agree with the native implementation for
-/// block-aligned, unaligned, and empty inputs, exercising the kernel commitment's domain.
+/// block-aligned, unaligned, and empty inputs in the generic Felt-sequence domain.
 #[test]
 fn hash_elements_in_domain_matches_native() {
     use miden_core::{Felt, chiplets::hasher};
+    use miden_crypto::hash::eidos::{
+        EidosDomain,
+        domains::{GENERIC_FELT_SEQUENCE, GenericFeltSequenceDomain},
+    };
 
     let mut marked_block = vec![0; 8];
     marked_block[0] = 1;
@@ -113,7 +117,7 @@ fn hash_elements_in_domain_matches_native() {
     for values in cases {
         let num_elements = values.len();
         let felts: Vec<Felt> = values.iter().map(|&v| Felt::new_unchecked(v)).collect();
-        let domain = miden_core::program::KERNEL_DOMAIN_TAG;
+        let domain = GenericFeltSequenceDomain::TAG.as_felt();
 
         const PTR: u64 = 1000;
         let mut store_ops = String::new();
@@ -147,12 +151,11 @@ fn hash_elements_in_domain_matches_native() {
             domain_int = domain.as_canonical_u64(),
         );
 
-        let mut expected: Vec<u64> =
-            hasher::hash_elements_in_domain(&felts, miden_core::program::domain::KERNEL_COMMITMENT)
-                .as_elements()
-                .iter()
-                .map(Felt::as_canonical_u64)
-                .collect();
+        let mut expected: Vec<u64> = hasher::hash_elements_in_domain(&felts, GENERIC_FELT_SEQUENCE)
+            .as_elements()
+            .iter()
+            .map(Felt::as_canonical_u64)
+            .collect();
         expected.resize(16, 0);
         build_test!(source.as_str(), &[]).expect_stack(&expected);
     }

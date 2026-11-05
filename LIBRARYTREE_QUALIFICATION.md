@@ -52,3 +52,42 @@ Host code is preloaded and processor caches start empty. Entry generates one ope
 All fourteen native security records, including recursive children, agree: conjectured security 96 bits; 298 DEEP terms; 79 lookup fractions/row, maximum message width 16, three boundary terms; two OOD points; 799 composed constraints, maximum degree 9, eight quotient chunks, `max_combo=2`. Protocol parameters are log blowup 3, log folding arity 2, 27 queries, log final degree 7 and query/OOD/DEEP/folding/lookup PoW bits `17/0/12/4/0`. Instance parameters are log maximum height 16, field bits Q16 `8388606`, collision resistance 126 bits.
 
 Resource/security boundaries and optional external Protocol scope remain governed by [PR16 and the plan's recorded invariants](LIBRARYTREE_PLAN.md#pr-16-adversarial-performance-and-final-qualification). No adopted Protocol adapter construction cost is claimed. Fuzz execution/campaigns are explicitly waived; none ran. Repository, no_std and adversarial validation evidence is recorded in the plan ledger, separately from these measurements.
+
+
+## Blake3 revision comparison — 5 November 2026
+
+A hash in this measurement is a VM program computing Blake3 over 32 bytes, repeatedly feeding the previous digest into the next call, starting with 32 bytes of `0xff`. This is distinct from choosing the proof transcript's hash. The transcript uses Eidos in both revisions. The same MASM source, inputs and runner source are byte-identical across the pinned revisions; VM invocation semantics and AIRs are allowed to differ.
+
+Baseline is the local `origin/next` at `00b12150715891582864d256ef51c5ea46bfb282`; requested HEAD is `18d4a347d96b63118e9c93af760f077d76493d52`, before the subsequent retirement-only follow-up. Both isolated clean checkouts use `cargo +1.99.0 build --locked --offline --profile optimized -p miden-vm-blake3-bench --bin vm-performance -j2` (HEAD additionally requests JSON build messages). Rust 1.99.0, release-derived optimized profile, LTO, one codegen unit and empty Rust flags match. HEAD's source-required fixture dependencies add helper/testing/arbitrary features; this is a comparison of revisions built with the same command, not identical dependency feature closures. Independent source inspection found no added gate changing these execution/proving algorithms or layouts.
+
+The final run pins the coordinator, children and Rayon workers to Linux CPU 4, a performance-class CPU (capacity 1024; efficiency class 561), with one worker. Twelve subprocesses run sequentially; revision order is counterbalanced across six workload pairs. Each subprocess verifies one warmup and five measured proofs: 60 measured proofs, all reporting 96-bit conjectured security and complete verification. Eight preserving output assertions check independently computed external-Blake3 digests. All power-policy checks pass. Earlier cached-build/unpinned runs are exploratory and excluded.
+
+The primary time is the median of each sample's **execution-for-proving + proving**. Proving includes trace construction. Plain execution is a separate measurement; do not add it again. Assembly/input parsing are outside timers; fresh host construction, complete corelib loading and advice setup are inside execution/witness timers. Verification is measured separately.
+
+| Blake3 calls | origin/next execute + prove s | HEAD execute + prove s | Change | origin/next plain execute ms | HEAD plain execute ms |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 1.150 | 2.042 | +77.57% | 8.753 | 5.035 |
+| 8 | 3.149 | 4.406 | +39.89% | 8.829 | 12.379 |
+| 32 | 11.462 | 13.208 | +15.24% | 9.768 | 35.824 |
+
+The measured proof-time increase is 15–78% for these three workloads. At 32 calls plain execution is 9.768→35.824ms, while execution plus proving is 11.462→13.208s. The larger relative plain-execution increase should not be confused with the total proof-time increase.
+
+| Calls | Native verify ms, origin → HEAD | Proof bytes, origin → HEAD | Padded Core / Chiplets / Eidos / byte-pair rows, origin → HEAD |
+|---:|---:|---:|---|
+| 1 | 0.878 → 0.897 | 158301 → 159037 | 8192 / 1024 / 8192 / 65536 → 8192 / 4096 / 32768 / 65536 |
+| 8 | 0.877 → 0.913 | 158461 → 163357 | 65536 / 8192 / 8192 / 65536 → 65536 / 16384 / 32768 / 65536 |
+| 32 | 0.966 → 0.994 | 177157 → 180709 | 262144 / 32768 / 8192 / 65536 → 262144 / 32768 / 32768 / 65536 |
+
+The control replaces only the hash call with `nop`, retaining the loop and eight output assertions:
+
+| Loop iterations | origin/next control execute + prove s | HEAD control execute + prove s |
+|---:|---:|---:|
+| 1 | 0.653 | 1.718 |
+| 8 | 0.655 | 1.723 |
+| 32 | 0.657 | 1.736 |
+
+This control shows a substantial fixed-cost difference even without Blake3 computation. HEAD's benchmark fixture places every selected implementation from the program/full corelib naming inventories beneath one root `List`, with no used-implementation filtering or Merkle layout (`benches/blake3-bench/src/lib.rs:66`, `crates/test-utils/src/librarytree.rs:160,206,330`). Opening the entry already carries and authenticates that List vector. This is a test-fixture choice, not a production profile default or an intrinsic lower bound for LibraryTree. Observed Eidos/Chiplets growth is consistent with more authentication work; these measurements do not isolate its exact time contribution. Hash-minus-control deltas remain diagnostic: padding changes discretely, so they are not an exact marginal cost per hash.
+
+Five samples on one laptop CPU provide a bounded revision comparison, not a general throughput ranking or statistical confidence interval. CPU frequency is not fixed. The actual 32-byte hash work, caller environment layout, host loading and new runtime-call semantics all matter. No multicore speedup, alternative environment-layout result, or Blake3 precompile cost is claimed.
+
+Authoritative raw [manifest](.scratch/librarytree/blake3-comparison/runs/20261105T075815.832527Z/manifest.json), [summary](.scratch/librarytree/blake3-comparison/runs/20261105T075815.832527Z/summary.json), per-case JSON/stderr and power-guards JSONL remain separate from this report. Independent review recomputes all 12 records/60 samples, hashes, timing arithmetic, security and nonoverlap with zero discrepancies. Build/feature manifests and the independent oracle are in `.scratch/librarytree/blake3-comparison/`. Binary SHA-256s: origin `14aaf06840b84a9109452773dae66f5f8671f93bd8de99687ea07ab400582b02`; HEAD `8630870624cad66bdc8531f23f5a14787a94ee3e18a837dce13002841d7a4118`.

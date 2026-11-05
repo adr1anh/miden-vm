@@ -11,7 +11,7 @@ use crate::{
     deferred::{DEFERRED_AND_FRAME, Node, PrecompileWitness, PrecompileWitnessEntry, TRUE_DIGEST},
     mast::{BasicBlockNodeBuilder, CallNodeBuilder, ExecNodeBuilder, JoinNodeBuilder, MastForest},
     operations::Operation,
-    program::{KernelDescriptor, ProcedureKey, StackInputs, StackOutputs},
+    program::{ProcedureKey, StackInputs, StackOutputs},
     proof::{
         ExecutionProof, ExecutionProofCompatibility, HashFunction, PrecompileProof,
         PrecompileStatus, StarkProof, VmProof,
@@ -191,49 +191,6 @@ fn generate_fuzz_seeds() {
             "invalid_magic.bin",
             bytes,
         );
-    }
-
-    // KernelDescriptor seed
-    {
-        let kernel = KernelDescriptor::default();
-        write_seed("kernel_deserialize", "empty_kernel.bin", &kernel.to_bytes());
-
-        let a: Word = [
-            Felt::new_unchecked(1),
-            Felt::new_unchecked(2),
-            Felt::new_unchecked(3),
-            Felt::new_unchecked(4),
-        ]
-        .into();
-        let b: Word = [
-            Felt::new_unchecked(5),
-            Felt::new_unchecked(6),
-            Felt::new_unchecked(7),
-            Felt::new_unchecked(8),
-        ]
-        .into();
-
-        let non_empty = KernelDescriptor::new(&[a]).expect("failed to build non-empty kernel");
-        write_seed("kernel_deserialize", "single_kernel.bin", &non_empty.to_bytes());
-
-        let max_kernel: Vec<Word> = (0u64..=254)
-            .map(|n| {
-                [
-                    Felt::new_unchecked(n),
-                    Felt::new_unchecked(n + 1),
-                    Felt::new_unchecked(n + 2),
-                    Felt::new_unchecked(n + 3),
-                ]
-                .into()
-            })
-            .collect();
-        let max_kernel =
-            KernelDescriptor::new(&max_kernel).expect("failed to build max-size kernel");
-        write_seed("kernel_deserialize", "max_kernel_255.bin", &max_kernel.to_bytes());
-
-        // Invalid seed: duplicate hashes should deserialize to Err (never panic).
-        let duplicate_kernel = KernelDescriptor::from_hashes_unchecked(vec![b, a, a]);
-        write_seed("kernel_deserialize", "duplicate_kernel.bin", &duplicate_kernel.to_bytes());
     }
 
     // Stack IO seeds

@@ -276,46 +276,6 @@ impl InputFile {
         Ok(())
     }
 
-    /// Parse and return merkle tree leaves.
-    #[cfg(test)]
-    fn parse_merkle_tree(tree: &[String]) -> Result<Vec<Word>, String> {
-        tree.iter()
-            .map(|v| {
-                let leaf = Self::parse_word(v)?;
-                Ok(leaf)
-            })
-            .collect()
-    }
-
-    /// Parse and return Sparse Merkle Tree entries.
-    #[cfg(test)]
-    fn parse_sparse_merkle_tree(tree: &[(u64, String)]) -> Result<Vec<(u64, Word)>, String> {
-        tree.iter()
-            .map(|(index, v)| {
-                let leaf = Self::parse_word(v)?;
-                Ok((*index, leaf))
-            })
-            .collect()
-    }
-
-    /// Parse and return Partial Merkle Tree entries.
-    #[cfg(test)]
-    fn parse_partial_merkle_tree(
-        tree: &[((u8, u64), String)],
-    ) -> Result<Vec<(NodeIndex, Word)>, String> {
-        tree.iter()
-            .map(|((depth, index), v)| {
-                let node_index = NodeIndex::new(*depth, *index).map_err(|e| {
-                    format!(
-                        "failed to create node index with depth {depth} and index {index} - {e}"
-                    )
-                })?;
-                let leaf = Self::parse_word(v)?;
-                Ok((node_index, leaf))
-            })
-            .collect()
-    }
-
     /// Parse a `Word` from a hex string.
     pub fn parse_word(word_hex: &str) -> Result<Word, String> {
         let Some(word_value) = word_hex.strip_prefix("0x") else {
