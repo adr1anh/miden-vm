@@ -62,6 +62,7 @@ fn program_with_phantom_mast_call() -> TestResult {
     let assembler = fixture.configure(Assembler::new(context.source_manager()), [&*ast])?;
     let program = assembler.assemble_program("test", ast)?.fixture_program();
     let targets = program
+        .package()
         .mast_forest()
         .nodes()
         .iter()

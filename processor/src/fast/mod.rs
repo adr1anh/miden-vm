@@ -1,7 +1,6 @@
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
-    string::ToString,
     sync::Arc,
     vec,
     vec::Vec,
@@ -13,17 +12,13 @@ use miden_core::{
     EMPTY_WORD, Felt, WORD_SIZE, Word, ZERO,
     deferred::{DeferredState, Digest, PrecompileWitness},
     mast::MastForest,
-    program::{MIN_STACK_DEPTH, Program, StackInputs, StackOutputs},
+    program::{ExecutionTarget, MIN_STACK_DEPTH, StackInputs, StackOutputs},
     utils::range,
-};
-use miden_mast_package::{
-    Package, PackageNaming,
-    debug_info::{DebugSourceNodeId, PackageDebugInfo},
 };
 
 use crate::{
-    AdviceInputs, AdviceProvider, ContextId, ExecutionEnvironment, ExecutionError,
-    ExecutionOptions, LoadedMastForest, ProcessorState,
+    AdviceInputs, AdviceProvider, CodeRequest, ContextId, ExecutionError, ExecutionOptions,
+    LoadedMastForest, ProcessorState,
     advice::AdviceError,
     continuation_stack::{Continuation, ContinuationStack},
     errors::MapExecErrNoCtx,
@@ -137,8 +132,11 @@ pub struct FastProcessor {
     /// The advice provider to be used during execution.
     advice: AdviceProvider,
 
-    /// MAST forests loaded during this execution, indexed by their local procedure digests.
-    loaded_mast_forests: BTreeMap<Word, LoadedMastForest>,
+    /// Loaded code owners indexed by local procedure digest, in first-loaded order.
+    loaded_mast_forests: BTreeMap<Word, Vec<LoadedMastForest>>,
+
+    /// Positive code availability for already selected requests; never environment authority.
+    loaded_code_requests: BTreeMap<CodeRequest, LoadedMastForest>,
 
     /// Commitments of MAST forests whose advice maps have been merged into the advice provider.
     merged_mast_forests: BTreeSet<Word>,
@@ -170,11 +168,6 @@ pub struct FastProcessor {
     /// Eager deferred evaluation state retained only while execution is running.
     deferred_state: DeferredState,
 
-    /// Package debug information configured through [`ProgramExecutor`](crate::ProgramExecutor).
-    pub(crate) package_debug_info: Option<PackageDebugInfo>,
-
-    /// Entrypoint source node configured through [`ProgramExecutor`](crate::ProgramExecutor).
-    pub(crate) entrypoint_source_node: Option<DebugSourceNodeId>,
     /// Binds the one owned resume context to this processor across all suspended operations.
     execution_identity: Option<Arc<()>>,
     invalid_execution: bool,
@@ -278,6 +271,7 @@ impl FastProcessor {
         Ok(Self {
             advice: AdviceProvider::new(advice_inputs, &options)?,
             loaded_mast_forests: BTreeMap::new(),
+            loaded_code_requests: BTreeMap::new(),
             merged_mast_forests: BTreeSet::new(),
             stack,
             stack_top_idx,
@@ -294,46 +288,21 @@ impl FastProcessor {
                 options.execution_precompile_limits().clone(),
             )
             .map_err(AdviceError::DeferredStateConfigurationFailed)?,
-            package_debug_info: None,
-            entrypoint_source_node: None,
             execution_identity: None,
             invalid_execution: false,
             options,
         })
     }
 
-    /// Returns the resume context to be used with the first call to `step_sync()`.
+    /// Creates the owned context used by the first call to `step_sync()`.
     ///
-    /// Requires exact canonical naming retained by compilation or admitted with current policy.
-    /// The caller-authorized descriptor must select that explicit entry key; code and embedded
-    /// kernel packages never supply environment authority.
-    pub fn get_initial_resume_context_for_package(
-        &mut self,
-        package: Arc<Package>,
-        naming: &PackageNaming,
-        environment: ExecutionEnvironment,
-    ) -> Result<ResumeContext, ExecutionError> {
-        let program = package
-            .try_into_program(naming)
-            .map_err(|error| ExecutionError::InvalidPackageExecutable(error.to_string()))?;
-        let requested = environment.descriptor().entry_key();
-        if naming.entry_key() != Some(requested) {
-            return Err(ExecutionError::PackageEntryMismatch {
-                expected: naming.entry_key().expect("converted executable has an explicit entry"),
-                requested,
-            });
-        }
-        let debug_info = package.debug_info()?.map(Arc::new);
-        self.new_resume_context(&program, environment, debug_info, package.entrypoint_source_node())
-    }
-
-    /// Returns the resume context to be used with the first call to `step_sync()`.
+    /// The caller supplies the expected target; the host supplies code and witnesses. Resolution
+    /// limits must be configured in the execution options before creating the context.
     pub fn get_initial_resume_context(
         &mut self,
-        program: &Program,
-        environment: ExecutionEnvironment,
+        target: ExecutionTarget,
     ) -> Result<ResumeContext, ExecutionError> {
-        self.new_resume_context(program, environment, None, None)
+        self.new_resume_context(target)
     }
 
     // ACCESSORS
@@ -707,7 +676,7 @@ impl Tracer for NoopTracer {
 
     fn prepare_environment(
         &mut self,
-        _descriptor: &miden_core::program::ExecutionDescriptor,
+        _descriptor: &ExecutionTarget,
         _entry: crate::SessionBinding,
     ) -> Result<(), ExecutionError> {
         Ok(())
@@ -717,7 +686,7 @@ impl Tracer for NoopTracer {
 
     fn prepare_environment_completion(
         &mut self,
-        _environment: &ExecutionEnvironment,
+        _target: ExecutionTarget,
         _session: &crate::ResolutionSession,
     ) -> Result<(), ExecutionError> {
         Ok(())

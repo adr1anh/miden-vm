@@ -6,7 +6,7 @@ use miden_debug_types::{
 };
 
 use crate::{
-    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    BaseHost, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
     LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState, ResolutionWitness,
     SyncHost, Word,
     advice::AdviceMutation,
@@ -117,7 +117,7 @@ pub struct TestHost<S: SourceManager = DefaultSourceManager> {
     /// Source manager for debugging information
     pub source_manager: Arc<S>,
 
-    environment_source: Option<super::EnvironmentSource>,
+    environment_source: Option<super::TestEnvironmentSource>,
 }
 
 impl TestHost {
@@ -161,9 +161,15 @@ impl TestHost {
 }
 
 impl<S: SourceManager> TestHost<S> {
+    /// Retains checked fixture code without supplying target or environment authority.
+    pub fn with_code(mut self, code: miden_mast_package::CodePackage) -> Self {
+        self.store.insert_loaded(LoadedMastForest::from_code_package(code));
+        self
+    }
+
     /// Attaches a source of untrusted environment witnesses for explicit execution requests.
-    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentWitnessSource>) -> Self {
-        self.environment_source = Some(super::EnvironmentSource(source));
+    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentSource>) -> Self {
+        self.environment_source = Some(super::TestEnvironmentSource(source));
         self
     }
 }
@@ -202,8 +208,8 @@ where
         }
     }
 
-    fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest> {
-        self.store.get(node_digest)
+    fn get_mast_forest(&self, request: crate::CodeRequest) -> Option<LoadedMastForest> {
+        self.store.get(request)
     }
 
     fn on_event(&mut self, process: &ProcessorState) -> Result<Vec<AdviceMutation>, EventError> {
@@ -256,18 +262,18 @@ mod tests {
     end"
         );
         let test = Test::new("test_host_records_trace_and_snapshot", &source, false);
-        let (program, ..) = test.compile().unwrap();
-        let (environment, source) =
+        let (code, _) = test.compile().unwrap();
+        let (target, limits, source) =
             native_fixture_environment(&test.fixture_environment().unwrap());
-        let mut host = TestHost::default().with_environment_source(source);
+        let mut host = TestHost::default().with_environment_source(source).with_code(code);
         host.source_manager = test.source_manager;
         FastProcessor::new_with_options(
             StackInputs::default(),
             AdviceInputs::default(),
-            ExecutionOptions::default(),
+            ExecutionOptions::default().with_resolution_limits(limits),
         )
         .expect("failed to construct FastProcessor")
-        .execute_sync(&program, environment, &mut host)
+        .execute_sync(target, &mut host)
         .unwrap();
 
         // Each trace id is recorded, in emission order.

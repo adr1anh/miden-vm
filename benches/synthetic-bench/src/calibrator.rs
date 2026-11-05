@@ -42,17 +42,21 @@ pub fn measure_program(source: &str) -> Result<TraceShape, MeasurementError> {
     let product = assembler
         .assemble_executable_modules("program".into(), module, [])
         .map_err(|e| MeasurementError::Assembly(format!("{e}")))?;
-    let fixture = try_fixture_from_product(product, &[])
+    let (code, environment) = try_fixture_from_product(product, &[])
         .map_err(|error| MeasurementError::Assembly(error.to_string()))?;
 
-    let mut host = DefaultHost::default()
-        .with_source_manager(source_manager)
-        .with_environment_source(fixture.environment.source());
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(code)
+        .map_err(|e| MeasurementError::Execution(format!("{e}")))?;
     let processor = FastProcessor::new(StackInputs::default())
-        .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+        .with_options(
+            ExecutionOptions::default()
+                .with_environment_trace_limits(trace_limits())
+                .with_resolution_limits(environment.resolution_limits()),
+        )
         .map_err(|e| MeasurementError::Execution(format!("{e}")))?;
     let witness = processor
-        .execute_for_proving_sync(&fixture.program, fixture.environment.execution(), &mut host)
+        .execute_for_proving_sync(environment.target(), &mut host)
         .map_err(|e| MeasurementError::Execution(format!("{e}")))?;
     let (vm_witness, _) = witness.into_parts();
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget())

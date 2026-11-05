@@ -23,7 +23,7 @@ use miden_air_definitions::vm::{
     },
 };
 use miden_assembly::package::{
-    CallableBinding, CallableProcedurePath, NamespacePlan, PackageCallables, PackageNaming,
+    CallableProcedurePath, NamespacePath, PackageCallables, PackageSymbols, ProcedureName,
 };
 use miden_core::{
     Felt,
@@ -35,7 +35,7 @@ use miden_core::{
         MastNodeExt, SplitNodeBuilder,
     },
     operations::{Operation, opcodes},
-    program::{CanonicalLabel, ImplementationRoot, Namespace, Program},
+    program::{CanonicalLabel, ImplementationRoot, Namespace},
     utils::{Matrix, RowMajorMatrix},
 };
 use miden_processor::{
@@ -46,7 +46,7 @@ use miden_stark::{
     air::BaseAir,
     lookup::{Challenges, build_lookup_fractions},
 };
-use miden_utils_testing::librarytree::FixtureEnvironment;
+use miden_utils_testing::librarytree::{FixtureEnvironment, fixture_code, fixture_entry_digest};
 
 use super::{ReproTrace, core_row_mut};
 
@@ -55,12 +55,12 @@ use super::{ReproTrace, core_row_mut};
 /// corresponding invocation, resolution frequency and compression witness change.
 pub(super) fn build_nonroot_syscall_fixture() -> (ReproTrace, ReproTrace) {
     let child_home =
-        NamespacePlan::new(vec![CanonicalLabel::text("prover-nonroot-syscall").unwrap()]);
-    let root_binding = binding(NamespacePlan::new(vec![]), "target");
+        NamespacePath::new(vec![CanonicalLabel::text("prover-nonroot-syscall").unwrap()]);
+    let root_binding = binding(NamespacePath::new(vec![]), "target");
     let child_binding = binding(child_home.clone(), "target");
     let entry_binding = binding(child_home.clone(), "entry");
     let [root_key, child_key, entry_key] =
-        [&root_binding, &child_binding, &entry_binding].map(CallableBinding::key);
+        [&root_binding, &child_binding, &entry_binding].map(ProcedureName::key);
     assert_ne!(root_key, child_key);
     assert_eq!(root_binding.parent_namespace(), Namespace::initial());
     assert_ne!(child_binding.parent_namespace(), Namespace::initial());
@@ -85,31 +85,32 @@ pub(super) fn build_nonroot_syscall_fixture() -> (ReproTrace, ReproTrace) {
     let tail = JoinNodeBuilder::new([advice, split]).add_to_forest(&mut forest).unwrap();
     let entry = JoinNodeBuilder::new([exec, tail]).add_to_forest(&mut forest).unwrap();
     forest.make_root(entry);
-    let program = Program::new(forest.into(), entry);
+    let program = fixture_code(forest.into(), entry);
     let callables = PackageCallables::new(
         [root_binding, child_binding, entry_binding],
         [],
         [
             (root_key, implementation),
             (child_key, implementation),
-            (entry_key, ImplementationRoot::new(program.hash())),
+            (entry_key, ImplementationRoot::new(fixture_entry_digest(&program))),
         ],
     )
     .unwrap();
-    let naming = PackageNaming::new(child_home, callables, Some(entry_key)).unwrap();
+    let naming = PackageSymbols::new(child_home, callables, Some(entry_key)).unwrap();
     let environment = FixtureEnvironment::new(entry_key, [&naming]).unwrap();
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(program).unwrap();
     let (trace, precompile) = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default().with_stack(AdviceStack::from(vec![Felt::ZERO])))
         .unwrap()
         .with_options(
             ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits())
                 .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
         )
         .unwrap()
         .execute_and_build_trace_sync(
-            &program,
-            environment.execution(),
+            environment.target(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )
@@ -229,8 +230,8 @@ pub(super) fn build_nonroot_syscall_fixture() -> (ReproTrace, ReproTrace) {
     (honest, forged)
 }
 
-fn binding(home: NamespacePlan, name: &str) -> CallableBinding {
-    CallableBinding::new(
+fn binding(home: NamespacePath, name: &str) -> ProcedureName {
+    ProcedureName::new(
         home,
         CallableProcedurePath::from_semantic_components(vec![name.into()]).unwrap(),
     )

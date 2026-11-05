@@ -45,7 +45,7 @@ fn test_issue_2456_statically_linked_library_call() {
         )
         .unwrap();
     let library_naming = product.naming().clone();
-    let library = Arc::from(product.into_artifact(true).unwrap());
+    let library = product.into_code_package(true).unwrap();
 
     // This program calls a procedure from a statically linked library.
     let source = "
@@ -59,9 +59,7 @@ fn test_issue_2456_statically_linked_library_call() {
     ";
 
     let mut assembler = Assembler::new(source_manager.clone());
-    assembler
-        .link_package(library, miden_assembly::Linkage::Static, library_naming.clone())
-        .unwrap();
+    assembler.link_package(library, miden_assembly::Linkage::Static).unwrap();
     let root = Module::parser(Some(ModuleKind::Executable))
         .parse_str(None, source, source_manager)
         .unwrap();
@@ -70,8 +68,7 @@ fn test_issue_2456_statically_linked_library_call() {
     let assembler = names.configure(assembler, [root.as_ref()]).unwrap();
     let product = assembler.assemble_executable_modules("program".into(), root, []).unwrap();
     let naming = product.naming().clone();
-    let package = product.into_artifact(true).unwrap();
-    let program = package.try_into_program(&naming).unwrap();
+    let code = product.into_code_package(true).unwrap();
     let environment =
         FixtureEnvironment::new(naming.entry_key().unwrap(), [&naming, &library_naming]).unwrap();
 
@@ -79,10 +76,12 @@ fn test_issue_2456_statically_linked_library_call() {
     let stack_inputs = StackInputs::default();
     let advice_inputs = AdviceInputs::default();
     let mut host = DefaultHost::default().with_environment_source(environment.source());
-    let options = ExecutionOptions::default();
+    host.load_library(code).unwrap();
+    let options =
+        ExecutionOptions::default().with_resolution_limits(environment.resolution_limits());
 
     let result = FastProcessor::new_with_options(stack_inputs, advice_inputs, options)
         .expect("failed to construct FastProcessor")
-        .execute_sync(&program, environment.execution(), &mut host);
+        .execute_sync(environment.target(), &mut host);
     assert!(result.is_ok(), "Execution should succeed but got error: {:?}", result.err());
 }

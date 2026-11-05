@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use miden_core_lib::CoreLibrary;
-use miden_processor::{FastProcessor, advice::AdviceInputs};
-use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program};
+use miden_processor::{ExecutionOptions, FastProcessor, advice::AdviceInputs};
+use miden_utils_testing::librarytree::assemble_fixture_program;
 use miden_vm::{
     Assembler, DefaultHost, StackInputs, assembly::DefaultSourceManager, internal::InputFile,
 };
@@ -51,12 +51,11 @@ fn program_execution_fast(c: &mut Criterion) {
                     let mut assembler = Assembler::new(source_manager.clone());
                     assembler
                         .link_package(
-                            core_lib.package(),
+                            core_lib.code_package().clone(),
                             miden_assembly::Linkage::Dynamic,
-                            core_lib.naming().clone(),
                         )
                         .expect("failed to load core library");
-                    let fixture: NamedProgram = assemble_fixture_program(
+                    let (code, environment) = assemble_fixture_program(
                         assembler,
                         "program",
                         source.as_str(),
@@ -70,21 +69,22 @@ fn program_execution_fast(c: &mut Criterion) {
                                 .with_source_manager(source_manager.clone())
                                 .with_library(&core_lib)
                                 .unwrap()
-                                .with_environment_source(fixture.environment.source());
+                                .with_library(code.clone())
+                                .unwrap()
+                                .with_environment_source(environment.source());
 
-                            let processor = FastProcessor::new(stack_inputs)
-                                .with_advice(advice_inputs.clone())
-                                .expect("advice inputs should fit advice map limits");
-
-                            (
-                                host,
-                                fixture.program.clone(),
-                                fixture.environment.execution(),
-                                processor,
+                            let processor = FastProcessor::new_with_options(
+                                stack_inputs,
+                                advice_inputs.clone(),
+                                ExecutionOptions::default()
+                                    .with_resolution_limits(environment.resolution_limits()),
                             )
+                            .expect("advice inputs should fit advice map limits");
+
+                            (host, environment.target(), processor)
                         },
-                        |(mut host, program, environment, processor)| async move {
-                            processor.execute(&program, environment, &mut host).await.unwrap();
+                        |(mut host, target, processor)| async move {
+                            processor.execute(target, &mut host).await.unwrap();
                         },
                         BatchSize::SmallInput,
                     );

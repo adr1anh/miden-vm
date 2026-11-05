@@ -2,7 +2,7 @@
 mod named_source;
 use miden_core::field::PrimeField64;
 use miden_processor::{
-    AceError, DefaultHost, ExecutionError, FastProcessor, Felt, Program, StackInputs,
+    AceError, DefaultHost, ExecutionError, FastProcessor, Felt, StackInputs,
     advice::AdviceInputs,
     trace::chiplets::{MAX_EVAL_CIRCUIT_INVOCATIONS, MAX_EVAL_CIRCUIT_WIRES},
 };
@@ -20,16 +20,18 @@ fn eval_circuit_overflow_panic_check() {
     let (program, environment) = eval_circuit_program();
 
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(program).unwrap();
     let processor = FastProcessor::new_with_options(
         stack_inputs,
         AdviceInputs::default(),
-        miden_processor::ExecutionOptions::default(),
+        miden_processor::ExecutionOptions::default()
+            .with_resolution_limits(environment.resolution_limits()),
     )
     .expect("processor advice inputs should fit advice map limits");
 
     // Namely, this checks that execution doesn't panic due to an overflow.
     assert!(matches!(
-        processor.execute_sync(&program, environment.execution(), &mut host),
+        processor.execute_sync(environment.target(), &mut host),
         Err(ExecutionError::AceChipError {
             label: _,
             source_file: _,
@@ -49,10 +51,17 @@ fn eval_circuit_rejects_excessive_wires_before_memory_access() {
             StackInputs::new(&[Felt::new_unchecked(1), Felt::from(num_read), Felt::from(num_eval)])
                 .unwrap();
         let error = FastProcessor::new(stack_inputs)
+            .with_options(
+                miden_processor::ExecutionOptions::default()
+                    .with_resolution_limits(environment.resolution_limits()),
+            )
+            .unwrap()
             .execute_sync(
-                &program,
-                environment.execution(),
-                &mut DefaultHost::default().with_environment_source(environment.source()),
+                environment.target(),
+                &mut DefaultHost::default()
+                    .with_environment_source(environment.source())
+                    .with_library(program.clone())
+                    .unwrap(),
             )
             .unwrap_err();
         let ExecutionError::AceChipError { error: AceError(message), .. } = error else {
@@ -85,13 +94,16 @@ fn eval_circuit_witness_invocation_limit_across_calls() {
             StackInputs::default(),
             AdviceInputs::default(),
             miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits())
                 .with_environment_trace_limits(trace_limits()),
         )
         .unwrap()
         .execute_for_proving_sync(
-            &program,
-            environment.execution(),
-            &mut DefaultHost::default().with_environment_source(environment.source()),
+            environment.target(),
+            &mut DefaultHost::default()
+                .with_environment_source(environment.source())
+                .with_library(program.clone())
+                .unwrap(),
         );
         if invocations == limit {
             result.unwrap();
@@ -108,6 +120,6 @@ fn eval_circuit_witness_invocation_limit_across_calls() {
     }
 }
 
-fn eval_circuit_program() -> (Program, FixtureEnvironment) {
+fn eval_circuit_program() -> (miden_mast_package::CodePackage, FixtureEnvironment) {
     named_source("begin eval_circuit end")
 }

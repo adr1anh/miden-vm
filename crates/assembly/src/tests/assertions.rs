@@ -23,7 +23,7 @@ fn assert_with_code() -> TestResult {
     );
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -47,7 +47,7 @@ fn assertz_with_code() -> TestResult {
     );
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -71,7 +71,7 @@ fn assert_eq_with_code() -> TestResult {
     );
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -95,7 +95,7 @@ fn assert_eqw_with_code() -> TestResult {
     );
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -119,7 +119,7 @@ fn u32assert_with_code() -> TestResult {
     );
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -143,7 +143,7 @@ fn u32assert2_with_code() -> TestResult {
     );
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -167,7 +167,7 @@ fn u32assertw_with_code() -> TestResult {
     );
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -252,9 +252,9 @@ fn asserts_and_mpverify_with_code_in_duplicate_procedure() -> TestResult {
         .configure(Assembler::new(context.source_manager()), [&*module])?
         .assemble_program("test", module)?;
     let program = package.fixture_program();
-    let forest = program.mast_forest();
+    let forest = program.package().mast_forest();
     let mut exec_targets = Vec::new();
-    let mut pending = vec![program.entrypoint()];
+    let mut pending = vec![entry_node(&program)];
     while let Some(node) = pending.pop() {
         match &forest[node] {
             MastNode::Join(join) => {
@@ -324,7 +324,7 @@ fn asserts_and_mpverify_with_code_in_duplicate_procedure() -> TestResult {
             "wrong operations for {path}",
         );
     }
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -346,6 +346,6 @@ fn mtree_verify_with_code() -> TestResult {
 
     let program = context.assemble(source)?;
 
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }

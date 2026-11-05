@@ -6,8 +6,8 @@ use miden_core::{
     program::{CanonicalLabel, ProcedureKey},
     serde::Serializable,
 };
-use miden_mast_package::{CallableBinding, CallableProcedurePath};
-use miden_project::{LibraryImport, LibrarySelection, PackageSourceMount};
+use miden_mast_package::{CallableProcedurePath, ProcedureName};
+use miden_project::{LibraryRef, LibrarySelection, PackageSourceMount};
 use tempfile::TempDir;
 
 use super::*;
@@ -20,8 +20,8 @@ const LIBRARY_ID: &str = "0x0100000000000000020000000000000003000000000000000400
 const SOURCE: &str =
     "use left as chosen\nuse right\npub proc entry exec.chosen::run exec.right::run end\n";
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
 fn path(components: &[&str]) -> CallableProcedurePath {
@@ -31,20 +31,20 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn owner(revision: u32) -> LibraryImport {
-    LibraryImport::new(
+fn owner(revision: u32) -> LibraryRef {
+    LibraryRef::new(
         home("instance-owner"),
         Word::try_from(LIBRARY_ID).unwrap(),
-        LibrarySelection::Pinned(NonZeroU32::new(revision).unwrap()),
+        LibrarySelection::Revision(NonZeroU32::new(revision).unwrap()),
     )
 }
 
-fn run(revision: u32) -> CallableBinding {
+fn run(revision: u32) -> ProcedureName {
     owner(revision).callable_binding(path(&["dep", "lib", "run"])).unwrap()
 }
 
-fn caller() -> CallableBinding {
-    CallableBinding::new(home("instance-client"), path(&["app", "entry"])).unwrap()
+fn caller() -> ProcedureName {
+    ProcedureName::new(home("instance-client"), path(&["app", "entry"])).unwrap()
 }
 
 fn write(path: &FsPath, source: &str) {
@@ -137,20 +137,22 @@ fn assert_exact_instances(resolved: &ResolvedPackage, linkage: &str) {
     let second = run(2);
     assert_ne!(first.key(), second.key(), "the pinned revision qualifies canonical K");
     assert_eq!(
-        exec_targets(&resolved.package),
+        exec_targets(resolved.code.package()),
         alloc::collections::BTreeSet::from([first.key(), second.key()]),
         "mounts and dependency aliases must resolve to the owner's exact keys",
     );
-    assert_eq!(resolved.naming.callables().binding(caller().key()), Some(&caller()));
+    assert_eq!(resolved.code.symbols().callables().binding(caller().key()), Some(&caller()));
     let mut dependencies = Vec::new();
     let mut bodies = Vec::new();
     assert_eq!(resolved.dependency_packages.len(), 2, "both exact code supplies must survive");
     for expected in [&first, &second] {
-        let (package, naming) = resolved
+        let code = resolved
             .dependency_packages
             .iter()
-            .find(|(_, naming)| naming.callables().binding(expected.key()) == Some(expected))
+            .find(|code| code.symbols().callables().binding(expected.key()) == Some(expected))
             .expect("the retained code pool must contain each selected pinned instance");
+        let package = code.package();
+        let naming = code.symbols();
         assert_eq!(package.name, PackageId::from("dep"));
         assert_eq!(package.version.to_string(), "1.0.0");
         assert_eq!(naming.namespace_plan(), expected.namespace_plan());
@@ -158,16 +160,19 @@ fn assert_exact_instances(resolved: &ResolvedPackage, linkage: &str) {
             naming.callables().key_for_visible_path(&path(&["dep", "lib", "run"])),
             Some(expected.key()),
         );
-        assert_eq!(resolved.naming.callables().binding(expected.key()), Some(expected));
+        assert_eq!(resolved.code.symbols().callables().binding(expected.key()), Some(expected));
         let body = naming.callables().selected_implementation(expected.key()).unwrap();
-        assert_eq!(resolved.naming.callables().selected_implementation(expected.key()), Some(body));
+        assert_eq!(
+            resolved.code.symbols().callables().selected_implementation(expected.key()),
+            Some(body)
+        );
         package.check_naming(naming).unwrap();
         bodies.push(body);
         dependencies.push(package.to_dependency());
     }
     assert_eq!(bodies[0], bodies[1], "identical source retains identical implementation D");
     assert_ne!(dependencies[0].digest, dependencies[1].digest);
-    let runtime = resolved.package.manifest.dependencies().cloned().collect::<Vec<_>>();
+    let runtime = resolved.code.package().manifest.dependencies().cloned().collect::<Vec<_>>();
     if linkage == "dynamic" {
         assert_eq!(runtime.len(), 2, "same-name runtime records must not overwrite each other");
         for dependency in dependencies {
@@ -176,7 +181,7 @@ fn assert_exact_instances(resolved: &ResolvedPackage, linkage: &str) {
     } else {
         assert!(runtime.is_empty(), "static bodies require no runtime dependency records");
     }
-    resolved.package.check_naming(&resolved.naming).unwrap();
+    resolved.code.package().check_naming(resolved.code.symbols()).unwrap();
 }
 
 #[test]
@@ -205,35 +210,43 @@ fn same_source_pinned_instances_keep_exact_keys_code_pool_and_runtime_records_co
         let cold = assemble(&mut assembler, &mut cache);
         assert_exact_instances(&cold, linkage);
         assert_eq!(cache.len(), 3, "root and both graph-local source slots must be retained");
-        assert_eq!(cache.values().filter(|entry| entry.package.name == "dep").count(), 2);
+        assert_eq!(cache.values().filter(|entry| entry.code.package().name == "dep").count(), 2);
         let warm = assemble(&mut assembler, &mut cache);
-        for (package, _) in &cold.dependency_packages {
-            let (reused, _) = warm
+        for code in &cold.dependency_packages {
+            let reused = warm
                 .dependency_packages
                 .iter()
-                .find(|(candidate, _)| {
-                    candidate.dependency_commitment() == package.dependency_commitment()
+                .find(|candidate| {
+                    candidate.package().dependency_commitment()
+                        == code.package().dependency_commitment()
                 })
                 .unwrap();
-            assert!(Arc::ptr_eq(package, reused), "each source instance must reuse its own slot");
+            assert!(
+                Arc::ptr_eq(code.package(), reused.package()),
+                "each source instance must reuse its own slot"
+            );
+            assert!(
+                Arc::ptr_eq(code.symbols(), reused.symbols()),
+                "cached code must retain its exact checked symbols"
+            );
         }
         assert_exact_instances(&warm, linkage);
-        assert_eq!(cold.package.to_bytes(), warm.package.to_bytes());
-        assert_eq!(cold.naming, warm.naming);
+        assert_eq!(cold.code.package().to_bytes(), warm.code.package().to_bytes());
+        assert_eq!(cold.code.symbols(), warm.code.symbols());
 
         // Retained candidates are available code with their exact naming, even when only one
         // same-semver artifact can be the registry's canonical publication.
         let mut inventory = Linker::new(assembler.assembler.source_manager());
         for (revision, source) in [(1, "::left"), (2, "::right")] {
             let expected = run(revision);
-            let (package, naming) = cold
+            let code = cold
                 .dependency_packages
                 .iter()
-                .find(|(_, naming)| naming.callables().binding(expected.key()) == Some(&expected))
+                .find(|code| code.symbols().callables().binding(expected.key()) == Some(&expected))
                 .unwrap();
             inventory
                 .link_library_at(
-                    LinkLibrary::from_package(package.clone(), naming.clone()).unwrap(),
+                    LinkLibrary::from_code_package(code.clone()),
                     PackageSourceMount::new(
                         crate::Path::new("::dep::lib"),
                         crate::Path::new(source),
@@ -243,10 +256,10 @@ fn same_source_pinned_instances_keep_exact_keys_code_pool_and_runtime_records_co
                 .unwrap();
             assert_eq!(
                 inventory
-                    .library_by_commitment(package.dependency_commitment())
+                    .library_by_commitment(code.package().dependency_commitment())
                     .unwrap()
                     .naming(),
-                naming,
+                code.symbols(),
             );
         }
         assert_eq!(inventory.libraries().count(), 2);
@@ -258,8 +271,8 @@ fn same_source_pinned_instances_keep_exact_keys_code_pool_and_runtime_records_co
         admit(&mut assembler);
         let reloaded = assemble(&mut assembler, &mut SourcePackageCache::new());
         assert_exact_instances(&reloaded, linkage);
-        assert_eq!(cold.package.to_bytes(), reloaded.package.to_bytes());
-        assert_eq!(cold.naming, reloaded.naming);
+        assert_eq!(cold.code.package().to_bytes(), reloaded.code.package().to_bytes());
+        assert_eq!(cold.code.symbols(), reloaded.code.symbols());
 
         let root = assembler.dependency_graph.get(*assembler.dependency_graph.root()).unwrap();
         let local = root
@@ -305,18 +318,27 @@ fn dependency_alias_rename_keeps_owner_keys_and_route_assignment_changes_caller_
         let result = assemble(&mut assembler, &mut SourcePackageCache::new());
         assert_exact_instances(&result, "dynamic");
         assert_eq!(fs::read_to_string(temp.path().join("mod.masm")).unwrap(), SOURCE);
-        let provenance = PackageBuildProvenance::from_package(&result.package).unwrap().unwrap();
+        let provenance =
+            PackageBuildProvenance::from_package(result.code.package()).unwrap().unwrap();
         let compilation = provenance.compilation_commitment().unwrap();
-        let body = result.naming.callables().selected_implementation(caller().key()).unwrap();
+        let body = result
+            .code
+            .symbols()
+            .callables()
+            .selected_implementation(caller().key())
+            .unwrap();
         products.push((result, compilation, body));
     }
-    assert_eq!(products[0].0.naming, products[1].0.naming);
+    assert_eq!(products[0].0.code.symbols(), products[1].0.code.symbols());
     assert_eq!(products[0].2, products[1].2, "dependency alias spelling preserves caller D");
     assert_eq!(products[0].1, products[1].1, "aliases do not change resolved compiler routes");
     for product in &products {
         for revision in [1, 2] {
             let expected = run(revision);
-            assert_eq!(product.0.naming.callables().binding(expected.key()), Some(&expected));
+            assert_eq!(
+                product.0.code.symbols().callables().binding(expected.key()),
+                Some(&expected)
+            );
         }
     }
     assert_ne!(products[1].2, products[2].2, "the caller commits to its ordered EXEC keys");

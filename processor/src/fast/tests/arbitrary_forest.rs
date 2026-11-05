@@ -11,14 +11,14 @@ use miden_core::{
             ExecutableForestFixture, GenerationMode, MastForestParams, executable_forest_strategy,
         },
     },
-    program::{EnvironmentBuildLimits, ExecutionDescriptor, Program, StackInputs},
+    program::{EnvironmentBuildLimits, ExecutionTarget, StackInputs},
 };
 use proptest::{prelude::*, strategy::ValueTree, test_runner::TestRunner};
 
 use crate::{
-    DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
-    ExecutionEnvironment, ExecutionOptions, FastProcessor, LedgerLimits, OpeningLimits,
-    OpeningStep, ResolutionWitness, SessionLimits,
+    DefaultHost, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
+    ExecutionOptions, FastProcessor, LedgerLimits, OpeningLimits, OpeningStep, ResolutionLimits,
+    ResolutionWitness, SessionLimits, test_utils::fixture_code,
 };
 
 fn params() -> MastForestParams {
@@ -91,6 +91,11 @@ fn execution_options() -> ExecutionOptions {
         .with_max_stack_depth(128)
         .expect("bounded fixture stack policy")
         .with_max_memory_elements(4096)
+        .with_resolution_limits(ResolutionLimits::new(
+            opening_limits(),
+            ledger_limits(),
+            session_limits(),
+        ))
 }
 
 fn fixture_strategy() -> BoxedStrategy<ExecutableForestFixture> {
@@ -101,7 +106,7 @@ fn fixture_strategy() -> BoxedStrategy<ExecutableForestFixture> {
 
 struct FixtureSource(Arc<ExecutableForestFixture>);
 
-impl EnvironmentWitnessSource for FixtureSource {
+impl EnvironmentSource for FixtureSource {
     fn get(
         &self,
         request: EnvironmentWitnessRequest,
@@ -123,23 +128,20 @@ impl EnvironmentWitnessSource for FixtureSource {
 /// hint.
 fn run_every_binding(fixture: ExecutableForestFixture, stack: &[Felt]) -> Result<(), String> {
     let fixture = Arc::new(fixture);
-    let mut host = DefaultHost::default()
-        .with_library(fixture.forest())
-        .map_err(|err| err.to_string())?
-        .with_environment_source(Arc::new(FixtureSource(fixture.clone())));
+    let mut host =
+        DefaultHost::default().with_environment_source(Arc::new(FixtureSource(fixture.clone())));
+    let supplied_root = fixture.procedures().first().expect("generated fixtures have roots").root;
+    // This complete owner supplies code by implementation root. Generated callable keys and
+    // their authorization still come exclusively from the separately fixed fixture environment.
+    host.load_library(fixture_code(fixture.forest().clone(), supplied_root))
+        .map_err(|err| err.to_string())?;
     for procedure in fixture.procedures() {
-        let program = Program::new(fixture.forest().clone(), procedure.root);
-        let environment = ExecutionEnvironment::new(
-            ExecutionDescriptor::new(procedure.key, fixture.environment().root()),
-            opening_limits(),
-            ledger_limits(),
-            session_limits(),
-        );
+        let target = ExecutionTarget::new(procedure.key, fixture.environment().root());
         let inputs = StackInputs::new(stack).map_err(|err| err.to_string())?;
         FastProcessor::new(inputs)
             .with_options(execution_options())
             .map_err(|err| err.to_string())?
-            .execute_sync(&program, environment, &mut host)
+            .execute_sync(target, &mut host)
             .map_err(|err| {
                 format!("binding {:?}, root {} failed: {err}", procedure.key, procedure.root)
             })?;

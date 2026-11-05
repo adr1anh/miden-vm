@@ -10,7 +10,7 @@ extern crate std;
 pub mod ast;
 mod dependencies;
 mod library_catalog;
-mod library_import;
+mod library_ref;
 mod linkage;
 mod package;
 mod profile;
@@ -42,7 +42,7 @@ pub use toml::Value;
 pub use self::{
     dependencies::*,
     library_catalog::LibraryCatalog,
-    library_import::{ExpectedVisibleCallables, LibraryImport, LibrarySelection},
+    library_ref::{ExpectedVisibleCallables, LibraryRef, LibrarySelection},
     linkage::Linkage,
     package::Package,
     profile::Profile,

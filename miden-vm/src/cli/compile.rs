@@ -50,13 +50,19 @@ impl CompileCmd {
         // Note: assembler debug mode is always enabled (issue #1821)
         let compiled =
             program.compile_package(libraries.libraries.iter().cloned(), namespace_inputs)?;
-        let naming_bytes = naming_inputs.encode_owned(&compiled.naming)?;
-        compiled.package.check_naming(&compiled.naming).map_err(Report::msg)?;
+        let naming_bytes = naming_inputs.encode_owned(compiled.symbols())?;
+        compiled.package().check_naming(compiled.symbols()).map_err(Report::msg)?;
 
-        // report program hash to user
-        let compiled_program = compiled.package.try_into_program(&compiled.naming)?;
-        let program_hash: [u8; 32] = compiled_program.hash().into();
-        println!("program hash is {}", hex::encode(program_hash));
+        // Report the declared key and supplied implementation separately.
+        compiled.package().check_executable_code(compiled.symbols())?;
+        let entry = compiled.symbols().entry_key().expect("checked executable entry");
+        let implementation = compiled
+            .symbols()
+            .callables()
+            .selected_implementation(entry)
+            .expect("checked executable implementation");
+        println!("Entry key: {}", entry.as_word());
+        println!("Selected implementation: {}", implementation.as_word());
 
         // write the compiled program into the specified path if one is provided; if the path is
         // not provided, writes the file into the same directory as the source file, but with
@@ -68,7 +74,7 @@ impl CompileCmd {
         });
 
         compiled
-            .package
+            .package()
             .write_to_file(out_path)
             .into_diagnostic()
             .wrap_err("Failed to write the compiled file")?;

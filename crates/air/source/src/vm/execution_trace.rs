@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use miden_core::{
-    Felt, Word, ZERO,
+    Felt, ZERO,
     deferred::Digest,
-    program::{ExecutionDescriptor, MIN_STACK_DEPTH, ProgramInfo, StackInputs, StackOutputs},
+    program::{ExecutionTarget, ImplementationRoot, MIN_STACK_DEPTH, StackInputs, StackOutputs},
     utils::RowMajorMatrix,
 };
 
@@ -25,14 +25,14 @@ use super::{
 ///
 /// The trace consists of the following components:
 /// - Per-AIR main traces for Core, Chiplets, Eidos compression, and byte-pair lookup.
-/// - The authenticated execution descriptor and code/debug metadata about the program.
+/// - The authenticated execution target and its entry implementation for diagnostics.
 /// - Information about the initial and final stack states and authenticated precompile root.
 /// - Summary of trace lengths of the main trace components.
 #[derive(Debug)]
 pub struct VmTrace {
     main_trace: MainTrace,
-    program_info: ProgramInfo,
-    execution_descriptor: ExecutionDescriptor,
+    entry_implementation: ImplementationRoot,
+    execution_descriptor: ExecutionTarget,
     stack_inputs: StackInputs,
     stack_outputs: StackOutputs,
     precompile_root: Digest,
@@ -49,8 +49,8 @@ impl VmTrace {
     /// The summary's padded heights must match the matrices in [`crate::vm::AIRS`] order.
     /// Construction does not evaluate the AIR constraints.
     pub fn new_from_parts(
-        program_info: ProgramInfo,
-        execution_descriptor: ExecutionDescriptor,
+        entry_implementation: ImplementationRoot,
+        execution_descriptor: ExecutionTarget,
         stack_inputs: StackInputs,
         stack_outputs: StackOutputs,
         precompile_root: Digest,
@@ -59,7 +59,7 @@ impl VmTrace {
     ) -> Self {
         Self {
             main_trace,
-            program_info,
+            entry_implementation,
             execution_descriptor,
             stack_inputs,
             stack_outputs,
@@ -71,19 +71,16 @@ impl VmTrace {
     // PUBLIC ACCESSORS
     // --------------------------------------------------------------------------------------------
 
-    /// Returns non-authoritative code/debug metadata for this execution trace.
-    pub fn program_info(&self) -> &ProgramInfo {
-        &self.program_info
-    }
-
-    /// Returns the authenticated descriptor of this execution trace.
-    pub fn execution_descriptor(&self) -> ExecutionDescriptor {
+    /// Returns the authenticated target of this execution trace.
+    pub fn execution_descriptor(&self) -> ExecutionTarget {
         self.execution_descriptor
     }
 
-    /// Returns the entry implementation hash retained as code/debug metadata.
-    pub fn program_hash(&self) -> &Word {
-        self.program_info.program_hash()
+    /// Returns the authenticated entry implementation retained for diagnostics.
+    ///
+    /// This is not the execution identity: the caller supplies the expected entry key and root.
+    pub fn entry_implementation(&self) -> ImplementationRoot {
+        self.entry_implementation
     }
 
     /// Returns outputs of the program execution which resulted in this execution trace.

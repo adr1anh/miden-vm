@@ -104,7 +104,7 @@ mod tests;
 /// Represents one or more procedures, represented as a collection of [`MastNode`]s.
 ///
 /// A [`MastForest`] does not have an entrypoint, and hence is not executable. A
-/// [`crate::program::Program`] can be built from a [`MastForest`] to specify an entrypoint.
+/// Hosts supply code forests; the caller selects an independent execution target.
 ///
 /// Finalized dense forests keep nodes in final dense order:
 /// - external nodes first, sorted by digest, with no duplicate external digests;

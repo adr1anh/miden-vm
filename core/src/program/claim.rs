@@ -29,7 +29,7 @@
 
 use miden_crypto::hash::eidos::EidosDomain;
 
-use super::{EnvironmentRoot, ExecutionDescriptor, ProcedureKey, StackInputs, StackOutputs};
+use super::{EnvironmentRoot, ExecutionTarget, ProcedureKey, StackInputs, StackOutputs};
 use crate::{Felt, Word, ZERO, chiplets::hasher};
 
 // CONSTANTS
@@ -55,7 +55,7 @@ pub const CLAIM_DOMAIN_TAG: Felt = super::domain::ExecutionClaimDomain::TAG.as_f
 /// The deferred root is deliberately absent: verification returns it as an obligation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionClaim {
-    execution_descriptor: ExecutionDescriptor,
+    execution_descriptor: ExecutionTarget,
     stack_inputs: StackInputs,
     stack_outputs: StackOutputs,
 }
@@ -63,7 +63,7 @@ pub struct ExecutionClaim {
 impl ExecutionClaim {
     /// Creates a new execution claim from the execution descriptor and stack I/O.
     pub const fn new(
-        execution_descriptor: ExecutionDescriptor,
+        execution_descriptor: ExecutionTarget,
         stack_inputs: StackInputs,
         stack_outputs: StackOutputs,
     ) -> Self {
@@ -75,7 +75,7 @@ impl ExecutionClaim {
     }
 
     /// Returns the execution descriptor of this claim.
-    pub const fn execution_descriptor(&self) -> ExecutionDescriptor {
+    pub const fn execution_descriptor(&self) -> ExecutionTarget {
         self.execution_descriptor
     }
 
@@ -100,7 +100,7 @@ impl ExecutionClaim {
     }
 
     /// Splits this claim into its execution descriptor and stack I/O.
-    pub fn into_parts(self) -> (ExecutionDescriptor, StackInputs, StackOutputs) {
+    pub fn into_parts(self) -> (ExecutionTarget, StackInputs, StackOutputs) {
         (self.execution_descriptor, self.stack_inputs, self.stack_outputs)
     }
 
@@ -146,7 +146,7 @@ mod tests {
 
     fn claim_from_elements(elements: &[Felt; NUM_CLAIM_ELEMENTS]) -> ExecutionClaim {
         ExecutionClaim::new(
-            ExecutionDescriptor::new(
+            ExecutionTarget::new(
                 ProcedureKey::new(Word::new(elements[0..4].try_into().unwrap())),
                 EnvironmentRoot::new(Word::new(elements[4..8].try_into().unwrap())),
             ),

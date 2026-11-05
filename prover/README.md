@@ -21,29 +21,53 @@ no-op tracer and return `ExecutionOutput`, which cannot be promoted to `Executio
 run because it contains no replay data. Call `FastProcessor::execute_for_proving*` when the result
 will be passed to `Prover`.
 
+The processor takes a caller-authorized `ExecutionTarget` (`K_entry`, `R_E`) and a host that owns
+the loaded `CodePackage` values. Each package keeps code, checked symbols, advice, and exact source
+metadata together. Configure the host's untrusted opening-evidence source with
+`DefaultHost::with_environment_source`, and load code with `load_library(code)` or
+`with_library(code)`. Packages and evidence never supply target authority. The authenticated
+environment selects `D`; the host then supplies code subject to implementation-root and
+procedure-root checks.
+
+Before execution, install caller-selected
+`ResolutionLimits::new(opening, ledger, session)` and `EnvironmentTraceLimits` with
+`ExecutionOptions::with_resolution_limits` and `with_environment_trace_limits`. Neither policy has
+a default. Missing policies reject before entry authentication or host calls, and explicit zero
+limits remain zero. Trace diagnostics expose the authenticated `entry_implementation`; public
+verification instead uses the independently expected target and stack inputs and outputs in
+`ExecutionClaim`.
+
 ### Deferred precompile workflow
 
-```rust,ignore
+The recipient supplies its expected claim independently of the incoming witness or proof:
+
+```rust,no_run
+use miden_core::program::ExecutionClaim;
+use miden_processor::ExecutionWitness;
 use miden_prover::{ExecutionProof, PrecompileStatus, Prover};
 use miden_verifier::Verifier;
 
-// `witness` is an ExecutionWitness produced by FastProcessor.
-let claim = witness.claim();
-let prover = Prover::new();
-let deferred = prover.prove(witness)?;
+fn settle_deferred(
+    witness: ExecutionWitness,
+    expected_claim: &ExecutionClaim,
+) -> Result<ExecutionProof, Box<dyn std::error::Error>> {
+    let prover = Prover::new();
+    let deferred = prover.prove(witness)?;
 
-// Transport and decode the proof without a registry.
-let bytes = deferred.to_bytes();
-let proof = ExecutionProof::read_from_bytes(&bytes)?;
-let PrecompileStatus::Deferred(precompile_witness) = proof.precompile_status() else {
-    unreachable!("precompile proving is only needed for deferred proofs");
-};
-
-// Direct import checks the portable operations and assertions when proving begins.
-let precompile_proof = prover.prove_precompiles(vec![precompile_witness.clone()])?;
-let complete = proof.complete(precompile_proof)?;
-let outcome = Verifier::new().verify(&claim, &complete)?;
-assert!(outcome.is_complete());
+    // Transport and decode the proof without a registry.
+    let bytes = deferred.to_bytes();
+    let proof = ExecutionProof::read_from_bytes(&bytes)?;
+    let complete = if let PrecompileStatus::Deferred(precompile_witness) = proof.precompile() {
+        // Direct import checks portable operations and assertions when proving begins.
+        let precompile_proof = prover.prove_precompiles(vec![precompile_witness.clone()])?;
+        proof.complete(precompile_proof)?
+    } else {
+        proof
+    };
+    let outcome = Verifier::new().verify(expected_claim, &complete)?;
+    assert!(outcome.is_complete());
+    Ok(complete)
+}
 ```
 
 To share precompile proving across several deferred proofs, collect their portable singleton
@@ -66,8 +90,11 @@ explains the claim list, ordered root fold, and host request.
 
 ### Synchronous execution and proving
 
-The FastProcessor-backed `prove_sync(&Prover, ...)` function is the direct synchronous path for
-executing and fully proving a program. When enabled in `ExecutionOptions`, it overlaps execution
+The FastProcessor-backed
+`prove_sync(&Prover, target, stack_inputs, advice_inputs, &mut host, execution_options)` function is
+the direct synchronous path for executing and fully proving a target using host-owned code and
+explicit resolution and tracing policies. It returns `(StackOutputs, ExecutionProof)`. When
+enabled in `ExecutionOptions`, it overlaps execution
 with hasher trace construction when a Rayon worker is available. A caller with no separate Rayon
 worker uses compact buffered replay. Proof generation remains configured on `Prover`.
 

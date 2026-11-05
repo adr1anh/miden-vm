@@ -3,6 +3,7 @@
 use miden_core::mast::MastNodeId;
 
 pub mod naming;
+pub mod witness;
 
 /// Root selection for the generator-driven oracle in `mast_forest_wire_view_new`: `k` in
 /// 0..=node_ids.len(), distinct node ids in first-occurrence order over `data[1..]`, padded
@@ -38,7 +39,23 @@ pub fn select_roots(data: &[u8], node_ids: &[MastNodeId], k: usize) -> Vec<MastN
 mod tests {
     use miden_core::mast::MastNodeId;
 
-    use super::select_roots;
+    use super::{select_roots, witness};
+
+    // These deterministic seed replays establish reachability of every shared witness oracle.
+    // They do not run a fuzz mutation campaign.
+    #[test]
+    fn ordinary_witness_seed_reaches_all_oracles() {
+        assert!(witness::exercise(include_bytes!(
+            "corpus/execution_witness_deserialize/ordinary.bin"
+        )));
+    }
+
+    #[test]
+    fn deferred_witness_seed_reaches_all_oracles() {
+        assert!(witness::exercise(include_bytes!(
+            "corpus/execution_witness_deserialize/deferred.bin"
+        )));
+    }
 
     /// BEHAVIORAL REGRESSION : zero-count inputs produce EMPTY root
     /// lists even with trailing bytes — the former push-then-check ordering produced one

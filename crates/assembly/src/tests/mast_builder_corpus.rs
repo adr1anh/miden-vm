@@ -109,18 +109,19 @@ fn mast_builder_acceptance_corpus() -> TestResult {
     Ok(())
 }
 
-fn append_program_acceptance_summary(output: &mut String, case_name: &str, program: &Program) {
-    let forest = program.mast_forest();
-    let serialized_program_len = program.to_bytes().len();
+fn append_program_acceptance_summary(output: &mut String, case_name: &str, program: &CodePackage) {
+    let forest = program.package().mast_forest();
+    let serialized_package_len = program.package().to_bytes().len();
     let serialized_forest_len = forest.to_bytes().len();
 
     writeln!(output, "=== {case_name} ===").unwrap();
-    writeln!(output, "program_hash={:?}", program.hash()).unwrap();
-    writeln!(output, "entrypoint={}", u32::from(program.entrypoint())).unwrap();
-    writeln!(output, "num_procedures={}", program.num_procedures()).unwrap();
+    writeln!(output, "program_hash={:?}", entry_digest(program)).unwrap();
+    writeln!(output, "entrypoint={}", u32::from(entry_node(program))).unwrap();
+    writeln!(output, "num_procedures={}", program.package().mast_forest().num_procedures())
+        .unwrap();
     writeln!(output, "num_nodes={}", forest.num_nodes()).unwrap();
     writeln!(output, "forest_commitment={:?}", forest.commitment()).unwrap();
-    writeln!(output, "serialized_program_len={serialized_program_len}").unwrap();
+    writeln!(output, "serialized_package_len={serialized_package_len}").unwrap();
     writeln!(output, "serialized_forest_len={serialized_forest_len}").unwrap();
 
     let roots = forest
@@ -164,7 +165,10 @@ pub proc foo exec.::test::mod1::bar end"
         naming.add_module(&mod2)?;
         let mut assembler = Assembler::new(context.source_manager());
         let vendor_naming = naming.admit_package(&vendor_lib)?;
-        assembler.link_package(Arc::from(vendor_lib), Linkage::Static, vendor_naming)?;
+        assembler.link_package(
+            CodePackage::new(Arc::from(vendor_lib), vendor_naming.into()).unwrap(),
+            Linkage::Static,
+        )?;
         let assembler = naming.configure(assembler, [&*mod2])?;
         Arc::<Package>::from(assembler.assemble_library("lib", mod2, None::<Box<Module>>).unwrap())
     };
@@ -219,8 +223,8 @@ pub proc foo exec.::test::mod1::bar end"
     // 4. Verify we can create an assembler that successfully links the vendored library
     let mut assembler_with_vendored_lib = Assembler::default();
     let lib_naming = crate::testing::FixtureNamespace::assembly_tests().admit_package(&lib)?;
-    let link_result =
-        assembler_with_vendored_lib.link_package(lib.clone(), Linkage::Static, lib_naming);
+    let link_result = assembler_with_vendored_lib
+        .link_package(CodePackage::new(lib.clone(), lib_naming.into()).unwrap(), Linkage::Static);
     assert!(link_result.is_ok(), "Should be able to link the vendored library");
 
     // 5. Test that a simple program can be assembled with the linked library

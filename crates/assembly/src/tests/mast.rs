@@ -4,11 +4,11 @@ use miden_core::{
     mast::BasicBlockNodeBuilder,
     program::{CanonicalLabel, ProcedureKey},
 };
-use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath};
 
 use super::*;
 use crate::{
-    CallableBinding,
+    ProcedureName,
     testing::{FixtureNamespace, admit_fixture_package},
 };
 
@@ -31,12 +31,12 @@ fn nested_blocks() -> Result<(), Report> {
         )
         .unwrap()
     };
-    let program_home = NamespacePlan::new(vec![
+    let program_home = NamespacePath::new(vec![
         CanonicalLabel::text("nested-blocks").unwrap(),
         CanonicalLabel::text("program").unwrap(),
     ]);
-    let kernel_home = NamespacePlan::new(vec![]);
-    let helper_home = NamespacePlan::new(vec![
+    let kernel_home = NamespacePath::new(vec![]);
+    let helper_home = NamespacePath::new(vec![
         CanonicalLabel::text("nested-blocks").unwrap(),
         CanonicalLabel::text("dependency").unwrap(),
     ]);
@@ -76,27 +76,32 @@ fn nested_blocks() -> Result<(), Report> {
             admit_fixture_package(&kernel_lib, core::slice::from_ref(&kernel_home))?;
         let helper_naming =
             admit_fixture_package(&dummy_library, core::slice::from_ref(&helper_home))?;
-        let mut assembler =
-            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)?
-                .with_namespace_plan(program_home.clone())
-                .with_callable_path(Path::exec_path().join("$main").into(), entry_path)
-                .unwrap()
-                .with_callable_path(Path::exec_path().join("foo").into(), foo_path)
-                .unwrap()
-                .with_callable_path(Path::exec_path().join("bar").into(), bar_path)
-                .unwrap()
-                .with_callable_binding(
-                    Path::kernel_path().join("foo").into(),
-                    CallableBinding::new(kernel_home.clone(), kernel_foo_path).unwrap(),
-                )
-                .unwrap()
-                .with_callable_binding(
-                    Arc::from(Path::new("::libs::helpers::help")),
-                    CallableBinding::new(helper_home.clone(), helper_path).unwrap(),
-                )
-                .unwrap();
+        let mut assembler = Assembler::with_kernel(
+            context.source_manager(),
+            CodePackage::new(kernel_lib, kernel_naming.into()).unwrap(),
+        )?
+        .with_namespace_plan(program_home.clone())
+        .with_callable_path(Path::exec_path().join("$main").into(), entry_path)
+        .unwrap()
+        .with_callable_path(Path::exec_path().join("foo").into(), foo_path)
+        .unwrap()
+        .with_callable_path(Path::exec_path().join("bar").into(), bar_path)
+        .unwrap()
+        .with_callable_binding(
+            Path::kernel_path().join("foo").into(),
+            ProcedureName::new(kernel_home.clone(), kernel_foo_path).unwrap(),
+        )
+        .unwrap()
+        .with_callable_binding(
+            Arc::from(Path::new("::libs::helpers::help")),
+            ProcedureName::new(helper_home.clone(), helper_path).unwrap(),
+        )
+        .unwrap();
         assembler
-            .link_package(Arc::from(dummy_library), Linkage::Dynamic, helper_naming)
+            .link_package(
+                CodePackage::new(Arc::from(dummy_library), helper_naming.into()).unwrap(),
+                Linkage::Dynamic,
+            )
             .unwrap();
 
         assembler
@@ -162,7 +167,8 @@ fn nested_blocks() -> Result<(), Report> {
 
     let package = assembler.assemble_program("program", program).unwrap();
     let naming = admit_fixture_package(&package, &[program_home, kernel_home, helper_home])?;
-    let program = package.unwrap_program(&naming);
+    package.check_executable_code(&naming)?;
+    let program = CodePackage::new(Arc::from(package), Arc::new(naming)).map_err(Report::msg)?;
 
     // Dynamic code supply also retains D separately from the helper's keyed EXEC.
     let helper_digest = BasicBlockNodeBuilder::new(vec![Operation::Push(Felt::from_u32(29))])
@@ -291,9 +297,8 @@ fn nested_blocks() -> Result<(), Report> {
     let (mut expected_mast_forest, node_remapping) =
         expected_mast_forest_builder.build().unwrap().into_parts();
     expected_mast_forest.make_root(node_remapping[&combined_node_ref]);
-    let expected_program =
-        Program::new(expected_mast_forest.into(), node_remapping[&combined_node_ref]);
-    assert_eq!(expected_program.hash(), program.hash());
+    let expected_entry = node_remapping[&combined_node_ref];
+    assert_eq!(expected_mast_forest[expected_entry].digest(), entry_digest(&program));
 
     // Compare complete rooted structure without relying on final dense node numbering.
     let canonical_roots = |forest: &MastForest| {
@@ -309,12 +314,12 @@ fn nested_blocks() -> Result<(), Report> {
         roots
     };
     assert_eq!(
-        canonical_roots(expected_program.mast_forest()),
-        canonical_roots(program.mast_forest()),
+        canonical_roots(&expected_mast_forest),
+        canonical_roots(program.package().mast_forest()),
     );
-    assert_all_nodes_reachable_from_roots(program.mast_forest());
+    assert_all_nodes_reachable_from_roots(program.package().mast_forest());
 
-    let forest = program.mast_forest();
+    let forest = program.package().mast_forest();
     let exec_targets = forest
         .nodes()
         .iter()
@@ -345,7 +350,7 @@ fn nested_blocks() -> Result<(), Report> {
     assert_eq!(calls, vec![(kernel_foo_key, true)]);
 
     // Three local implementations plus the two selected external implementations remain roots.
-    assert_eq!(program.num_procedures(), 5);
+    assert_eq!(program.package().mast_forest().num_procedures(), 5);
     assert_eq!(
         forest
             .procedure_roots()
@@ -355,8 +360,8 @@ fn nested_blocks() -> Result<(), Report> {
         2,
     );
     for body in [foo_body, bar_body] {
-        let digest = expected_program.mast_forest()[node_remapping[&body]].digest();
-        assert!(program.find_procedure_root(digest).is_some());
+        let digest = expected_mast_forest[node_remapping[&body]].digest();
+        assert!(program.package().mast_forest().find_procedure_root(digest).is_some());
     }
 
     Ok(())
@@ -388,7 +393,8 @@ fn emit_instruction_digest() {
 
     let program = context.assemble(program_source).unwrap();
 
-    let procedure_digests: Vec<Word> = program.mast_forest().procedure_digests().collect();
+    let procedure_digests: Vec<Word> =
+        program.package().mast_forest().procedure_digests().collect();
 
     // foo, bar and entrypoint
     assert_eq!(3, procedure_digests.len());
@@ -425,7 +431,8 @@ fn trace_instruction_digest() {
 
     let program = context.assemble(program_source).unwrap();
 
-    let procedure_digests: Vec<Word> = program.mast_forest().procedure_digests().collect();
+    let procedure_digests: Vec<Word> =
+        program.package().mast_forest().procedure_digests().collect();
 
     // foo, bar and entrypoint
     assert_eq!(3, procedure_digests.len());
@@ -472,18 +479,18 @@ fn emit_syntax_equivalence() {
     let program3 = context.assemble(program3_source).unwrap();
 
     // Get the MAST forest digests for both programs
-    let digest1 = program1.hash();
-    let digest2 = program2.hash();
-    let digest3 = program3.hash();
+    let digest1 = entry_digest(&program1);
+    let digest2 = entry_digest(&program2);
+    let digest3 = entry_digest(&program3);
 
     // Both programs should have identical MAST representations
     assert_eq!(digest1, digest2, "MAST digests differ between programs 1 and 2");
     assert_eq!(digest1, digest3, "MAST digests differ between programs 1 and 3");
 
     // Verify the procedure count is 1 (just the entrypoint) for both programs
-    assert_eq!(program1.num_procedures(), 1);
-    assert_eq!(program2.num_procedures(), 1);
-    assert_eq!(program3.num_procedures(), 1);
+    assert_eq!(program1.package().mast_forest().num_procedures(), 1);
+    assert_eq!(program2.package().mast_forest().num_procedures(), 1);
+    assert_eq!(program3.package().mast_forest().num_procedures(), 1);
 }
 
 /// Tests that trace events have the same MAST representation regardless of whether the trace ID
@@ -535,15 +542,15 @@ fn trace_syntax_equivalence() {
     let program3 = context.assemble(program3_source).unwrap();
     let program4 = context.assemble(program4_source).unwrap();
 
-    let digest1 = program1.hash();
-    assert_eq!(digest1, program2.hash(), "constant and inline trace forms differ");
-    assert_eq!(digest1, program3.hash(), "immediate and stack trace forms differ");
-    assert_eq!(digest1, program4.hash(), "trace and expanded emit forms differ");
+    let digest1 = entry_digest(&program1);
+    assert_eq!(digest1, entry_digest(&program2), "constant and inline trace forms differ");
+    assert_eq!(digest1, entry_digest(&program3), "immediate and stack trace forms differ");
+    assert_eq!(digest1, entry_digest(&program4), "trace and expanded emit forms differ");
 
-    assert_eq!(program1.num_procedures(), 1);
-    assert_eq!(program2.num_procedures(), 1);
-    assert_eq!(program3.num_procedures(), 1);
-    assert_eq!(program4.num_procedures(), 1);
+    assert_eq!(program1.package().mast_forest().num_procedures(), 1);
+    assert_eq!(program2.package().mast_forest().num_procedures(), 1);
+    assert_eq!(program3.package().mast_forest().num_procedures(), 1);
+    assert_eq!(program4.package().mast_forest().num_procedures(), 1);
 }
 
 /// Since `foo` and `bar` have the same body, we only expect them to be added once to the program.
@@ -572,7 +579,7 @@ fn duplicate_procedure() {
     let program = context.assemble(program_source).unwrap();
     // `foo` and `bar` have the same body, so they are deduplicated. The entrypoint is the second
     // procedure.
-    assert_eq!(program.num_procedures(), 2);
+    assert_eq!(program.package().mast_forest().num_procedures(), 2);
 }
 
 #[test]
@@ -599,7 +606,7 @@ fn distinguish_grandchildren_correctly() {
 
     let program = context.assemble(program_source).unwrap();
 
-    let join_node = &program.mast_forest()[program.entrypoint()].unwrap_join();
+    let join_node = &program.package().mast_forest()[entry_node(&program)].unwrap_join();
 
     // Make sure that both `if.true` blocks compile down to a different MAST node.
     assert_ne!(join_node.first(), join_node.second());
@@ -635,7 +642,10 @@ fn explicit_fully_qualified_procedure_references() -> Result<(), Report> {
 
     let library_naming = naming.admit_package(&library)?;
     let assembler = Assembler::new(context.source_manager())
-        .with_package(library.into(), Linkage::Dynamic, library_naming)
+        .with_package(
+            CodePackage::new(library.into(), library_naming.into()).unwrap(),
+            Linkage::Dynamic,
+        )
         .unwrap();
 
     let program = context.parse_module(
@@ -678,7 +688,10 @@ fn re_exports() -> Result<(), Report> {
 
     let library_naming = naming.admit_package(&library)?;
     let assembler = Assembler::new(context.source_manager())
-        .with_package(library.into(), Linkage::Dynamic, library_naming)
+        .with_package(
+            CodePackage::new(library.into(), library_naming.into()).unwrap(),
+            Linkage::Dynamic,
+        )
         .unwrap();
 
     let program = context.parse_module(

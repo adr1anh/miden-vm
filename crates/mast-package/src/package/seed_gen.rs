@@ -55,7 +55,7 @@ fn build_package_exports(signature: Option<FunctionType>) -> (Arc<MastForest>, V
 
 fn build_package(signature: Option<FunctionType>) -> Package {
     let (mast, exports) = build_package_exports(signature);
-    let home = crate::NamespacePlan::new(vec![
+    let home = crate::NamespacePath::new(vec![
         miden_core::program::CanonicalLabel::text("package-seed-fixtures").unwrap(),
     ]);
     let naming = super::arbitrary::fixture_naming(home, TargetType::Library, &mast, &exports);

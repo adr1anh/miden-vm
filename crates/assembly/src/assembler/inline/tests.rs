@@ -6,24 +6,26 @@ use miden_core::{
     operations::Operation,
     program::CanonicalLabel,
 };
-use miden_mast_package::{CallableProcedurePath, NamespacePlan, Package, PackageNaming};
+use miden_mast_package::{
+    CallableProcedurePath, CodePackage, NamespacePath, Package, PackageSymbols,
+};
 use miden_project::Linkage;
 
 use super::*;
 use crate::{
-    CallableBinding, CallableDeclaration,
+    CallableDeclaration, ProcedureName,
     ast::{Ident, Instruction, ItemIndex, Op},
     debuginfo::Span,
     linker::{Linker, LinkerError},
     testing::{TestContext, admit_fixture_package},
 };
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
-fn binding(name: &str) -> CallableBinding {
-    CallableBinding::new(
+fn binding(name: &str) -> ProcedureName {
+    ProcedureName::new(
         home("foreign-canonical-home"),
         CallableProcedurePath::from_semantic_components(vec![name.to_string()]).unwrap(),
     )
@@ -54,7 +56,7 @@ fn dependency(context: &TestContext) -> Arc<Package> {
         .into()
 }
 
-fn dependency_naming(package: &Package) -> PackageNaming {
+fn dependency_naming(package: &Package) -> PackageSymbols {
     admit_fixture_package(package, &[home("inline-tests"), home("foreign-canonical-home")]).unwrap()
 }
 
@@ -217,7 +219,10 @@ fn latest_imports_reject_even_with_source_or_static_code_supply() {
     for linkage in [Linkage::Dynamic, Linkage::Static] {
         let package = dependency(&context);
         let error = assembler(&context, &[("::$exec::$main", "entry"), ("::dep::run", "run")])
-            .with_package(package.clone(), linkage, dependency_naming(&package))
+            .with_package(
+                CodePackage::new(package.clone(), dependency_naming(&package).into()).unwrap(),
+                linkage,
+            )
             .unwrap()
             .assemble_program("caller", source)
             .unwrap_err();
@@ -272,7 +277,11 @@ fn explicit_import_pins_match_selected_code_and_survive_aliases() {
         let expected = implementation(&dependency, "dep::run");
         let mut assembler =
             assembler(&context, &[("::$exec::$main", "entry"), ("::dep::run", "run")])
-                .with_package(dependency.clone(), linkage, dependency_naming(&dependency))
+                .with_package(
+                    CodePackage::new(dependency.clone(), dependency_naming(&dependency).into())
+                        .unwrap(),
+                    linkage,
+                )
                 .unwrap()
                 .with_pinned_callable(Arc::from(Path::new("::dep::run")), expected)
                 .unwrap();
@@ -310,7 +319,10 @@ fn pins_reject_wrong_roots_alias_names_and_duplicate_configuration() {
     let wrong = ImplementationRoot::new(Word::default());
     let dependency = dependency(&context);
     let error = assembler(&context, &[("::$exec::$main", "entry"), ("::dep::run", "run")])
-        .with_package(dependency.clone(), Linkage::Static, dependency_naming(&dependency))
+        .with_package(
+            CodePackage::new(dependency.clone(), dependency_naming(&dependency).into()).unwrap(),
+            Linkage::Static,
+        )
         .unwrap()
         .with_pinned_callable(declaration.clone(), wrong)
         .unwrap()
@@ -318,7 +330,10 @@ fn pins_reject_wrong_roots_alias_names_and_duplicate_configuration() {
         .unwrap_err();
     assert!(error.to_string().contains("selected body has"));
     let error = assembler(&context, &[("::$exec::$main", "entry"), ("::dep::run", "run")])
-        .with_package(dependency.clone(), Linkage::Static, dependency_naming(&dependency))
+        .with_package(
+            CodePackage::new(dependency.clone(), dependency_naming(&dependency).into()).unwrap(),
+            Linkage::Static,
+        )
         .unwrap()
         .with_pinned_callable(Arc::from(Path::new("::$exec::chosen")), wrong)
         .unwrap()
@@ -345,7 +360,10 @@ fn inline_key_literals_never_reverse_resolve_to_a_body() {
     let known_body = implementation(&dependency, "dep::run");
     let source = format!("begin inline.{} end", known_body.as_word().to_hex());
     let error = assembler(&context, &[("::$exec::$main", "entry")])
-        .with_package(dependency.clone(), Linkage::Static, dependency_naming(&dependency))
+        .with_package(
+            CodePackage::new(dependency.clone(), dependency_naming(&dependency).into()).unwrap(),
+            Linkage::Static,
+        )
         .unwrap()
         .with_pinned_callable(Arc::from(Path::new("::dep::run")), known_body)
         .unwrap()
@@ -538,7 +556,10 @@ fn pinned_static_inline_keeps_selected_export_source_after_inventory_retention()
         .unwrap();
     let expected_location = context.source_manager().location(call_site).unwrap();
     let package = assembler(&context, &[("::$exec::$main", "entry"), ("::dep::leaf", "leaf")])
-        .with_package(dependency.clone(), Linkage::Static, dependency_naming(&dependency))
+        .with_package(
+            CodePackage::new(dependency.clone(), dependency_naming(&dependency).into()).unwrap(),
+            Linkage::Static,
+        )
         .unwrap()
         .with_pinned_callable(Arc::from(Path::new("::dep::leaf")), expected)
         .unwrap()

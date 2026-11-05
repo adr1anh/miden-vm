@@ -5,7 +5,7 @@ use libfuzzer_sys::fuzz_target;
 use miden_core::{Felt, Word, program::ImplementationRoot};
 use miden_core_fuzz::naming::SyntheticProfile;
 use miden_mast_package::{
-    CallableBinding, CallableProcedurePath, NamespacePlan, PackageCallables,
+    CallableProcedurePath, NamespacePath, PackageCallables, ProcedureName,
     interface::serialization::CodecLimits,
 };
 
@@ -46,15 +46,15 @@ fuzz_target!(|data: &[u8]| {
         let flags = byte(data, index + 1);
         let home = profile.homes[usize::from(flags % 3)].clone();
         let prefix = ["public", "helpers", "callbacks", "$exec"][usize::from((flags >> 2) % 4)];
-        let binding = CallableBinding::new(
-            NamespacePlan::new(home),
+        let binding = ProcedureName::new(
+            NamespacePath::new(home),
             path(vec![prefix.into(), format!("p{index}")]),
         )
         .unwrap();
         let key = binding.key();
         if flags & 16 != 0 {
             let target = if flags & 64 != 0 {
-                bindings.first().map_or(key, CallableBinding::key)
+                bindings.first().map_or(key, ProcedureName::key)
             } else {
                 key
             };

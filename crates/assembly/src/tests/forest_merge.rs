@@ -91,7 +91,7 @@ fn issue_1644_single_forest_merge_identity() -> TestResult {
     end"#;
 
     let program = context.assemble(program_source)?;
-    let original_forest = program.mast_forest().clone();
+    let original_forest = program.package().mast_forest().clone();
 
     // Core test: Merge the forest with itself
     // This should act as identity (return the same forest) but doesn't

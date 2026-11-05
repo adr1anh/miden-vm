@@ -2,32 +2,25 @@
 
 use miden_air::vm::config::RELATION_DIGEST;
 use miden_core::{
-    crypto::hash::Blake3_256, program::ExecutionDescriptor, proof::ExecutionProofCompatibility,
+    crypto::hash::Blake3_256, program::ExecutionTarget, proof::ExecutionProofCompatibility,
     serde::Serializable, utils::to_hex,
 };
 use miden_stark::pcs::PcsParams;
-use miden_vm::{HashFunction, ProgramInfo};
+use miden_vm::HashFunction;
 
 const TX_PROOF_CACHE_KEY_VERSION: &[u8] =
-    b"miden-synthetic-recursive-tx-proof-cache-v7-verifier-identity-eidos";
+    b"miden-synthetic-recursive-tx-proof-cache-v8-execution-target-eidos";
 pub(super) const INNER_PROOF_HASH: HashFunction = HashFunction::Eidos;
 
 pub(super) fn tx_proof_cache_key(
-    program_info: &ProgramInfo,
-    descriptor: ExecutionDescriptor,
+    target: ExecutionTarget,
     stack_values: &[u64],
     compatibility: &ExecutionProofCompatibility,
 ) -> String {
-    let mut program_bytes = Vec::new();
-    program_bytes.extend_from_slice(&program_info.program_hash().as_bytes());
-    for digest in program_info.kernel_procedures() {
-        program_bytes.extend_from_slice(&digest.as_bytes());
-    }
-    // This local cache must distinguish authorized environments in addition to the code/debug
-    // metadata. Neither the implementation root nor the source identifies K_entry/R_E.
-    let mut environment_bytes = Vec::with_capacity(64);
-    environment_bytes.extend_from_slice(&descriptor.entry_key().into_word().as_bytes());
-    environment_bytes.extend_from_slice(&descriptor.environment_root().into_word().as_bytes());
+    // The caller's target fixes K_entry/R_E; its authenticated environment binds implementations.
+    let mut target_bytes = Vec::with_capacity(64);
+    target_bytes.extend_from_slice(&target.entry_key().into_word().as_bytes());
+    target_bytes.extend_from_slice(&target.environment_root().into_word().as_bytes());
 
     let mut stack_bytes = Vec::with_capacity(stack_values.len() * 8);
     for value in stack_values {
@@ -54,8 +47,7 @@ pub(super) fn tx_proof_cache_key(
             env!("CARGO_PKG_VERSION").as_bytes(),
             relation_digest_bytes.as_slice(),
             compatibility_bytes.as_slice(),
-            program_bytes.as_slice(),
-            environment_bytes.as_slice(),
+            target_bytes.as_slice(),
             stack_bytes.as_slice(),
             hash_fn_byte.as_slice(),
             parameters.as_slice(),

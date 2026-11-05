@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn no_package_store_cache_package_is_noop() {
         let (mast, exports) = build_package_exports("test::pkg::entry");
-        let home = miden_mast_package::NamespacePlan::new(vec![
+        let home = miden_mast_package::NamespacePath::new(vec![
             miden_core::program::CanonicalLabel::text("registry-fixtures").unwrap(),
         ]);
         let naming = miden_mast_package::arbitrary::fixture_naming(

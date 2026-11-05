@@ -17,7 +17,7 @@ use miden_core::{Word, mast::MastNodeId, utils::DisplayHex};
 use proptest::prelude::{Strategy, any};
 use thiserror::Error;
 
-use super::{NamingCodecError, PackageNamingError};
+use super::{NamingCodecError, PackageSymbolsError};
 use crate::{Dependency, PackageId, debug_info::DebugSourceNodeId};
 
 // PACKAGE MANIFEST
@@ -68,7 +68,9 @@ pub struct PackageManifest {
 #[derive(Debug, Error)]
 pub enum ManifestValidationError {
     #[error(transparent)]
-    InvalidNaming(#[from] PackageNamingError),
+    InvalidNaming(#[from] PackageSymbolsError),
+    #[error(transparent)]
+    InvalidOccurrences(#[from] super::PackageProcedureOccurrencesError),
     #[error(transparent)]
     NamingTransport(#[from] NamingCodecError<Infallible>),
     #[error("canonical naming does not match the package's required naming transport")]

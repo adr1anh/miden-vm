@@ -8,15 +8,15 @@ fn simple_instructions() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin push.0 assertz end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
 
     let source = source_file!(&context, "begin push.10 push.50 push.2 u32wrapping_madd end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
 
     let source = source_file!(&context, "begin push.10 push.50 push.2 u32wrapping_add3 end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -27,7 +27,7 @@ fn empty_program() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -45,7 +45,7 @@ fn empty_if_true_then_branch() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin if.true nop end end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -56,7 +56,7 @@ fn empty_while() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin while.true end end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -67,7 +67,7 @@ fn empty_repeat() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin repeat.5 end end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -78,10 +78,10 @@ fn repeat_basic_blocks_merged() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin mul repeat.5 add end end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
 
     // Also ensure that dead code elimination works properly
-    assert_eq!(program.mast_forest().num_nodes(), 1);
+    assert_eq!(program.package().mast_forest().num_nodes(), 1);
     Ok(())
 }
 
@@ -93,7 +93,7 @@ fn do_while_lowers_to_bare_loop() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin do push.1 while eq.0 end end");
     let program = context.assemble(source)?;
-    let forest = program.mast_forest();
+    let forest = program.package().mast_forest();
 
     let num_loops = forest.nodes().iter().filter(|n| matches!(n, MastNode::Loop(_))).count();
     let num_splits = forest.nodes().iter().filter(|n| matches!(n, MastNode::Split(_))).count();
@@ -118,7 +118,7 @@ fn repeat_dynamic_iteration_count() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "const A = 5 begin repeat.A add end end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -127,7 +127,7 @@ fn single_basic_block() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin push.1 push.2 add end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -138,12 +138,12 @@ fn basic_block_and_simple_if_true() -> TestResult {
     // if with else
     let source = source_file!(&context, "begin push.2 push.3 if.true add else mul end end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
 
     // if without else
     let source = source_file!(&context, "begin push.2 push.3 if.true add end end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -154,11 +154,11 @@ fn basic_block_and_simple_if_false() -> TestResult {
     // if with else
     let source = source_file!(&context, "begin push.2 push.3 if.false add else mul end end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
 
     // if without else
     let source = source_file!(&context, "begin push.2 push.3 if.false add end end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }

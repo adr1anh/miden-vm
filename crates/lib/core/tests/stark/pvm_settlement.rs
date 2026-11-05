@@ -123,14 +123,16 @@ fn prove_signature_execution(
     );
     let program = assemble(
         Assembler::default()
-            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
             .expect("core library must link"),
         "signature_deferred_settlement",
         source,
         &[core_lib.naming()],
     );
     let mut host = DefaultHost::default()
-        .with_environment_source(program.environment.source())
+        .with_environment_source(program.1.source())
+        .with_library(program.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(core_lib)
         .expect("core library must load into the host");
     let mut advice_stack = AdviceStack::new();
@@ -142,10 +144,11 @@ fn prove_signature_execution(
         stack_inputs,
         AdviceInputs::default().with_stack(advice_stack),
         ExecutionOptions::default()
+            .with_resolution_limits(program.1.resolution_limits())
             .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .expect("signature advice must fit provider limits")
-    .execute_for_proving_sync(&program.program, program.environment.execution(), &mut host)
+    .execute_for_proving_sync(program.1.target(), &mut host)
     .expect("signature execution must produce a proving witness");
     let claim = witness.claim();
     // The core library's recursive verifiers accept Eidos proofs.
@@ -187,11 +190,14 @@ async fn run_settlement_in_masm(
     let mut host =
         PvmSettlementHost::new(core_lib, &program, &advice_inputs, vec![precompile_witness]);
 
-    let output =
-        FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
-            .expect("failed to construct FastProcessor")
-            .execute(&program.program, program.environment.execution(), &mut host)
-            .await?;
+    let output = FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        ExecutionOptions::default().with_resolution_limits(program.1.resolution_limits()),
+    )
+    .expect("failed to construct FastProcessor")
+    .execute(program.1.target(), &mut host)
+    .await?;
     let precompile_proof = host
         .precompile_proof
         .take()
@@ -211,7 +217,7 @@ fn assemble_settlement_program(core_lib: &CoreLibrary) -> NamedProgram {
     let source = format!("{}\n{source}", verifier_identity_constants(core_lib));
     let program = assemble(
         Assembler::default()
-            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
             .expect("core library must link"),
         "async_pvm_settlement",
         source,
@@ -246,9 +252,9 @@ fn mount_settlement_verifier(core_lib: &CoreLibrary, mut program: NamedProgram) 
     let vm = core_lib.vm_recursive_verifier_profile().unwrap();
     let pvm = core_lib.pvm_recursive_verifier_profile().unwrap();
     assert_eq!(vm.fragment().root(), pvm.fragment().root());
-    program.environment = FixtureEnvironment::new_with_fragments(
-        program.naming.entry_key().expect("settlement program must have an entry"),
-        [program.naming.as_ref(), core_lib.naming()],
+    program.1 = FixtureEnvironment::new_with_fragments(
+        program.0.symbols().entry_key().expect("settlement program must have an entry"),
+        [program.0.symbols().as_ref(), core_lib.naming()],
         &[vm.shared_fragment()],
     )
     .expect("the complete core fragment must mount in the settlement environment");
@@ -258,12 +264,12 @@ fn mount_settlement_verifier(core_lib: &CoreLibrary, mut program: NamedProgram) 
 fn authorize_settlement_vm(core_lib: &CoreLibrary, program: &NamedProgram, advice: &AdviceInputs) {
     let mut effective_advice = advice.map().clone();
     effective_advice
-        .merge(program.program.mast_forest().advice_map())
+        .merge(program.0.package().mast_forest().advice_map())
         .expect("outer program advice must not conflict with request advice");
     effective_advice
         .merge(core_lib.mast_forest().advice_map())
         .expect("core package advice must not conflict with request advice");
-    let environment = program.environment.validated_environment();
+    let environment = program.1.validated_environment();
     core_lib
         .vm_recursive_verifier_profile()
         .unwrap()
@@ -296,7 +302,9 @@ impl PvmSettlementHost {
         let verifier_profile = core_lib.pvm_recursive_verifier_profile().unwrap();
         let expected_verifier = verifier_profile.identity();
         let inner = DefaultHost::default()
-            .with_environment_source(program.environment.source())
+            .with_environment_source(program.1.source())
+            .with_library(program.0.clone())
+            .expect("fixture code must load into the host")
             .with_library(core_lib)
             .expect("core library must load into the settlement host");
         let registry = Arc::new(miden_precompiles::registry());
@@ -317,7 +325,7 @@ impl PvmSettlementHost {
             event_name: PVM_PROOF_REQUEST_EVENT_NAME,
             expected_verifier,
             verifier_profile,
-            environment: program.environment.clone(),
+            environment: program.1.clone(),
             available_root,
             precompile_witnesses,
             precompile_proof: None,
@@ -353,9 +361,9 @@ impl Host for PvmSettlementHost {
 
     fn get_mast_forest(
         &self,
-        node_digest: &Word,
+        request: miden_processor::CodeRequest,
     ) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
-        let forest = SyncHost::get_mast_forest(&self.inner, node_digest);
+        let forest = SyncHost::get_mast_forest(&self.inner, request);
         async move { forest }
     }
 

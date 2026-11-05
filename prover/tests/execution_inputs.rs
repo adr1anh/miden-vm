@@ -17,34 +17,39 @@ use miden_core::{
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::Operation,
     program::{
-        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionDescriptor, ImplementationRoot,
-        LabelCommitment, Namespace, ProcedureKey, Program, StackInputs,
+        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionTarget, ImplementationRoot,
+        LabelCommitment, Namespace, ProcedureKey, StackInputs,
     },
     serde::Serializable,
 };
 use miden_processor::{
-    DefaultHost, EnvironmentTraceLimits, EnvironmentWitnessRequest, ExecutionEnvironment,
-    ExecutionError, ExecutionOptions, FastProcessor, LedgerLimits, OpeningLimits, OpeningStep,
+    DefaultHost, EnvironmentTraceLimits, EnvironmentWitnessRequest, ExecutionError,
+    ExecutionOptions, FastProcessor, LedgerLimits, OpeningLimits, OpeningStep, ResolutionLimits,
     SessionLimits,
 };
+use miden_utils_testing::librarytree::{fixture_code, fixture_entry_digest};
 use serde_json::{Value, json};
 
 #[test]
 fn admitted_named_program_executes_with_the_callers_authority_and_policies() {
     let fixture = Fixture::new();
     let admitted = fixture.admit(&fixture.document(), input_limits()).unwrap();
-    assert_eq!(admitted.environment(), fixture.environment);
+    assert_eq!(admitted.target(), fixture.target);
+    assert_eq!(admitted.resolution_limits(), fixture.resolution_limits);
     assert_eq!(admitted.trace_limits(), trace_limits());
-    assert_ne!(fixture.entry.into_word(), fixture.program.hash());
+    assert_ne!(fixture.entry.into_word(), fixture_entry_digest(&fixture.program));
     assert_ne!(fixture.entry, fixture.service);
 
     let mut host = DefaultHost::default().with_environment_source(admitted.source());
+    host.load_library(fixture.program).unwrap();
     let output = FastProcessor::new(StackInputs::default())
         .with_options(
-            ExecutionOptions::default().with_environment_trace_limits(admitted.trace_limits()),
+            ExecutionOptions::default()
+                .with_environment_trace_limits(admitted.trace_limits())
+                .with_resolution_limits(admitted.resolution_limits()),
         )
         .unwrap()
-        .execute_sync(&fixture.program, admitted.environment(), &mut host)
+        .execute_sync(admitted.target(), &mut host)
         .unwrap();
     assert_eq!(output.stack.get_element(0), Some(Felt::from_u32(13)));
 }
@@ -52,9 +57,9 @@ fn admitted_named_program_executes_with_the_callers_authority_and_policies() {
 #[test]
 fn admission_preserves_independent_zero_native_trace_and_source_policies() {
     let fixture = Fixture::new();
-    let environment = ExecutionEnvironment::new(
-        fixture.environment.descriptor(),
-        fixture.environment.opening_limits(),
+    let target = fixture.target;
+    let resolution_limits = ResolutionLimits::new(
+        fixture.resolution_limits.opening_limits(),
         LedgerLimits {
             max_occurrences: 0,
             max_total_list_children: 0,
@@ -78,9 +83,16 @@ fn admission_preserves_independent_zero_native_trace_and_source_policies() {
         max_validation_work: 0,
     };
     let bytes = serde_json::to_vec(&fixture.document()).unwrap();
-    let admitted =
-        AdmittedExecutionInputs::from_bytes(&bytes, environment, trace, input_limits()).unwrap();
-    assert_eq!(admitted.environment(), environment);
+    let admitted = AdmittedExecutionInputs::from_bytes(
+        &bytes,
+        target,
+        resolution_limits,
+        trace,
+        input_limits(),
+    )
+    .unwrap();
+    assert_eq!(admitted.target(), target);
+    assert_eq!(admitted.resolution_limits(), resolution_limits);
     assert_eq!(admitted.trace_limits(), trace);
     let request = fixture.request(fixture.entry);
     admitted
@@ -91,17 +103,20 @@ fn admission_preserves_independent_zero_native_trace_and_source_policies() {
         .verify(request.root, request.key, request.limits)
         .unwrap();
     let mut host = DefaultHost::default().with_environment_source(admitted.source());
-    let result = FastProcessor::new(StackInputs::default()).execute_sync(
-        &fixture.program,
-        admitted.environment(),
-        &mut host,
-    );
+    host.load_library(fixture.program.clone()).unwrap();
+    let result = FastProcessor::new(StackInputs::default())
+        .with_options(
+            ExecutionOptions::default().with_resolution_limits(admitted.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(admitted.target(), &mut host);
     assert!(matches!(result, Err(ExecutionError::EnvironmentSession(_))));
 
     let source_disabled = fixture
         .admit(&fixture.document(), ExecutionInputLimits { max_requests: 0, ..input_limits() })
         .unwrap();
-    assert_eq!(source_disabled.environment(), fixture.environment);
+    assert_eq!(source_disabled.target(), fixture.target);
+    assert_eq!(source_disabled.resolution_limits(), fixture.resolution_limits);
     assert!(source_disabled.source().get(request).is_err());
 }
 
@@ -118,7 +133,10 @@ fn source_preserves_complete_lists_and_exact_structural_slots() {
         assert_eq!(&candidate.path, expected);
         let binding = candidate.verify(request.root, key, request.limits).unwrap();
         assert_eq!(binding.namespace(), fixture.namespace);
-        assert_eq!(binding.implementation_root().into_word(), fixture.program.hash());
+        assert_eq!(
+            binding.implementation_root().into_word(),
+            fixture_entry_digest(&fixture.program)
+        );
         assert_eq!(binding.procedure_key(), key);
     }
 }
@@ -147,13 +165,14 @@ fn caller_descriptor_must_match_the_json_header() {
         assert!(fixture.admit(&document, input_limits()).is_err(), "changed {field}");
     }
     for descriptor in [
-        ExecutionDescriptor::new(fixture.service, fixture.root()),
-        ExecutionDescriptor::new(fixture.entry, other_root()),
+        ExecutionTarget::new(fixture.service, fixture.root()),
+        ExecutionTarget::new(fixture.entry, other_root()),
     ] {
         assert!(
             AdmittedExecutionInputs::from_bytes(
                 &serde_json::to_vec(&fixture.document()).unwrap(),
-                fixture.with_descriptor(descriptor),
+                descriptor,
+                fixture.resolution_limits,
                 trace_limits(),
                 input_limits(),
             )
@@ -167,12 +186,12 @@ fn matching_untrusted_headers_do_not_authenticate_a_root_or_key() {
     let fixture = Fixture::new();
     let mut document = fixture.document();
     document["environment_root"] = json!(word_hex(other_root().into_word()));
-    let environment =
-        fixture.with_descriptor(ExecutionDescriptor::new(fixture.entry, other_root()));
+    let target = ExecutionTarget::new(fixture.entry, other_root());
     assert!(
         AdmittedExecutionInputs::from_bytes(
             &serde_json::to_vec(&document).unwrap(),
-            environment,
+            target,
+            fixture.resolution_limits,
             trace_limits(),
             input_limits(),
         )
@@ -180,15 +199,16 @@ fn matching_untrusted_headers_do_not_authenticate_a_root_or_key() {
     );
 
     // A callable K is derived from canonical labels and namespaces, independently of code D.
-    for key in [missing_key(), ProcedureKey::new(fixture.program.hash())] {
+    for key in [missing_key(), ProcedureKey::new(fixture_entry_digest(&fixture.program))] {
         let mut document = fixture.document();
         document["entry_key"] = json!(word_hex(key.into_word()));
         document["openings"][0]["key"] = json!(word_hex(key.into_word()));
-        let environment = fixture.with_descriptor(ExecutionDescriptor::new(key, fixture.root()));
+        let target = ExecutionTarget::new(key, fixture.root());
         assert!(
             AdmittedExecutionInputs::from_bytes(
                 &serde_json::to_vec(&document).unwrap(),
-                environment,
+                target,
+                fixture.resolution_limits,
                 trace_limits(),
                 input_limits(),
             )
@@ -236,7 +256,7 @@ fn invalid_slots_and_nonterminal_or_data_leaves_are_rejected() {
     let data = EnvNode::Data {
         kind: 7,
         label: label("entry"),
-        value: fixture.program.hash(),
+        value: fixture_entry_digest(&fixture.program),
     };
     let key = Namespace::initial().procedure_key(label("entry"));
     let root = data.commitment().unwrap();
@@ -251,7 +271,8 @@ fn invalid_slots_and_nonterminal_or_data_leaves_are_rejected() {
     assert!(
         AdmittedExecutionInputs::from_bytes(
             &serde_json::to_vec(&document).unwrap(),
-            fixture.with_descriptor(ExecutionDescriptor::new(key, root)),
+            ExecutionTarget::new(key, root),
+            fixture.resolution_limits,
             trace_limits(),
             input_limits(),
         )
@@ -349,7 +370,8 @@ fn json_rejects_escaped_field_names_and_values_even_when_their_meaning_is_unchan
         assert!(matches!(
             AdmittedExecutionInputs::from_bytes(
                 escaped.as_bytes(),
-                fixture.environment,
+                fixture.target,
+                fixture.resolution_limits,
                 trace_limits(),
                 input_limits(),
             ),
@@ -385,12 +407,14 @@ fn ordinary_json_whitespace_preserves_admission_and_authenticated_openings() {
     let whitespace = format!(" \t\r\n{}\r\n\t ", document.replace('\n', "\r\n\t"));
     let admitted = AdmittedExecutionInputs::from_bytes(
         whitespace.as_bytes(),
-        fixture.environment,
+        fixture.target,
+        fixture.resolution_limits,
         trace_limits(),
         input_limits(),
     )
     .unwrap();
-    assert_eq!(admitted.environment(), fixture.environment);
+    assert_eq!(admitted.target(), fixture.target);
+    assert_eq!(admitted.resolution_limits(), fixture.resolution_limits);
     for key in [fixture.entry, fixture.service] {
         let request = fixture.request(key);
         admitted
@@ -447,7 +471,8 @@ fn json_rejects_duplicate_fields_and_trailing_documents() {
         assert!(
             AdmittedExecutionInputs::from_bytes(
                 malformed.as_bytes(),
-                fixture.environment,
+                fixture.target,
+                fixture.resolution_limits,
                 trace_limits(),
                 input_limits(),
             )
@@ -510,16 +535,28 @@ fn bounded_file_read_accepts_exact_length_and_rejects_one_more_byte() {
         ..input_limits()
     };
     let file = TempInput::new(&bytes);
-    let admitted =
-        AdmittedExecutionInputs::read(&file.0, fixture.environment, trace_limits(), limits)
-            .unwrap();
-    assert_eq!(admitted.environment(), fixture.environment);
+    let admitted = AdmittedExecutionInputs::read(
+        &file.0,
+        fixture.target,
+        fixture.resolution_limits,
+        trace_limits(),
+        limits,
+    )
+    .unwrap();
+    assert_eq!(admitted.target(), fixture.target);
+    assert_eq!(admitted.resolution_limits(), fixture.resolution_limits);
     let mut larger = bytes;
     larger.push(b' ');
     std::fs::write(&file.0, larger).unwrap();
     assert!(
-        AdmittedExecutionInputs::read(&file.0, fixture.environment, trace_limits(), limits)
-            .is_err()
+        AdmittedExecutionInputs::read(
+            &file.0,
+            fixture.target,
+            fixture.resolution_limits,
+            trace_limits(),
+            limits
+        )
+        .is_err()
     );
 }
 
@@ -528,7 +565,7 @@ fn admission_and_source_apply_each_original_and_tighter_opening_limit() {
     let fixture = Fixture::new();
     let admitted = fixture.admit(&fixture.document(), input_limits()).unwrap();
     let source = admitted.source();
-    let original = fixture.environment.opening_limits();
+    let original = fixture.resolution_limits.opening_limits();
     let encoded_bytes: usize =
         fixture.entry_path.iter().map(|step| step.node.encoded_len().unwrap()).sum();
     for limits in [
@@ -548,16 +585,17 @@ fn admission_and_source_apply_each_original_and_tighter_opening_limit() {
         },
         OpeningLimits { max_storage_bytes: 0, ..original },
     ] {
-        let environment = ExecutionEnvironment::new(
-            fixture.environment.descriptor(),
+        let target = fixture.target;
+        let resolution_limits = ResolutionLimits::new(
             limits,
-            fixture.environment.ledger_limits(),
-            fixture.environment.session_limits(),
+            fixture.resolution_limits.ledger_limits(),
+            fixture.resolution_limits.session_limits(),
         );
         assert!(
             AdmittedExecutionInputs::from_bytes(
                 &serde_json::to_vec(&fixture.document()).unwrap(),
-                environment,
+                target,
+                resolution_limits,
                 trace_limits(),
                 input_limits(),
             )
@@ -630,8 +668,9 @@ fn source_quota_is_atomic_across_concurrent_consumers() {
 }
 
 struct Fixture {
-    program: Program,
-    environment: ExecutionEnvironment,
+    program: miden_assembly::CodePackage,
+    target: ExecutionTarget,
+    resolution_limits: ResolutionLimits,
     entry: ProcedureKey,
     service: ProcedureKey,
     namespace: Namespace,
@@ -652,8 +691,8 @@ impl Fixture {
         .add_to_forest(&mut forest)
         .unwrap();
         forest.make_root(body);
-        let program = Program::new(Arc::new(forest), body);
-        let implementation = ImplementationRoot::new(program.hash());
+        let program = fixture_code(Arc::new(forest), body);
+        let implementation = ImplementationRoot::new(fixture_entry_digest(&program));
         let entry_leaf = EnvNode::Mast { label: label("entry"), implementation };
         let service_leaf = EnvNode::Mast { label: label("service"), implementation };
         let exports = EnvNode::List(vec![
@@ -684,8 +723,8 @@ impl Fixture {
             .child(label("application"));
         let entry = namespace.procedure_key(label("entry"));
         let service = namespace.procedure_key(label("service"));
-        let environment = ExecutionEnvironment::new(
-            ExecutionDescriptor::new(entry, home.commitment().unwrap()),
+        let target = ExecutionTarget::new(entry, home.commitment().unwrap());
+        let resolution_limits = ResolutionLimits::new(
             OpeningLimits {
                 max_nodes: 16,
                 max_depth: 15,
@@ -732,7 +771,8 @@ impl Fixture {
             entry_path: path(entry_leaf, 0),
             service_path: path(service_leaf, 1),
             program,
-            environment,
+            target,
+            resolution_limits,
             entry,
             service,
             namespace,
@@ -740,24 +780,15 @@ impl Fixture {
     }
 
     fn root(&self) -> EnvironmentRoot {
-        self.environment.descriptor().environment_root()
+        self.target.environment_root()
     }
 
     fn request(&self, key: ProcedureKey) -> EnvironmentWitnessRequest {
         EnvironmentWitnessRequest {
             root: self.root(),
             key,
-            limits: self.environment.opening_limits(),
+            limits: self.resolution_limits.opening_limits(),
         }
-    }
-
-    fn with_descriptor(&self, descriptor: ExecutionDescriptor) -> ExecutionEnvironment {
-        ExecutionEnvironment::new(
-            descriptor,
-            self.environment.opening_limits(),
-            self.environment.ledger_limits(),
-            self.environment.session_limits(),
-        )
     }
 
     fn document(&self) -> Value {
@@ -784,7 +815,8 @@ impl Fixture {
     ) -> Result<AdmittedExecutionInputs, execution_inputs::ExecutionInputError> {
         AdmittedExecutionInputs::from_bytes(
             &serde_json::to_vec(document).unwrap(),
-            self.environment,
+            self.target,
+            self.resolution_limits,
             trace_limits(),
             limits,
         )

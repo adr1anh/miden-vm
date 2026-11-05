@@ -25,14 +25,15 @@ fn test_event_handling() {
         source,
         &[],
     );
-    host = host.with_environment_source(named.environment.source());
+    host = host.with_environment_source(named.1.source());
+    host = host.with_code(named.0.clone());
     FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(named.1.resolution_limits()),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&named.program, named.environment.execution(), &mut host)
+    .execute_sync(named.1.target(), &mut host)
     .unwrap();
 
     // make sure events were handled correctly

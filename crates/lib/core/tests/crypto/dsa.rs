@@ -648,7 +648,7 @@ fn run_core_program(
 ) -> Result<ExecutionOutput, ExecutionError> {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to link core library");
     let named = crate::naming::assemble(
         assembler,
@@ -658,7 +658,9 @@ fn run_core_program(
     );
 
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&core_lib)
         .expect("failed to load CoreLibrary into the host");
     if let Some(handler) = recovery_handler {
@@ -675,11 +677,12 @@ fn run_core_program(
         StackInputs::default(),
         AdviceInputs::default().with_stack(advice_stack),
         ExecutionOptions::default()
+            .with_resolution_limits(named.1.resolution_limits())
             .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .expect("processor construction");
 
-    let output = processor.execute_sync(&named.program, named.environment.execution(), &mut host);
+    let output = processor.execute_sync(named.1.target(), &mut host);
     if let Ok(output) = &output {
         assert!(output.advice.stack().is_empty(), "core ECDSA wrapper must consume advice");
     }

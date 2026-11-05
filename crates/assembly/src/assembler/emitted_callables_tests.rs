@@ -3,8 +3,8 @@ use miden_core::{mast::MastNode, program::CanonicalLabel};
 use super::*;
 use crate::testing::{FixtureNamespace, TestContext};
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
 fn canonical(components: &[&str]) -> CallableProcedurePath {
@@ -109,8 +109,8 @@ fn emitted_inventory_coalesces_declaration_aliases_without_selected_code() {
     let root = context
         .parse_module("namespace client\nuse left\nuse right\npub proc caller exec.left::run exec.right::run end")
         .unwrap();
-    let caller = CallableBinding::new(home("caller"), canonical(&["public", "caller"])).unwrap();
-    let dependency = CallableBinding::new(home("dependency"), canonical(&["run"])).unwrap();
+    let caller = ProcedureName::new(home("caller"), canonical(&["public", "caller"])).unwrap();
+    let dependency = ProcedureName::new(home("dependency"), canonical(&["run"])).unwrap();
     let mut assembler = Assembler::new(context.source_manager())
         .with_namespace_plan(caller.namespace_plan().clone())
         .with_callable_path(Arc::from(Path::new("::client::caller")), caller.path().clone())
@@ -158,8 +158,7 @@ fn emitted_inventory_coalesces_imported_compiled_reexport_aliases() {
         .unwrap()
         .assemble_library_modules("published".into(), root, [implementation], TargetType::Library)
         .unwrap();
-    let naming = package.naming().clone();
-    let package = package.into_artifact(true).unwrap();
+    let package = package.into_code_package(true).unwrap();
     let caller = context
         .parse_module(
             "namespace client\nuse api\npub proc caller exec.api::first exec.api::second end",
@@ -169,7 +168,7 @@ fn emitted_inventory_coalesces_imported_compiled_reexport_aliases() {
         .with_namespace_plan(home("caller-home"))
         .with_callable_path(Arc::from(Path::new("::client::caller")), canonical(&["caller"]))
         .unwrap()
-        .with_package(package.into(), Linkage::Static, naming)
+        .with_package(package, Linkage::Static)
         .unwrap()
         .with_callable_binding(Arc::from(Path::new("::api::first")), target.clone())
         .unwrap()

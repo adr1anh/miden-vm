@@ -1,5 +1,5 @@
 use miden_core::program::CanonicalLabel;
-use miden_mast_package::NamespacePlan;
+use miden_mast_package::NamespacePath;
 
 use super::*;
 
@@ -36,10 +36,10 @@ source_alias = {{version = '=2.0.0', linkage = 'static', binding = {{selection =
     assert_eq!(dependency.required_version().to_string(), "=2.0.0");
     assert_eq!(dependency.linkage(), Linkage::Static);
     let base =
-        NamespacePlan::new(vec![CanonicalLabel::library_id(Word::try_from(PARENT).unwrap())]);
+        NamespacePath::new(vec![CanonicalLabel::library_id(Word::try_from(PARENT).unwrap())]);
     assert_eq!(
         dependency.binding(),
-        Some(&DependencyBinding::Standard(LibraryImport::new(
+        Some(&DependencyBinding::Standard(LibraryRef::new(
             base.clone(),
             Word::try_from(MATH).unwrap(),
             LibrarySelection::Latest,
@@ -120,7 +120,7 @@ source_alias = {{version = '=2.0.0', binding = {{selection = 'latest', base = [{
         ("", LibrarySelection::Latest, FOREIGN),
         (
             ", binding = {selection = 'pinned', base = [], library-id = {catalog = 'math'}, revision = 7}",
-            LibrarySelection::Pinned(core::num::NonZeroU32::new(7).unwrap()),
+            LibrarySelection::Revision(core::num::NonZeroU32::new(7).unwrap()),
             FOREIGN,
         ),
         (
@@ -165,8 +165,8 @@ source_alias = {{workspace = true{extra}}}
                 .unwrap()
                 .binding()
                 .namespace_plan(),
-            LibraryImport::new(
-                NamespacePlan::new(vec![]),
+            LibraryRef::new(
+                NamespacePath::new(vec![]),
                 Word::try_from(MATH).unwrap(),
                 LibrarySelection::Latest
             )

@@ -3,9 +3,9 @@ use alloc::{sync::Arc, vec::Vec};
 use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceManager, SourceSpan};
 
 use crate::{
-    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
-    LoadedMastForest, ProcessorState, ResolutionWitness, SyncHost, Word, advice::AdviceMutation,
-    event::EventError,
+    BaseHost, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
+    LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState, ResolutionWitness,
+    SyncHost, advice::AdviceMutation, event::EventError,
 };
 
 /// A minimal testing host that records regular events.
@@ -14,15 +14,16 @@ use crate::{
 /// it either. Still they must be able to handle traces without error, by way of the no-op default
 /// implementation of `on_trace`.
 ///
-/// Intended only for running self-contained programs built directly from source. It resolves no
-/// external MAST forests, loads no kernels, and produces no advice mutations.
+/// Intended for checked fixture packages supplied explicitly by tests. It produces no advice
+/// mutations and gains no execution authority from loaded code.
 #[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct NonTracingTestHost {
     /// Regular host event IDs received via [`SyncHost::on_event`], in emission order.
     pub events: Vec<u64>,
     source_manager: Arc<DefaultSourceManager>,
-    environment_source: Option<super::EnvironmentSource>,
+    environment_source: Option<super::TestEnvironmentSource>,
+    store: MemMastForestStore,
 }
 
 #[cfg(test)]
@@ -32,12 +33,19 @@ impl NonTracingTestHost {
             events: Vec::new(),
             source_manager: Arc::new(DefaultSourceManager::default()),
             environment_source: None,
+            store: MemMastForestStore::default(),
         }
     }
 
     /// Attaches a source of untrusted environment witnesses for explicit execution requests.
-    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentWitnessSource>) -> Self {
-        self.environment_source = Some(super::EnvironmentSource(source));
+    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentSource>) -> Self {
+        self.environment_source = Some(super::TestEnvironmentSource(source));
+        self
+    }
+
+    /// Retains checked fixture code separately from the test's target and witness source.
+    pub fn with_code(mut self, code: miden_mast_package::CodePackage) -> Self {
+        self.store.insert_loaded(LoadedMastForest::from_code_package(code));
         self
     }
 }
@@ -73,9 +81,8 @@ impl SyncHost for NonTracingTestHost {
         }
     }
 
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
-        // This host only runs self-contained programs; external MAST forests are not resolved.
-        None
+    fn get_mast_forest(&self, request: crate::CodeRequest) -> Option<LoadedMastForest> {
+        self.store.get(request)
     }
 
     fn on_event(&mut self, process: &ProcessorState) -> Result<Vec<AdviceMutation>, EventError> {
@@ -118,18 +125,19 @@ mod tests {
     end"
         );
         let test = Test::new("non_tracing_host_ignores_trace_events", &source, false);
-        let (program, ..) = test.compile().unwrap();
-        let (environment, source) =
+        let (code, _) = test.compile().unwrap();
+        let (target, limits, source) =
             native_fixture_environment(&test.fixture_environment().unwrap());
-        let mut host = NonTracingTestHost::default().with_environment_source(source);
+        let mut host =
+            NonTracingTestHost::default().with_environment_source(source).with_code(code);
         host.source_manager = test.source_manager;
         FastProcessor::new_with_options(
             StackInputs::default(),
             AdviceInputs::default(),
-            ExecutionOptions::default(),
+            ExecutionOptions::default().with_resolution_limits(limits),
         )
         .expect("failed to construct FastProcessor")
-        .execute_sync(&program, environment, &mut host)
+        .execute_sync(target, &mut host)
         .unwrap();
 
         assert_eq!(host.events, vec![REGULAR_EVENT_ID_1, REGULAR_EVENT_ID_2]);

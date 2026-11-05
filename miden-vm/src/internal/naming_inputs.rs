@@ -27,8 +27,7 @@ use miden_assembly::{
 };
 use miden_core::{program::CanonicalLabel, serde::read_file_bounded};
 use miden_mast_package::{
-    CallableBinding, CallableProcedurePath, NamespacePlan, Package, PackageCallables,
-    PackageNaming,
+    CallableProcedurePath, NamespacePath, Package, PackageCallables, PackageSymbols, ProcedureName,
     interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile},
 };
 use serde::Deserialize;
@@ -51,12 +50,8 @@ impl fmt::Display for NamingRole {
     }
 }
 
-/// A package with its independently expected and profile-admitted complete naming retained.
-#[derive(Clone, Debug)]
-pub struct LoadedPackage {
-    pub package: Arc<Package>,
-    pub naming: Arc<PackageNaming>,
-}
+/// Owned package code and exact checked symbols; policy is supplied by the admitting caller.
+pub use miden_mast_package::CodePackage;
 
 /// Current caller naming policy, exact source bindings and independent artifact expectations.
 #[derive(Debug)]
@@ -72,7 +67,7 @@ pub struct NamingInputs {
 #[derive(Debug)]
 enum SelectedChoice {
     Source(NamespaceInputs),
-    Artifact(Arc<PackageNaming>),
+    Artifact(Arc<PackageSymbols>),
 }
 
 #[derive(Debug)]
@@ -204,7 +199,7 @@ impl NamingInputs {
         // Even unused permissions must contain valid built-in labels and fit the selected
         // individual home budget. The authorization list itself is bounded by the JSON limit.
         for home in &context.homes {
-            NamespacePlan::new(home.clone())
+            NamespacePath::new(home.clone())
                 .encode_home_v1(&profile, &context, limits)
                 .map_err(|error| Report::msg(format!("invalid allowed home: {error}")))?;
         }
@@ -249,7 +244,7 @@ impl NamingInputs {
     }
 
     /// Admits a package under current policy and compares its complete independent expectation.
-    pub fn admit(&self, role: NamingRole, package: Arc<Package>) -> Result<LoadedPackage, Report> {
+    pub fn admit(&self, role: NamingRole, package: Arc<Package>) -> Result<CodePackage, Report> {
         let expected = match self.choice(role)? {
             SelectedChoice::Artifact(expected) => expected,
             SelectedChoice::Source(_) => {
@@ -259,14 +254,14 @@ impl NamingInputs {
             },
         };
         let naming = package
-            .admit_naming(&self.profile, &self.context, self.limits)
+            .validate_symbols(&self.profile, &self.context, self.limits)
             .map_err(|error| Report::msg(format!("{role} naming admission failed: {error}")))?;
         if naming != **expected {
             return Err(Report::msg(format!(
                 "{role} complete naming differs from its independently supplied expectation"
             )));
         }
-        Ok(LoadedPackage { package, naming: Arc::new(naming) })
+        CodePackage::new(package, Arc::new(naming)).map_err(Report::msg)
     }
 
     /// Requires one ordered artifact expectation for every explicit `-l` input.
@@ -285,7 +280,7 @@ impl NamingInputs {
     }
 
     /// Exports owned compiler naming using the existing codec and the selected current policy.
-    pub fn encode_owned(&self, naming: &PackageNaming) -> Result<Vec<u8>, Report> {
+    pub fn encode_owned(&self, naming: &PackageSymbols) -> Result<Vec<u8>, Report> {
         naming
             .encode_v1(&self.profile, &self.context, self.limits)
             .map_err(|error| Report::msg(format!("cannot encode owned naming: {error}")))
@@ -332,7 +327,7 @@ fn prepare_choice(
 ) -> Result<SelectedChoice, Report> {
     match choice {
         Choice::Source { compilation_home, bindings } => {
-            let compilation_home = NamespacePlan::new(builtin_home(compilation_home)?);
+            let compilation_home = NamespacePath::new(builtin_home(compilation_home)?);
             let mut inputs = NamespaceInputs::new().with_namespace_plan(compilation_home.clone());
             let mut inventory = Vec::new();
             for binding in bindings {
@@ -345,7 +340,7 @@ fn prepare_choice(
                     .into_diagnostic()
                     .wrap_err("invalid canonical callable path components")?;
                 let binding =
-                    CallableBinding::new(NamespacePlan::new(builtin_home(binding.home)?), path)
+                    ProcedureName::new(NamespacePath::new(builtin_home(binding.home)?), path)
                         .into_diagnostic()?;
                 inputs = inputs.with_callable_binding(declaration.into(), binding.clone())?;
                 inventory.push(binding);
@@ -354,7 +349,8 @@ fn prepare_choice(
             // for declaration-only source choices. Codegen will retain aliases, private roots
             // and entry selections; encode_owned checks that resulting inventory afresh.
             let callables = PackageCallables::new(inventory, [], []).into_diagnostic()?;
-            let naming = PackageNaming::new(compilation_home, callables, None).into_diagnostic()?;
+            let naming =
+                PackageSymbols::new(compilation_home, callables, None).into_diagnostic()?;
             naming
                 .encode_v1(profile, context, limits)
                 .map_err(|error| Report::msg(format!("source naming rejected: {error}")))?;
@@ -368,7 +364,7 @@ fn prepare_choice(
             let bytes = read_file_bounded(&path, limits.max_bytes() as usize)
                 .into_diagnostic()
                 .wrap_err_with(|| format!("failed to read expected naming '{}'", path.display()))?;
-            let expected = PackageNaming::decode_v1(&bytes, profile, context, limits)
+            let expected = PackageSymbols::decode_v1(&bytes, profile, context, limits)
                 .map_err(|error| Report::msg(format!("expected NamingV1 rejected: {error}")))?;
             Ok(SelectedChoice::Artifact(Arc::new(expected)))
         },
@@ -396,8 +392,8 @@ mod tests {
         CodecLimits::new(65536, 4096, 4096, 65536)
     }
 
-    fn home(name: &str) -> NamespacePlan {
-        NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+    fn home(name: &str) -> NamespacePath {
+        NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
     }
 
     fn canonical(components: &[&str]) -> CallableProcedurePath {
@@ -407,7 +403,7 @@ mod tests {
         .unwrap()
     }
 
-    fn encoded_home(home: &NamespacePlan) -> Value {
+    fn encoded_home(home: &NamespacePath) -> Value {
         json!(
             home.home()
                 .iter()
@@ -416,7 +412,7 @@ mod tests {
         )
     }
 
-    fn document(homes: &[NamespacePlan], target: Value) -> Value {
+    fn document(homes: &[NamespacePath], target: Value) -> Value {
         json!({
             "version": 1,
             "profile": "builtin-exact-v1",
@@ -433,7 +429,7 @@ mod tests {
         })
     }
 
-    fn source_choice(compilation: &NamespacePlan, bindings: Value) -> Value {
+    fn source_choice(compilation: &NamespacePath, bindings: Value) -> Value {
         json!({
             "kind": "source",
             "compilation_home": encoded_home(compilation),
@@ -441,7 +437,7 @@ mod tests {
         })
     }
 
-    fn source_binding(declaration: &str, home: &NamespacePlan, path: &[&str]) -> Value {
+    fn source_binding(declaration: &str, home: &NamespacePath, path: &[&str]) -> Value {
         json!({"declaration": declaration, "home": encoded_home(home), "path": path})
     }
 
@@ -458,8 +454,8 @@ mod tests {
     fn write_expectation(
         directory: &Path,
         name: &str,
-        naming: &PackageNaming,
-        homes: &[NamespacePlan],
+        naming: &PackageSymbols,
+        homes: &[NamespacePath],
     ) {
         let context = ExactHomes {
             homes: homes.iter().map(|home| home.home().to_vec()).collect(),
@@ -470,17 +466,16 @@ mod tests {
 
     // An owned, locally constructed artifact with a private entry and a foreign callable
     // reexported under a source alias. Its metadata and code do not select any of these homes.
-    fn fixture(private_name: &str) -> (Arc<Package>, PackageNaming, Vec<NamespacePlan>) {
+    fn fixture(private_name: &str) -> (Arc<Package>, PackageSymbols, Vec<NamespacePath>) {
         let compilation = home("compilation");
         let private = home(private_name);
-        let foreign = NamespacePlan::new(vec![
+        let foreign = NamespacePath::new(vec![
             CanonicalLabel::text("pinned").unwrap(),
             CanonicalLabel::library_id(Word::from([7u32; 4])),
             CanonicalLabel::revision(NonZeroU32::MIN),
         ]);
-        let entry =
-            CallableBinding::new(private.clone(), canonical(&["helpers", "entry"])).unwrap();
-        let imported = CallableBinding::new(foreign.clone(), canonical(&["api", "run"])).unwrap();
+        let entry = ProcedureName::new(private.clone(), canonical(&["helpers", "entry"])).unwrap();
+        let imported = ProcedureName::new(foreign.clone(), canonical(&["api", "run"])).unwrap();
         let mut forest = MastForest::new();
         let entry_node = BasicBlockNodeBuilder::new(vec![Operation::Add])
             .add_to_forest(&mut forest)
@@ -500,7 +495,8 @@ mod tests {
             ],
         )
         .unwrap();
-        let naming = PackageNaming::new(compilation.clone(), callables, Some(entry.key())).unwrap();
+        let naming =
+            PackageSymbols::new(compilation.clone(), callables, Some(entry.key())).unwrap();
         let public_path: miden_assembly::PathBuf = "::alias::visible".parse().unwrap();
         let package = Package::create(
             PackageId::from("unrelated-metadata"),
@@ -529,12 +525,12 @@ mod tests {
         let path = write_document(directory.path(), &config);
         let inputs = NamingInputs::read(&path, JSON_LIMIT).unwrap();
         let loaded = inputs.admit(NamingRole::Target, package.clone()).unwrap();
-        assert_eq!(*loaded.naming, naming);
-        assert_eq!(loaded.naming.entry_key(), naming.entry_key());
-        assert_eq!(loaded.naming.callables().bindings().len(), 2);
-        assert_eq!(loaded.naming.callables().visible_paths().len(), 1);
+        assert_eq!(**loaded.symbols(), naming);
+        assert_eq!(loaded.symbols().entry_key(), naming.entry_key());
+        assert_eq!(loaded.symbols().callables().bindings().len(), 2);
+        assert_eq!(loaded.symbols().callables().visible_paths().len(), 1);
         assert_eq!(
-            inputs.encode_owned(&loaded.naming).unwrap(),
+            inputs.encode_owned(loaded.symbols()).unwrap(),
             fs::read(directory.path().join("chosen.bin")).unwrap(),
         );
         assert!(inputs.source(NamingRole::Target).is_err());
@@ -601,12 +597,12 @@ mod tests {
             .with_namespace_plan(compilation.clone())
             .with_callable_binding(
                 SourcePathBuf::new("::client::hidden").unwrap().into(),
-                CallableBinding::new(private, canonical(&["helpers", "local"])).unwrap(),
+                ProcedureName::new(private, canonical(&["helpers", "local"])).unwrap(),
             )
             .unwrap()
             .with_callable_binding(
                 SourcePathBuf::new("::client::public").unwrap().into(),
-                CallableBinding::new(foreign.clone(), canonical(&["api", "canonical"])).unwrap(),
+                ProcedureName::new(foreign.clone(), canonical(&["api", "canonical"])).unwrap(),
             )
             .unwrap();
         assert_eq!(inputs.source(NamingRole::Target).unwrap(), expected);
@@ -622,7 +618,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         for codec in [0, 1, 77, u32::MAX] {
             let typed = CanonicalLabel::typed_id(codec, &[0xa5], |_, _| Ok(())).unwrap();
-            let typed_home = NamespacePlan::new(vec![typed]);
+            let typed_home = NamespacePath::new(vec![typed]);
             let path = write_document(
                 directory.path(),
                 &document(std::slice::from_ref(&typed_home), source_choice(&typed_home, json!([]))),
@@ -634,7 +630,7 @@ mod tests {
             let context = ExactHomes { homes: allowed };
             assert!(ExactBuiltinProfile.validate_typed_id(&context, codec, &[0xa5]).is_err());
             // Even an owned label constructed elsewhere cannot bypass the selected profile.
-            let naming = PackageNaming::new(
+            let naming = PackageSymbols::new(
                 typed_home,
                 base_naming.callables().clone(),
                 base_naming.entry_key(),
@@ -651,9 +647,9 @@ mod tests {
                 &naming,
             )
             .unwrap();
-            assert!(package.admit_naming(&ExactBuiltinProfile, &context, limits()).is_err());
+            assert!(package.validate_symbols(&ExactBuiltinProfile, &context, limits()).is_err());
             assert!(
-                PackageNaming::decode_v1(
+                PackageSymbols::decode_v1(
                     package.naming_transport().as_bytes(),
                     &ExactBuiltinProfile,
                     &context,

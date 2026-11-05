@@ -25,7 +25,7 @@ use miden_assembly_syntax::{
 use miden_core::serde::{Deserializable, Serializable, SliceReader};
 use miden_core_fuzz::naming::{SyntheticProfile, check_naming_admission, source_home};
 use miden_mast_package::{
-    CallableBinding, CallableProcedurePath, NamespacePlan, Package as MastPackage, SectionId,
+    CallableProcedurePath, NamespacePath, Package as MastPackage, ProcedureName, SectionId,
     TargetType, debug_info::PackageDebugInfo, interface::serialization::CodecLimits,
 };
 use miden_package_registry::InMemoryPackageRegistry;
@@ -272,14 +272,14 @@ fn assemble_project(manifest_path: &Path, target: ProjectTargetSelector<'_>, pro
         .with_namespace_inputs_provider(source_namespace_inputs)
         .with_package_naming_provider(|package| {
             package
-                .admit_naming(&SyntheticProfile::packages(), &true, NAMING_LIMITS)
+                .validate_symbols(&SyntheticProfile::packages(), &true, NAMING_LIMITS)
                 .map_err(Report::msg)
         });
     let package = project_assembler
         .assemble(target, profile)
         .expect("the controlled library, executable and kernel fixtures must assemble");
 
-    validate_package(&package);
+    validate_package(package.package());
 }
 
 /// The harness explicitly names its complete fixed source cohort, including private helpers and
@@ -301,7 +301,7 @@ fn source_namespace_inputs(
             let declaration = module.path().join(procedure.name());
             let (binding_home, components) =
                 if context.target.is_kernel() && procedure.visibility().is_exported() {
-                    (NamespacePlan::new(vec![]), vec![procedure.name().to_string()])
+                    (NamespacePath::new(vec![]), vec![procedure.name().to_string()])
                 } else {
                     let mut components = Vec::new();
                     for component in declaration.components() {
@@ -314,7 +314,7 @@ fn source_namespace_inputs(
                 };
             let canonical =
                 CallableProcedurePath::from_semantic_components(components).into_diagnostic()?;
-            let binding = CallableBinding::new(binding_home, canonical).into_diagnostic()?;
+            let binding = ProcedureName::new(binding_home, canonical).into_diagnostic()?;
             inputs = inputs.with_callable_binding(declaration.into(), binding)?;
         }
     }
@@ -347,11 +347,11 @@ fn validate_package(package: &MastPackage) {
         naming
     );
 
-    // These conversion helpers borrow the package, despite the `try_into_*` names.
+    // Validate the checked code surface without constructing execution authority.
     match package.kind {
         TargetType::Executable => {
             package
-                .try_into_program(&naming)
+                .check_executable_code(&naming)
                 .expect("assembled executable has an explicit entry");
             let _ = package.try_embedded_kernel_package();
         },

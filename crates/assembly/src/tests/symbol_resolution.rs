@@ -71,7 +71,10 @@ end
         let mut assembler = Assembler::default();
         for lib in libs {
             let naming = FixtureNamespace::assembly_tests().admit_package(lib)?;
-            assembler.link_package(lib.clone(), Linkage::Static, naming)?;
+            assembler.link_package(
+                CodePackage::new(lib.clone(), naming.into()).unwrap(),
+                Linkage::Static,
+            )?;
         }
 
         assembler.assemble_program("program", program_source).map(|_| ())
@@ -217,9 +220,8 @@ fn executable_package_main_export_points_to_entrypoint_source_root() -> TestResu
     naming.add_module(&program)?;
     let lib_naming = naming.admit_package(&lib)?;
     let assembler = Assembler::new(context.source_manager()).with_package(
-        Arc::from(lib),
+        CodePackage::new(Arc::from(lib), lib_naming.into()).unwrap(),
         Linkage::Static,
-        lib_naming,
     )?;
     let package = naming.configure(assembler, [&*program])?.assemble_program("program", program)?;
 

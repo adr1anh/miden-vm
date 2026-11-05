@@ -18,11 +18,18 @@ their choice. However, compilers to help with this have not been developed yet. 
 primary way to write programs for Miden VM is to use
 [Miden assembly](../crates/assembly/).
 
-Miden assembler compiles assembly source code in a [program MAST](https://docs.miden.xyz/miden-vm/design/programs), which is represented by a `Program` struct. It is possible to construct a `Program` struct manually, but we don't recommend this approach because it is tedious, error-prone, and requires an in-depth understanding of VM internals. All examples throughout these docs use assembly syntax.
+Miden assembler compiles assembly source code into a [program MAST](https://docs.miden.xyz/miden-vm/design/programs). Assembly and project products provide a `CodePackage` that keeps code, checked symbols, advice, and exact source metadata together. Load this package through the host before execution. Assembly requires an explicit namespace configuration; compiling or loading a package does not authorize its entry point.
 
-#### Program hash
+Dependencies are linked with the same owner: `assembler.link_package(code, Linkage::Dynamic)`
+or `with_package(code, linkage)`. Built-in libraries expose it through
+`core_lib.code_package().clone()`. Kernel attachment also receives a `CodePackage`; callers do
+not separately pair a package with its symbols.
 
-All Miden programs can be reduced to a single 32-byte value, called program hash. Once a `Program` object is constructed, you can access this hash via `Program::hash()` method. This hash value is used by a verifier when they verify program execution. This ensures that the verifier verifies execution of a specific program (e.g. a program which the prover had committed to previously). The methodology for computing program hash is described [here](https://docs.miden.xyz/miden-vm/design/programs#program-hash-computation).
+#### Execution identity
+
+The caller independently selects and authorizes an `ExecutionTarget` containing the expected entry procedure key `K_entry` and environment root `R_E`. The authenticated environment binds callable keys to implementation roots `D`. Host-loaded packages and environment lookup evidence supply witnesses for this target; they never supply execution authority. After binding authentication, the host may supply code for the requested `D`, subject to implementation-root and procedure-root checks.
+
+The authenticated `entry_implementation` is useful for diagnostics about the selected code. It is separate from the target and the public `ExecutionClaim`, which also commits to public stack inputs and outputs. The environment root remains fixed throughout execution. Syscalls require an authenticated immediate parent namespace equal to the fixed, nonzero `N0 = Namespace::initial()`; code availability and source metadata confer no syscall privilege.
 
 ### Inputs / outputs
 
@@ -30,9 +37,9 @@ Currently, there are 3 ways to get values onto the stack:
 
 1. You can use `push` instruction to push values onto the stack. These values become a part of the program itself, and, therefore, cannot be changed between program executions. You can think of them as constants.
 2. The stack can be initialized to some set of values at the beginning of the program. These inputs are public and must be shared with the verifier for them to verify a proof of the correct execution of a Miden program. At most 16 values could be provided for the stack initialization, attempts to provide more than 16 values will cause an error.
-3. The program may request nondeterministic advice inputs from the prover. These inputs are secret inputs. This means that the prover does not need to share them with the verifier. Advice can come from a stack, a map of element lists, or a Merkle store used by instructions that work with Merkle trees. There are no restrictions on the number of advice inputs a program can request.
+3. The program may request nondeterministic advice inputs from the prover. These inputs are secret inputs. This means that the prover does not need to share them with the verifier. Advice can come from a stack, a map of element lists, or a Merkle store used by instructions that work with Merkle trees. Advice is subject to the configured advice-size and execution limits.
 
-The stack is provided to Miden VM via `StackInputs` struct. These are public inputs of the execution, and should also be provided to the verifier. The secret inputs for the program are provided via the `Host` interface. The default implementation of the host relies on in-memory advice provider (`AdviceProvider`) that can be commonly used for operations that won't require persistence.
+The stack is provided to Miden VM via `StackInputs` struct. These are public inputs of the execution, and should also be provided to the verifier. Initial private inputs are supplied as `AdviceInputs` when constructing the processor, which maintains an in-memory `AdviceProvider`. The host supplies code, environment evidence, and responses to runtime interactions. Package advice is merged once when its code is loaded for execution; guest resource loaders must authenticate advice values before using them.
 
 Values remaining on the stack after a program is executed can be returned as stack outputs. You can specify exactly how many values (from the top of the stack) should be returned. Notice, that, similar to stack inputs, at most 16 values can be returned via the stack. Attempts to return more than 16 values will cause an error.
 
@@ -48,11 +55,11 @@ For ordinary execution, construct `FastProcessor` and call `execute()` or `execu
 Generic code can use the `ProgramExecutor` trait, whose default implementation is
 `FastProcessor`. These interfaces take the following inputs:
 
-- `program: &Program` is a reference to the Miden program.
+- `target: ExecutionTarget` contains the caller-authorized entry key and environment root.
 - `stack_inputs: StackInputs` contains the public inputs.
 - `advice_inputs: AdviceInputs` contains the private inputs used to build the advice provider. Use `AdviceInputs::default()` when no private inputs are needed.
-- `host` is a `Host` for `execute()` or a `SyncHost` for `execute_sync()`. It supplies nondeterministic inputs to the VM and receives messages from it.
-- `options: ExecutionOptions` controls execution settings such as the maximum cycle count.
+- `host` is a `Host` for `execute()` or a `SyncHost` for `execute_sync()`. It owns loaded package code, supplies untrusted environment evidence and nondeterministic inputs, and receives messages from the VM.
+- `options: ExecutionOptions` controls execution settings such as the maximum cycle count. Execution requires explicit `ResolutionLimits::new(opening, ledger, session)` installed with `with_resolution_limits`. These policies have no default.
 
 Ordinary execution returns a `Result<ExecutionOutput, ExecutionError>` containing the final stack
 state and other execution outputs, or an error if execution failed. `ProgramExecutor` represents
@@ -64,47 +71,43 @@ materialize the VM trace. If the execution will be proved, select tracing up fro
 `FastProcessor::execute_for_proving()` / `FastProcessor::execute_for_proving_sync()`, then pass the
 returned `ExecutionWitness` to `Prover::prove()`. To materialize only the VM trace, split the
 witness with `ExecutionWitness::into_parts()` and pass the resulting `VmWitness` to
-`trace::build_trace()`.
+`trace::build_trace()` with a caller-selected proving budget. Tracing also requires explicit
+`EnvironmentTraceLimits` installed with `with_environment_trace_limits`; these limits have no
+default.
 
-For example:
+For example, the application supplies the package for `begin push.3 push.5 add swap drop end`,
+an independently authorized target, and its execution policies. Its host must already have an
+environment witness source, configured with `DefaultHost::with_environment_source`, and any
+other packages the application needs:
 
-```rust
+```rust,no_run
 use miden_vm::{
     advice::AdviceInputs,
-    Assembler, DefaultHost, ExecutionOptions, FastProcessor, StackInputs
+    CodePackage, DefaultHost, ExecutionOptions, ExecutionOutput, ExecutionTarget, FastProcessor,
+    LedgerLimits, OpeningLimits, ResolutionLimits, SessionLimits, StackInputs,
 };
 
-// instantiate the assembler
-let assembler = Assembler::default();
-
-// compile Miden assembly source code into a program
-let program = assembler.assemble_program(
-    "prg",
-    "begin push.3 push.5 add swap drop end",
-).unwrap();
-
-// use an empty list as initial stack
-let stack_inputs = StackInputs::default();
-
-// do not include any initial advice data
-let advice_inputs = AdviceInputs::default();
-
-// instantiate a default host (with an empty advice provider)
-let mut host = DefaultHost::default();
-
-// instantiate default execution options
-let exec_options = ExecutionOptions::default();
-
-// execute the program with no inputs
-let output = FastProcessor::new_with_options(
-    stack_inputs,
-    advice_inputs.clone(),
-    exec_options,
-)
-.unwrap()
-.execute_sync(&program.unwrap_program(), &mut host)
-.unwrap();
+fn execute_addition(
+    code: CodePackage,
+    target: ExecutionTarget,
+    mut host: DefaultHost,
+    options: ExecutionOptions,
+    opening: OpeningLimits,
+    ledger: LedgerLimits,
+    session: SessionLimits,
+) -> ExecutionOutput {
+    host.load_library(code).expect("package loading failed");
+    let options = options.with_resolution_limits(ResolutionLimits::new(opening, ledger, session));
+    FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
+        .expect("invalid advice inputs")
+        .execute_sync(target, &mut host)
+        .expect("execution failed")
+}
 ```
+
+`DefaultHost::with_library(code)` is the builder form of `load_library(code)`. The async path uses
+the same target and policies with `execute(target, &mut host).await`. Missing required policies
+reject before entry authentication or host calls; explicit zero limits remain zero.
 
 ### Proving program execution
 
@@ -128,8 +131,10 @@ native semantic evaluation and Session import do not reapply admission. These lo
 distinct from the prover's batch-wide peak-memory budget.
 
 `ExecutionOptions` configure execution, while `Prover::with_hash_fn` selects the proof hash
-function. The FastProcessor-backed `prove_sync(&Prover, ...)` function executes and fully proves in
-one synchronous call while preserving optimized overlapped execution and trace construction.
+function. The FastProcessor-backed
+`prove_sync(&Prover, target, stack_inputs, advice_inputs, &mut host, execution_options)` function
+executes and fully proves in one synchronous call while preserving optimized overlapped execution
+and trace construction.
 
 `prove_sync()` overlaps execution with hasher-chiplet trace construction when a Rayon worker is
 available. A caller with no separate Rayon worker uses compact buffered replay, including on
@@ -139,51 +144,49 @@ targets such as `wasm32-unknown-unknown`.
 
 Here is a simple example of executing a program which pushes two numbers onto the stack and computes their sum:
 
-```rust
+```rust,no_run
 use miden_vm::{
     advice::AdviceInputs,
     field::PrimeField64,
-    Assembler, DefaultHost, ExecutionOptions, FastProcessor, Prover, StackInputs,
+    CodePackage, DefaultHost, EnvironmentTraceLimits, ExecutionOptions, ExecutionProof,
+    ExecutionTarget, FastProcessor, Prover, ResolutionLimits, StackInputs,
 };
 
-// instantiate the assembler
-let assembler = Assembler::default();
-
-// this is our program, we compile it from assembly code
-let program = assembler
-    .assemble_program("prg", "begin push.3 push.5 add swap drop end")
-    .unwrap()
-    .unwrap_program();
-
-// execute the program to produce a post-execution witness
-let mut host = DefaultHost::default();
-let witness = FastProcessor::new_with_options(
-    StackInputs::default(),
-    AdviceInputs::default(),
-    ExecutionOptions::default(),
-)
-.unwrap()
-.execute_for_proving_sync(&program, &mut host)
-.unwrap();
-let outputs = *witness.claim().stack_outputs();
-
-// this program has no precompile work, so the proof is ready for verification
-let proof = Prover::new().prove(witness).unwrap();
-
-// the output should be 8
-assert_eq!(8, outputs.first().unwrap().as_canonical_u64());
+fn prove_addition(
+    code: CodePackage,
+    target: ExecutionTarget,
+    mut host: DefaultHost,
+    options: ExecutionOptions,
+    resolution: ResolutionLimits,
+    tracing: EnvironmentTraceLimits,
+) -> ExecutionProof {
+    host.load_library(code).expect("package loading failed");
+    let options = options
+        .with_resolution_limits(resolution)
+        .with_environment_trace_limits(tracing);
+    let witness = FastProcessor::new_with_options(
+        StackInputs::default(), AdviceInputs::default(), options,
+    )
+    .expect("invalid advice inputs")
+    .execute_for_proving_sync(target, &mut host)
+    .expect("execution failed");
+    let outputs = *witness.claim().stack_outputs();
+    let proof = Prover::new().prove(witness).expect("proof generation failed");
+    assert_eq!(8, outputs.first().unwrap().as_canonical_u64());
+    proof
+}
 ```
 
 ### Verifying program execution
 
 To verify program execution, use `Verifier::new().verify(&claim, &proof)`. The verifier borrows:
 
-- `claim: &ExecutionClaim`. The program information and public stack inputs and outputs.
+- `claim: &ExecutionClaim`. The expected execution target (`K_entry`, `R_E`) and public stack inputs and outputs.
 - `proof: &ExecutionProof`. The deferred or complete execution proof artifacts.
 
-Stack inputs are expected to be ordered as if they would be pushed onto the stack one by one. Thus, their expected order on the stack will be the reverse of the order in which they are provided, and the last value in the `stack_inputs` is expected to be the value at the top of the stack.
+The caller must independently choose and authorize the expected entry key and environment root, and supply the expected public inputs and outputs. Host-loaded code and environment lookup evidence provide witnesses for this claim.
 
-Stack outputs are expected to be ordered as if they would be popped off the stack one by one. Thus, the value at the top of the stack is expected to be in the first position of the `stack_outputs`, and the order of the rest of the output elements will also match the order on the stack. This is the reverse of the order of the `stack_inputs`.
+The claim stores both stack inputs and outputs top-of-stack first, in their canonical zero-padded 16-element form. The first element of each stored stack is its top value.
 
 The verifier returns `Result<VerificationOutcome, VerificationError>`. A successful deferred outcome
 evaluates the carried witness and authenticates its outstanding VM root; a successful
@@ -193,35 +196,29 @@ graph under the configured per-witness limits. Precompile proving imports the pr
 directly into a shared Session. See the
 [deferred-proof semantics](../docs/src/design/deferred/semantics.md) for transport and limit details.
 
-> If a program with the provided hash is executed against some secret inputs and the provided public inputs, it will produce the provided outputs.
+> A complete verified proof attests that execution from the expected entry key under the fixed expected environment root, with the supplied public inputs and some private advice, produced the expected outputs.
 
-The verifier needs only the program hash. It does not need the program itself.
+The verifier takes the expected target and public stack inputs and outputs through the claim. It does not need the program code or environment lookup witnesses.
 
 #### Proof verification example
 
-Here is a simple example of verifying execution of the program from the previous example:
+Here is a simple example using the proof from the previous example and a target independently authorized by the verifying application:
 
-```rust,ignore
+```rust,no_run
 use miden_vm::{
-    ExecutionClaim, ProgramInfo, StackInputs, StackOutputs, Verifier, field::Felt,
+    ExecutionClaim, ExecutionProof, ExecutionTarget, StackInputs, StackOutputs,
+    VerificationError, VerificationOutcome, Verifier,
 };
 
-let program =   /* value from previous example */;
-let proof =     /* value from previous example */;
-let expected_outputs = StackOutputs::new(&[Felt::new(8).unwrap()]).unwrap();
-let claim = ExecutionClaim::from_program_info(
-    ProgramInfo::from(program),
-    StackInputs::default(),
-    expected_outputs,
-);
-
-match Verifier::new().verify(&claim, &proof) {
-    Ok(outcome) if outcome.is_complete() => println!("Execution verified and complete!"),
-    Ok(outcome) => println!(
-        "Execution verified with outstanding root {:?}",
-        outcome.outstanding_precompile_root(),
-    ),
-    Err(err) => eprintln!("Verification failed: {err}"),
+fn verify_addition(
+    proof: &ExecutionProof,
+    expected_target: ExecutionTarget,
+) -> Result<VerificationOutcome, VerificationError> {
+    // The application authorizes expected_target independently of the supplied proof.
+    let inputs = StackInputs::default();
+    let outputs = StackOutputs::new(&[8_u32.into()]).unwrap();
+    let claim = ExecutionClaim::new(expected_target, inputs, outputs);
+    Verifier::new().verify(&claim, proof)
 }
 ```
 
@@ -245,67 +242,63 @@ dup.1       // stack state: 2 1 2
 add         // stack state: 3 2
 ```
 
-Notice that except for the first 2 operations which initialize the stack, the sequence of `swap dup.1 add` operations repeats over and over. In fact, we can repeat these operations an arbitrary number of times to compute an arbitrary Fibonacci number. In Rust, it would look like this:
+Notice that except for the first 2 operations which initialize the stack, the sequence of `swap dup.1 add` operations repeats over and over. We can repeat these operations to compute another Fibonacci number. To compute the 50th term with public starting values, compile this source using an assembler configured with explicit namespaces:
 
-```rust
+```masm
+begin
+    repeat.49
+        swap dup.1 add
+    end
+end
+```
+
+The application supplies the resulting `CodePackage`, its independently authorized target, and a
+host configured with environment evidence. The synchronous helper executes and fully proves the
+result:
+
+```rust,no_run
 use miden_vm::{
     advice::AdviceInputs,
     field::PrimeField64,
-    Assembler, DefaultHost, ExecutionOptions, FastProcessor, Prover, StackInputs,
+    prove_sync, CodePackage, DefaultHost, EnvironmentTraceLimits, ExecutionOptions,
+    ExecutionProof, ExecutionTarget, Prover, ResolutionLimits, StackInputs,
 };
 
-// set the number of terms to compute
-let n = 50;
-
-// instantiate the default assembler and compile the program
-let source = format!(
-    "
-    begin
-        repeat.{}
-            swap dup.1 add
-        end
-    end",
-    n - 1
-);
-let assembler = Assembler::default();
-let program = assembler
-    .assemble_program("prg", &source)
-    .unwrap()
-    .unwrap_program();
-
-// initialize a default host (with an empty advice provider)
-let mut host = DefaultHost::default();
-
-// initialize the stack with values 0 and 1
-let stack_inputs = StackInputs::new(&[1_u32.into(), 0_u32.into()]).unwrap();
-
-// execute the program and prove its post-execution witness
-let witness = FastProcessor::new_with_options(
-    stack_inputs,
-    AdviceInputs::default(),
-    ExecutionOptions::default(),
-)
-.unwrap()
-.execute_for_proving_sync(&program, &mut host)
-.unwrap();
-let outputs = *witness.claim().stack_outputs();
-let proof = Prover::new().prove(witness).unwrap();
-
-// fetch the stack outputs, truncating to the first element
-let stack = outputs.get_num_elements(1);
-
-// the output should be the 50th Fibonacci number
-assert_eq!(12586269025, stack[0].as_canonical_u64());
+fn prove_fibonacci(
+    code: CodePackage,
+    target: ExecutionTarget,
+    mut host: DefaultHost,
+    options: ExecutionOptions,
+    resolution: ResolutionLimits,
+    tracing: EnvironmentTraceLimits,
+) -> ExecutionProof {
+    host.load_library(code).expect("package loading failed");
+    let options = options
+        .with_resolution_limits(resolution)
+        .with_environment_trace_limits(tracing);
+    let inputs = StackInputs::new(&[1_u32.into(), 0_u32.into()]).unwrap();
+    let (outputs, proof) = prove_sync(
+        &Prover::new(), target, inputs, AdviceInputs::default(), &mut host, options,
+    )
+    .expect("execution or proving failed");
+    assert_eq!(12586269025, outputs.get_num_elements(1)[0].as_canonical_u64());
+    proof
+}
 ```
 
-Above, we used public inputs to initialize the stack. This keeps the program simpler and lets us run it from arbitrary starting points without changing its hash.
+Public inputs initialize the stack, so the same compiled code can run from different starting
+values. The verifier supplies those expected inputs, the expected outputs, and its authorized
+target through `ExecutionClaim`.
 
 ## CLI interface
 
 If you want to execute, prove, and verify programs on Miden VM, but don't want to write Rust code, you can use Miden CLI. It also contains a number of useful tools to help analyze and debug programs.
 
 The CLI limits package (`.masp`) files to 512 MiB, input (`.inputs`) JSON files to
-64 MiB, and output (`.outputs`) JSON files to 64 KiB. Files at the limit are accepted;
+64 MiB, and output (`.outputs`) JSON files to 64 KiB. Verification also limits the whole
+proof transport to 512 MiB by default; `--max-proof-size` selects another byte cap
+(for example, `64Mi`). The proof cap is checked before reading and decoding, and an explicit
+zero stays zero. Files at the limit are accepted;
 larger files are rejected before decoding. These readers accept regular files and
 symlinks to regular files. Pipes, devices, and directories are rejected.
 

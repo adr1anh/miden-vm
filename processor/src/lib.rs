@@ -68,7 +68,7 @@ pub use errors::{
     procedure_not_found_with_package_source_context,
 };
 pub use execution_options::{
-    EnvironmentTraceLimits, ExecutionEnvironment, ExecutionOptions, ExecutionOptionsError,
+    EnvironmentTraceLimits, ExecutionOptions, ExecutionOptionsError, ResolutionLimits,
 };
 pub use executor::ProgramExecutor;
 pub use fast::{
@@ -76,7 +76,7 @@ pub use fast::{
     DebugRuntimeFrameKind, ExecutionOutput, FastProcessor, ResumeContext,
 };
 pub use host::{
-    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    BaseHost, CodeRequest, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
     FutureMaybeSend, Host, LoadedMastForest, MastForestStore, MemMastForestStore, SyncHost,
     debug::{StdoutWriter, format_value, write_interval, write_stack},
     default::{DefaultHost, HostLibrary},
@@ -84,8 +84,8 @@ pub use host::{
 pub use miden_core::{
     EMPTY_WORD, Felt, ONE, WORD_SIZE, Word, ZERO, crypto, field, mast,
     program::{
-        ExecutionClaim, ExecutionDescriptor, InputError, KernelDescriptor, MIN_STACK_DEPTH,
-        Program, ProgramInfo, StackInputs, StackOutputs,
+        ExecutionClaim, ExecutionTarget, InputError, KernelDescriptor, MIN_STACK_DEPTH,
+        StackInputs, StackOutputs,
     },
     serde, utils,
 };

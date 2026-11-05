@@ -20,9 +20,8 @@ pub use miden_core::{
     operations::Operation,
     program,
     program::{
-        CanonicalLabel, EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, ImplementationRoot,
-        InputError, KernelDescriptor, Namespace, ProcedureKey, Program, ProgramInfo, StackInputs,
-        StackOutputs,
+        CanonicalLabel, EnvironmentRoot, ExecutionClaim, ExecutionTarget, ImplementationRoot,
+        InputError, KernelDescriptor, Namespace, ProcedureKey, StackInputs, StackOutputs,
     },
     proof::{
         ExecutionProof, ExecutionProofCompatibility, ExecutionProofCompatibilityError,
@@ -30,16 +29,17 @@ pub use miden_core::{
     },
 };
 pub use miden_core_lib::{conjectured_security_estimator_root, proven_security_estimator_root};
+pub use miden_mast_package::CodePackage;
 pub use miden_precompiles::{
     CURVE_WORK, HASH_WORK, MSM_WORK, UINT_WORK, default_execution_precompile_limits,
     default_verification_precompile_limits,
 };
 pub use miden_processor::{
-    BaseHost, DefaultHost, EnvironmentSourceError, EnvironmentTraceLimits,
-    EnvironmentWitnessRequest, EnvironmentWitnessSource, ExecutionEnvironment, ExecutionError,
-    ExecutionOptions, ExecutionOutput, ExecutionWitness, FastProcessor, FutureMaybeSend, Host,
-    LedgerLimits, OpeningLimits, OpeningStep, ProgramExecutor, ResolutionWitness, SessionLimits,
-    SyncHost, VmWitness, advice, crypto, field, serde, trace, trace::VmTrace, utils,
+    BaseHost, CodeRequest, DefaultHost, EnvironmentSource, EnvironmentSourceError,
+    EnvironmentTraceLimits, EnvironmentWitnessRequest, ExecutionError, ExecutionOptions,
+    ExecutionOutput, ExecutionWitness, FastProcessor, FutureMaybeSend, Host, LedgerLimits,
+    OpeningLimits, OpeningStep, ProgramExecutor, ResolutionLimits, ResolutionWitness,
+    SessionLimits, SyncHost, VmWitness, advice, crypto, field, serde, trace, trace::VmTrace, utils,
 };
 pub use miden_prover::{PrecompileProvingError, Prover, ProverError, prove_sync};
 pub use miden_verifier::{

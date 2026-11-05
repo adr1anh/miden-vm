@@ -36,15 +36,16 @@ fn test_trace_event_handling() {
     let source_manager = Arc::new(DefaultSourceManager::default());
     let named =
         assemble_fixture_program(Assembler::new(source_manager.clone()), "program", source, &[]);
-    let mut host = TestHost::default().with_environment_source(named.environment.source());
+    let mut host = TestHost::default().with_environment_source(named.1.source());
     host.source_manager = source_manager;
+    host = host.with_code(named.0.clone());
     FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(named.1.resolution_limits()),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&named.program, named.environment.execution(), &mut host)
+    .execute_sync(named.1.target(), &mut host)
     .unwrap();
 
     assert_eq!(host.event_handler, vec![3000, 4000]);
@@ -76,14 +77,15 @@ fn test_unhandled_trace_does_not_raise_error() {
     // No trace handler is registered on this host.
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(named.environment.source());
+        .with_environment_source(named.1.source());
+    host.load_library(named.0.clone()).unwrap();
     let output = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(named.1.resolution_limits()),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&named.program, named.environment.execution(), &mut host)
+    .execute_sync(named.1.target(), &mut host)
     .expect("emitting an unhandled trace event must not abort execution");
 
     assert_eq!(output.stack, StackOutputs::default());
@@ -117,17 +119,18 @@ fn test_trace_handler_registry() {
 
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(named.environment.source());
+        .with_environment_source(named.1.source());
     host.register_trace_handler(EventName::new(trace_name), Arc::new(recorder))
         .unwrap();
 
+    host.load_library(named.0.clone()).unwrap();
     FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(named.1.resolution_limits()),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&named.program, named.environment.execution(), &mut host)
+    .execute_sync(named.1.target(), &mut host)
     .unwrap();
 
     let recorded = recorded.lock().unwrap();
@@ -145,15 +148,16 @@ fn test_trace_event_from_stack() {
     let named =
         assemble_fixture_program(Assembler::new(source_manager.clone()), "program", source, &[]);
 
-    let mut host = TestHost::default().with_environment_source(named.environment.source());
+    let mut host = TestHost::default().with_environment_source(named.1.source());
     host.source_manager = source_manager;
+    host = host.with_code(named.0.clone());
     let output = FastProcessor::new_with_options(
         StackInputs::new(&[Felt::from_u32(1000)]).unwrap(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(named.1.resolution_limits()),
     )
     .unwrap()
-    .execute_sync(&named.program, named.environment.execution(), &mut host)
+    .execute_sync(named.1.target(), &mut host)
     .unwrap();
 
     assert_eq!(host.trace_handler, vec![1000]);
@@ -180,15 +184,16 @@ fn test_trace_event_manual_emit() {
     let named =
         assemble_fixture_program(Assembler::new(source_manager.clone()), "program", source, &[]);
 
-    let mut host = TestHost::default().with_environment_source(named.environment.source());
+    let mut host = TestHost::default().with_environment_source(named.1.source());
     host.source_manager = source_manager;
+    host = host.with_code(named.0.clone());
     FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(named.1.resolution_limits()),
     )
     .unwrap()
-    .execute_sync(&named.program, named.environment.execution(), &mut host)
+    .execute_sync(named.1.target(), &mut host)
     .unwrap();
 
     assert_eq!(host.trace_handler, vec![1000]);

@@ -18,14 +18,14 @@ use miden_assembly::{
     ast::{Item, Module, ModuleKind, Path as SourcePath},
     testing::{FixtureNamespace, parser},
 };
-use miden_core::program::{CanonicalLabel, ExecutionDescriptor, ProcedureKey};
+use miden_core::program::{CanonicalLabel, ExecutionTarget, ProcedureKey};
 use miden_core_lib::CoreLibrary;
 use miden_mast_package::{
-    CallableBinding, NamespacePlan, Package, PackageCallables, PackageNaming, TargetType,
+    NamespacePath, Package, PackageCallables, PackageSymbols, ProcedureName, TargetType,
     interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile},
 };
 use miden_processor::EnvironmentWitnessRequest;
-use miden_utils_testing::librarytree::{FixtureEnvironment, NamedProgram, fixture_from_product};
+use miden_utils_testing::librarytree::{FixtureEnvironment, fixture_from_product};
 
 const CODEC_BYTES: u32 = 4 * 1024 * 1024;
 const CODEC_RECORDS: u32 = 100_000;
@@ -56,7 +56,7 @@ fn quote(value: &str) -> String {
     format!("{value:?}")
 }
 
-fn home(plan: &NamespacePlan) -> String {
+fn home(plan: &NamespacePath) -> String {
     format!(
         "[{}]",
         plan.home()
@@ -67,16 +67,16 @@ fn home(plan: &NamespacePlan) -> String {
     )
 }
 
-fn homes() -> Vec<NamespacePlan> {
+fn homes() -> Vec<NamespacePath> {
     vec![
         FixtureNamespace::assembly_tests().namespace_plan().clone(),
-        NamespacePlan::new(vec![]),
+        NamespacePath::new(vec![]),
     ]
 }
 
 struct ExactFixtureHomes;
 impl TypedIdProfile for ExactFixtureHomes {
-    type Context = [NamespacePlan];
+    type Context = [NamespacePath];
     type Error = &'static str;
     fn validate_typed_id(&self, _: &Self::Context, _: u32, _: &[u8]) -> Result<(), Self::Error> {
         Err("CLI builtin-exact-v1 fixtures reject TypedId")
@@ -96,7 +96,7 @@ impl HomeProfile for ExactFixtureHomes {
     }
 }
 
-fn expected(path: &Path, naming: &PackageNaming) -> String {
+fn expected(path: &Path, naming: &PackageSymbols) -> String {
     let bytes = naming
         .encode_v1(
             &ExactFixtureHomes,
@@ -146,7 +146,7 @@ struct SourceSelection {
     root: Box<Module>,
     support: Box<[Box<Module>]>,
     names: FixtureNamespace,
-    bindings: Vec<CallableBinding>,
+    bindings: Vec<ProcedureName>,
     choice: String,
 }
 impl SourceSelection {
@@ -229,9 +229,7 @@ impl SourceSelection {
 fn assembler() -> Assembler {
     let mut assembler = Assembler::default();
     let core = CoreLibrary::default();
-    assembler
-        .link_package(core.package(), Linkage::Dynamic, core.naming().clone())
-        .unwrap();
+    assembler.link_package(core.code_package().clone(), Linkage::Dynamic).unwrap();
     assembler
 }
 
@@ -249,8 +247,8 @@ pub fn bundle_inputs(
 /// Independently compiled library/kernel metadata, before any CLI bundle output is inspected.
 pub struct LibraryFixture {
     pub package: Arc<Package>,
-    pub naming: Arc<PackageNaming>,
-    selected: PackageNaming,
+    pub naming: Arc<PackageSymbols>,
+    selected: PackageSymbols,
 }
 impl LibraryFixture {
     pub fn new(source: &Path, kernel: bool, namespace: Option<&str>) -> Self {
@@ -284,7 +282,7 @@ impl LibraryFixture {
 // Only independently declared local K receive authority, including private callable roots.
 // Full compiler naming still travels through artifact expectations. In particular, equal D does
 // not turn unrelated Core bindings into authorized fixture entries.
-fn project(naming: &PackageNaming, bindings: &[CallableBinding]) -> PackageNaming {
+fn project(naming: &PackageSymbols, bindings: &[ProcedureName]) -> PackageSymbols {
     let implementations = bindings
         .iter()
         .filter_map(|binding| {
@@ -294,7 +292,7 @@ fn project(naming: &PackageNaming, bindings: &[CallableBinding]) -> PackageNamin
                 .map(|implementation| (binding.key(), implementation))
         })
         .collect::<Vec<_>>();
-    PackageNaming::new(
+    PackageSymbols::new(
         naming.namespace_plan().clone(),
         PackageCallables::new(bindings.iter().cloned(), [], implementations).unwrap(),
         None,
@@ -303,8 +301,8 @@ fn project(naming: &PackageNaming, bindings: &[CallableBinding]) -> PackageNamin
 }
 
 pub struct ProgramFixture {
-    pub named: NamedProgram,
-    expected_descriptor: ExecutionDescriptor,
+    pub named: (miden_mast_package::CodePackage, FixtureEnvironment),
+    expected_descriptor: ExecutionTarget,
     source: NamingFile,
     artifact: NamingFile,
     execution_args: Vec<OsString>,
@@ -321,19 +319,24 @@ impl ProgramFixture {
         let mut assembler = match kernel {
             Some(kernel) => Assembler::with_kernel(
                 manager.clone(),
-                kernel.package.clone(),
-                kernel.naming.clone(),
+                miden_mast_package::CodePackage::new(kernel.package.clone(), kernel.naming.clone())
+                    .expect("fixture kernel retains exact symbols"),
             )
             .unwrap(),
             None => Assembler::new(manager.clone()),
         };
         let core = CoreLibrary::default();
-        assembler
-            .link_package(core.package(), Linkage::Dynamic, core.naming().clone())
-            .unwrap();
+        assembler.link_package(core.code_package().clone(), Linkage::Dynamic).unwrap();
         for library in libraries {
             assembler
-                .link_package(library.package.clone(), Linkage::Dynamic, library.naming.clone())
+                .link_package(
+                    miden_mast_package::CodePackage::new(
+                        library.package.clone(),
+                        library.naming.clone(),
+                    )
+                    .expect("fixture library retains exact symbols"),
+                    Linkage::Dynamic,
+                )
                 .unwrap();
         }
         let root = Module::parser(Some(ModuleKind::Executable))
@@ -346,8 +349,8 @@ impl ProgramFixture {
             .unwrap();
         let local = project(product.naming(), &selection.bindings);
         let mut named = fixture_from_product(product, &[]);
-        named.environment = FixtureEnvironment::new(
-            named.naming.entry_key().unwrap(),
+        named.1 = FixtureEnvironment::new(
+            named.0.symbols().entry_key().unwrap(),
             std::iter::once(&local)
                 .chain(kernel.map(|kernel| &kernel.selected))
                 .chain(libraries.iter().map(|library| &library.selected)),
@@ -368,7 +371,7 @@ impl ProgramFixture {
     }
     fn finish(
         dir: &Path,
-        named: NamedProgram,
+        named: (miden_mast_package::CodePackage, FixtureEnvironment),
         source_choice: &str,
         kernel: Option<&LibraryFixture>,
         libraries: &[&LibraryFixture],
@@ -377,7 +380,7 @@ impl ProgramFixture {
         assert!(keys.len() <= 128, "explicit CLI fixture opening budget");
         let dir = directory(dir);
         let expected_naming = dir.join("target.naming");
-        let target = expected(&expected_naming, &named.naming);
+        let target = expected(&expected_naming, named.0.symbols());
         let kernel_choice =
             kernel.map(|kernel| expected(&dir.join("kernel.naming"), &kernel.naming));
         let library_choices = libraries
@@ -401,9 +404,9 @@ impl ProgramFixture {
             kernel_choice.as_deref(),
             &library_choices,
         );
-        let execution = named.environment.execution();
-        let descriptor = execution.descriptor();
-        let witness_source = named.environment.source();
+        let execution = named.1.resolution_limits();
+        let descriptor = named.1.target();
+        let witness_source = named.1.source();
         let mut openings = Vec::new();
         for key in keys {
             let witness = witness_source
@@ -467,7 +470,7 @@ impl ProgramFixture {
         }
     }
     pub fn write_package(&self, path: &Path) {
-        self.named.package.write_to_file(path).unwrap();
+        self.named.0.package().write_to_file(path).unwrap();
     }
     /// Verifier authority fixed by the fixture before any CLI output or proof is read.
     pub fn descriptor_args(&self) -> [String; 4] {
@@ -528,9 +531,9 @@ fn selected_fixture_files_admit_and_execute_without_cli_output() {
         .unwrap();
     let admitted = NamingInputs::read(&fixture.artifact.path, fixture.artifact.size)
         .unwrap()
-        .admit(NamingRole::Target, fixture.named.package.clone())
+        .admit(NamingRole::Target, fixture.named.0.package().clone())
         .unwrap();
-    assert_eq!(admitted.naming, fixture.named.naming);
+    assert_eq!(admitted.symbols(), fixture.named.0.symbols());
 
     let openings = fixture
         .execution_args
@@ -540,7 +543,8 @@ fn selected_fixture_files_admit_and_execute_without_cli_output() {
         .unwrap();
     let execution = AdmittedExecutionInputs::read(
         openings,
-        fixture.named.environment.execution(),
+        fixture.named.1.target(),
+        fixture.named.1.resolution_limits(),
         miden_utils_testing::librarytree::trace_limits(),
         ExecutionInputLimits {
             max_file_bytes: OPENING_FILE_BYTES,
@@ -554,8 +558,14 @@ fn selected_fixture_files_admit_and_execute_without_cli_output() {
     )
     .unwrap();
     let mut host = DefaultHost::default().with_environment_source(execution.source());
+    host.load_library(fixture.named.0.clone()).unwrap();
     let output = FastProcessor::new(StackInputs::default())
-        .execute_sync(&fixture.named.program, execution.environment(), &mut host)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(execution.resolution_limits()),
+        )
+        .unwrap()
+        .execute_sync(execution.target(), &mut host)
         .unwrap();
     assert_eq!(output.stack[0].as_canonical_u64(), 3);
 }

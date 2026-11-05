@@ -2,9 +2,7 @@ use alloc::{vec, vec::Vec};
 use core::borrow::Borrow;
 
 use miden_air_definitions::vm::trace::chiplets::library::PAD;
-use miden_core::program::{
-    CanonicalLabel, ExecutionDescriptor, ImplementationRoot, LabelCommitment,
-};
+use miden_core::program::{CanonicalLabel, ExecutionTarget, ImplementationRoot, LabelCommitment};
 
 use super::*;
 use crate::{
@@ -613,7 +611,7 @@ fn binding(path: Vec<OpeningStep>) -> ResolvedBinding {
 
 fn new_session(binding: &ResolvedBinding) -> ResolutionSession {
     ResolutionSession::new(
-        ExecutionDescriptor::new(binding.procedure_key(), binding.environment_root()),
+        ExecutionTarget::new(binding.procedure_key(), binding.environment_root()),
         LedgerLimits {
             max_occurrences: 128,
             max_total_list_children: 256,

@@ -52,9 +52,10 @@ end
 
     let mut context = TestContext::new();
 
-    let dev = context
+    let dev_code = context
         .assemble_library_package(&manifest_path, None)
         .expect("failed to assemble under dev profile");
+    let dev = dev_code.package();
     assert_eq!(&dev.name, "libpkg");
     assert_eq!(dev.version.to_string(), "1.2.3");
     assert_eq!(dev.description.as_deref(), Some("sample library"));
@@ -69,9 +70,10 @@ end
     );
     assert!(dev.sections.iter().any(|section| section.id == SectionId::DEBUG_INFO));
 
-    let release = context
+    let release_code = context
         .assemble_library_package(&manifest_path, Some("release"))
         .expect("failed to assemble under release profile");
+    let release = release_code.package();
     assert!(
         release
             .debug_info()
@@ -144,9 +146,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_executable_package(&manifest_path, Some("primary"), None)
         .expect("executable build should succeed");
+    let package = package_code.package();
 
     assert_eq!(&package.name, "app:primary");
     assert_eq!(package.kind, TargetType::Executable);
@@ -214,9 +217,9 @@ end
     let library = assembler
         .assemble_with_naming(ProjectTargetSelector::Library, "release")
         .expect("library build should retain its compiler naming");
-    library.package.check_naming(&library.naming).unwrap();
-    assert!(library.package.debug_info().unwrap().is_none());
-    let callables = library.naming.callables();
+    library.code.package().check_naming(library.code.symbols()).unwrap();
+    assert!(library.code.package().debug_info().unwrap().is_none());
+    let callables = library.code.symbols().callables();
     let run_key = callables.key_for_visible_path(&definition).unwrap();
     assert_eq!(callables.key_for_visible_path(&alias), Some(run_key));
     assert_eq!(callables.binding(run_key).unwrap().path(), &definition);
@@ -230,7 +233,7 @@ end
         .expect("private definition must retain its canonical binding");
     assert_eq!(callables.key_for_visible_path(&private), None);
     assert!(callables.selected_implementation(private_key).is_some());
-    assert_eq!(library.naming.entry_key(), None);
+    assert_eq!(library.code.symbols().entry_key(), None);
 
     let executable = match assembler
         .assemble_interruptible_with_naming(ProjectTargetSelector::Executable("entry"), "release")
@@ -239,13 +242,27 @@ end
         ControlFlow::Continue(resolved) => resolved,
         ControlFlow::Break(_) => panic!("source build unexpectedly interrupted"),
     };
-    executable.package.check_naming(&executable.naming).unwrap();
-    let entry_key = executable.naming.entry_key().expect("executable entry must be retained");
+    executable.code.package().check_naming(executable.code.symbols()).unwrap();
+    let entry_key = executable
+        .code
+        .symbols()
+        .entry_key()
+        .expect("executable entry must be retained");
     let entry_path = path(&["$exec", "$main"]);
-    assert_eq!(executable.naming.callables().key_for_visible_path(&entry_path), Some(entry_key));
-    assert!(executable.naming.callables().selected_implementation(entry_key).is_some());
     assert_eq!(
-        executable.naming.callables().binding(private_key),
+        executable.code.symbols().callables().key_for_visible_path(&entry_path),
+        Some(entry_key)
+    );
+    assert!(
+        executable
+            .code
+            .symbols()
+            .callables()
+            .selected_implementation(entry_key)
+            .is_some()
+    );
+    assert_eq!(
+        executable.code.symbols().callables().binding(private_key),
         callables.binding(private_key),
         "static linking must retain the library's private canonical binding"
     );
@@ -256,20 +273,23 @@ end
     let rebuilt = rebuilt_assembler
         .assemble_with_naming(ProjectTargetSelector::Library, "release")
         .expect("changed source should rebuild with the same naming convention");
-    rebuilt.package.check_naming(&rebuilt.naming).unwrap();
-    assert_ne!(library.package.code_commitment(), rebuilt.package.code_commitment());
+    rebuilt.code.package().check_naming(rebuilt.code.symbols()).unwrap();
+    assert_ne!(
+        library.code.package().code_commitment(),
+        rebuilt.code.package().code_commitment()
+    );
     assert_eq!(
         callables.bindings().collect::<Vec<_>>(),
-        rebuilt.naming.callables().bindings().collect::<Vec<_>>(),
+        rebuilt.code.symbols().callables().bindings().collect::<Vec<_>>(),
         "implementation changes must preserve canonical keys and private bindings"
     );
     assert_eq!(
         callables.visible_paths().collect::<Vec<_>>(),
-        rebuilt.naming.callables().visible_paths().collect::<Vec<_>>()
+        rebuilt.code.symbols().callables().visible_paths().collect::<Vec<_>>()
     );
     assert_ne!(
         callables.selected_implementation(run_key),
-        rebuilt.naming.callables().selected_implementation(run_key)
+        rebuilt.code.symbols().callables().selected_implementation(run_key)
     );
 }
 
@@ -308,12 +328,13 @@ end
     let mut assembler =
         Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
     configure_project_fixture(&mut assembler);
-    let package = assembler
+    let package_code = assembler
         .assemble(ProjectTargetSelector::Library, "dev")
         .expect("kernel build should succeed");
+    let package = package_code.package();
 
     assert_eq!(package.kind, TargetType::Kernel);
-    assert!(package.check_kernel_code(&fixture_package_naming(&package).unwrap()).is_ok());
+    assert!(package.check_kernel_code(&fixture_package_naming(package).unwrap()).is_ok());
 }
 
 #[test]
@@ -340,9 +361,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_library_package(&manifest_path, Some("dev"))
         .expect("debug build should succeed");
+    let package = package_code.package();
 
     let debug_info = package
         .sections
@@ -390,9 +412,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_library_package(&manifest_path, Some("dev"))
         .expect("debug build should succeed");
+    let package = package_code.package();
 
     let debug_info = package
         .debug_info()
@@ -441,9 +464,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_library_package(&manifest_path, Some("dev"))
         .expect("debug build should succeed");
+    let package = package_code.package();
 
     let debug_info = package
         .debug_info()
@@ -627,9 +651,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_library_package(&root_manifest, Some("dev"))
         .expect("root package with static debug deps should build");
+    let package = package_code.package();
     let debug_info = package
         .debug_info()
         .expect("package debug sections should decode")
@@ -750,9 +775,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_library_package(&manifest_path, Some("dev"))
         .expect("trim-paths build should succeed");
+    let package = package_code.package();
     let tempdir_prefix = tempdir.path().display().to_string();
 
     let debug_info = package
@@ -897,9 +923,10 @@ end
 "#,
     );
 
-    let package = context
+    let package_code = context
         .assemble_library_package(root_dir.join("miden-project.toml"), Some("dev"))
         .expect("mixed dependency build should succeed");
+    let package = package_code.package();
 
     let dependency_names = package
         .manifest
@@ -1009,9 +1036,10 @@ end
     );
 
     let mut context = context;
-    let package = context
+    let package_code = context
         .assemble_library_package(&root_manifest, None)
         .expect("source dependency with preassembled dependency should assemble");
+    let package = package_code.package();
 
     assert_eq!(&package.name, "root");
 }
@@ -1071,9 +1099,10 @@ end
 "#,
     );
 
-    let package = context
+    let package_code = context
         .assemble_library_package(&root_manifest, None)
         .expect("explicit preassembled path should bypass registry semver collisions");
+    let package = package_code.package();
 
     assert_eq!(&package.name, "root");
     assert_eq!(
@@ -1307,9 +1336,10 @@ end
 "#,
     );
 
-    let package = context
+    let package_code = context
         .assemble_library_package(&root_manifest, None)
         .expect("compatible shared registry dependency should assemble");
+    let package = package_code.package();
     let shared_dependency = package
         .manifest
         .dependencies()
@@ -1446,9 +1476,10 @@ end
 "#,
     );
 
-    let package = context
+    let package_code = context
         .assemble_library_package(&root_manifest, None)
         .expect("digest-compatible shared registry dependency should assemble");
+    let package = package_code.package();
     let shared_dependency = package
         .manifest
         .dependencies()
@@ -1541,9 +1572,10 @@ end
 "#,
     );
 
-    let package = context
+    let package_code = context
         .assemble_library_package(&root_manifest, None)
         .expect("distinct exact runtime supplies may share a package name");
+    let package = package_code.package();
     let runtime_dependencies = package
         .manifest
         .dependencies()
@@ -1642,9 +1674,10 @@ end
 "#,
     );
 
-    let package = context
+    let package_code = context
         .assemble_library_package(&root_manifest, None)
         .expect("multi-level static propagation should succeed");
+    let package = package_code.package();
 
     assert_eq!(
         package
@@ -1733,9 +1766,10 @@ dep.workspace = true
     ));
     context.registry_mut().add_package(dep010.clone());
 
-    let package = context
+    let package_code = context
         .assemble_library_package(&app_manifest, None)
         .expect("failed to assemble 'app'");
+    let package = package_code.package();
 
     let dependency = package.manifest.dependencies().next().unwrap();
     assert_eq!(dependency.name, PackageId::from("dep"));
@@ -1794,9 +1828,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let first = context
+    let first_code = context
         .assemble_library_package(&root_manifest, None)
         .expect("first build should succeed");
+    let first = first_code.package();
     assert!(
         context
             .registry()
@@ -1811,9 +1846,10 @@ end
         .collect::<Vec<_>>();
     context.registry().clear_loaded_packages();
 
-    let second = context
+    let second_code = context
         .assemble_library_package(&root_manifest, None)
         .expect("second build should reuse canonical dependency");
+    let second = second_code.package();
 
     let dep_record = context
         .registry()
@@ -1889,9 +1925,10 @@ end
         tag: "pp-root",
         invocations: Arc::new(std::sync::Mutex::new(Vec::new())),
     });
-    let post_processed = dep_assembler
+    let post_processed_code = dep_assembler
         .assemble(ProjectTargetSelector::Library, "dev")
         .expect("root build of dep should succeed");
+    let post_processed = post_processed_code.package();
     drop(dep_assembler);
     assert!(
         post_processed
@@ -1899,7 +1936,7 @@ end
             .iter()
             .any(|section| section.id == SectionId::custom("pp-root").unwrap())
     );
-    context.registry_mut().add_package(post_processed);
+    context.registry_mut().add_package(post_processed.clone());
 
     let error = context
         .assemble_library_package(&root_manifest, None)
@@ -1958,9 +1995,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_library_package(&root_manifest, None)
         .expect("assembly with a source dependency should succeed");
+    let package = package_code.package();
 
     assert_eq!(&package.name, "root");
     assert!(
@@ -2316,9 +2354,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let first = context
+    let first_code = context
         .assemble_library_package(&app_manifest, None)
         .expect("initial workspace build should succeed");
+    let first = first_code.package();
     assert!(
         context
             .registry()
@@ -2344,9 +2383,10 @@ dep = { path = "dep", binding = { selection = "custom", home = [{ text = "miden-
 "#,
     );
 
-    let second = context
+    let second_code = context
         .assemble_library_package(&app_manifest, None)
         .expect("workspace manifest comment changes should still allow reuse");
+    let second = second_code.package();
 
     let dep_record = context
         .registry()
@@ -2605,9 +2645,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_library_package(&app_manifest, None)
         .expect("workspace member dependency should assemble with inherited workspace config");
+    let package = package_code.package();
     assert!(
         context
             .registry()
@@ -2659,9 +2700,10 @@ fn executable_packages_preserve_kernel_distribution_with_code_only_program_conve
     let manifest_path = write_kernel_program_project(tempdir.path());
 
     let mut context = TestContext::new();
-    let kernel_package = context
+    let kernel_package_code = context
         .assemble_library_package(&manifest_path, None)
         .expect("kernel package build should succeed");
+    let kernel_package = kernel_package_code.package();
     let saw_kernel = std::rc::Rc::new(std::cell::Cell::new(false));
     let mut assembler = context.project_assembler_for_path(&manifest_path).unwrap();
     assembler.with_namespace_inputs_provider({
@@ -2678,9 +2720,10 @@ fn executable_packages_preserve_kernel_distribution_with_code_only_program_conve
             crate::testing::project_fixture_namespace_inputs(context, sources, base)
         }
     });
-    let package = assembler
+    let package_code = assembler
         .assemble(ProjectTargetSelector::Executable("main"), "dev")
         .expect("executable package build should succeed");
+    let package = package_code.package();
     assert!(saw_kernel.get());
     let kernel_dependency = package
         .manifest
@@ -2700,8 +2743,13 @@ fn executable_packages_preserve_kernel_distribution_with_code_only_program_conve
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     let round_tripped_program = fixture_program(&round_tripped_package);
-    assert!(round_tripped_program.kernel().is_empty());
-    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
+    assert!(
+        round_tripped_program
+            .package()
+            .check_executable_code(round_tripped_program.symbols())
+            .is_ok()
+    );
+    assert_embedded_kernel_preserved(&round_tripped_package, kernel_package);
 }
 
 #[test]
@@ -2710,13 +2758,15 @@ fn executable_packages_preserve_transitive_kernel_distribution_with_code_only_co
     let (root_manifest, kernel_manifest) = write_transitive_kernel_program_project(tempdir.path());
 
     let mut context = TestContext::new();
-    let kernel_package = context
+    let kernel_package_code = context
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
+    let kernel_package = kernel_package_code.package();
     assert!(kernel_package.is_kernel());
-    let package = context
+    let package_code = context
         .assemble_executable_package(&root_manifest, Some("main"), None)
         .expect("executable package build should succeed");
+    let package = package_code.package();
     let kernel_dependency = package
         .manifest
         .dependencies()
@@ -2735,8 +2785,13 @@ fn executable_packages_preserve_transitive_kernel_distribution_with_code_only_co
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     let round_tripped_program = fixture_program(&round_tripped_package);
-    assert!(round_tripped_program.kernel().is_empty());
-    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
+    assert!(
+        round_tripped_program
+            .package()
+            .check_executable_code(round_tripped_program.symbols())
+            .is_ok()
+    );
+    assert_embedded_kernel_preserved(&round_tripped_package, kernel_package);
 }
 
 #[test]
@@ -2746,9 +2801,10 @@ fn library_packages_with_transitive_kernels_do_not_embed_kernel_sections() {
     let mid_manifest = tempdir.path().join("mid").join("miden-project.toml");
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_library_package(&mid_manifest, None)
         .expect("library package build should succeed");
+    let package = package_code.package();
 
     assert!(
         package
@@ -2767,13 +2823,15 @@ fn preassembled_libraries_prefer_store_kernel_over_embedded_copy() {
     let mid_package_path = tempdir.path().join("mid-embedded.masp");
 
     let mut build_context = TestContext::new();
-    let kernel_package = build_context
+    let kernel_package_code = build_context
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
+    let kernel_package = kernel_package_code.package();
     let mut mid_package = MastPackage::read_from_bytes(
         &build_context
             .assemble_library_package(&mid_manifest, None)
             .expect("mid package build should succeed")
+            .package()
             .to_bytes(),
     )
     .expect("mid package should deserialize");
@@ -2795,9 +2853,10 @@ fn preassembled_libraries_prefer_store_kernel_over_embedded_copy() {
         &mut project_assembler,
         vec![mid_package.commitment(), kernel_package.commitment()],
     );
-    let package = project_assembler
+    let package_code = project_assembler
         .assemble(ProjectTargetSelector::Executable("main"), "dev")
         .expect("executable package build should prefer the store kernel");
+    let package = package_code.package();
     drop(project_assembler);
     let embedded_kernel_package = package
         .try_embedded_kernel_package()
@@ -2809,8 +2868,13 @@ fn preassembled_libraries_prefer_store_kernel_over_embedded_copy() {
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     let round_tripped_program = fixture_program(&round_tripped_package);
-    assert!(round_tripped_program.kernel().is_empty());
-    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
+    assert!(
+        round_tripped_program
+            .package()
+            .check_executable_code(round_tripped_program.symbols())
+            .is_ok()
+    );
+    assert_embedded_kernel_preserved(&round_tripped_package, kernel_package);
 }
 
 #[test]
@@ -2821,13 +2885,15 @@ fn preassembled_libraries_require_registered_kernel_when_store_is_missing() {
     let mid_package_path = tempdir.path().join("mid-embedded.masp");
 
     let mut build_context = TestContext::new();
-    let kernel_package = build_context
+    let kernel_package_code = build_context
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
+    let kernel_package = kernel_package_code.package();
     let mut mid_package = MastPackage::read_from_bytes(
         &build_context
             .assemble_library_package(&mid_manifest, None)
             .expect("mid package build should succeed")
+            .package()
             .to_bytes(),
     )
     .expect("mid package should deserialize");
@@ -2854,9 +2920,10 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
     let mid_package_path = tempdir.path().join("mid-embedded.masp");
 
     let mut build_context = TestContext::new();
-    let kernel_package = build_context
+    let kernel_package_code = build_context
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
+    let kernel_package = kernel_package_code.package();
     let kernel_version = miden_package_registry::Version::new(
         kernel_package.version.clone(),
         kernel_package.dependency_commitment(),
@@ -2865,6 +2932,7 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
         &build_context
             .assemble_library_package(&mid_manifest, None)
             .expect("mid package build should succeed")
+            .package()
             .to_bytes(),
     )
     .expect("mid package should deserialize");
@@ -2888,9 +2956,10 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
         &mut project_assembler,
         vec![mid_package.commitment(), kernel_package.commitment()],
     );
-    let package = project_assembler
+    let package_code = project_assembler
         .assemble(ProjectTargetSelector::Executable("main"), "dev")
         .expect("embedded kernel should be used when the indexed artifact is unreadable");
+    let package = package_code.package();
     drop(project_assembler);
     let embedded_kernel_package = package
         .try_embedded_kernel_package()
@@ -2913,8 +2982,13 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     let round_tripped_program = fixture_program(&round_tripped_package);
-    assert!(round_tripped_program.kernel().is_empty());
-    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
+    assert!(
+        round_tripped_program
+            .package()
+            .check_executable_code(round_tripped_program.symbols())
+            .is_ok()
+    );
+    assert_embedded_kernel_preserved(&round_tripped_package, kernel_package);
 }
 
 #[test]
@@ -2925,13 +2999,15 @@ fn preassembled_libraries_skip_embedded_kernel_cache_on_semver_collision() {
     let mid_package_path = tempdir.path().join("mid-embedded.masp");
 
     let mut build_context = TestContext::new();
-    let kernel_package = build_context
+    let kernel_package_code = build_context
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
+    let kernel_package = kernel_package_code.package();
     let mut mid_package = MastPackage::read_from_bytes(
         &build_context
             .assemble_library_package(&mid_manifest, None)
             .expect("mid package build should succeed")
+            .package()
             .to_bytes(),
     )
     .expect("mid package should deserialize");
@@ -2960,9 +3036,10 @@ path = "kernel.masm"
 end
 "#,
     );
-    let conflicting_kernel = build_context
+    let conflicting_kernel_code = build_context
         .assemble_library_package(&conflicting_kernel_manifest, None)
         .expect("conflicting kernel package build should succeed");
+    let conflicting_kernel = conflicting_kernel_code.package();
     assert_ne!(
         conflicting_kernel.dependency_commitment(),
         kernel_package.dependency_commitment()
@@ -2979,7 +3056,7 @@ end
         &mut project_assembler,
         vec![mid_package.commitment(), kernel_package.commitment()],
     );
-    project_assembler.store.replace_semver_package(conflicting_kernel);
+    project_assembler.store.replace_semver_package(conflicting_kernel.clone());
 
     project_assembler
         .assemble(ProjectTargetSelector::Executable("main"), "dev")
@@ -3004,6 +3081,7 @@ fn preassembled_libraries_without_store_or_embedded_kernel_cannot_resolve_depend
     build_context
         .assemble_library_package(&mid_manifest, None)
         .expect("mid package build should succeed")
+        .package()
         .write_to_file(&mid_package_path)
         .unwrap();
 
@@ -3023,9 +3101,10 @@ fn embedded_kernel_package_must_match_runtime_dependency() {
     let manifest_path = write_kernel_program_project(tempdir.path());
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_executable_package(&manifest_path, Some("main"), None)
         .expect("executable package build should succeed");
+    let package = package_code.package();
     let mut round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     let kernel_dependency = round_tripped_package
@@ -3045,7 +3124,8 @@ fn embedded_kernel_package_must_match_runtime_dependency() {
     embedded_kernel_package.version = "2.0.0".parse().unwrap();
     embedded_kernel_section.data = embedded_kernel_package.to_bytes().into();
 
-    assert!(fixture_program(&round_tripped_package).kernel().is_empty());
+    let code = fixture_program(&round_tripped_package);
+    assert!(code.package().check_executable_code(code.symbols()).is_ok());
     let error = round_tripped_package
         .try_embedded_kernel_package()
         .expect_err("mismatched embedded kernel metadata should be rejected independently");
@@ -3060,14 +3140,16 @@ fn executable_code_conversion_does_not_require_embedded_kernel_code() {
     let manifest_path = write_kernel_program_project(tempdir.path());
 
     let mut context = TestContext::new();
-    let package = context
+    let package_code = context
         .assemble_executable_package(&manifest_path, Some("main"), None)
         .expect("executable package build should succeed");
+    let package = package_code.package();
     let mut round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
     round_tripped_package.sections.retain(|section| section.id != SectionId::KERNEL);
 
-    assert!(fixture_program(&round_tripped_package).kernel().is_empty());
+    let code = fixture_program(&round_tripped_package);
+    assert!(code.package().check_executable_code(code.symbols()).is_ok());
     assert!(round_tripped_package.kernel_runtime_dependency().unwrap().is_some());
     assert!(
         round_tripped_package
@@ -3159,9 +3241,10 @@ end
     );
 
     let mut context = TestContext::new();
-    let dep_package = context
+    let dep_package_code = context
         .assemble_library_package(&dep_manifest, Some("dev"))
         .expect("dependency package should assemble");
+    let dep_package = dep_package_code.package();
     let dep_package_path = tempdir.path().join("dep.masp");
     dep_package.write_to_file(&dep_package_path).unwrap();
 
@@ -3189,7 +3272,7 @@ end
     );
 
     let mut project_assembler = context.project_assembler_for_path(&root_manifest).unwrap();
-    fs::write(&dep_package_path, package_bytes_with_spoofed_non_root_node_digest(&dep_package))
+    fs::write(&dep_package_path, package_bytes_with_spoofed_non_root_node_digest(dep_package))
         .unwrap();
 
     let error = project_assembler
@@ -3731,9 +3814,10 @@ fn package_post_processors_default_to_empty() {
     configure_project_fixture(&mut project_assembler);
     assert!(project_assembler.post_processors.is_empty());
 
-    let package = project_assembler
+    let package_code = project_assembler
         .assemble(ProjectTargetSelector::Library, "dev")
         .expect("assembly without post-processors should succeed");
+    let package = package_code.package();
     assert!(
         !package
             .sections
@@ -3762,9 +3846,11 @@ fn package_post_processors_run_in_registration_order() {
             invocations: invocations.clone(),
         });
 
-    let package = project_assembler
+    let code = project_assembler
         .assemble(ProjectTargetSelector::Library, "dev")
         .expect("assembly with post-processors should succeed");
+    let package = code.package();
+    package.check_naming(code.symbols()).unwrap();
 
     assert_eq!(invocations.lock().unwrap().as_slice(), &["pp-a", "pp-b"]);
     let marker_positions: Vec<_> = package
@@ -3835,7 +3921,8 @@ fn manually_provided_sources_skip_package_post_processors() {
     assert!(invocations.lock().unwrap().is_empty());
     assert!(
         !resolved
-            .package
+            .code
+            .package()
             .sections
             .iter()
             .any(|section| section.id == SectionId::custom("pp-manual").unwrap())
@@ -3902,9 +3989,10 @@ end
         invocations: invocations.clone(),
     });
 
-    let package = project_assembler
+    let package_code = project_assembler
         .assemble(ProjectTargetSelector::Library, "dev")
         .expect("the root and its source dependency assemble");
+    let package = package_code.package();
 
     // The processor ran exactly once — for the root package, not for the source dependency —
     // and the one marker section sits on the root package.
@@ -3926,7 +4014,7 @@ fn allow_root_fixture_bindings(
     assembler.with_package_naming_provider(move |package| {
         let mut homes = vec![FixtureNamespace::assembly_tests().namespace_plan().clone()];
         if artifacts.contains(&package.commitment()) {
-            homes.push(NamespacePlan::new(vec![]));
+            homes.push(NamespacePath::new(vec![]));
         }
         crate::testing::admit_fixture_package(package, &homes)
     });
@@ -3946,7 +4034,7 @@ fn cache_test_project(directory: &FsPath, source_path: &str) -> PathBuf {
 fn cache_test_inputs(
     context: &TargetAssemblyContext<'_>,
     sources: &ProjectSourceInputs,
-    home: NamespacePlan,
+    home: NamespacePath,
 ) -> Result<NamespaceInputs, Report> {
     let mut fixture = FixtureNamespace::new(home);
     let modules = core::iter::once(sources.root.as_ref())
@@ -3976,7 +4064,7 @@ fn source_cache_selects_current_naming_before_reuse_and_rejects_changed_home() {
         move |context, sources, _base| {
             calls.set(calls.get() + 1);
             let home = if changed_home.get() {
-                NamespacePlan::new(vec![
+                NamespacePath::new(vec![
                     miden_core::program::CanonicalLabel::text("changed-caller").unwrap(),
                 ])
             } else {
@@ -4012,7 +4100,7 @@ fn source_cache_selects_current_naming_before_reuse_and_rejects_changed_home() {
         _ => panic!("source build unexpectedly interrupted"),
     };
     assert!(
-        Arc::ptr_eq(&first.package, &second.package),
+        Arc::ptr_eq(first.code.package(), second.code.package()),
         "exact matching source inputs should reuse the memory artifact"
     );
     assert_eq!(calls.get(), 2, "naming selection must run even on a memory hit");
@@ -4116,14 +4204,14 @@ fn manual_ast_without_source_file_or_provider_never_reuses_another_body() {
     };
     let first = assemble(first_root);
     let second = assemble(second_root);
-    assert_ne!(first.package.code_commitment(), second.package.code_commitment());
+    assert_ne!(first.code.package().code_commitment(), second.code.package().code_commitment());
     assert_eq!(
-        first.naming.callables().bindings().collect::<Vec<_>>(),
-        second.naming.callables().bindings().collect::<Vec<_>>(),
+        first.code.symbols().callables().bindings().collect::<Vec<_>>(),
+        second.code.symbols().callables().bindings().collect::<Vec<_>>(),
         "body changes retain the caller's canonical names"
     );
-    assert!(PackageBuildProvenance::from_package(&first.package).unwrap().is_none());
-    assert!(PackageBuildProvenance::from_package(&second.package).unwrap().is_none());
+    assert!(PackageBuildProvenance::from_package(first.code.package()).unwrap().is_none());
+    assert!(PackageBuildProvenance::from_package(second.code.package()).unwrap().is_none());
 }
 
 #[test]
@@ -4211,12 +4299,15 @@ fn manual_dependency_ast_rejects_changed_source_provenance_for_the_same_body() {
         _ => panic!("manual AST unexpectedly interrupted"),
     };
     assert!(
-        !Arc::ptr_eq(&first.package, &identical.package),
+        !Arc::ptr_eq(first.code.package(), identical.code.package()),
         "manual ASTs must compile even when supplied provenance matches"
     );
-    assert_eq!(first.package.dependency_commitment(), identical.package.dependency_commitment());
-    assert_eq!(first.naming, identical.naming);
-    assert!(PackageBuildProvenance::from_package(&first.package).unwrap().is_some());
+    assert_eq!(
+        first.code.package().dependency_commitment(),
+        identical.code.package().dependency_commitment()
+    );
+    assert_eq!(first.code.symbols(), identical.code.symbols());
+    assert!(PackageBuildProvenance::from_package(first.code.package()).unwrap().is_some());
 
     // The same parsed body and naming cannot make changed file provenance interchangeable.
     let changed_source = format!("# provenance changed\n{source}");
@@ -4229,14 +4320,14 @@ fn manual_dependency_ast_rejects_changed_source_provenance_for_the_same_body() {
 
 #[test]
 fn standard_dependency_bindings_match_compiled_homes_and_reject_changed_requests() {
-    use miden_project::{LibraryImport, LibrarySelection};
+    use miden_project::{LibraryRef, LibrarySelection};
     let id = "0x0100000000000000020000000000000003000000000000000400000000000000";
     for (mode, revision, selection) in [
         ("latest", "", LibrarySelection::Latest),
         (
             "pinned",
             ", revision = 2",
-            LibrarySelection::Pinned(core::num::NonZeroU32::new(2).unwrap()),
+            LibrarySelection::Revision(core::num::NonZeroU32::new(2).unwrap()),
         ),
     ] {
         let temp = TempDir::new().unwrap();
@@ -4255,8 +4346,8 @@ fn standard_dependency_bindings_match_compiled_homes_and_reject_changed_requests
         };
         write_file(&manifest, &config("owner"));
         write_file(&app.join("mod.masm"), "use dep pub proc entry exec.dep::run end");
-        let import = LibraryImport::new(
-            NamespacePlan::new(vec![miden_core::program::CanonicalLabel::text("owner").unwrap()]),
+        let import = LibraryRef::new(
+            NamespacePath::new(vec![miden_core::program::CanonicalLabel::text("owner").unwrap()]),
             miden_core::Word::try_from(id).unwrap(),
             selection,
         );
@@ -4293,7 +4384,8 @@ fn standard_dependency_bindings_match_compiled_homes_and_reject_changed_requests
                 };
                 cache_test_inputs(context, sources, home)
             });
-            let package = assembler.assemble(ProjectTargetSelector::Library, "dev").unwrap();
+            let code = assembler.assemble(ProjectTargetSelector::Library, "dev").unwrap();
+            let package = code.package();
             assert!(package.mast_forest().nodes().iter().any(|node|
                 matches!(node, miden_core::mast::MastNode::Exec(exec) if exec.target() == expected.key())));
         }

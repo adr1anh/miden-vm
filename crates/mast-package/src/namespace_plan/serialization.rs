@@ -4,14 +4,14 @@ use alloc::vec::Vec;
 
 use miden_core::program::CanonicalLabel;
 
-use super::NamespacePlan;
+use super::NamespacePath;
 use crate::interface::serialization::{
     Budget, CodecError, CodecLimits, HomeProfile, ProfileOperation, Reader, Writer, checked_add,
     count_with_tail, decode_label, preflight_label, reserve, validate_label,
     validate_label_context, wire_len,
 };
 
-impl NamespacePlan {
+impl NamespacePath {
     /// Preflights a complete embedded HomeV1 without interpreting labels or invoking policy.
     /// The caller retains mandatory following framing in `tail` and completes its entire
     /// enclosing preflight before calling `decode_preflighted_home_v1`.

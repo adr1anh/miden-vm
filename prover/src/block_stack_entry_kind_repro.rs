@@ -39,19 +39,20 @@ struct Fixture {
 
 fn build_fixture() -> Fixture {
     let fixture = crate::named_fixture::named_source("proc inner nop nop end begin call.inner end");
-    let program = fixture.program;
+    let program = fixture.code;
     let environment = fixture.environment;
 
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(program).unwrap();
     let (trace, precompile_witness) = FastProcessor::new(StackInputs::default())
         .with_options(
             miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits())
                 .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
         )
         .unwrap()
         .execute_and_build_trace_sync(
-            &program,
-            environment.execution(),
+            environment.target(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

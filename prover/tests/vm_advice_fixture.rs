@@ -25,21 +25,24 @@ fn regenerate_vm_eidos_v3_advice_fixture() {
         // The fixture owner selects the expected statement from the named environment and the
         // source's known zero I/O. Neither the proof nor a program implementation root chooses it.
         let expected_claim = ExecutionClaim::new(
-            environment.execution().descriptor(),
+            environment.target(),
             StackInputs::default(),
             StackOutputs::default(),
         );
         let mut host =
             miden_processor::DefaultHost::default().with_environment_source(environment.source());
+        host.load_library(program).unwrap();
         let witness =
             miden_processor::FastProcessor::new(StackInputs::default())
                 .with_options(
-                    miden_processor::ExecutionOptions::default().with_environment_trace_limits(
-                        miden_utils_testing::librarytree::trace_limits(),
-                    ),
+                    miden_processor::ExecutionOptions::default()
+                        .with_resolution_limits(environment.resolution_limits())
+                        .with_environment_trace_limits(
+                            miden_utils_testing::librarytree::trace_limits(),
+                        ),
                 )
                 .unwrap()
-                .execute_for_proving_sync(&program, environment.execution(), &mut host)
+                .execute_for_proving_sync(environment.target(), &mut host)
                 .unwrap();
         assert_eq!(witness.claim(), expected_claim);
         let (vm, _) = witness.into_parts();

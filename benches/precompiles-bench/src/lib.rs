@@ -4,9 +4,10 @@ use miden_core::{Felt, Word, deferred::PrecompileWitness, program::ExecutionClai
 use miden_core_lib::CoreLibrary;
 use miden_utils_testing::librarytree::{self, FixtureEnvironment, assemble_fixture_program};
 use miden_vm::{
-    Assembler, DefaultHost, ExecutionOptions, ExecutionProof, FastProcessor, HashFunction,
-    PrecompileLimits, Program, Prover, StackInputs, StackOutputs, Verifier, advice::AdviceInputs,
-    default_execution_precompile_limits, default_verification_precompile_limits,
+    Assembler, CodePackage, DefaultHost, ExecutionOptions, ExecutionProof, FastProcessor,
+    HashFunction, PrecompileLimits, Prover, StackInputs, StackOutputs, Verifier,
+    advice::AdviceInputs, default_execution_precompile_limits,
+    default_verification_precompile_limits,
 };
 
 use self::input_generation::generate_advice_inputs;
@@ -15,7 +16,7 @@ mod input_generation;
 pub use input_generation::PrecompileWorkload;
 
 pub struct PrecompileFixture {
-    pub program: Program,
+    pub code: CodePackage,
     pub environment: FixtureEnvironment,
     pub stack_inputs: StackInputs,
     pub advice_inputs: AdviceInputs,
@@ -35,13 +36,9 @@ impl PrecompileFixture {
         let source = generate_program_source(workload);
         let core_lib = CoreLibrary::default();
         let assembler = Assembler::default()
-            .with_package(
-                core_lib.package(),
-                miden_vm::assembly::Linkage::Dynamic,
-                core_lib.naming().clone(),
-            )
+            .with_package(core_lib.code_package().clone(), miden_vm::assembly::Linkage::Dynamic)
             .expect("failed to link core library");
-        let named = assemble_fixture_program(
+        let (code, environment) = assemble_fixture_program(
             assembler,
             "precompile_workload",
             source.as_str(),
@@ -49,12 +46,13 @@ impl PrecompileFixture {
         );
 
         Self {
-            program: named.program,
-            environment: named.environment,
+            code,
+            execution_options: execution_options
+                .with_resolution_limits(environment.resolution_limits()),
+            environment,
             stack_inputs: generate_stack_inputs(workload),
             advice_inputs: generate_advice_inputs(workload),
             verification_limits,
-            execution_options,
         }
     }
 
@@ -64,13 +62,14 @@ impl PrecompileFixture {
             .with_library(&CoreLibrary::default())
             .expect("load precompile workload library")
             .with_environment_source(self.environment.source());
+        host.load_library(self.code.clone()).expect("load precompile workload package");
         let output = FastProcessor::new_with_options(
             self.stack_inputs,
             self.advice_inputs.clone(),
             self.execution_options.clone(),
         )
         .expect("construct precompile workload processor")
-        .execute_sync(&self.program, self.environment.execution(), &mut host)
+        .execute_sync(self.environment.target(), &mut host)
         .expect("execute precompile workload");
         let root = output.precompile_root();
         let witness = output.precompile_witness.expect("workload must authenticate deferred work");
@@ -160,13 +159,15 @@ pub fn prove_once(fixture: &PrecompileFixture) -> (StackOutputs, ExecutionProof)
         .with_library(&CoreLibrary::default())
         .expect("failed to load core library into host")
         .with_environment_source(fixture.environment.source());
+    host.load_library(fixture.code.clone())
+        .expect("load precompile benchmark package");
     let witness = FastProcessor::new_with_options(
         fixture.stack_inputs,
         fixture.advice_inputs.clone(),
         fixture.execution_options.clone(),
     )
     .expect("failed to initialize precompile benchmark processor")
-    .execute_for_proving_sync(&fixture.program, fixture.environment.execution(), &mut host)
+    .execute_for_proving_sync(fixture.environment.target(), &mut host)
     .expect("failed to execute precompile benchmark");
     let stack_outputs = *witness.claim().stack_outputs();
     let proof = Prover::new()
@@ -182,11 +183,8 @@ pub fn verify_once(
     stack_outputs: StackOutputs,
     proof: &ExecutionProof,
 ) {
-    let claim = ExecutionClaim::new(
-        fixture.environment.execution().descriptor(),
-        fixture.stack_inputs,
-        stack_outputs,
-    );
+    let claim =
+        ExecutionClaim::new(fixture.environment.target(), fixture.stack_inputs, stack_outputs);
     let outcome = Verifier::new()
         .verify(&claim, proof)
         .expect("failed to verify precompile benchmark proof");

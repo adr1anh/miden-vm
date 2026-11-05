@@ -10,6 +10,7 @@ use miden_core::{
 use miden_core_lib::{CoreLibrary, dsa::ecdsa_p256_sha256};
 use miden_crypto::hash::sha2::Sha256;
 use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor, StackInputs};
+use miden_utils_testing::librarytree::assemble_fixture_program;
 use p256::ecdsa::{Signature, VerifyingKey, signature::hazmat::PrehashVerifier};
 use wycheproof_ng_core::TestResult;
 
@@ -24,12 +25,13 @@ fn p256_wycheproof_vectors_verify_in_masm() {
         wycheproof_ng_ecdsa::TestSet::load(wycheproof_ng_ecdsa::TestName::EcdsaSecp256r1Sha256)
             .expect("P-256/SHA-256 Wycheproof vectors should load");
     let library = CoreLibrary::default();
-    let program = Assembler::default()
-        .with_package(library.package(), Linkage::Dynamic)
-        .unwrap()
-        .assemble_program(
-            "p256_wycheproof",
-            r#"
+    let assembler = Assembler::default()
+        .with_package(library.code_package().clone(), Linkage::Dynamic)
+        .unwrap();
+    let (code, environment) = assemble_fixture_program(
+        assembler,
+        "p256_wycheproof",
+        r#"
 proc load_message
     push.128 adv_push
     dup neq.0
@@ -45,9 +47,8 @@ begin
     exec.::miden::core::crypto::dsa::ecdsa_p256_sha256::verify_bytes
 end
 "#,
-        )
-        .unwrap()
-        .unwrap_program();
+        &[library.naming()],
+    );
     let registry = Arc::new(miden_precompiles::registry());
     let mut valid = 0;
     let mut invalid = 0;
@@ -95,14 +96,19 @@ end
             advice.append_elements(public_key_limbs.into_iter().flatten());
             advice.append_elements(be_to_le_limbs(&r));
             advice.append_elements(be_to_le_limbs(&s));
-            let mut host = DefaultHost::default().with_library(&library).unwrap();
+            let mut host = DefaultHost::default()
+                .with_library(&library)
+                .unwrap()
+                .with_library(code.clone())
+                .unwrap()
+                .with_environment_source(environment.source());
             let result = FastProcessor::new_with_options(
                 StackInputs::default(),
                 AdviceInputs::default().with_stack(advice),
-                ExecutionOptions::default(),
+                ExecutionOptions::default().with_resolution_limits(environment.resolution_limits()),
             )
             .unwrap()
-            .execute_sync(&program, &mut host);
+            .execute_sync(environment.target(), &mut host);
 
             match test.result {
                 TestResult::Valid => {

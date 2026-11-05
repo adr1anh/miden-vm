@@ -9,7 +9,7 @@ use crate::{
     BaseHost, BreakReason, ContextId, ExecutionError, Felt, MapExecErr, Stopper, Word,
     continuation_stack::{Continuation, ContinuationStack, SourceInlineCallContext},
     errors::PackageSourceDebugContext,
-    host::default::NoopHost,
+    host::{LoadedMastForest, default::NoopHost},
     mast::{ExecutableMastForest, MastNode, MastNodeExt, MastNodeId},
     operation::OperationError,
     option_map_break_reason,
@@ -73,12 +73,17 @@ pub(crate) struct PreparedRootEnd<P: Processor> {
     loop_pop: Option<<P::Stack as StackInterface>::StackPop>,
 }
 
-/// Code supply validated against an authenticated implementation root.
+/// Code supply validated against an expected implementation root.
+///
+/// Keyed invocation authenticates this root; structural External materialization checks requested
+/// D.
+#[derive(Debug)]
 pub(crate) struct LoadedTarget<F> {
     pub implementation: ImplementationRoot,
     pub root: MastNodeId,
     pub forest: F,
     pub package_debug_info: Option<Arc<PackageDebugInfo>>,
+    pub loaded_owner: Option<LoadedMastForest>,
     pub source_node_id: Option<DebugSourceNodeId>,
 }
 
@@ -97,6 +102,7 @@ pub(crate) struct ExecutionState<'a, P, H, S, T, F> {
     pub tracer: &'a mut T,
     pub stopper: &'a S,
     pub source_debug_info: Option<Arc<PackageDebugInfo>>,
+    pub loaded_owner: &'a mut Option<LoadedMastForest>,
     pub current_source_node_id: Option<DebugSourceNodeId>,
     pub inline_call_contexts: &'a mut Vec<Option<SourceInlineCallContext>>,
 }
@@ -242,6 +248,7 @@ pub(crate) fn execute_impl<P, S, T, F>(
     tracer: &mut T,
     stopper: &S,
     source_debug_info: &mut Option<Arc<PackageDebugInfo>>,
+    loaded_owner: &mut Option<LoadedMastForest>,
     inline_call_contexts: &mut Vec<Option<SourceInlineCallContext>>,
 ) -> ControlFlow<InternalBreakReason<F>>
 where
@@ -258,6 +265,7 @@ where
         tracer,
         stopper,
         source_debug_info,
+        loaded_owner,
         inline_call_contexts,
     )
 }
@@ -270,6 +278,7 @@ pub(crate) fn execute_impl_noop_host<P, S, T, F>(
     tracer: &mut T,
     stopper: &S,
     source_debug_info: &mut Option<Arc<PackageDebugInfo>>,
+    loaded_owner: &mut Option<LoadedMastForest>,
     inline_call_contexts: &mut Vec<Option<SourceInlineCallContext>>,
 ) -> ControlFlow<InternalBreakReason<F>>
 where
@@ -286,6 +295,7 @@ where
         tracer,
         stopper,
         source_debug_info,
+        loaded_owner,
         inline_call_contexts,
     )
 }
@@ -298,6 +308,7 @@ fn execute_impl_inner<P, H, S, T, F>(
     tracer: &mut T,
     stopper: &S,
     source_debug_info: &mut Option<Arc<PackageDebugInfo>>,
+    loaded_owner: &mut Option<LoadedMastForest>,
     inline_call_contexts: &mut Vec<Option<SourceInlineCallContext>>,
 ) -> ControlFlow<InternalBreakReason<F>>
 where
@@ -315,6 +326,7 @@ where
             host,
             tracer,
             stopper,
+            loaded_owner,
             inline_call_contexts,
         )
     } else {
@@ -326,6 +338,7 @@ where
             tracer,
             stopper,
             source_debug_info,
+            loaded_owner,
             inline_call_contexts,
         )
     }
@@ -340,6 +353,7 @@ fn execute_impl_with_source<P, H, S, T, F>(
     tracer: &mut T,
     stopper: &S,
     source_debug_info: &mut Option<Arc<PackageDebugInfo>>,
+    loaded_owner: &mut Option<LoadedMastForest>,
     inline_call_contexts: &mut Vec<Option<SourceInlineCallContext>>,
 ) -> ControlFlow<InternalBreakReason<F>>
 where
@@ -356,6 +370,7 @@ where
         tracer,
         stopper,
         source_debug_info: source_debug_info.clone(),
+        loaded_owner,
         current_source_node_id: None,
         inline_call_contexts,
     };
@@ -488,12 +503,14 @@ where
             Continuation::EnterForest {
                 forest,
                 package_debug_info,
+                loaded_owner: restored_loaded_owner,
                 inline_context_depth,
             } => {
                 // Restore the previous forest
                 *current_forest = forest;
                 state.source_debug_info = package_debug_info.clone();
                 *source_debug_info = package_debug_info;
+                *state.loaded_owner = restored_loaded_owner;
                 state.inline_call_contexts.truncate(inline_context_depth);
             },
         }
@@ -511,6 +528,7 @@ fn execute_impl_pure<P, H, S, T, F>(
     host: &mut H,
     tracer: &mut T,
     stopper: &S,
+    loaded_owner: &mut Option<LoadedMastForest>,
     inline_call_contexts: &mut Vec<Option<SourceInlineCallContext>>,
 ) -> ControlFlow<InternalBreakReason<F>>
 where
@@ -527,6 +545,7 @@ where
         tracer,
         stopper,
         source_debug_info: None,
+        loaded_owner,
         current_source_node_id: None,
         inline_call_contexts,
     };
@@ -656,8 +675,14 @@ where
                 basic_block::finish_basic_block(&mut state, node_id, current_forest)
                     .map_break(InternalBreakReason::from)?
             },
-            Continuation::EnterForest { forest, inline_context_depth, .. } => {
+            Continuation::EnterForest {
+                forest,
+                loaded_owner: restored_loaded_owner,
+                inline_context_depth,
+                ..
+            } => {
                 *current_forest = forest;
+                *state.loaded_owner = restored_loaded_owner;
                 state.inline_call_contexts.truncate(inline_context_depth);
             },
         }
@@ -1169,6 +1194,9 @@ where
         return Ok(None);
     };
     let continuation = continuation.clone();
+    // Return preflight can fail before the continuation is popped. Use its exact source occurrence
+    // even when this execution state was just recreated after a stop.
+    state.current_source_node_id = source;
     let mut length = state.continuation_stack.len() - 1;
     let prepared_return = prepare_end_return(state, current_forest, &continuation)?;
     match &continuation {
@@ -1183,7 +1211,6 @@ where
                 ExecutionError::Internal("loop transition cannot consume its stack condition")
             })?;
             if state.processor.stack().get(0) == crate::ONE {
-                state.current_source_node_id = source;
                 state.child_source_node_id(0)?;
                 state.continuation_stack.prepare_push(2)?;
                 length = length

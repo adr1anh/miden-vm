@@ -9,7 +9,7 @@ use miden_core::{
 };
 
 use super::*;
-use crate::{CallableBinding, PackageExport, PathBuf, ProcedureExport};
+use crate::{PackageExport, PathBuf, ProcedureExport, ProcedureName};
 
 fn path(components: &[&str]) -> CallableProcedurePath {
     CallableProcedurePath::from_semantic_components(
@@ -18,8 +18,8 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn home(components: &[&str]) -> NamespacePlan {
-    NamespacePlan::new(
+fn home(components: &[&str]) -> NamespacePath {
+    NamespacePath::new(
         components
             .iter()
             .map(|component| CanonicalLabel::text(component).unwrap())
@@ -27,8 +27,8 @@ fn home(components: &[&str]) -> NamespacePlan {
     )
 }
 
-fn binding(home_components: &[&str], components: &[&str]) -> CallableBinding {
-    CallableBinding::new(home(home_components), path(components)).unwrap()
+fn binding(home_components: &[&str], components: &[&str]) -> ProcedureName {
+    ProcedureName::new(home(home_components), path(components)).unwrap()
 }
 
 fn body(forest: &mut MastForest, operation: Operation, root: bool) -> MastNodeId {
@@ -54,12 +54,12 @@ fn export(source: &str, forest: &MastForest, node: MastNodeId) -> PackageExport 
 }
 
 fn naming(
-    bindings: impl IntoIterator<Item = CallableBinding>,
+    bindings: impl IntoIterator<Item = ProcedureName>,
     aliases: impl IntoIterator<Item = (CallableProcedurePath, ProcedureKey)>,
     selected: impl IntoIterator<Item = (ProcedureKey, ImplementationRoot)>,
     entry: Option<ProcedureKey>,
-) -> PackageNaming {
-    PackageNaming::new(
+) -> PackageSymbols {
+    PackageSymbols::new(
         home(&["compilation"]),
         PackageCallables::new(bindings, aliases, selected).unwrap(),
         entry,
@@ -123,7 +123,7 @@ fn private_executable_entry_requires_its_own_selection_to_a_procedure_root() {
     let missing = make(vec![(retained.key(), implementation(&forest, root))]);
     assert!(matches!(
         missing.validate_package(TargetType::Executable, &forest, &manifest),
-        Err(PackageNamingError::MissingEntryImplementation { key }) if key == entry.key(),
+        Err(PackageSymbolsError::MissingEntryImplementation { key }) if key == entry.key(),
     ));
     let wrong_root = make(vec![
         (retained.key(), implementation(&forest, root)),
@@ -131,7 +131,7 @@ fn private_executable_entry_requires_its_own_selection_to_a_procedure_root() {
     ]);
     assert!(matches!(
         wrong_root.validate_package(TargetType::Executable, &forest, &manifest),
-        Err(PackageNamingError::MissingSelectedRoot { key, .. }) if key == entry.key(),
+        Err(PackageSymbolsError::MissingSelectedRoot { key, .. }) if key == entry.key(),
     ));
     let valid = make(vec![
         (retained.key(), implementation(&forest, root)),
@@ -142,7 +142,7 @@ fn private_executable_entry_requires_its_own_selection_to_a_procedure_root() {
     assert_eq!(valid.entry_key(), Some(entry.key()));
     assert!(matches!(
         valid.validate_package(TargetType::Library, &forest, &manifest),
-        Err(PackageNamingError::NonExecutableEntrypoint),
+        Err(PackageSymbolsError::NonExecutableEntrypoint),
     ));
 }
 
@@ -217,7 +217,7 @@ fn every_retained_root_requires_a_selected_binding() {
         naming([local.clone()], [], [(local.key(), implementation(&forest, first))], None);
     assert!(matches!(
         metadata.validate_package(TargetType::Library, &forest, &PackageManifest::new([]).unwrap()),
-        Err(PackageNamingError::UnboundProcedureRoot { node, .. }) if node == unbound,
+        Err(PackageSymbolsError::UnboundProcedureRoot { node, .. }) if node == unbound,
     ));
 }
 
@@ -242,7 +242,7 @@ fn selected_code_cannot_be_a_nonroot_or_an_absent_digest() {
         );
         assert!(matches!(
             metadata.validate_package(TargetType::Library, &forest, &PackageManifest::new([]).unwrap()),
-            Err(PackageNamingError::MissingSelectedRoot { key, .. }) if key == missing.key(),
+            Err(PackageSymbolsError::MissingSelectedRoot { key, .. }) if key == missing.key(),
         ));
     }
 }
@@ -258,7 +258,7 @@ fn visible_aliases_must_match_all_and_only_manifest_procedures() {
             naming([local.clone()], aliases, [(local.key(), implementation(&forest, root))], None);
         assert!(matches!(
             metadata.validate_package(TargetType::Library, &forest, &manifest),
-            Err(PackageNamingError::MissingVisibleExport { .. }),
+            Err(PackageSymbolsError::MissingVisibleExport { .. }),
         ));
     }
     let metadata = naming(
@@ -269,7 +269,7 @@ fn visible_aliases_must_match_all_and_only_manifest_procedures() {
     );
     assert!(matches!(
         metadata.validate_package(TargetType::Library, &forest, &manifest),
-        Err(PackageNamingError::UnexpectedVisiblePath { .. }),
+        Err(PackageSymbolsError::UnexpectedVisiblePath { .. }),
     ));
 }
 
@@ -292,7 +292,7 @@ fn export_requires_its_own_matching_selection_and_exact_node_provenance() {
     let missing = make(vec![(private.key(), implementation(&forest, root))]);
     assert!(matches!(
         missing.validate_package(TargetType::Library, &forest, &manifest),
-        Err(PackageNamingError::MissingExportImplementation { .. }),
+        Err(PackageSymbolsError::MissingExportImplementation { .. }),
     ));
     let wrong = make(vec![
         (private.key(), implementation(&forest, root)),
@@ -300,7 +300,7 @@ fn export_requires_its_own_matching_selection_and_exact_node_provenance() {
     ]);
     assert!(matches!(
         wrong.validate_package(TargetType::Library, &forest, &manifest),
-        Err(PackageNamingError::ExportImplementationMismatch { .. }),
+        Err(PackageSymbolsError::ExportImplementationMismatch { .. }),
     ));
     let correct = make(vec![
         (exported.key(), implementation(&forest, root)),
@@ -314,7 +314,7 @@ fn export_requires_its_own_matching_selection_and_exact_node_provenance() {
     let stale = PackageManifest::new([stale]).unwrap();
     assert!(matches!(
         correct.validate_package(TargetType::Library, &forest, &stale),
-        Err(PackageNamingError::InvalidProcedureExport { .. }),
+        Err(PackageSymbolsError::InvalidProcedureExport { .. }),
     ));
 }
 
@@ -344,15 +344,15 @@ fn entry_is_explicit_even_when_other_keys_select_identical_code() {
         .unwrap();
     assert!(matches!(
         make(None).validate_package(TargetType::Executable, &forest, &manifest),
-        Err(PackageNamingError::MissingEntryKey),
+        Err(PackageSymbolsError::MissingEntryKey),
     ));
     assert!(matches!(
         make(Some(other.key())).validate_package(TargetType::Executable, &forest, &manifest),
-        Err(PackageNamingError::EntryKeyMismatch { .. }),
+        Err(PackageSymbolsError::EntryKeyMismatch { .. }),
     ));
     assert!(matches!(
         make(Some(entry.key())).validate_package(TargetType::Library, &forest, &manifest),
-        Err(PackageNamingError::NonExecutableEntrypoint),
+        Err(PackageSymbolsError::NonExecutableEntrypoint),
     ));
     let no_entry = PackageManifest::new([export("visible::run", &forest, root)]).unwrap();
     make(Some(entry.key()))
@@ -364,8 +364,8 @@ fn entry_is_explicit_even_when_other_keys_select_identical_code() {
 fn constructor_rejects_undeclared_entry_and_empty_code_cannot_admit() {
     let undeclared = binding(&["unknown"], &["entry"]).key();
     assert!(matches!(
-        PackageNaming::new(home(&[]), PackageCallables::new([], [], []).unwrap(), Some(undeclared)),
-        Err(PackageNamingError::UnknownEntryKey { key }) if key == undeclared,
+        PackageSymbols::new(home(&[]), PackageCallables::new([], [], []).unwrap(), Some(undeclared)),
+        Err(PackageSymbolsError::UnknownEntryKey { key }) if key == undeclared,
     ));
     assert!(matches!(
         naming([], [], [], None).validate_package(
@@ -373,7 +373,7 @@ fn constructor_rejects_undeclared_entry_and_empty_code_cannot_admit() {
             &MastForest::new(),
             &PackageManifest::new([]).unwrap(),
         ),
-        Err(PackageNamingError::NoProcedures),
+        Err(PackageSymbolsError::NoProcedures),
     ));
 }
 
@@ -398,7 +398,7 @@ fn kernel_public_aliases_preserve_root_keys_and_helpers_use_explicit_child_homes
         if canonical.parent_namespace() == Namespace::initial() {
             result.unwrap();
         } else {
-            assert!(matches!(result, Err(PackageNamingError::KernelExportOutsideRoot { .. })));
+            assert!(matches!(result, Err(PackageSymbolsError::KernelExportOutsideRoot { .. })));
         }
     }
 }

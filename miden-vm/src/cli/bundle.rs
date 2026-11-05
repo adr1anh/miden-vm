@@ -78,7 +78,7 @@ impl BundleCmd {
         };
 
         let core = CoreLibrary::default();
-        assembler.link_package(core.package(), Linkage::Dynamic, core.naming().clone())?;
+        assembler.link_package(core.code_package().clone(), Linkage::Dynamic)?;
         let product = if self.kernel {
             let namespace = match self.namespace.as_deref() {
                 Some(ns) => ns,

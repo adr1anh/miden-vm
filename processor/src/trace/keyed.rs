@@ -12,15 +12,15 @@ use core::{
 
 use miden_core::{
     program::{
-        EnvNode, EnvNodeError, ExecutionDescriptor, ImplementationRoot, Namespace, ProcedureKey,
+        EnvNode, EnvNodeError, ExecutionTarget, ImplementationRoot, Namespace, ProcedureKey,
     },
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
 };
 
 use super::{limits::MAX_TRACE_LEN, trace_state::CoreTraceFragmentContext};
 use crate::{
-    EnvironmentTraceLimits, ExecutionEnvironment, InvocationTag, InvocationUse, OpeningError,
-    OpeningLimits, OpeningOccurrence, OpeningResource, OpeningStep, ResolutionSession,
+    EnvironmentTraceLimits, InvocationTag, InvocationUse, OpeningError, OpeningLimits,
+    OpeningOccurrence, OpeningResource, OpeningStep, ResolutionLimits, ResolutionSession,
     ResolutionWitness, SessionBinding, SessionError, SessionPhase,
     mast::{MastForestId, MastNodeId},
     trace::RowIndex,
@@ -162,7 +162,7 @@ struct ReplayOccurrence {
 /// Each selected occurrence is stored once, with only its incoming parent edge and core v1 bytes.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct EnvironmentReplay {
-    descriptor: ExecutionDescriptor,
+    descriptor: ExecutionTarget,
     entry: ReplayEntry,
     occurrences: Vec<ReplayOccurrence>,
     validated: bool,
@@ -199,7 +199,7 @@ impl PreparedEnvironmentReplay {
 }
 
 impl EnvironmentReplay {
-    pub(crate) const fn descriptor(&self) -> ExecutionDescriptor {
+    pub(crate) const fn descriptor(&self) -> ExecutionTarget {
         self.descriptor
     }
 
@@ -241,7 +241,7 @@ impl EnvironmentReplay {
 
     pub(crate) fn retained_bytes(&self) -> Result<usize, KeyedReplayError> {
         let mut bytes = add(
-            size_of::<ExecutionDescriptor>(),
+            size_of::<ExecutionTarget>(),
             add(
                 size_of::<ReplayEntry>(),
                 array_bytes::<ReplayOccurrence>(self.occurrences.capacity())?,
@@ -282,7 +282,7 @@ impl EnvironmentReplay {
         let native_retained_bytes = session.counters().retained_bytes;
         let other_retained_bytes = add(other_retained_bytes, native_retained_bytes)?;
         let count = session.ledger().occurrences().len();
-        let inline_bytes = add(size_of::<ExecutionDescriptor>(), size_of::<ReplayEntry>())?;
+        let inline_bytes = add(size_of::<ExecutionTarget>(), size_of::<ReplayEntry>())?;
         let requested = add(inline_bytes, array_bytes::<ReplayOccurrence>(count)?)?;
         check_capture_storage(policies, other_retained_bytes, other_preparation_bytes, requested)?;
         let mut occurrences = reserve_vec::<ReplayOccurrence>(count)?;
@@ -334,7 +334,7 @@ impl EnvironmentReplay {
     ) -> Result<Self, KeyedReplayError> {
         budget.wire(ENVIRONMENT_HEADER_BYTES)?;
         source.check_eor(ENVIRONMENT_HEADER_BYTES)?;
-        let descriptor = ExecutionDescriptor::new(
+        let descriptor = ExecutionTarget::new(
             ProcedureKey::read_from(source)?,
             miden_core::program::EnvironmentRoot::read_from(source)?,
         );
@@ -357,7 +357,7 @@ impl EnvironmentReplay {
             budget.read.max_wire_bytes,
         )?;
         let requested = add(
-            add(size_of::<ExecutionDescriptor>(), size_of::<ReplayEntry>())?,
+            add(size_of::<ExecutionTarget>(), size_of::<ReplayEntry>())?,
             array_bytes::<ReplayOccurrence>(count)?,
         )?;
         budget.storage(requested)?;
@@ -406,7 +406,8 @@ impl EnvironmentReplay {
     /// Recreates authority through the native APIs, leaving the environment untrusted on failure.
     pub(crate) fn revalidate(
         &mut self,
-        environment: &ExecutionEnvironment,
+        target: ExecutionTarget,
+        resolution_limits: ResolutionLimits,
         contexts: &mut [CoreTraceFragmentContext],
         policies: EnvironmentTraceLimits,
         read: ReplayReadLimits,
@@ -437,7 +438,7 @@ impl EnvironmentReplay {
                 record.native_use = None;
             }
         }
-        if self.descriptor != environment.descriptor() {
+        if self.descriptor != target {
             return Err(KeyedReplayError::Invalid("descriptor differs from caller authority"));
         }
         limit(ReplayResource::Events, events, policies.max_events)?;
@@ -449,12 +450,12 @@ impl EnvironmentReplay {
         // Clamp before any native allocation: the native owner survives validation and must fit
         // both retained and peak allowance. Temporary paths/replacement buffers consume peak only.
         // Native preparation includes full Lists, old native buffers and staged replacements.
-        let mut session_limits = environment.session_limits();
+        let mut session_limits = resolution_limits.session_limits();
         session_limits.max_prepare_peak_bytes =
             session_limits.max_prepare_peak_bytes.min(peak_available);
         session_limits.max_retained_bytes =
             session_limits.max_retained_bytes.min(retained_available).min(peak_available);
-        let mut ledger_limits = environment.ledger_limits();
+        let mut ledger_limits = resolution_limits.ledger_limits();
         ledger_limits.max_peak_bytes = ledger_limits.max_peak_bytes.min(peak_available);
         ledger_limits.max_retained_bytes =
             ledger_limits.max_retained_bytes.min(retained_available).min(peak_available);
@@ -462,7 +463,7 @@ impl EnvironmentReplay {
         let binding = self.resolve_path(
             self.entry.opening,
             self.descriptor.entry_key(),
-            environment.opening_limits(),
+            resolution_limits.opening_limits(),
             raw_bytes,
             session.counters().retained_bytes,
             read,
@@ -507,7 +508,7 @@ impl EnvironmentReplay {
                             let binding = self.resolve_path(
                                 record.opening,
                                 record.key,
-                                environment.opening_limits(),
+                                resolution_limits.opening_limits(),
                                 raw_bytes,
                                 session.counters().retained_bytes,
                                 read,

@@ -78,8 +78,8 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn binding(home: Vec<CanonicalLabel>, components: &[&str]) -> CallableBinding {
-    CallableBinding::new(NamespacePlan::new(home), path(components)).unwrap()
+fn binding(home: Vec<CanonicalLabel>, components: &[&str]) -> ProcedureName {
+    ProcedureName::new(NamespacePath::new(home), path(components)).unwrap()
 }
 
 fn typed(codec: u32) -> CanonicalLabel {
@@ -131,7 +131,7 @@ fn home_bytes(home: &[CanonicalLabel]) -> Vec<u8> {
     bytes
 }
 
-fn binding_bytes(binding: &CallableBinding) -> Vec<u8> {
+fn binding_bytes(binding: &ProcedureName) -> Vec<u8> {
     let mut bytes = binding.key().as_word().as_bytes().to_vec();
     bytes.extend_from_slice(&home_bytes(binding.namespace_plan().home()));
     let components = binding.path().components().iter().map(String::as_str).collect::<Vec<_>>();
@@ -162,7 +162,7 @@ fn wire(
     bytes
 }
 
-fn sorted_bindings(bindings: &[CallableBinding]) -> Vec<Vec<u8>> {
+fn sorted_bindings(bindings: &[ProcedureName]) -> Vec<Vec<u8>> {
     let mut records = bindings.iter().map(binding_bytes).collect::<Vec<_>>();
     records.sort_unstable_by(|left, right| left[..32].cmp(&right[..32]));
     records

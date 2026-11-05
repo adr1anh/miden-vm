@@ -1,43 +1,27 @@
 use miden_air_definitions::vm::trace::MIN_TRACE_LEN;
-use miden_core::{
-    deferred::PrecompileLimits,
-    program::{ExecutionDescriptor, MIN_STACK_DEPTH},
-};
+use miden_core::{deferred::PrecompileLimits, program::MIN_STACK_DEPTH};
 
 use crate::{LedgerLimits, OpeningLimits, SessionLimits};
 
-// EXECUTION ENVIRONMENT
+// RESOLUTION LIMITS
 // ================================================================================================
 
-/// Immutable execution authority and explicit native resolution resource policies.
+/// Explicit native resource policies for opening verification and resolution accounting.
 ///
-/// The descriptor fixes the entry key and environment root. Its authority must come from the caller;
-/// neither this configuration nor available code authenticates those identities. Syscalls require an
-/// authenticated immediate parent equal to the fixed initial namespace. Opening verification and the
-/// resolution session enforce the supplied policies.
-/// No deployment defaults are provided.
+/// These policies do not supply execution authority. The caller separately supplies the expected
+/// entry key and environment root through [`crate::ExecutionTarget`]. No defaults are provided.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExecutionEnvironment {
-    descriptor: ExecutionDescriptor,
+pub struct ResolutionLimits {
     opening: OpeningLimits,
     ledger: LedgerLimits,
     session: SessionLimits,
 }
 
-impl ExecutionEnvironment {
-    /// Creates an immutable configuration without authenticating its descriptor or bindings.
-    pub const fn new(
-        descriptor: ExecutionDescriptor,
-        opening: OpeningLimits,
-        ledger: LedgerLimits,
-        session: SessionLimits,
-    ) -> Self {
-        Self { descriptor, opening, ledger, session }
-    }
-
-    /// Returns the fixed identities defining this execution.
-    pub const fn descriptor(&self) -> ExecutionDescriptor {
-        self.descriptor
+impl ResolutionLimits {
+    /// Creates explicit resolution policies without supplying or authenticating an execution
+    /// target.
+    pub const fn new(opening: OpeningLimits, ledger: LedgerLimits, session: SessionLimits) -> Self {
+        Self { opening, ledger, session }
     }
 
     /// Returns the caller's limits for each candidate environment opening.
@@ -71,7 +55,7 @@ pub struct EnvironmentTraceLimits {
     pub max_retained_bytes: usize,
     /// Trace-owned preparation peak, including old and staged keyed buffers and node encodings.
     ///
-    /// Native session preparation is independently bounded by ExecutionEnvironment. This is not
+    /// Native session preparation is independently bounded by ResolutionLimits. This is not
     /// a combined native/tracer cap; reporting a combined ceiling requires checked addition.
     pub max_prepare_peak_bytes: usize,
     /// Cumulative parent links and canonical node bytes processed during capture or validation,
@@ -91,6 +75,8 @@ pub struct ExecutionOptions {
     max_cycles: u32,
     expected_cycles: u32,
     core_trace_fragment_size: usize,
+    /// Explicit native resolution policies; execution requires caller selection.
+    resolution_limits: Option<ResolutionLimits>,
     /// Explicit keyed trace policies; proving requires them, while execution without tracing does
     /// not.
     environment_trace_limits: Option<EnvironmentTraceLimits>,
@@ -128,6 +114,7 @@ impl Default for ExecutionOptions {
             max_cycles: Self::MAX_CYCLES,
             expected_cycles: MIN_TRACE_LEN as u32,
             core_trace_fragment_size: Self::DEFAULT_CORE_TRACE_FRAGMENT_SIZE,
+            resolution_limits: None,
             environment_trace_limits: None,
             max_advice_size_bytes: Self::DEFAULT_MAX_ADVICE_SIZE_BYTES,
             max_hash_len_bytes: Self::DEFAULT_MAX_HASH_LEN_BYTES,
@@ -233,6 +220,7 @@ impl ExecutionOptions {
             max_cycles,
             expected_cycles,
             core_trace_fragment_size,
+            resolution_limits: None,
             environment_trace_limits: None,
             max_advice_size_bytes: Self::DEFAULT_MAX_ADVICE_SIZE_BYTES,
             max_hash_len_bytes: Self::DEFAULT_MAX_HASH_LEN_BYTES,
@@ -281,6 +269,20 @@ impl ExecutionOptions {
     /// Returns the fragment size for core trace generation.
     pub fn core_trace_fragment_size(&self) -> usize {
         self.core_trace_fragment_size
+    }
+
+    /// Returns the caller's native resolution policies, if explicitly configured.
+    pub const fn resolution_limits(&self) -> Option<ResolutionLimits> {
+        self.resolution_limits
+    }
+
+    /// Configures the native opening, ledger and session limits required for execution.
+    ///
+    /// Execution validates that these policies are present before entry authentication or host
+    /// calls. Each supplied value is preserved, including zero limits.
+    pub fn with_resolution_limits(mut self, limits: ResolutionLimits) -> Self {
+        self.resolution_limits = Some(limits);
+        self
     }
 
     /// Returns the caller's keyed trace policies, if explicitly configured.
@@ -436,6 +438,39 @@ pub enum ExecutionOptionsError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolution_policies_require_explicit_selection_and_preserve_zero_limits() {
+        assert_eq!(ExecutionOptions::default().resolution_limits(), None);
+        assert_eq!(ExecutionOptions::new(None, 64, 1024).unwrap().resolution_limits(), None);
+        const LIMITS: ResolutionLimits = ResolutionLimits::new(
+            OpeningLimits {
+                max_nodes: 0,
+                max_depth: 0,
+                max_list_children: 0,
+                max_total_list_children: 0,
+                max_encoded_bytes: 0,
+                max_storage_bytes: 0,
+            },
+            LedgerLimits {
+                max_occurrences: 0,
+                max_total_list_children: 0,
+                max_encoded_bytes: 0,
+                max_library_rows: 0,
+                max_compression_requests: 0,
+                max_retained_bytes: 0,
+                max_peak_bytes: 0,
+            },
+            SessionLimits {
+                max_cached_keys: 0,
+                max_requests: 0,
+                max_retained_bytes: 0,
+                max_prepare_peak_bytes: 0,
+            },
+        );
+        let options = ExecutionOptions::default().with_resolution_limits(LIMITS);
+        assert_eq!(options.resolution_limits(), Some(LIMITS));
+    }
 
     #[test]
     fn valid_fragment_size() {

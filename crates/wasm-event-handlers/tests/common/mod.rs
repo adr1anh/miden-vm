@@ -7,13 +7,13 @@ use miden_assembly::{
     ast::{Module, ModuleKind},
     testing::FixtureNamespace,
 };
-use miden_mast_package::{Package, PackageNaming};
+use miden_mast_package::{Package, PackageSymbols};
 use miden_utils_testing::librarytree::FixtureEnvironment;
 
 pub fn named_package(
     name: &str,
     source: &str,
-) -> (Box<Package>, PackageNaming, FixtureEnvironment) {
+) -> (Box<Package>, PackageSymbols, FixtureEnvironment) {
     let source_manager = Arc::new(DefaultSourceManager::default());
     let module = Module::parser(Some(ModuleKind::Executable))
         .parse_str(None, source, source_manager.clone())

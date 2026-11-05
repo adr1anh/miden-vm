@@ -9,10 +9,10 @@ use miden_core::{
 };
 
 use super::*;
-use crate::{CallableBinding, CallableProcedurePath, NamespacePlan};
+use crate::{CallableProcedurePath, CodePackage, NamespacePath, ProcedureName};
 
-fn home(components: &[&str]) -> NamespacePlan {
-    NamespacePlan::new(
+fn home(components: &[&str]) -> NamespacePath {
+    NamespacePath::new(
         components
             .iter()
             .map(|component| CanonicalLabel::text(component).unwrap())
@@ -27,8 +27,8 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn binding(home_components: &[&str], components: &[&str]) -> CallableBinding {
-    CallableBinding::new(home(home_components), path(components)).unwrap()
+fn binding(home_components: &[&str], components: &[&str]) -> ProcedureName {
+    ProcedureName::new(home(home_components), path(components)).unwrap()
 }
 
 fn body(forest: &mut MastForest, operation: Operation) -> MastNodeId {
@@ -52,12 +52,12 @@ fn export(source: &str, forest: &MastForest, node: MastNodeId) -> PackageExport 
 }
 
 fn naming(
-    bindings: impl IntoIterator<Item = CallableBinding>,
+    bindings: impl IntoIterator<Item = ProcedureName>,
     aliases: impl IntoIterator<Item = (CallableProcedurePath, ProcedureKey)>,
     selected: impl IntoIterator<Item = (ProcedureKey, ImplementationRoot)>,
     entry: Option<ProcedureKey>,
-) -> PackageNaming {
-    PackageNaming::new(
+) -> PackageSymbols {
+    PackageSymbols::new(
         home(&["conversion-fixtures"]),
         PackageCallables::new(bindings, aliases, selected).unwrap(),
         entry,
@@ -69,7 +69,7 @@ fn package(
     kind: TargetType,
     forest: MastForest,
     exports: impl IntoIterator<Item = PackageExport>,
-    metadata: &PackageNaming,
+    metadata: &PackageSymbols,
 ) -> Package {
     Package::create(
         PackageId::from("conversion-fixture"),
@@ -83,7 +83,7 @@ fn package(
     .unwrap()
 }
 
-fn private_entry_fixture() -> (Package, PackageNaming, MastNodeId) {
+fn private_entry_fixture() -> (Package, PackageSymbols, MastNodeId) {
     let mut forest = MastForest::new();
     let root = body(&mut forest, Operation::Add);
     let entry = binding(&["application"], &["private", "start"]);
@@ -93,24 +93,35 @@ fn private_entry_fixture() -> (Package, PackageNaming, MastNodeId) {
         [(entry.key(), implementation(&forest, root))],
         Some(entry.key()),
     );
-    let package = package(TargetType::Executable, forest, [], &metadata);
+    let package = package(TargetType::Executable, forest, [], &metadata)
+        .with_procedure_occurrences(
+            [PackageProcedureOccurrence::new(entry.key(), root, None)],
+            &metadata,
+        )
+        .unwrap();
     (package, metadata, root)
 }
 
 #[test]
-fn program_conversion_uses_explicit_private_entry_without_a_manifest_alias() {
+fn executable_code_uses_explicit_private_entry_without_a_manifest_alias() {
     let (package, metadata, root) = private_entry_fixture();
     assert!(package.manifest.entrypoint().is_none());
     assert_eq!(metadata.callables().visible_paths().len(), 0);
 
-    let program = package.try_into_program(&metadata).unwrap();
-    assert_eq!(program.entrypoint(), root);
-    assert_eq!(program.hash(), package.mast_forest()[root].digest());
-    assert!(Arc::ptr_eq(program.mast_forest(), package.mast_forest()));
+    package.check_executable_code(&metadata).unwrap();
+    let key = metadata.entry_key().unwrap();
+    assert_eq!(package.procedure_occurrence(key).unwrap().exec_node(), root);
+    assert_eq!(
+        metadata.callables().selected_implementation(key).unwrap().into_word(),
+        package.mast_forest()[root].digest(),
+    );
+    let forest = Arc::clone(package.mast_forest());
+    let code = CodePackage::new(Arc::new(package), Arc::new(metadata)).unwrap();
+    assert!(Arc::ptr_eq(code.package().mast_forest(), &forest));
 }
 
 #[test]
-fn program_conversion_selects_entry_code_instead_of_a_main_like_source_alias() {
+fn executable_code_selects_entry_code_instead_of_a_main_like_source_alias() {
     let mut forest = MastForest::new();
     let main = body(&mut forest, Operation::Add);
     let root = body(&mut forest, Operation::Mul);
@@ -133,10 +144,23 @@ fn program_conversion_selects_entry_code_instead_of_a_main_like_source_alias() {
         ],
         Some(entry.key()),
     );
-    let package = package(TargetType::Executable, forest, exports, &metadata);
+    let package = package(TargetType::Executable, forest, exports, &metadata)
+        .with_procedure_occurrences(
+            [PackageProcedureOccurrence::new(entry.key(), root, None)],
+            &metadata,
+        )
+        .unwrap();
 
     assert_ne!(main, root);
-    assert_eq!(package.try_into_program(&metadata).unwrap().entrypoint(), root);
+    package.check_executable_code(&metadata).unwrap();
+    assert_eq!(
+        package.procedure_occurrence(metadata.entry_key().unwrap()).unwrap().exec_node(),
+        root
+    );
+    assert_eq!(
+        metadata.callables().selected_implementation(entry.key()),
+        Some(implementation(package.mast_forest(), root))
+    );
 }
 
 #[test]
@@ -167,14 +191,14 @@ fn executable_tag_and_main_like_alias_do_not_supply_missing_entry_metadata() {
         );
         let package = package(TargetType::Executable, forest, exports, &metadata);
 
-        assert!(package.try_into_program(&metadata).is_err());
+        assert!(package.check_executable_code(&metadata).is_err());
     }
 }
 
 #[test]
-fn program_conversion_requires_exact_naming_even_for_identical_code() {
+fn executable_code_requires_exact_naming_even_for_identical_code() {
     let (package, metadata, _) = private_entry_fixture();
-    let changed = PackageNaming::new(
+    let changed = PackageSymbols::new(
         home(&["different-compilation"]),
         metadata.callables().clone(),
         metadata.entry_key(),
@@ -184,16 +208,20 @@ fn program_conversion_requires_exact_naming_even_for_identical_code() {
         .validate_package(package.kind, package.mast_forest(), &package.manifest)
         .unwrap();
 
-    assert!(package.try_into_program(&changed).is_err());
-    package.try_into_program(&metadata).unwrap();
+    assert!(package.check_executable_code(&changed).is_err());
+    package.check_executable_code(&metadata).unwrap();
 }
 
 #[test]
-fn program_code_conversion_does_not_reconstruct_an_embedded_kernel() {
+fn executable_code_does_not_reconstruct_an_embedded_kernel() {
     let (mut package, metadata, root) = private_entry_fixture();
     package.sections.push(Section::new(SectionId::KERNEL, vec![0xff]));
 
-    assert_eq!(package.try_into_program(&metadata).unwrap().entrypoint(), root);
+    package.check_executable_code(&metadata).unwrap();
+    assert_eq!(
+        package.procedure_occurrence(metadata.entry_key().unwrap()).unwrap().exec_node(),
+        root
+    );
 }
 
 #[test]
@@ -222,7 +250,7 @@ fn kernel_code_accepts_distinct_root_keys_selecting_the_same_implementation() {
     assert_eq!(first.parent_namespace(), Namespace::initial());
     assert_eq!(second.parent_namespace(), Namespace::initial());
     package.check_kernel_code(&metadata).unwrap();
-    assert!(package.try_into_program(&metadata).is_err());
+    assert!(package.check_executable_code(&metadata).is_err());
 }
 
 #[test]
@@ -267,7 +295,7 @@ fn kernel_code_requires_kernel_kind_public_exports_and_exact_naming() {
 
     let kernel = package(TargetType::Kernel, forest.clone(), exports, &metadata);
     let changed =
-        PackageNaming::new(home(&["different-compilation"]), metadata.callables().clone(), None)
+        PackageSymbols::new(home(&["different-compilation"]), metadata.callables().clone(), None)
             .unwrap();
     changed
         .validate_package(kernel.kind, kernel.mast_forest(), &kernel.manifest)
@@ -296,6 +324,6 @@ fn kernel_public_source_alias_cannot_turn_a_child_binding_into_a_root_binding() 
 
     assert!(matches!(
         metadata.validate_package(TargetType::Kernel, &forest, &manifest),
-        Err(PackageNamingError::KernelExportOutsideRoot { key, .. }) if key == child.key(),
+        Err(PackageSymbolsError::KernelExportOutsideRoot { key, .. }) if key == child.key(),
     ));
 }

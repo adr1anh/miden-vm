@@ -9,17 +9,17 @@ use super::*;
 /// Unexported retained roots get child helper names indexed independently of their code digests.
 /// Invalid export paths are left for the package constructor's manifest validation to reject.
 pub fn fixture_naming(
-    home: crate::NamespacePlan,
+    home: crate::NamespacePath,
     kind: TargetType,
     mast: &MastForest,
     exports: &[PackageExport],
-) -> PackageNaming {
+) -> PackageSymbols {
     use alloc::collections::BTreeSet;
     use core::fmt::Write;
 
     use miden_core::program::ImplementationRoot;
 
-    use crate::{CallableBinding, CallableProcedurePath, NamespacePlan};
+    use crate::{CallableProcedurePath, NamespacePath, ProcedureName};
 
     let mut bindings = Vec::new();
     let mut visible = Vec::new();
@@ -43,14 +43,14 @@ pub fn fixture_naming(
                 write!(&mut label, "{byte:02x}").expect("fixture label formatting");
             }
             (
-                NamespacePlan::new(vec![]),
+                NamespacePath::new(vec![]),
                 CallableProcedurePath::from_semantic_components(vec![label])
                     .expect("flat fixture export name"),
             )
         } else {
             (home.clone(), path.clone())
         };
-        let binding = CallableBinding::new(binding_home, canonical).expect("fixture binding");
+        let binding = ProcedureName::new(binding_home, canonical).expect("fixture binding");
         let key = binding.key();
         if kind.is_executable()
             && export
@@ -75,14 +75,14 @@ pub fn fixture_naming(
             ])
             .expect("fixture helper path");
             // Even a caller's explicit N0 home keeps these fixture helpers under a child Env.
-            let binding = CallableBinding::new(home.clone(), canonical).expect("fixture helper");
+            let binding = ProcedureName::new(home.clone(), canonical).expect("fixture helper");
             selections.push((binding.key(), implementation));
             bindings.push(binding);
         }
     }
     let callables =
         PackageCallables::new(bindings, visible, selections).expect("fixture inventory");
-    PackageNaming::new(home, callables, entry).expect("fixture naming")
+    PackageSymbols::new(home, callables, entry).expect("fixture naming")
 }
 
 impl Package {
@@ -204,7 +204,7 @@ impl proptest::arbitrary::Arbitrary for Package {
                 };
 
                 let mast_forest = Arc::new(mast_forest);
-                let home = crate::NamespacePlan::new(vec![
+                let home = crate::NamespacePath::new(vec![
                     miden_core::program::CanonicalLabel::text("arbitrary-package-fixtures")
                         .expect("fixture home"),
                 ]);

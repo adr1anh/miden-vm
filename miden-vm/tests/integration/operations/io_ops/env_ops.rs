@@ -1,6 +1,6 @@
 use miden_assembly::{
-    CallableBinding, Path,
-    package::{CallableProcedurePath, NamespacePlan},
+    Path, ProcedureName,
+    package::{CallableProcedurePath, NamespacePath},
     testing::FixtureNamespace,
 };
 use miden_core::{
@@ -187,7 +187,7 @@ fn caller() {
 
     // Top 4 elements should be overwritten with the canonical key of `bar`, but the 5th
     // element should remain untouched (position 4 in input [1,2,3,4,5] is 5)
-    let bar_key = CallableBinding::new(
+    let bar_key = ProcedureName::new(
         FixtureNamespace::assembly_tests().namespace_plan().clone(),
         CallableProcedurePath::from_semantic_components(vec![Path::EXEC_PATH.into(), "bar".into()])
             .unwrap(),
@@ -200,7 +200,7 @@ fn caller() {
     // remains its canonical key, even though the syscall implementation has a different digest.
     let bar_hash = build_bar_hash();
     let (program, ..) = test.compile().unwrap();
-    assert!(program.mast_forest().find_procedure_root(bar_hash).is_some());
+    assert!(program.package().mast_forest().find_procedure_root(bar_hash).is_some());
     assert_ne!(bar_key, bar_hash);
     test.expect_stack(&[
         bar_key[0].as_canonical_u64(),
@@ -214,8 +214,8 @@ fn caller() {
 }
 
 fn build_bar_hash() -> Word {
-    let foo_binding = CallableBinding::new(
-        NamespacePlan::new(vec![]),
+    let foo_binding = ProcedureName::new(
+        NamespacePath::new(vec![]),
         CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
     )
     .unwrap();

@@ -2,21 +2,21 @@ use std::fmt::Write;
 
 use miden_assembly::{Report, diagnostics::IntoDiagnostic};
 use miden_core::{Word, advice::AdviceMap, program::CanonicalLabel};
-use miden_mast_package::{CallableProcedurePath, NamespacePlan, PackageNaming};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, PackageSymbols};
 
 /// Emits the compiler's complete owned inventory for the embedded package.
 ///
 /// The generated code reconstructs owned values, then the loader checks them against the exact
 /// Package9 transport. This does not decode or admit arbitrary package naming under a profile.
 pub fn render(
-    naming: &PackageNaming,
+    naming: &PackageSymbols,
     vm: &VerifierMetadata,
     pvm: &VerifierMetadata,
 ) -> Result<String, Report> {
     let mut output = String::from(
         r#"// Generated from the core compiler's owned naming inventory.
 use miden_core::{Word, program::{CanonicalLabel, ImplementationRoot, ProcedureKey}};
-use miden_mast_package::{CallableBinding, CallableProcedurePath, NamespacePlan, PackageCallables, PackageNaming};
+use miden_mast_package::{ProcedureName, CallableProcedurePath, NamespacePath, PackageCallables, PackageSymbols};
 
 type Home = &'static [&'static [u8]];
 type Path = &'static [&'static str];
@@ -55,8 +55,8 @@ const HOME: Home = "#,
     }
     output.push_str(
         r#"
-fn home(labels: Home) -> NamespacePlan {
-    NamespacePlan::new(labels.iter().map(|bytes| {
+fn home(labels: Home) -> NamespacePath {
+    NamespacePath::new(labels.iter().map(|bytes| {
         CanonicalLabel::from_bytes(bytes).expect("generated core home label is valid")
     }).collect())
 }
@@ -71,9 +71,9 @@ fn word(bytes: &[u8; 32]) -> Word {
     Word::try_from(bytes.as_slice()).expect("generated core word is canonical")
 }
 
-pub(super) fn reconstruct() -> PackageNaming {
+pub(super) fn reconstruct() -> PackageSymbols {
     let bindings = BINDINGS.iter().map(|&(labels, components)| {
-        CallableBinding::new(home(labels), path(components))
+        ProcedureName::new(home(labels), path(components))
             .expect("generated core binding is valid")
     });
     let aliases = ALIASES.iter().map(|&(components, key)| {
@@ -85,7 +85,7 @@ pub(super) fn reconstruct() -> PackageNaming {
     let callables = PackageCallables::new(bindings, aliases, implementations)
         .expect("generated core callable inventory is valid");
     let entry = ENTRY.as_ref().map(|key| ProcedureKey::new(word(key)));
-    PackageNaming::new(home(HOME), callables, entry)
+    PackageSymbols::new(home(HOME), callables, entry)
         .expect("generated core entry metadata is valid")
 }
 "#,
@@ -128,7 +128,7 @@ fn write_verifier_metadata(output: &mut String, name: &str, metadata: &VerifierM
     output.push_str("    ])\n}\n");
 }
 
-fn write_home(output: &mut String, home: &NamespacePlan) -> Result<(), Report> {
+fn write_home(output: &mut String, home: &NamespacePath) -> Result<(), Report> {
     output.push_str("&[");
     for label in home.home() {
         // This built-in producer uses no TypedId homes. Require the same owned built-in label

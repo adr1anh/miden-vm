@@ -3,13 +3,13 @@
 use std::{path::Path, sync::Arc};
 
 use miden_assembly::{
-    CallableBinding, NamespaceInputs, ProjectAssembler, Report,
+    NamespaceInputs, ProcedureName, ProjectAssembler, Report,
     testing::{
         FixtureNamespace, TestContext, TestRegistry, admit_fixture_package,
         project_fixture_namespace_inputs,
     },
 };
-use miden_mast_package::{CallableProcedurePath, NamespacePlan, TargetType};
+use miden_mast_package::{CallableProcedurePath, NamespacePath, TargetType};
 
 pub const FIXTURES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
@@ -54,7 +54,8 @@ fn assemble_protocol_userspace_dynamic_dependencies() -> Result<(), Report> {
 
     let mut assembler = context.project_assembler_for_path(&manifest_path)?;
     configure_protocol_fixture(&mut assembler);
-    let package = assembler.assemble(miden_assembly::ProjectTargetSelector::Library, "dev")?;
+    let code = assembler.assemble(miden_assembly::ProjectTargetSelector::Library, "dev")?;
+    let package = code.package();
     assert_eq!(&package.name, "miden-protocol");
     assert_eq!(package.kind, TargetType::Library);
 
@@ -93,7 +94,7 @@ fn configure_protocol_fixture(assembler: &mut ProjectAssembler<'_, TestRegistry>
             let path = CallableProcedurePath::from_semantic_components(vec!["panic".to_string()])
                 .map_err(Report::msg)?;
             let binding =
-                CallableBinding::new(NamespacePlan::new(vec![]), path).map_err(Report::msg)?;
+                ProcedureName::new(NamespacePath::new(vec![]), path).map_err(Report::msg)?;
             NamespaceInputs::new()
                 .with_namespace_plan(FixtureNamespace::assembly_tests().namespace_plan().clone())
                 .with_callable_binding(
@@ -104,7 +105,7 @@ fn configure_protocol_fixture(assembler: &mut ProjectAssembler<'_, TestRegistry>
         .with_package_naming_provider(|package| {
             let homes = [
                 FixtureNamespace::assembly_tests().namespace_plan().clone(),
-                NamespacePlan::new(vec![]),
+                NamespacePath::new(vec![]),
             ];
             admit_fixture_package(package, &homes)
         });

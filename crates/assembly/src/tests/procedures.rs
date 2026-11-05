@@ -13,8 +13,8 @@ enum ProcedureBodyItem {
 }
 
 /// Inspect each independent callable body; the program display only follows the entrypoint.
-fn procedure_body(program: &Program, root: MastNodeId) -> Vec<ProcedureBodyItem> {
-    match &program.mast_forest()[root] {
+fn procedure_body(program: &CodePackage, root: MastNodeId) -> Vec<ProcedureBodyItem> {
+    match &program.package().mast_forest()[root] {
         MastNode::Block(block) => block
             .operations()
             .filter(|op| **op != Operation::Noop)
@@ -32,7 +32,7 @@ fn procedure_body(program: &Program, root: MastNodeId) -> Vec<ProcedureBodyItem>
 }
 
 fn assert_runtime_procedure_roots(
-    program: &Program,
+    program: &CodePackage,
     module: &Module,
     names: &[&str],
 ) -> Result<Vec<Vec<ProcedureBodyItem>>, Report> {
@@ -43,6 +43,7 @@ fn assert_runtime_procedure_roots(
         .map(|name| fixture.binding(&module.path().join(*name)).unwrap().key())
         .collect::<BTreeSet<_>>();
     let targets = program
+        .package()
         .mast_forest()
         .nodes()
         .iter()
@@ -54,15 +55,16 @@ fn assert_runtime_procedure_roots(
         .collect::<BTreeSet<_>>();
     assert_eq!(targets, expected_targets);
     let bodies = program
+        .package()
         .mast_forest()
         .procedure_roots()
         .iter()
         .copied()
-        .filter(|root| *root != program.entrypoint())
+        .filter(|root| *root != entry_node(program))
         .map(|root| procedure_body(program, root))
         .collect::<Vec<_>>();
     assert_eq!(bodies.len(), names.len());
-    assert_all_nodes_reachable_from_roots(program.mast_forest());
+    assert_all_nodes_reachable_from_roots(program.package().mast_forest());
     Ok(bodies)
 }
 
@@ -84,7 +86,7 @@ fn program_with_one_procedure() -> TestResult {
             ProcedureBodyItem::Op(Operation::Mul),
         ]],
     );
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -114,7 +116,7 @@ fn program_with_nested_procedure() -> TestResult {
         ProcedureBodyItem::Exec(foo_key),
         ProcedureBodyItem::Op(Operation::Add),
     ]));
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -174,7 +176,7 @@ fn program_with_proc_locals() -> TestResult {
         bodies,
         vec![expected.into_iter().map(ProcedureBodyItem::Op).collect::<Vec<_>>()]
     );
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 

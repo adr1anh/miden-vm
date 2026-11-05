@@ -32,8 +32,8 @@ use super::{
     MAGIC_PACKAGE, PACKAGE_BYTE_READ_BUDGET_MULTIPLIER, Package, PackageManifest, Section, VERSION,
 };
 use crate::{
-    Dependency, ManifestValidationError, NamespacePlan, PackageExport, PackageId, PackageModule,
-    PackageSubmodule, ProcedureExport, SectionId, TargetType, UnverifiedPackageNaming,
+    Dependency, ManifestValidationError, NamespacePath, PackageExport, PackageId, PackageModule,
+    PackageSubmodule, ProcedureExport, SectionId, TargetType, UnverifiedPackageSymbols,
     debug_info::{DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, PackageDebugInfoBuilder},
     interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile},
     package::arbitrary::fixture_naming,
@@ -74,8 +74,8 @@ fn build_package_exports() -> (Arc<MastForest>, Vec<PackageExport>) {
     (Arc::new(forest), vec![PackageExport::Procedure(export)])
 }
 
-fn fixture_home() -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text("package-serde-fixture").unwrap()])
+fn fixture_home() -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text("package-serde-fixture").unwrap()])
 }
 
 fn fixture_create(
@@ -201,6 +201,8 @@ fn package_bytes_with_sections_count(count: usize) -> Vec<u8> {
     package.mast.write_into(&mut bytes);
     bytes.write_u32(package.naming_transport().as_bytes().len().try_into().unwrap());
     bytes.write_bytes(package.naming_transport().as_bytes());
+    bytes.write_u32(4);
+    bytes.write_u32(0);
     package.manifest.write_into(&mut bytes);
     bytes.write_usize(count);
 
@@ -305,7 +307,7 @@ fn private_only_code_package_roundtrips_without_public_exports() {
                 assert_eq!(decoded.commitment(), package.commitment());
                 let naming = fixture_naming(fixture_home(), kind, decoded.mast_forest(), &[]);
                 decoded.check_naming(&naming).unwrap();
-                assert!(decoded.try_into_program(&naming).is_err());
+                assert!(decoded.check_executable_code(&naming).is_err());
                 assert!(decoded.check_kernel_code(&naming).is_err());
             }
         }
@@ -387,9 +389,9 @@ fn package_readers_reject_non_executable_entrypoint() {
 fn package_format_version_rejects_previous_version() {
     let bytes = build_package().to_bytes();
     let version_offset = MAGIC_PACKAGE.len();
-    assert_eq!(&bytes[version_offset..version_offset + 3], &[9, 0, 0]);
+    assert_eq!(&bytes[version_offset..version_offset + 3], &[10, 0, 0]);
 
-    for previous in [[8, 0, 0], [7, 0, 0], [4, 0, 0]] {
+    for previous in [[9, 0, 0], [8, 0, 0], [7, 0, 0], [4, 0, 0]] {
         let mut old_bytes = bytes.clone();
         old_bytes[version_offset..version_offset + 3].copy_from_slice(&previous);
         // The header alone must reject old versions, before reading the package body.
@@ -402,7 +404,7 @@ fn package_format_version_rejects_previous_version() {
                 result,
                 Err(DeserializationError::InvalidValue(message))
                     if message == alloc::format!(
-                        "unsupported version. Got '{previous:?}', but only '[9, 0, 0]' is supported"
+                        "unsupported version. Got '{previous:?}', but only '[10, 0, 0]' is supported"
                     )
             );
         }
@@ -495,7 +497,7 @@ impl SerdeNamingProfile {
 }
 
 impl TypedIdProfile for SerdeNamingProfile {
-    type Context = NamespacePlan;
+    type Context = NamespacePath;
     type Error = &'static str;
 
     fn validate_typed_id(
@@ -531,7 +533,7 @@ impl HomeProfile for SerdeNamingProfile {
 #[test]
 fn package_readers_preserve_unknown_typed_ids_until_explicit_current_admission() {
     let codec = 9127;
-    let home = NamespacePlan::new(vec![
+    let home = NamespacePath::new(vec![
         CanonicalLabel::typed_id(codec, &[0xa5, 0, 0xff], |_, _| Ok(())).unwrap(),
     ]);
     let (mast, exports) = build_package_exports();
@@ -563,15 +565,19 @@ fn package_readers_preserve_unknown_typed_ids_until_explicit_current_admission()
         assert_eq!(decoded.to_bytes(), bytes);
 
         let unknown = SerdeNamingProfile::new(77);
-        assert!(decoded.admit_naming(&unknown, &home, limits).is_err());
+        assert!(decoded.validate_symbols(&unknown, &home, limits).is_err());
         assert!(unknown.typed_calls.get() > 0);
-        assert_eq!(decoded.admit_naming(&selected, &home, limits).unwrap(), naming);
+        assert_eq!(decoded.validate_symbols(&selected, &home, limits).unwrap(), naming);
         assert!(selected.typed_calls.get() > 0);
         assert!(selected.home_calls.get() > 0);
         // Prior admission confers no cached permission under a changed caller context.
-        assert!(decoded.admit_naming(&selected, &fixture_home(), limits).is_err());
+        assert!(decoded.validate_symbols(&selected, &fixture_home(), limits).is_err());
         let calls = (selected.typed_calls.get(), selected.home_calls.get());
-        assert!(decoded.admit_naming(&selected, &home, CodecLimits::new(0, 0, 0, 0)).is_err());
+        assert!(
+            decoded
+                .validate_symbols(&selected, &home, CodecLimits::new(0, 0, 0, 0))
+                .is_err()
+        );
         assert_eq!((selected.typed_calls.get(), selected.home_calls.get()), calls);
         assert_eq!(decoded.naming_transport(), package.naming_transport());
     }
@@ -926,7 +932,7 @@ fn package_rejects_non_root_export() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Library,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Library, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -934,6 +940,7 @@ fn package_rejects_non_root_export() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1259,7 +1266,7 @@ fn regression_package_deserialisation_rejects_spoofed_mast_node_digests() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Library,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Library, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1267,6 +1274,7 @@ fn regression_package_deserialisation_rejects_spoofed_mast_node_digests() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1308,7 +1316,7 @@ fn trusted_package_deserialisation_accepts_spoofed_mast_hashes() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Library,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Library, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1316,6 +1324,7 @@ fn trusted_package_deserialisation_accepts_spoofed_mast_hashes() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1361,7 +1370,7 @@ fn regression_kernel_package_deserialisation_rejects_spoofed_mast_node_digests()
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Kernel,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Kernel, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1369,6 +1378,7 @@ fn regression_kernel_package_deserialisation_rejects_spoofed_mast_node_digests()
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1411,7 +1421,7 @@ fn package_deserialize_from_file_rejects_spoofed_kernel_mast_node_digests() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Kernel,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Kernel, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1419,6 +1429,7 @@ fn package_deserialize_from_file_rejects_spoofed_kernel_mast_node_digests() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 
@@ -1469,7 +1480,7 @@ fn trusted_kernel_package_deserialisation_accepts_spoofed_mast_hashes() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Kernel,
-        naming: UnverifiedPackageNaming::from_owned(
+        naming: UnverifiedPackageSymbols::from_owned(
             &fixture_naming(fixture_home(), TargetType::Kernel, &forest, &exports),
             super::super::FORMAT_NAMING_LIMITS,
         )
@@ -1477,6 +1488,7 @@ fn trusted_kernel_package_deserialisation_accepts_spoofed_mast_hashes() {
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
+        procedure_occurrences: Vec::new(),
         debug_sections_trusted: true,
     };
 

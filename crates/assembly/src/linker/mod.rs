@@ -70,7 +70,9 @@ use miden_assembly_syntax::{
     module::{ItemInfo, ModuleDescriptor},
 };
 use miden_core::{Word, advice::AdviceMap};
-use miden_mast_package::{CallableProcedurePath, Package as MastPackage, PackageNaming};
+use miden_mast_package::{
+    CallableProcedurePath, CodePackage, Package as MastPackage, PackageSymbols,
+};
 use miden_project::PackageSourceMount;
 use smallvec::{SmallVec, smallvec};
 
@@ -87,7 +89,7 @@ use self::{
     namespaces::ResolvedImports,
     resolver::*,
 };
-use crate::{CallableBinding, CallableDeclaration};
+use crate::{CallableDeclaration, ProcedureName};
 
 /// The resolved public modules available for analysis after linking.
 ///
@@ -209,11 +211,11 @@ impl Linker {
         mount: PackageSourceMount,
     ) -> Result<(), LinkerError> {
         if matches!(
-            library.package.kind,
+            library.package().kind,
             miden_project::TargetType::Kernel | miden_project::TargetType::Executable
         ) {
             return Err(LinkerError::InvalidPackageModuleSurface {
-                package: library.package.name.to_string(),
+                package: library.package().name.to_string(),
                 reason:
                     "explicit source mounts require a library package; attach kernels separately"
                         .into(),
@@ -227,15 +229,15 @@ impl Linker {
         library: LinkLibrary,
         mount: Option<PackageSourceMount>,
     ) -> Result<(), LinkerError> {
-        library.package.check_naming(library.naming()).map_err(|err| {
+        library.package().check_naming(library.naming()).map_err(|err| {
             LinkerError::InvalidPackageModuleSurface {
-                package: library.package.name.to_string(),
+                package: library.package().name.to_string(),
                 reason: err.to_string(),
             }
         })?;
         let mut module_descriptors = library.module_descriptors().map_err(|err| {
             LinkerError::InvalidPackageModuleSurface {
-                package: library.package.name.to_string(),
+                package: library.package().name.to_string(),
                 reason: err.to_string(),
             }
         })?;
@@ -245,13 +247,13 @@ impl Linker {
         if let Some(mount) = &mount {
             let project = |path: &Path| {
                 mount.project(path).map_err(|err| LinkerError::InvalidPackageModuleSurface {
-                    package: library.package.name.to_string(),
+                    package: library.package().name.to_string(),
                     reason: err.to_string(),
                 })
             };
             // Validate non-procedure exports too, even though only procedure bindings are
             // projected.
-            for export in library.package.manifest.exports() {
+            for export in library.package().manifest.exports() {
                 project(&export.path())?;
             }
             for descriptor in &mut module_descriptors {
@@ -284,9 +286,9 @@ impl Linker {
 
     /// Projects source-visible exports onto their existing canonical declarations. Source paths
     /// only locate aliases; their spelling never supplies a callable home or canonical name.
-    fn library_export_bindings(library: &LinkLibrary) -> BTreeMap<Arc<Path>, CallableBinding> {
+    fn library_export_bindings(library: &LinkLibrary) -> BTreeMap<Arc<Path>, ProcedureName> {
         library
-            .package
+            .package()
             .manifest
             .exports()
             .filter_map(|export| {
@@ -321,7 +323,7 @@ impl Linker {
     fn preflight_library_modules(
         &self,
         modules: Vec<ModuleDescriptor>,
-        bindings: &BTreeMap<Arc<Path>, CallableBinding>,
+        bindings: &BTreeMap<Arc<Path>, ProcedureName>,
     ) -> Result<Vec<ModuleDescriptor>, LinkerError> {
         let mut pending = Vec::new();
         for descriptor in modules {
@@ -371,7 +373,7 @@ impl Linker {
     fn insert_library_modules(
         &mut self,
         modules: Vec<ModuleDescriptor>,
-        bindings: &BTreeMap<Arc<Path>, CallableBinding>,
+        bindings: &BTreeMap<Arc<Path>, ProcedureName>,
         package_paths: &BTreeMap<Arc<Path>, Arc<Path>>,
     ) {
         for descriptor in modules {
@@ -617,16 +619,15 @@ impl Linker {
 // ------------------------------------------------------------------------------------------------
 /// Kernels
 impl Linker {
-    /// Returns a new [Linker] using a kernel and its explicitly retained canonical naming.
+    /// Returns a new [Linker] retaining complete kernel code and its exact checked symbols.
     pub fn with_kernel(
         source_manager: Arc<dyn SourceManager>,
-        kernel_package: Arc<MastPackage>,
-        naming: impl Into<Arc<PackageNaming>>,
+        kernel: CodePackage,
     ) -> Result<Self, Report> {
-        log::debug!(target: "linker", "instantiating linker with kernel package {}@{}", kernel_package.name, kernel_package.version);
+        log::debug!(target: "linker", "instantiating linker with kernel package {}@{}", kernel.package().name, kernel.package().version);
 
         let mut linker = Self::new(source_manager);
-        linker.link_with_kernel(kernel_package, naming)?;
+        linker.link_with_kernel(kernel)?;
 
         Ok(linker)
     }
@@ -636,14 +637,10 @@ impl Linker {
     /// This cannot cause any issues with modules already added to the linker (if any), as they
     /// cannot have directly depended on the kernel, or an error would have been raised.
     ///
-    /// Naming must come from compilation or explicit selected-profile admission of raw transport.
-    pub fn link_with_kernel(
-        &mut self,
-        kernel_package: Arc<MastPackage>,
-        naming: impl Into<Arc<PackageNaming>>,
-    ) -> Result<(), Report> {
-        let library =
-            LinkLibrary::from_package(kernel_package.clone(), naming).map_err(Report::msg)?;
+    /// The code owner retains exact checked symbols, advice and source metadata.
+    pub fn link_with_kernel(&mut self, kernel: CodePackage) -> Result<(), Report> {
+        let library = LinkLibrary::from_code_package(kernel);
+        let kernel_package = library.package();
         kernel_package.check_kernel_code(library.naming())?;
         assert!(!self.has_kernel());
 
@@ -673,11 +670,16 @@ impl Linker {
         Ok(())
     }
 
-    pub fn kernel_package(&self) -> Option<Arc<MastPackage>> {
-        self.kernel_library.as_ref().map(|library| library.package.clone())
+    /// Returns the complete checked code owner retained for the attached kernel.
+    pub fn kernel_code(&self) -> Option<&CodePackage> {
+        self.kernel_library.as_ref().map(LinkLibrary::code)
     }
 
-    pub fn kernel_naming(&self) -> Option<Arc<PackageNaming>> {
+    pub fn kernel_package(&self) -> Option<Arc<MastPackage>> {
+        self.kernel_library.as_ref().map(|library| library.package().clone())
+    }
+
+    pub fn kernel_naming(&self) -> Option<Arc<PackageSymbols>> {
         self.kernel_library.as_ref().map(|library| library.naming().clone())
     }
 
@@ -1265,7 +1267,7 @@ mod tests {
         module::{ItemInfo, TypeInfo},
     };
     use miden_core::{Felt, program::CanonicalLabel};
-    use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+    use miden_mast_package::{CallableProcedurePath, NamespacePath};
 
     use super::*;
     use crate::{
@@ -1393,7 +1395,7 @@ mod tests {
             ))
             .expect("library module should parse");
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
+            .with_namespace_plan(NamespacePath::new(vec![
                 CanonicalLabel::text("lib-fixture-home").unwrap(),
             ]))
             .with_callable_path(
@@ -1424,16 +1426,18 @@ mod tests {
         let mut linker = Linker::new(context.source_manager());
         linker
             .link_library(
-                LinkLibrary::from_package(package, naming.clone())
-                    .unwrap()
-                    .with_linkage(Linkage::Static),
+                LinkLibrary::from_code_package(
+                    CodePackage::new(package, naming.clone().into()).unwrap(),
+                )
+                .with_linkage(Linkage::Static),
             )
             .expect("first library should link");
         linker
             .link_library(
-                LinkLibrary::from_package(with_advice, naming)
-                    .unwrap()
-                    .with_linkage(Linkage::Static),
+                LinkLibrary::from_code_package(
+                    CodePackage::new(with_advice, naming.into()).unwrap(),
+                )
+                .with_linkage(Linkage::Static),
             )
             .expect("same public interface with distinct forest commitment should link");
 
@@ -1452,13 +1456,13 @@ mod tests {
             ))
             .unwrap();
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
+            .with_namespace_plan(NamespacePath::new(vec![
                 CanonicalLabel::text("compilation-home").unwrap(),
             ]))
             .with_callable_binding(
                 Arc::from(Path::new("::lib::foo")),
-                CallableBinding::new(
-                    NamespacePlan::new(vec![CanonicalLabel::text(home).unwrap()]),
+                ProcedureName::new(
+                    NamespacePath::new(vec![CanonicalLabel::text(home).unwrap()]),
                     CallableProcedurePath::from_semantic_components(vec!["definition".into()])
                         .unwrap(),
                 )
@@ -1473,7 +1477,9 @@ mod tests {
             )
             .unwrap();
         let naming = product.naming().clone();
-        LinkLibrary::from_package(product.into_artifact(false).unwrap().into(), naming).unwrap()
+        LinkLibrary::from_code_package(
+            CodePackage::new(product.into_artifact(false).unwrap().into(), naming.into()).unwrap(),
+        )
     }
 
     #[test]
@@ -1486,14 +1492,23 @@ mod tests {
         let imported = linker.find_module(Path::new("::lib")).unwrap().get("foo").unwrap();
         assert_eq!(imported.callable_binding(), Some(&expected));
         assert_eq!(expected.path().components(), &["definition"]);
-        assert_eq!(linker.libraries().next().unwrap().naming(), library.naming());
-        assert_eq!(library.commitment(), library.package.dependency_commitment());
+        let retained = linker.libraries().next().unwrap();
+        assert_eq!(retained.naming(), library.naming());
+        assert!(Arc::ptr_eq(retained.code().package(), library.code().package()));
+        assert!(Arc::ptr_eq(retained.code().symbols(), library.code().symbols()));
+        assert_eq!(library.commitment(), library.package().dependency_commitment());
 
         let other = named_import_fixture(&context, "other-home");
         assert!(matches!(
-            LinkLibrary::from_package(library.package, other.naming().as_ref().clone()),
+            CodePackage::new(library.package().clone(), other.naming().clone()),
             Err(miden_mast_package::ManifestValidationError::MismatchedNamingTransport)
         ));
+        assert_eq!(linker.modules().len(), 1);
+        assert_eq!(linker.libraries().count(), 1);
+        assert_eq!(linker.static_libraries().count(), 0);
+        assert!(!linker.has_kernel());
+        assert!(linker.library_by_commitment(library.commitment()).is_some());
+        assert!(linker.library_by_commitment(other.commitment()).is_none());
     }
 
     #[test]
@@ -1560,7 +1575,7 @@ mod tests {
             ))
             .unwrap();
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
+            .with_namespace_plan(NamespacePath::new(vec![
                 CanonicalLabel::text("compilation-home").unwrap(),
             ]))
             .with_callable_path(
@@ -1581,10 +1596,10 @@ mod tests {
             )
             .unwrap();
         let naming = product.naming().clone();
-        let library =
-            LinkLibrary::from_package(product.into_artifact(false).unwrap().into(), naming)
-                .unwrap()
-                .with_linkage(Linkage::Static);
+        let library = LinkLibrary::from_code_package(
+            CodePackage::new(product.into_artifact(false).unwrap().into(), naming.into()).unwrap(),
+        )
+        .with_linkage(Linkage::Static);
         let mut linker = Linker::new(context.source_manager());
         linker
             .link_assembled_module(ModuleDescriptor::new(Path::new("::lib::extra").into(), None))
@@ -1617,14 +1632,14 @@ mod tests {
                 ))
                 .unwrap();
             kernel.set_path(source_path);
-            let export = CallableBinding::new(
-                NamespacePlan::new(vec![]),
+            let export = ProcedureName::new(
+                NamespacePath::new(vec![]),
                 CallableProcedurePath::from_semantic_components(vec!["canonical_export".into()])
                     .unwrap(),
             )
             .unwrap();
             let product = Assembler::new(context.source_manager())
-                .with_namespace_plan(NamespacePlan::new(vec![
+                .with_namespace_plan(NamespacePath::new(vec![
                     CanonicalLabel::text("private-kernel-home").unwrap(),
                 ]))
                 .with_callable_binding(source_path.join("foo").into(), export.clone())
@@ -1643,12 +1658,15 @@ mod tests {
                 .unwrap();
             let naming = product.naming().clone();
             let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
-            let linker =
-                Linker::with_kernel(context.source_manager(), package.clone(), naming.clone())
-                    .unwrap();
+            let code = CodePackage::new(package.clone(), naming.clone().into()).unwrap();
+            let linker = Linker::with_kernel(context.source_manager(), code.clone()).unwrap();
             assert!(linker.has_kernel());
             assert_eq!(linker.kernel_package().as_ref(), Some(&package));
             assert_eq!(linker.kernel_naming().unwrap().as_ref(), &naming);
+            let retained = linker.kernel_code().unwrap();
+            assert!(Arc::ptr_eq(retained.package(), code.package()));
+            assert!(Arc::ptr_eq(retained.symbols(), code.symbols()));
+            assert_eq!(retained.package().procedure_occurrences().len(), 2);
             let module = linker.find_module(source_path).unwrap();
             assert_eq!(module.get("foo").unwrap().callable_binding(), Some(&export));
             assert!(module.get("helper").is_none());
@@ -1656,11 +1674,10 @@ mod tests {
             assert_eq!(linker.kernel_index, source_path.is_kernel_path().then(|| module.id()));
 
             let mut assembler =
-                Assembler::with_kernel(context.source_manager(), package.clone(), naming.clone())
-                    .unwrap();
+                Assembler::with_kernel(context.source_manager(), code.clone()).unwrap();
             assert!(assembler.has_kernel());
             let err = assembler
-                .link_package(package, Linkage::Dynamic, naming)
+                .link_package(code, Linkage::Dynamic)
                 .expect_err("an attached package must prevent another kernel");
             assert!(err.to_string().contains("duplicate kernels"));
         }
@@ -1677,8 +1694,8 @@ mod tests {
             .unwrap();
         ordinary.set_path(Path::kernel_path());
         let ordinary_home =
-            NamespacePlan::new(vec![CanonicalLabel::text("ordinary-fixture-home").unwrap()]);
-        let ordinary_binding = CallableBinding::new(
+            NamespacePath::new(vec![CanonicalLabel::text("ordinary-fixture-home").unwrap()]);
+        let ordinary_binding = ProcedureName::new(
             ordinary_home.clone(),
             CallableProcedurePath::from_semantic_components(vec!["ordinary".into()]).unwrap(),
         )
@@ -1698,11 +1715,10 @@ mod tests {
             )
             .unwrap();
         let ordinary_naming = product.naming().clone();
-        let ordinary_library = LinkLibrary::from_package(
-            product.into_artifact(false).unwrap().into(),
-            ordinary_naming,
-        )
-        .unwrap();
+        let ordinary_library = LinkLibrary::from_code_package(
+            CodePackage::new(product.into_artifact(false).unwrap().into(), ordinary_naming.into())
+                .unwrap(),
+        );
         let mut linker = Linker::new(context.source_manager());
         linker.link_library(ordinary_library).unwrap();
         assert!(!linker.has_kernel());
@@ -1720,14 +1736,14 @@ mod tests {
         let mut kernel =
             context.parse_kernel(source_file!(&context, "pub proc foo push.2 end")).unwrap();
         kernel.set_path(source_path);
-        let export = CallableBinding::new(
-            NamespacePlan::new(vec![]),
+        let export = ProcedureName::new(
+            NamespacePath::new(vec![]),
             CallableProcedurePath::from_semantic_components(vec!["canonical_export".into()])
                 .unwrap(),
         )
         .unwrap();
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .with_namespace_plan(NamespacePath::new(vec![]))
             .with_callable_binding(source_path.join("foo").into(), export.clone())
             .unwrap()
             .assemble_library_modules(
@@ -1739,7 +1755,9 @@ mod tests {
             .unwrap();
         let naming = product.naming().clone();
         let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
-        linker.link_with_kernel(package.clone(), naming.clone()).unwrap();
+        linker
+            .link_with_kernel(CodePackage::new(package.clone(), naming.clone().into()).unwrap())
+            .unwrap();
 
         assert!(linker.has_kernel());
         assert_eq!(linker.kernel_package().as_ref(), Some(&package));
@@ -1791,7 +1809,7 @@ mod tests {
             ))
             .expect("library module should parse");
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![
+            .with_namespace_plan(NamespacePath::new(vec![
                 CanonicalLabel::text("overflow-fixture-home").unwrap(),
             ]))
             .with_callable_path(
@@ -1808,9 +1826,9 @@ mod tests {
             .expect("library should assemble");
         let naming = product.naming().clone();
         let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
-        let library = LinkLibrary::from_package(package, naming)
-            .unwrap()
-            .with_linkage(Linkage::Static);
+        let library =
+            LinkLibrary::from_code_package(CodePackage::new(package, naming.into()).unwrap())
+                .with_linkage(Linkage::Static);
         let mut linker = linker_at_module_capacity(&context);
 
         assert!(matches!(linker.link_library(library.clone()), Err(LinkerError::TooManyModules)));
@@ -1849,7 +1867,7 @@ mod tests {
             ))
             .expect("kernel module should parse");
         let product = Assembler::new(context.source_manager())
-            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .with_namespace_plan(NamespacePath::new(vec![]))
             .with_callable_path(
                 Arc::from(Path::new("::$kernel::foo")),
                 CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
@@ -1869,12 +1887,13 @@ mod tests {
             .expect("two-module kernel should assemble");
         let naming = product.naming().clone();
         let kernel_package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
+        let code = CodePackage::new(kernel_package, naming.into()).unwrap();
         let mut linker = linker_at_module_capacity(&context);
         linker.modules.pop();
         let modules_before = linker.modules.len();
 
         let err = linker
-            .link_with_kernel(kernel_package.clone(), naming.clone())
+            .link_with_kernel(code.clone())
             .expect_err("two-module kernel should exceed the single remaining slot");
 
         assert!(err.to_string().contains("too many modules"));
@@ -1887,7 +1906,7 @@ mod tests {
         assert!(linker.kernel_package().is_none());
 
         let retry_err = linker
-            .link_with_kernel(kernel_package, naming)
+            .link_with_kernel(code)
             .expect_err("retry should fail with the same capacity error");
         assert!(retry_err.to_string().contains("too many modules"));
         assert_eq!(linker.modules.len(), modules_before);

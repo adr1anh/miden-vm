@@ -724,8 +724,8 @@ impl Fixture {
             .unwrap()
     }
 
-    fn descriptor(&self) -> ExecutionDescriptor {
-        ExecutionDescriptor::new(self.key, self.root)
+    fn descriptor(&self) -> ExecutionTarget {
+        ExecutionTarget::new(self.key, self.root)
     }
 }
 
@@ -942,7 +942,7 @@ fn prospective_storage(native: &PreparedNative<'_>) -> usize {
 
 #[derive(Debug, PartialEq, Eq)]
 struct Snapshot {
-    descriptor: ExecutionDescriptor,
+    descriptor: ExecutionTarget,
     limits: SessionLimits,
     phase: SessionPhase,
     counters: SessionCounters,

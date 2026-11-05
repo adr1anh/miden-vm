@@ -16,8 +16,8 @@ use miden_core::{
     serde::{Deserializable, Serializable},
 };
 use miden_mast_package::{
-    CallableBinding, CallableProcedurePath, NamespacePlan, Package, PackageCallables,
-    PackageExport, PackageId, PackageNaming, ProcedureExport, Section, SectionId, TargetType,
+    CallableProcedurePath, NamespacePath, Package, PackageCallables, PackageExport, PackageId,
+    PackageSymbols, ProcedureExport, ProcedureName, Section, SectionId, TargetType,
     debug_info::{
         DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, PackageDebugInfo,
         PackageDebugInfoBuilder,
@@ -54,9 +54,9 @@ fn package_bytes(with_debug_info: bool) -> Vec<u8> {
         CallableProcedurePath::from_semantic_components(vec!["bench".into(), "deserialize".into()])
             .unwrap();
     let home =
-        NamespacePlan::new(vec![CanonicalLabel::text("package-benchmark-fixtures").unwrap()]);
-    let binding = CallableBinding::new(home.clone(), path.clone()).unwrap();
-    let naming = PackageNaming::new(
+        NamespacePath::new(vec![CanonicalLabel::text("package-benchmark-fixtures").unwrap()]);
+    let binding = ProcedureName::new(home.clone(), path.clone()).unwrap();
+    let naming = PackageSymbols::new(
         home,
         PackageCallables::new(
             [binding.clone()],

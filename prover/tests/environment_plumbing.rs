@@ -6,11 +6,11 @@ use miden_core::{
     Felt, Word,
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::Operation,
-    program::{CanonicalLabel, EnvironmentRoot, ExecutionDescriptor, Namespace},
+    program::{CanonicalLabel, EnvironmentRoot, ExecutionTarget, Namespace},
 };
 use miden_processor::{
-    DefaultHost, EnvironmentTraceLimits, ExecutionEnvironment, ExecutionError, ExecutionOptions,
-    LedgerLimits, OpeningLimits, Program, SessionLimits, StackInputs, advice::AdviceInputs,
+    DefaultHost, EnvironmentTraceLimits, ExecutionError, ExecutionOptions, LedgerLimits,
+    OpeningLimits, ResolutionLimits, SessionLimits, StackInputs, advice::AdviceInputs,
 };
 use miden_prover::{Prover, prove_sync};
 
@@ -23,13 +23,13 @@ fn proving_preserves_the_caller_environment_in_sequential_and_overlapped_executi
         .add_to_forest(&mut forest)
         .unwrap();
     forest.make_root(root);
-    let program = Program::new(Arc::new(forest), root);
+    let code = miden_utils_testing::librarytree::fixture_code(Arc::new(forest), root);
     let entry = Namespace::initial()
         .child(CanonicalLabel::text("caller-selected").unwrap().commitment())
         .procedure_key(CanonicalLabel::text("start").unwrap().commitment());
     let authorized_root = EnvironmentRoot::new(Word::new([83u32; 4].map(Felt::from_u32)));
-    let environment = ExecutionEnvironment::new(
-        ExecutionDescriptor::new(entry, authorized_root),
+    let target = ExecutionTarget::new(entry, authorized_root);
+    let resolution_limits = ResolutionLimits::new(
         OpeningLimits {
             max_nodes: 8,
             max_depth: 7,
@@ -56,6 +56,7 @@ fn proving_preserves_the_caller_environment_in_sequential_and_overlapped_executi
     );
     for overlapped in [false, true] {
         let options = ExecutionOptions::default()
+            .with_resolution_limits(resolution_limits)
             .with_overlapped_trace_build(overlapped)
             .with_environment_trace_limits(EnvironmentTraceLimits {
                 max_events: 64,
@@ -63,13 +64,14 @@ fn proving_preserves_the_caller_environment_in_sequential_and_overlapped_executi
                 max_prepare_peak_bytes: 2_097_152,
                 max_validation_work: 1_048_576,
             });
+        let mut host = DefaultHost::default();
+        host.load_library(code.clone()).unwrap();
         let result = prove_sync(
             &Prover::new(),
-            &program,
-            environment,
+            target,
             StackInputs::default(),
             AdviceInputs::default(),
-            &mut DefaultHost::default(),
+            &mut host,
             options,
         );
         assert!(

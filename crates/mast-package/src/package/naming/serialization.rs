@@ -8,9 +8,9 @@ use core::{alloc::Layout, convert::Infallible};
 
 use miden_core::{Word, program::ProcedureKey};
 
-use super::{PackageNaming, PackageNamingError};
+use super::{PackageSymbols, PackageSymbolsError};
 use crate::{
-    NamespacePlan,
+    NamespacePath,
     interface::serialization::{
         Budget, CodecError, CodecLimits, HomeProfile, Reader, Writer, checked_add, reserve,
         wire_len,
@@ -26,7 +26,9 @@ pub enum NamingCodecError<E> {
     #[error(transparent)]
     Callables(#[from] CallablesCodecError<E>),
     #[error(transparent)]
-    InvalidNaming(#[from] PackageNamingError),
+    InvalidNaming(#[from] PackageSymbolsError),
+    #[error(transparent)]
+    InvalidOccurrences(#[from] crate::PackageProcedureOccurrencesError),
     #[error("invalid naming entry tag {tag}")]
     InvalidEntryTag { tag: u8 },
     #[error("invalid canonical Word for naming entry key")]
@@ -37,17 +39,17 @@ pub enum NamingCodecError<E> {
 ///
 /// This type intentionally exposes no namespace, callable or entry getters. Unknown TypedId codecs
 /// and malformed label contents can remain opaque in transport; [`Self::decode`] must validate
-/// them under the caller's current explicit profile before yielding [`PackageNaming`].
+/// them under the caller's current explicit profile before yielding [`PackageSymbols`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnverifiedPackageNaming {
+pub struct UnverifiedPackageSymbols {
     bytes: Vec<u8>,
 }
 
-impl UnverifiedPackageNaming {
+impl UnverifiedPackageSymbols {
     /// Retains trusted immutable owned metadata as bounded transport without profile admission.
     /// The encoder completes structural/resource preflight, so its output needs no second scan.
     pub(crate) fn from_owned(
-        naming: &PackageNaming,
+        naming: &PackageSymbols,
         limits: CodecLimits,
     ) -> Result<Self, NamingCodecError<Infallible>> {
         Ok(Self {
@@ -84,12 +86,12 @@ impl UnverifiedPackageNaming {
         profile: &P,
         context: &P::Context,
         limits: CodecLimits,
-    ) -> Result<PackageNaming, NamingCodecError<P::Error>> {
-        PackageNaming::decode_v1(&self.bytes, profile, context, limits)
+    ) -> Result<PackageSymbols, NamingCodecError<P::Error>> {
+        PackageSymbols::decode_v1(&self.bytes, profile, context, limits)
     }
 }
 
-impl PackageNaming {
+impl PackageSymbols {
     /// Encodes complete required naming after revalidating its own home and every binding home.
     ///
     /// One enclosing budget includes all callable inventory resources and the package's own home.
@@ -127,11 +129,11 @@ impl PackageNaming {
         if let Some(key) = plan.entry_key
             && !prepared.contains_binding_key(key)
         {
-            return Err(PackageNamingError::UnknownEntryKey { key }.into());
+            return Err(PackageSymbolsError::UnknownEntryKey { key }.into());
         }
         let mut home_reader = Reader::new(plan.home, &budget)?;
         let namespace_plan =
-            NamespacePlan::decode_preflighted_home_v1(&mut home_reader, profile, context)?;
+            NamespacePath::decode_preflighted_home_v1(&mut home_reader, profile, context)?;
         home_reader.finish("HomeV1")?;
         let callables = prepared.decode(profile, context, &budget)?;
         Ok(Self::new(namespace_plan, callables, plan.entry_key)?)
@@ -168,7 +170,7 @@ impl PackageNaming {
 }
 
 struct EncodingPlan<'a> {
-    naming: &'a PackageNaming,
+    naming: &'a PackageSymbols,
     callables: callables::EncodingPlan<'a>,
     byte_len: usize,
 }
@@ -208,7 +210,7 @@ fn preflight_decoding<'a, E>(
     }
     let start = reader.remaining_bytes();
     // Retain the entry tag and the minimum complete callable inventory framing.
-    NamespacePlan::preflight_home_v1(&mut reader, budget, 14)?;
+    NamespacePath::preflight_home_v1(&mut reader, budget, 14)?;
     let home = &start[..start.len() - reader.remaining()];
     let entry_key = match reader.u8("naming entry tag")? {
         0 => None,

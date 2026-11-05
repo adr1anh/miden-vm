@@ -5,18 +5,18 @@ use core::num::NonZeroU32;
 
 use miden_assembly_syntax::PathComponent;
 use miden_core::program::{CanonicalLabel, Namespace, ProcedureKey};
-use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath};
 
 use super::*;
-use crate::{CallableBinding, testing::FixtureNamespace};
+use crate::{ProcedureName, testing::FixtureNamespace};
 
-fn kernel_fixture_namespaces() -> (FixtureNamespace, NamespacePlan) {
-    let home = NamespacePlan::new(vec![
+fn kernel_fixture_namespaces() -> (FixtureNamespace, NamespacePath) {
+    let home = NamespacePath::new(vec![
         CanonicalLabel::text("assembly-kernel-fixtures").unwrap(),
         CanonicalLabel::revision(NonZeroU32::new(1).unwrap()),
         CanonicalLabel::text("owner").unwrap(),
     ]);
-    (FixtureNamespace::new(home), NamespacePlan::new(vec![]))
+    (FixtureNamespace::new(home), NamespacePath::new(vec![]))
 }
 
 // Follow the fixture's public module surface, placing exported definitions at N0. Private
@@ -51,7 +51,7 @@ fn add_kernel_fixture_modules(
             let declaration = module.path().join(procedure.name());
             let exported = procedure.visibility().is_exported();
             let (home, components) = if exported {
-                (NamespacePlan::new(vec![]), vec![procedure.name().to_string()])
+                (NamespacePath::new(vec![]), vec![procedure.name().to_string()])
             } else {
                 let components = declaration
                     .components()
@@ -67,7 +67,7 @@ fn add_kernel_fixture_modules(
             };
             let canonical =
                 CallableProcedurePath::from_semantic_components(components).into_diagnostic()?;
-            let binding = CallableBinding::new(home, canonical).into_diagnostic()?;
+            let binding = ProcedureName::new(home, canonical).into_diagnostic()?;
             assert_eq!(binding.parent_namespace() == Namespace::initial(), exported);
             if exported && !root_keys.insert(binding.key()) {
                 return Err(Report::msg("kernel fixture has conflicting root export labels"));
@@ -82,7 +82,7 @@ fn assemble_kernel_fixture(
     context: &TestContext,
     kernel: Box<Module>,
     support: impl IntoIterator<Item = Box<Module>>,
-) -> Result<(Arc<Package>, FixtureNamespace, NamespacePlan), Report> {
+) -> Result<(Arc<Package>, FixtureNamespace, NamespacePath), Report> {
     let support = support.into_iter().collect::<Vec<_>>();
     let (mut bindings, kernel_home) = kernel_fixture_namespaces();
     let modules = core::iter::once(&*kernel)
@@ -157,7 +157,10 @@ fn can_assemble_a_multi_module_kernel() -> Result<(), Report> {
     bindings.add_module(&program)?;
     bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)?,
+            Assembler::with_kernel(
+                context.source_manager(),
+                CodePackage::new(kernel_lib, kernel_naming.into()).unwrap(),
+            )?,
             [&*program],
         )?
         .assemble_program("program", program)?;
@@ -209,9 +212,12 @@ fn kernel_candidate_with_private_submodule_code_cannot_become_a_runnable_kernel(
         .check_kernel_code(&naming)
         .expect_err("private code cannot manufacture a runnable root kernel surface");
     assert_diagnostic!(error, "invalid kernel package: does not export any procedures");
-    let error = Assembler::with_kernel(context.source_manager(), candidate, naming)
-        .err()
-        .expect("a code candidate with no root kernel exports cannot be attached as a kernel");
+    let error = Assembler::with_kernel(
+        context.source_manager(),
+        CodePackage::new(candidate, naming.into()).unwrap(),
+    )
+    .err()
+    .expect("a code candidate with no root kernel exports cannot be attached as a kernel");
     assert_diagnostic!(error, "invalid kernel package: does not export any procedures");
 }
 
@@ -231,7 +237,7 @@ fn kernel_reexport_from_private_submodule_preserves_the_defining_root_key() -> T
             CallableProcedurePath::from_semantic_components(vec![export.into()]).unwrap();
         bindings.add_binding(
             Arc::from(Path::new(declaration)),
-            CallableBinding::new(root_home.clone(), canonical).unwrap(),
+            ProcedureName::new(root_home.clone(), canonical).unwrap(),
         )?;
     }
     let root = bindings.binding(Path::new("::$kernel::root")).unwrap().clone();
@@ -359,18 +365,22 @@ fn syscall_of_public_kernel_submodule_export_uses_its_root_binding() {
     let kernel_naming = bindings.admit_package(&kernel).unwrap();
     let assembler = bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel, kernel_naming).unwrap(),
+            Assembler::with_kernel(
+                context.source_manager(),
+                CodePackage::new(kernel, kernel_naming.into()).unwrap(),
+            )
+            .unwrap(),
             [&*program],
         )
         .unwrap();
-    let program = assembler
+    let package = assembler
         .assemble_program("program", program)
         .expect("the exported submodule definition has an explicit root binding");
-    assert!(program.mast_forest().nodes().iter().any(|node| {
+    assert!(package.mast_forest().nodes().iter().any(|node| {
         matches!(node, MastNode::Call(call)
             if call.is_syscall() && call.target() == target_key)
     }));
-    assert_all_nodes_reachable_from_roots(program.mast_forest());
+    assert_all_nodes_reachable_from_roots(package.mast_forest());
 }
 
 #[test]
@@ -488,16 +498,20 @@ fn test_syscall_resolution_uses_kernel_module() -> TestResult {
     bindings.add_module(&program)?;
 
     let kernel_naming = bindings.admit_package(&kernel)?;
-    let mut assembler = Assembler::with_kernel(context.source_manager(), kernel, kernel_naming)?;
+    let mut assembler = Assembler::with_kernel(
+        context.source_manager(),
+        CodePackage::new(kernel, kernel_naming.into()).unwrap(),
+    )?;
     assembler.compile_and_statically_link(lib)?;
     let assembler = bindings.configure(assembler, [&*program])?;
     let package = assembler.assemble_program("program", program)?;
     let naming = bindings.admit_package(&package)?;
-    let program = package.unwrap_program(&naming);
+    package.check_executable_code(&naming)?;
+    let program = CodePackage::new(Arc::from(package), Arc::new(naming)).map_err(Report::msg)?;
 
     let mast = {
-        let entry = program.get_node_by_id(program.entrypoint()).unwrap();
-        format!("{}", entry.to_display(program.mast_forest()))
+        let entry = program.package().mast_forest().get_node_by_id(entry_node(&program)).unwrap();
+        format!("{}", entry.to_display(program.package().mast_forest()))
     };
 
     let expected = format!(
@@ -562,7 +576,7 @@ fn test_syscall_resolution_to_non_kernel_path_is_checked() -> TestResult {
                 CallableProcedurePath::from_semantic_components(vec!["bar".into()]).unwrap();
             bindings.add_binding(
                 lib.path().join("bar").into(),
-                CallableBinding::new(kernel_home.clone(), canonical).unwrap(),
+                ProcedureName::new(kernel_home.clone(), canonical).unwrap(),
             )?;
             bindings
         } else {
@@ -584,13 +598,13 @@ fn test_syscall_resolution_to_non_kernel_path_is_checked() -> TestResult {
             bindings.add_binding(Arc::from(Path::new("::userspace::bar")), target.clone())?;
             let assembler = Assembler::with_kernel(
                 context.source_manager(),
-                kernel.clone(),
-                kernel_bindings.admit_package(&kernel)?,
+                CodePackage::new(kernel.clone(), kernel_bindings.admit_package(&kernel)?.into())
+                    .unwrap(),
             )?
             .with_package(
-                package.clone(),
+                CodePackage::new(package.clone(), lib_bindings.admit_package(&package)?.into())
+                    .unwrap(),
                 Linkage::Static,
-                lib_bindings.admit_package(&package)?,
             )?;
             let result =
                 bindings.configure(assembler, [&*program])?.assemble_program("program", program);
@@ -682,8 +696,11 @@ end
     let kernel_naming = bindings.admit_package(&kernel_lib).unwrap();
     let assembler = bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)
-                .expect("test package should be valid"),
+            Assembler::with_kernel(
+                context.source_manager(),
+                CodePackage::new(kernel_lib, kernel_naming.into()).unwrap(),
+            )
+            .expect("test package should be valid"),
             [&*program],
         )
         .unwrap();
@@ -736,8 +753,11 @@ end
     let kernel_naming = bindings.admit_package(&kernel_lib).unwrap();
     let assembler = bindings
         .configure(
-            Assembler::with_kernel(context.source_manager(), kernel_lib, kernel_naming)
-                .expect("test kernel should be valid"),
+            Assembler::with_kernel(
+                context.source_manager(),
+                CodePackage::new(kernel_lib, kernel_naming.into()).unwrap(),
+            )
+            .expect("test kernel should be valid"),
             [&*program],
         )
         .unwrap();
@@ -837,8 +857,11 @@ end
             .configure(
                 Assembler::with_kernel(
                     context.source_manager(),
-                    Arc::clone(&kernel),
-                    kernel_bindings.admit_package(&kernel).unwrap(),
+                    CodePackage::new(
+                        Arc::clone(&kernel),
+                        kernel_bindings.admit_package(&kernel).unwrap().into(),
+                    )
+                    .unwrap(),
                 )
                 .expect("test kernel should be valid"),
                 [&*program],

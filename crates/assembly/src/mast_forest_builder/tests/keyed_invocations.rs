@@ -344,10 +344,12 @@ fn static_package_import_retains_private_helper_and_callback_roots() {
                 .sections
                 .push(Section::new(SectionId::DEBUG_INFO, fixture.debug.to_bytes()));
         }
-        let library = LinkLibrary::from_package(Arc::new(package), naming).unwrap();
+        let library = LinkLibrary::from_code_package(
+            miden_mast_package::CodePackage::new(Arc::new(package), naming.into()).unwrap(),
+        );
         for exact_source in [false, true] {
             let mut builder = MastForestBuilder::new_with_static_libraries([
-                StaticLibrary::from_link_library(&library, library.package.debug_info().unwrap())
+                StaticLibrary::from_link_library(&library, library.package().debug_info().unwrap())
                     .unwrap(),
                 StaticLibrary::from_mast_forest(&unrelated_forest, None),
             ])

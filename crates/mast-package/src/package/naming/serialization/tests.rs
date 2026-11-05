@@ -8,7 +8,7 @@ use miden_core::{
 
 use super::*;
 use crate::{
-    CallableBinding, CallableProcedurePath, PackageCallables, PackageCallablesError,
+    CallableProcedurePath, PackageCallables, PackageCallablesError, ProcedureName,
     interface::serialization::{ProfileOperation, TypedIdProfile},
 };
 
@@ -68,24 +68,24 @@ fn limits() -> CodecLimits {
     CodecLimits::new(65536, 4096, 4096, 65536)
 }
 
-fn fixture() -> (PackageNaming, Context) {
+fn fixture() -> (PackageSymbols, Context) {
     let own_home = vec![typed(77)];
     let entry_home = vec![CanonicalLabel::text("e").unwrap()];
     let unused_home = vec![CanonicalLabel::text("u").unwrap(), typed(77)];
-    let entry = CallableBinding::new(
-        NamespacePlan::new(entry_home.clone()),
+    let entry = ProcedureName::new(
+        NamespacePath::new(entry_home.clone()),
         CallableProcedurePath::from_semantic_components(vec!["run".into()]).unwrap(),
     )
     .unwrap();
-    let unused = CallableBinding::new(
-        NamespacePlan::new(unused_home.clone()),
+    let unused = ProcedureName::new(
+        NamespacePath::new(unused_home.clone()),
         CallableProcedurePath::from_semantic_components(vec!["hidden".into()]).unwrap(),
     )
     .unwrap();
     let key = entry.key();
     let callables = PackageCallables::new([entry, unused], [], []).unwrap();
     (
-        PackageNaming::new(NamespacePlan::new(own_home.clone()), callables, Some(key)).unwrap(),
+        PackageSymbols::new(NamespacePath::new(own_home.clone()), callables, Some(key)).unwrap(),
         Context {
             homes: vec![own_home, entry_home, unused_home],
             permit_typed: true,
@@ -111,8 +111,8 @@ fn resource(error: &Error) -> Option<&'static str> {
 
 #[test]
 fn empty_wire_golden_requires_explicit_n0_admission() {
-    let naming = PackageNaming::new(
-        NamespacePlan::new(vec![]),
+    let naming = PackageSymbols::new(
+        NamespacePath::new(vec![]),
         PackageCallables::new([], [], []).unwrap(),
         None,
     )
@@ -122,7 +122,7 @@ fn empty_wire_golden_requires_explicit_n0_admission() {
     let context = Context { homes: vec![vec![]], permit_typed: true };
     let profile = Profile::default();
     assert_eq!(naming.encode_unverified_v1(exact).unwrap(), bytes);
-    let raw = UnverifiedPackageNaming::from_bytes_with_limits(&bytes, exact).unwrap();
+    let raw = UnverifiedPackageSymbols::from_bytes_with_limits(&bytes, exact).unwrap();
     assert_eq!(raw.as_bytes(), bytes);
     assert_no_policy(&profile);
     assert_eq!(naming.encode_v1(&profile, &context, exact).unwrap(), bytes);
@@ -150,7 +150,7 @@ fn aggregate_exact_bounds_include_own_home_entry_and_unused_bindings() {
     assert_eq!(naming.callables().bindings().count(), 2);
     let profile = Profile::default();
     assert_eq!(naming.encode_v1(&profile, &context, exact).unwrap(), bytes);
-    assert_eq!(PackageNaming::decode_v1(&bytes, &profile, &context, exact).unwrap(), naming);
+    assert_eq!(PackageSymbols::decode_v1(&bytes, &profile, &context, exact).unwrap(), naming);
     assert_eq!(profile.typed_calls.get(), 4);
     assert_eq!(profile.home_calls.get(), 6);
 
@@ -163,7 +163,7 @@ fn aggregate_exact_bounds_include_own_home_entry_and_unused_bindings() {
         for decode in [false, true] {
             let profile = Profile::default();
             let result = if decode {
-                PackageNaming::decode_v1(&bytes, &profile, &context, bounded).map(|_| ())
+                PackageSymbols::decode_v1(&bytes, &profile, &context, bounded).map(|_| ())
             } else {
                 naming.encode_v1(&profile, &context, bounded).map(|_| ())
             };
@@ -171,7 +171,7 @@ fn aggregate_exact_bounds_include_own_home_entry_and_unused_bindings() {
             assert_eq!(resource(&error), Some(expected), "{error}");
             assert_no_policy(&profile);
         }
-        assert!(UnverifiedPackageNaming::new(bytes.clone(), bounded).is_err());
+        assert!(UnverifiedPackageSymbols::new(bytes.clone(), bounded).is_err());
     }
 }
 
@@ -181,7 +181,7 @@ fn all_truncations_counts_versions_and_trailing_bytes_precede_policy() {
     let bytes = naming.encode_unverified_v1(limits()).unwrap();
     for end in 0..bytes.len() {
         let profile = Profile::default();
-        assert!(PackageNaming::decode_v1(&bytes[..end], &profile, &context, limits()).is_err());
+        assert!(PackageSymbols::decode_v1(&bytes[..end], &profile, &context, limits()).is_err());
         assert_no_policy(&profile);
     }
     for offset in [2, 53] {
@@ -189,21 +189,21 @@ fn all_truncations_counts_versions_and_trailing_bytes_precede_policy() {
         let mut bad = bytes.clone();
         bad[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
         let profile = Profile::default();
-        assert!(PackageNaming::decode_v1(&bad, &profile, &context, limits()).is_err());
+        assert!(PackageSymbols::decode_v1(&bad, &profile, &context, limits()).is_err());
         assert_no_policy(&profile);
     }
     for offset in [0, 1, 52] {
         let mut bad = bytes.clone();
         bad[offset] = 2;
         let profile = Profile::default();
-        assert!(PackageNaming::decode_v1(&bad, &profile, &context, limits()).is_err());
+        assert!(PackageSymbols::decode_v1(&bad, &profile, &context, limits()).is_err());
         assert_no_policy(&profile);
     }
     let mut bad = bytes;
     bad.push(0);
     let profile = Profile::default();
     assert!(matches!(
-        PackageNaming::decode_v1(&bad, &profile, &context, limits()),
+        PackageSymbols::decode_v1(&bad, &profile, &context, limits()),
         Err(Error::Codec(CodecError::TrailingBytes("NamingV1")))
     ));
     assert_no_policy(&profile);
@@ -218,7 +218,7 @@ fn entry_tags_and_noncanonical_words_fail_before_any_callback() {
         bad[19] = tag;
         let profile = Profile::default();
         assert!(matches!(
-            PackageNaming::decode_v1(&bad, &profile, &context, limits()),
+            PackageSymbols::decode_v1(&bad, &profile, &context, limits()),
             Err(Error::InvalidEntryTag { tag: actual }) if actual == tag
         ));
         assert_no_policy(&profile);
@@ -228,11 +228,11 @@ fn entry_tags_and_noncanonical_words_fail_before_any_callback() {
         bad[20 + lane * 8..28 + lane * 8].copy_from_slice(&Felt::ORDER.to_le_bytes());
         let profile = Profile::default();
         assert!(matches!(
-            PackageNaming::decode_v1(&bad, &profile, &context, limits()),
+            PackageSymbols::decode_v1(&bad, &profile, &context, limits()),
             Err(Error::InvalidEntryKey)
         ));
         assert_no_policy(&profile);
-        assert!(UnverifiedPackageNaming::new(bad, limits()).is_err());
+        assert!(UnverifiedPackageSymbols::new(bad, limits()).is_err());
     }
 }
 
@@ -243,11 +243,11 @@ fn structurally_valid_raw_entry_must_still_reference_a_declaration_on_admission(
     let key = ProcedureKey::new(Word::new([11; 4].map(Felt::from_u32)));
     assert!(naming.callables().binding(key).is_none());
     bytes[20..52].copy_from_slice(&key.as_word().as_bytes());
-    let raw = UnverifiedPackageNaming::new(bytes, limits()).unwrap();
+    let raw = UnverifiedPackageSymbols::new(bytes, limits()).unwrap();
     let profile = Profile::default();
     assert!(matches!(
         raw.decode(&profile, &context, limits()),
-        Err(Error::InvalidNaming(PackageNamingError::UnknownEntryKey { key: actual }))
+        Err(Error::InvalidNaming(PackageSymbolsError::UnknownEntryKey { key: actual }))
             if actual == key
     ));
     assert_no_policy(&profile);
@@ -264,7 +264,7 @@ fn dangling_nested_references_fail_before_even_the_own_home_policy() {
         PackageCallables::new(bindings, [(alias, entry_key)], [(entry_key, implementation)])
             .unwrap();
     let naming =
-        PackageNaming::new(naming.namespace_plan().clone(), callables, Some(entry_key)).unwrap();
+        PackageSymbols::new(naming.namespace_plan().clone(), callables, Some(entry_key)).unwrap();
     let bytes = naming.encode_unverified_v1(limits()).unwrap();
     let unknown = ProcedureKey::new(Word::new([11; 4].map(Felt::from_u32)));
     assert!(naming.callables().binding(unknown).is_none());
@@ -275,7 +275,7 @@ fn dangling_nested_references_fail_before_even_the_own_home_policy() {
         let offset = if visible { bad.len() - 100 } else { bad.len() - 64 };
         bad[offset..offset + 32].copy_from_slice(&unknown.as_word().as_bytes());
         // Raw transport deliberately retains structurally valid but unadmitted references.
-        let raw = UnverifiedPackageNaming::new(bad, limits()).unwrap();
+        let raw = UnverifiedPackageSymbols::new(bad, limits()).unwrap();
         let profile = Profile::default();
         let error = raw.decode(&profile, &context, limits()).unwrap_err();
         match error {
@@ -299,14 +299,14 @@ fn dangling_nested_references_fail_before_even_the_own_home_policy() {
 
 #[test]
 fn raw_transport_cannot_bypass_unknown_codecs_or_malformed_labels() {
-    let naming = PackageNaming::new(
-        NamespacePlan::new(vec![typed(999)]),
+    let naming = PackageSymbols::new(
+        NamespacePath::new(vec![typed(999)]),
         PackageCallables::new([], [], []).unwrap(),
         None,
     )
     .unwrap();
     let bytes = naming.encode_unverified_v1(limits()).unwrap();
-    let raw = UnverifiedPackageNaming::new(bytes.clone(), limits()).unwrap();
+    let raw = UnverifiedPackageSymbols::new(bytes.clone(), limits()).unwrap();
     let profile = Profile::default();
     let context = Context {
         homes: vec![vec![typed(999)]],
@@ -328,7 +328,7 @@ fn raw_transport_cannot_bypass_unknown_codecs_or_malformed_labels() {
 
     let mut malformed = bytes;
     malformed[6] = 0; // The label envelope is complete but its version is invalid.
-    let raw = UnverifiedPackageNaming::from_bytes_with_limits(&malformed, limits()).unwrap();
+    let raw = UnverifiedPackageSymbols::from_bytes_with_limits(&malformed, limits()).unwrap();
     let profile = Profile::default();
     assert!(matches!(
         raw.decode(&profile, &context, limits()),
@@ -341,7 +341,7 @@ fn raw_transport_cannot_bypass_unknown_codecs_or_malformed_labels() {
 fn every_admission_and_encoding_revalidates_current_context_and_unused_homes() {
     let (naming, mut context) = fixture();
     let bytes = naming.encode_unverified_v1(limits()).unwrap();
-    let raw = UnverifiedPackageNaming::new(bytes, limits()).unwrap();
+    let raw = UnverifiedPackageSymbols::new(bytes, limits()).unwrap();
     let profile = Profile::default();
     assert_eq!(raw.decode(&profile, &context, limits()).unwrap(), naming);
     context.homes.pop(); // The unaliased, unselected declaration is still mandatory.

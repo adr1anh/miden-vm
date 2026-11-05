@@ -45,7 +45,7 @@ semantics and public-kernel/private-helper placement, remove configurable kernel
 the generic code-package/publication separation through required consumers and formats. Validate
 affected runtime/replay/assembler/AIR/public-input/native/recursive/generated contracts. This may
 span several existing PRs: source-only correction is a substep, not proof that the milestone is done.
-The current slice is the fixed-root correction before Package9 and project routing. Record partial
+Record partial
 progress and downstream gates honestly; close M1 only with actual acceptance evidence. Then select
 the next milestone from the remaining plan without closing, shrinking or recreating the overall goal.
 Final completion still requires every required integration, regeneration and qualification gate;
@@ -274,7 +274,7 @@ Replace root-only verification flags and implicit Program/kernel reconstruction 
 
 #### Deferred API cleanup card
 
-**Kanban state:** planned under PR15, after PR14 qualification and before PR15a/16. This card is the durable record of the user's API review; preserve active PR14 work and schedule the cleanup in PR15.
+**Kanban state:** implemented-awaiting-validation under PR15, before PR15a/16. This card records the approved API scope; functional acceptance is recorded in the ledger, and inherited final gates remain required.
 
 **User-approved direction:**
 
@@ -289,12 +289,13 @@ Replace root-only verification flags and implicit Program/kernel reconstruction 
 | `LibraryImport` | `LibraryRef`, with explicit `latest(base, id)` / `revision(base, id, revision)` helpers |
 | `Pinned(revision)` | `Revision(revision)`; exact code-hash pins remain a separate concept |
 | `admit_naming` | `validate_symbols`, retaining explicit profile/context/codec limits |
+| `EnvironmentWitnessSource` | `EnvironmentSource`: untrusted opening retrieval; caller-root/key authentication remains mandatory |
 
 Keep `ProcedureKey`, `EnvironmentRoot` and `ExecutionClaim`. Keep package code and checked symbols together so ordinary linking does not require separately pairing package and naming. Rust names do not change canonical Latest/Pinned labels, encodings or hashes. Source version, runtime revision and selected implementation remain distinct under D5.
 
 **User-approved execution shape, 4 November 2026:** load package code through the host and call `execute_sync(target, &mut host)`. Retire `Program` and legacy `ProgramInfo`, remove their conversions, and add no replacement forest-plus-entry wrapper. Keep package code, checked symbols, advice and source metadata together. Preserve exact source occurrences, private entry metadata and internal step/resume state. The caller supplies the expected entry key/environment root; host-loaded code and lookup evidence do not supply authority.
 
-**Proposed; settle before the affected cleanup:** `EnvironmentSource` is the latest suggestion for the untrusted lookup-evidence trait; neither that spelling nor `LookupProofProvider` is selected.
+**User-approved source trait name, 4 November 2026:** use `EnvironmentSource` for untrusted opening retrieval. Every returned opening must still authenticate against the caller's expected root and key. This Rust API rename does not change witness formats, codecs, resource policies or authority.
 
 **Acceptance:** migrate affected assembler/package/project, host/processor, prove/verify, CLI, examples, docs and supported no_std callers consistently. The caller still supplies expected K_entry/R_E; untrusted code/evidence never supplies authority or fallback. Preserve D3/D5/D6/D8, fixed-N0 syscalls, canonical codecs, every explicit resource budget, replay/source identity and all existing PR15/security/final gates. Retain negative binding/evidence tests and run/prove/verify coverage; do not mark a rename as implementation or acceptance evidence. PR15a remains AIR/Chiplets cleanup, not a duplicate API card.
 
@@ -526,7 +527,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
-| 15 API/CLI closure | planned | — | — | Depends on 08–14 |
+| 15 API/CLI closure | implemented-awaiting-validation | Final source `a99264137`; checked links/CLI `ba651f64d`; review `8ba05fd00`; prior SHAs below; base `f4350360d` | Independent reviews; fresh combined runtime/CLI/witness/proof/flow3,179; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumers; six compiled doctests; standalone fuzz2 typechecks; earlier scoped evidence below | PR15 functional acceptance passes; PR15a/16 and inherited guest/security/fuzz/performance/final gates remain |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
@@ -3324,3 +3325,239 @@ PR14 is implemented-awaiting-validation. Final branch review belongs in PR_DESCR
 the linear transition to PR15. PR15 follows the approved host-owned code/API card; the general
 goal and M1 remain active. Guest/fuzz/performance/final and inherited qualification remain open,
 with PR15a still preceding PR16. No GitHub PR, push or publication is authorized.
+
+
+### PR15 source-name checkpoint, 4 November 2026
+
+Signed `652e1780c` applies the approved ExecutionTarget, NamespacePath, ProcedureName,
+PackageSymbols, LibraryRef, Revision and validate_symbols source names across tracked Rust
+consumers. LibraryRef exposes explicit latest/revision constructors; Revision still encodes
+the canonical `pinned` label. Existing syntax-local ProcedureName remains under the AST API;
+the package facade now exposes the canonical complete procedure name. No identity algorithm,
+canonical label/domain, framing, selection policy or profile budget changed.
+
+Independent source review, all1427 core/package/project/assembly lib and core public-API tests
+(eight existing skips), including the exact compile-fail authority fixture, and final four-crate
+all-target strict custom Clippy pass. Logs: `pr15-api-name-{checks,clippy}.log` under scratch.
+This does not establish downstream/no_std or host execution acceptance. Program/ProgramInfo
+remain pending retirement; consistent types alone do not satisfy the PR15 card.
+
+Next implementation boundary preserves package-owned keyed executable/source occurrences before
+removing Program's entry hints. A private entry/helper must retain its exact occurrence through
+serialization and host loading, including equal-D roots; never reconstruct an occurrence by
+selecting the first D. The package codec/assembler and processor owners are disjoint. Preserve
+canonical symbol bytes, all existing admission/resource gates and caller-supplied target authority.
+
+
+### PR15 replay and exact occurrence checkpoint, 4 November 2026
+
+Signed `b3877191e` retires ProgramInfo and Program::to_info. Replay v6 omits that redundant
+transport while retaining caller-target validation and authenticated entry extraction; proof
+transport3 and claim2 are unchanged. VmTrace retains typed ImplementationRoot diagnostics.
+Twenty-seven snapshot migrations alter only that metadata field, preserving all matrix checksums,
+heights and outputs. Transaction cache v8 uses the expected target and retains relation, verifier
+identities, stack, transcript and parameter separation. Readme authority corrections are separate
+signed docs `9f9a4ff18`. Program itself is still pending retirement.
+
+Signed `77bbd95a7` adds Package10 bounded sorted keyed occurrence transport, separate from
+unchanged canonical NamingV1. Explicit admission shares aggregate byte/record budgets before
+profile callbacks; readers scan the entire scalar payload before row allocation. Exact roots,
+tags/order/tails, checked K/D association and owning source graph are validated. Trusted readers
+defer only existing debug validation; source stripping retains exact executable occurrences.
+Dependency v3 commits K/exec without optional source IDs; full artifact/package v3 includes all
+metadata, while the code commitment remains unchanged.
+
+Signed `f8e052482` transports compiler-owned local/private occurrences and actual static root/source
+remappings. Metadata collection does not import otherwise unselected source trees. Debug-disabled
+export uses existing fallible stripping; no occurrence is synthesized from first matching D.
+Independent reviews pass. The six-crate lib/integration run initially passed3750/3772; producer
+fixes resolve21 dangling-source failures and one source-projection failure with all checks retained.
+The fresh rerun passes3772, with nine existing skips. After lint-equivalent ownership grouping,
+all615 affected assembler/codec/source/instance controls pass; this is not another whole3772 run.
+Final11-crate all-target strict custom Clippy also type-checks CLI/public/private-prover consumers.
+Logs: `pr15-occurrence-replay-{checks,final,postlint,clippy-final}.log`. The initial lint failures
+remain a separate diagnostic log. The two target/verifier cache regressions pass in `pr15-target-cache-checks.log`; no fresh no_std or proof-regeneration
+claim is made. No production AIR/claim/pin changes in these slices.
+
+Next: immutable checked CodePackage association, keyed host code/source ownership, then target-only
+execution and Program retirement with explicit resolution policies. This is ordinary implementation
+within the approved PR15 card, not a new authority model. All remaining PR15, PR15a/16, inherited
+guest/fuzz/performance/final gates and the general goal/M1 remain open. No push or GitHub PR.
+
+
+### PR15 checked package ownership qualification, 4 November 2026
+
+Signed `954377d10` introduces immutable CodePackage association, reusing exact symbol/code/occurrence
+checks and explicit profile/context/shared-budget admission. `3ff730b5a` returns checked containers
+from project assembly and seals only after postprocessors; dependency conflicts, home checks and
+cache validation remain. `cf1043490` retains whole owners through private HostLibrary/LoadedMastForest
+and Wasm loading, preserving handler rollback and debug errors. Explicit raw witness insertion
+remains separate from ordinary checked package loading and grants no execution authority.
+
+`50c27f59f` migrates the core-library owner/build, CLI admission and public facade, cached test
+local/kernel/import owners and affected consumers. The unchanged full Package commitment covers
+forest advice and all metadata/debug sections; independent review and source audit found no stale
+cache identity gap. Low-level assembler linking and public CompiledTest remain transitional until
+the target-only execution cutover; do not claim Program is retired.
+
+The selected ownership runtime scope ran3127:3126 passed, with one existing filename-substring
+assertion broken by diagnostic wrapping under the longer workspace TMPDIR. Test-only `49151a5b4`
+checks complete inferred filenames after removing display continuations while retaining failure
+and missing-file cause assertions; both affected run/prove cases pass. All3127 therefore have
+passing scoped evidence, not a fresh whole3127 rerun. Scope includes checked-pair/profile/budget,
+project/processor/source/replay/cache, core-lib owner/debug, Wasm guest/handler limits and selected
+CLI/witness/deferred paths. Logs: `pr15-code-package-checks.log`, `pr15-code-package-cli-final.log`.
+
+Final14-crate all-target strict custom Clippy passes in `pr15-code-package-clippy-final.log`.
+Ten production roots compile with defaults off and required prover features; their normal graph
+contains no std (`pr15-code-package-no-std{,-features}.log`). Host build dependencies remain separate
+under resolver3; no bare-metal/cross-target or new relation-regeneration claim. All five commits
+verify signatures. Current tree contains only untracked scratch.
+
+Next: keyed host code/source requests before removing Program entry hints, then caller-target-only
+execution, resolution limits in ExecutionOptions and complete public/assembler consumer migration.
+Digest-only storage is still present; ownership alone does not solve equal-D source dispatch.
+General goal/M1 and PR15a/16/inherited final qualification remain active. No GitHub PR or push.
+
+### PR15 keyed code and native owner qualification, 4 November 2026
+
+Signed `972cc889e` introduces typed untrusted code requests: Procedure(K,D) and structural External(D).
+The host store and fast cache retain distinct equal-D owners; exact materialized occurrence rows
+select private/alias execution and source identities, including explicit absent sources. Generic
+D-only supply remains availability after authentication. Existing first-loaded fast-cache fallback
+and last-loaded host fallback are preserved; exact keyed offers take precedence. Successful
+request memos do not replace binding authentication. Native active state and continuations retain
+the whole owner, including same-forest switches; trace projection and wire omit it, so replay6
+encoding remains unchanged. Advice/debug/source checks precede cache and execution publication.
+
+Entry-only read-only session preflight shares prepare_entry checks, rejecting impossible entry
+demands before code lookup without consuming pending evidence. Nested invocation keeps its
+existing code-load/native-guard terminal boundary. Typed test request vectors preserve alias
+distinction, repeated-key reuse, missing/invalid-binding zero-query guards, entry zero-capacity
+rejection, nested syscall authorization, retry/cancellation and atomic/terminal state checks.
+
+The runtime scope ran3139:3138 passed; one new selector fixture supplied unsorted canonical
+occurrence rows. The fixture alone was sorted by canonical key bytes and its focused case passes.
+All3139 therefore have passing scoped evidence, not a fresh whole3139 rerun. Logs are
+`pr15-keyed-loader-runtime-qualified.log` and `pr15-keyed-loader-selector-qualified.log`.
+The earlier broad run and failed selector-command package-feature selection are diagnostic logs,
+not passing evidence. Final14-crate strict all-target custom Clippy passes in
+`pr15-keyed-loader-clippy-last.log`. Ten production no_std roots compile and their normal graphs
+contain no std (`pr15-keyed-loader-no-std{,-features}.log`); resolver3 host build dependencies remain
+separate, with no cross-target/bare-metal claim. Independent bounded review plus targeted root
+review covered auth/publication ordering, owner restoration and replay omission.
+
+Target-only execution, explicit resolution options and complete Program/conversion retirement
+remain next. Keep caller target authority, all explicit resource/replay policies and PR15a/16/
+inherited final/security gates. General goal/M1 remain active; no PR or push.
+
+### PR15 target-only execution and consumer qualification, 4 November 2026
+
+Signed `10345ccf0` retires Program, its conversions/legacy codec/fuzzer, and ExecutionEnvironment.
+FastProcessor and ProgramExecutor receive the caller's ExecutionTarget separately from host code.
+ResolutionLimits has explicit opening/ledger/session policies without Default; ExecutionOptions
+requires selection before entry initialization. Resume copies the selected policies and target.
+Missing policies fail before host/identity publication and may be corrected on the same fresh
+processor; later option changes cannot replace a live resume's target or native policies. Exact
+CodePackage owners supply code/advice/source metadata, including private/equal-D occurrences;
+normal execution no longer receives detached source graphs or Program entry hints. No replacement
+forest-plus-entry wrapper was introduced. Auth/N0/entry/session/publication and cancel/terminal
+boundaries remain, as do claim40v2, canonical domains and replay6 bytes. Replay reader API now
+takes independent target/native policies, preserving trust revocation and remaining-budget clamps.
+
+Compiler/package/test-utils/core-library/prover/CLI/guest/benchmark consumers migrate consistently.
+Checked executable-code inspection remains separate from generic host-code integrity and target
+authority. The corpus snapshot changes exactly four obsolete Program serialization-size metrics
+to full package sizes; entry/body/forest digests, root IDs and other corpus facts remain identical.
+Source/debug negatives now use checked occurrence rows, structurally valid graphs and explicit
+stripped code where applicable, rather than removed detached metadata behavior.
+
+Fresh runtime scope: 3,142 passed, 1,233 outside-filter tests skipped
+(`pr15-target-only-runtime-final.log`). The initial run's ten failures were fixture/metric changes;
+none were suppressed. Strict14-crate all-target custom Clippy passes
+(`pr15-target-only-clippy-last.log`). Ten production no_std roots compile and normal dependency
+graphs contain no std (`pr15-target-only-no-std{,-features}.log`); host build dependencies remain
+separate under resolver3, with no bare-metal/cross-target claim. Four benchmark/Wycheproof consumer
+packages pass all-target type checks (`pr15-target-only-extra-consumers.log`); no benchmark or
+cryptographic-vector campaign was run. Public prover/explicit-input/async scope passes28
+(`pr15-target-only-prover-consumers.log`), partially overlapping the runtime scope. Positive
+buffered/overlapped prove_sync and ignored seed generator both pass
+(`pr15-target-only-prove-seeds.log`); the expensive private prover test binary was not rebuilt.
+
+Witness fuzzing now uses an independent canonical caller K/RE prefix plus unchanged replay6. Both
+owner-generated seeds are refreshed, and two deterministic tests reach the shared canonical and
+changed-authority/zero-policy/trailing-byte rejection oracles
+(`pr15-target-only-fuzz-seed-replay.log`). The two directly affected standalone fuzz binaries type
+check (`pr15-target-only-fuzz-bins-final.log`). This is not a mutation campaign; inherited PR16
+fuzz gates remain. Full signed API docs `5a658b95d` explain target/code distinction and fixed-root
+syscalls, correct legacy KernelDescriptor authority wording without changing its codec, and include
+the prover README in rustdoc. Six compile-only doctests pass; five preexisting ignored examples
+remain ignored (`pr15-target-only-doctests-final.log`). Independent bounded runtime/replay review
+reported no material delta finding; it did not replace native/AIR/admission qualification.
+
+Remaining PR15: ordinary assembler/kernel linking must accept/retain CodePackage rather than
+public mutable split package/symbol owners; preserve project postprocessor-before-seal order.
+Audit CLI K_entry/R_E/actual-D diagnostics and bounded proof input, then complete the active card's
+remaining acceptance. General goal/M1, PR15a/16 and inherited final/security gates remain active.
+No PR or push.
+
+
+### PR15 checked linking, CLI and source-trait qualification, 4 November 2026
+
+Signed `ba651f64d` retains immutable CodePackage owners through ordinary assembler/kernel linking
+and project runtime dependencies. LinkLibrary exposes read-only inspection without a mutable split
+package/symbol escape. Kernel conflict/kind/route/capacity validation precedes publication; provider
+and project postprocessor-before-seal order remains. Callers across test utilities, processor, VM,
+core library, guest helpers, benchmarks and Wycheproof migrate to the same owner. Exact source
+occurrences, advice and symbols remain together; no profile/home/Latest policy is inferred.
+
+The approved EnvironmentSource spelling replaces the former public trait without an alias or
+codec/resource/authority change. Requests still return untrusted openings that must authenticate
+against the caller's expected root/key. CLI run/prove distinguish expected K_entry, R_E and actual
+entry D; compiler inspection labels its selected implementation separately. Proof-file reads use
+the existing bounded regular-file reader before decoding, with an explicit configurable whole-
+transport cap (default512MiB), checked platform conversion and preserved zero. Negative tests
+separate decoder failures from size/open failures. Atomic output and proof/precompile policies stay.
+Signed README follow-up `225aafe07` documents these APIs and limits separately from implementation.
+
+Fresh runtime scope passes3,146/3,146, with1,233 outside-filter tests skipped
+(`pr15-checked-link-runtime.log`). Strict14-crate all-target custom Clippy passes
+(`pr15-checked-link-clippy-next.log`). Ten production no_std roots compile and their normal graphs
+are std-free (`pr15-checked-link-no-std{,-features}.log`); four extra benchmark/Wycheproof consumers
+pass all-target typechecks (`pr15-checked-link-extra-consumers.log`). Six compile-only doctests pass;
+seven preexisting ignores include the two additional core-library examples
+(`pr15-checked-link-doctests.log`). Both affected standalone fuzz binaries typecheck
+(`pr15-checked-link-fuzz-bins.log`); no mutation campaign is claimed. Pinned rustfmt checks all85
+changed Rust files and diff whitespace checks pass. Independent bounded linking/CLI review reports
+no material finding. Earlier target-only proving/seed evidence above remains scoped, not a fresh
+whole proof matrix. Complete the PR15 run/prove/verify/transcript/stopped/deferred/negative acceptance
+audit before branch closeout. PR15a/16, inherited security/fuzz/performance gates and general goal/M1
+remain active. No GitHub PR or push.
+
+
+### PR15 final functional acceptance and branch closeout, 4 November 2026
+
+Signed `a99264137` fixes exact error-source restoration before return preflight when step/resume
+recreates ExecutionState. It copies the retained continuation's source, preserving exact None and
+owner identity; no digest lookup or authentication/publication/lifecycle policy changes. The
+existing local_fn_call negative exposed the regression through strict traced/step diagnostics.
+New tests exercise all three CLI transcript selections, checking decoded proof hash and complete
+verification plus K/R_E/actual-D diagnostics. Actual traces stopped before root END reject native
+session finalization and production witness export, while identical completed code exports.
+
+Fresh combined acceptance passes3,179/3,179 with1,202 outside-filter skips
+(`pr15-final-runtime-proof-next.log`): the earlier runtime scope plus prove_verify/flow_control
+filters, covering supported API/CLI hashes, native/recursive complete/deferred proof routes,
+portable replay, invocation modes, changed claims/legacy artifacts, budgets and code-hint authority.
+The initial proof/flow run exposed the diagnostic defect; the first combined run passed3,177 and
+failed only the two newly written fixtures (unbalanced final stack and expected later error gate).
+Both fixtures were corrected without weakening production checks; the fresh whole scope passes.
+Final strict14-crate all-target custom Clippy passes (`pr15-final-clippy.log`), pinned formatting
+and whitespace checks pass. Independent bounded source/test reviews report no material finding.
+Earlier no_std/consumer/doctest/fuzz typecheck evidence remains scoped as recorded above.
+
+Final review description `8ba05fd00` is committed separately. PR15 is implemented-awaiting-validation
+under inherited final gates and may advance linearly to PR15a. PR15a owns the actual Controller
+counter/layout choice, captures and regeneration; PR16 owns final post-cleanup qualification.
+General goal/M1 remain active, with no waiver of guest/security/fuzz/performance/release checks.
+No GitHub PR, push or publication.

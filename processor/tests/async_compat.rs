@@ -4,9 +4,9 @@ use std::sync::Arc;
 mod named_source;
 use miden_debug_types::{Location, SourceFile, SourceSpan};
 use miden_processor::{
-    BaseHost, DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, ExecutionOptions, FastProcessor, Felt, FutureMaybeSend, Host,
-    LoadedMastForest, ProcessorState, ResolutionWitness, StackInputs, Word,
+    BaseHost, DefaultHost, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
+    ExecutionOptions, FastProcessor, Felt, FutureMaybeSend, Host, LoadedMastForest, ProcessorState,
+    ResolutionWitness, StackInputs,
     advice::{AdviceInputs, AdviceMutation},
     event::{EventError, EventName, TraceError},
 };
@@ -16,15 +16,17 @@ use named_source::named_source;
 struct YieldingAsyncHost {
     event_calls: usize,
     trace_calls: usize,
-    environment: Arc<dyn EnvironmentWitnessSource>,
+    environment: Arc<dyn EnvironmentSource>,
+    code: LoadedMastForest,
 }
 
 impl YieldingAsyncHost {
-    fn new(environment: &FixtureEnvironment) -> Self {
+    fn new(environment: &FixtureEnvironment, code: miden_mast_package::CodePackage) -> Self {
         Self {
             event_calls: 0,
             trace_calls: 0,
             environment: environment.source(),
+            code: LoadedMastForest::from_code_package(code),
         }
     }
 }
@@ -51,9 +53,9 @@ impl Host for YieldingAsyncHost {
 
     fn get_mast_forest(
         &self,
-        _node_digest: &Word,
+        _request: miden_processor::CodeRequest,
     ) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
-        async { None }
+        async { Some(self.code.clone()) }
     }
 
     fn on_event(
@@ -79,11 +81,11 @@ impl Host for YieldingAsyncHost {
     }
 }
 
-fn simple_program() -> (miden_processor::Program, FixtureEnvironment) {
+fn simple_program() -> (miden_mast_package::CodePackage, FixtureEnvironment) {
     named_source("begin push.2 add end")
 }
 
-fn emit_trace_program() -> (miden_processor::Program, FixtureEnvironment) {
+fn emit_trace_program() -> (miden_mast_package::CodePackage, FixtureEnvironment) {
     named_source("begin trace.event(\"test::async::trace_emit\") end")
 }
 
@@ -94,22 +96,27 @@ async fn execute_async_matches_execute() {
     let advice_inputs = AdviceInputs::default();
 
     let mut sync_host = DefaultHost::default().with_environment_source(environment.source());
+    sync_host.load_library(program.clone()).unwrap();
     let sync_output = FastProcessor::new_with_options(
         stack_inputs,
         advice_inputs.clone(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_resolution_limits(environment.resolution_limits()),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&program, environment.execution(), &mut sync_host)
+    .execute_sync(environment.target(), &mut sync_host)
     .unwrap();
 
     let mut async_host = DefaultHost::default().with_environment_source(environment.source());
-    let async_output =
-        FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
-            .expect("failed to construct FastProcessor")
-            .execute(&program, environment.execution(), &mut async_host)
-            .await
-            .unwrap();
+    async_host.load_library(program.clone()).unwrap();
+    let async_output = FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        ExecutionOptions::default().with_resolution_limits(environment.resolution_limits()),
+    )
+    .expect("failed to construct FastProcessor")
+    .execute(environment.target(), &mut async_host)
+    .await
+    .unwrap();
 
     assert_eq!(sync_output.stack, async_output.stack);
 }
@@ -120,23 +127,29 @@ async fn fast_processor_execute_for_proving_async_matches_sync() {
     let stack_inputs = StackInputs::new(&[Felt::new_unchecked(3)]).unwrap();
 
     let mut sync_host = DefaultHost::default().with_environment_source(environment.source());
+    sync_host.load_library(program.clone()).unwrap();
     let sync_witness = FastProcessor::new_with_options(
         stack_inputs,
         AdviceInputs::default(),
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_resolution_limits(environment.resolution_limits())
+            .with_environment_trace_limits(trace_limits()),
     )
     .unwrap()
-    .execute_for_proving_sync(&program, environment.execution(), &mut sync_host)
+    .execute_for_proving_sync(environment.target(), &mut sync_host)
     .unwrap();
 
     let mut async_host = DefaultHost::default().with_environment_source(environment.source());
+    async_host.load_library(program.clone()).unwrap();
     let async_witness = FastProcessor::new_with_options(
         stack_inputs,
         AdviceInputs::default(),
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_resolution_limits(environment.resolution_limits())
+            .with_environment_trace_limits(trace_limits()),
     )
     .unwrap()
-    .execute_for_proving(&program, environment.execution(), &mut async_host)
+    .execute_for_proving(environment.target(), &mut async_host)
     .await
     .unwrap();
 
@@ -169,9 +182,13 @@ async fn execute_async_supports_async_only_host_events() {
     let event_id = event_name.to_event_id().as_u64();
     let (program, environment) = named_source(&format!("begin push.{event_id} emit drop end"));
 
-    let mut host = YieldingAsyncHost::new(&environment);
+    let mut host = YieldingAsyncHost::new(&environment, program.clone());
     let output = FastProcessor::new(StackInputs::default())
-        .execute(&program, environment.execution(), &mut host)
+        .with_options(
+            ExecutionOptions::default().with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute(environment.target(), &mut host)
         .await
         .expect("async execution should succeed");
 
@@ -183,9 +200,13 @@ async fn execute_async_supports_async_only_host_events() {
 async fn execute_async_supports_async_only_host_traces() {
     let (program, environment) = emit_trace_program();
 
-    let mut host = YieldingAsyncHost::new(&environment);
+    let mut host = YieldingAsyncHost::new(&environment, program.clone());
     let output = FastProcessor::new(StackInputs::default())
-        .execute(&program, environment.execution(), &mut host)
+        .with_options(
+            ExecutionOptions::default().with_resolution_limits(environment.resolution_limits()),
+        )
+        .unwrap()
+        .execute(environment.target(), &mut host)
         .await
         .expect("async execution should succeed");
 

@@ -76,7 +76,7 @@ impl SourceNaming {
             DependencyBinding::Custom(_) => out.push_str("custom"),
             DependencyBinding::Standard(import) => match import.selection() {
                 LibrarySelection::Latest => out.push_str("latest"),
-                LibrarySelection::Pinned(revision) => {
+                LibrarySelection::Revision(revision) => {
                     write!(out, "pinned:{revision}").expect("writing to a String cannot fail");
                 },
             },
@@ -202,14 +202,14 @@ mod tests {
     use alloc::sync::Arc;
 
     use miden_core::program::CanonicalLabel;
-    use miden_mast_package::NamespacePlan;
+    use miden_mast_package::NamespacePath;
 
     use super::*;
 
     fn naming(convention: SourceNamingConvention, home: &str) -> SourceNaming {
         SourceNaming::new(
             convention,
-            DependencyBinding::Custom(NamespacePlan::new(vec![
+            DependencyBinding::Custom(NamespacePath::new(vec![
                 CanonicalLabel::text(home).unwrap(),
             ])),
         )
@@ -275,11 +275,8 @@ mod tests {
         assert_ne!(projection(&configured), projection(&changed));
         assert!(projection(&configured).contains("target:naming:convention:defining-paths\n"));
 
-        let import = LibraryImport::new(
-            NamespacePlan::new(vec![]),
-            Word::default(),
-            LibrarySelection::Latest,
-        );
+        let import =
+            LibraryRef::new(NamespacePath::new(vec![]), Word::default(), LibrarySelection::Latest);
         let custom = target
             .clone()
             .with_naming(SourceNaming::new(

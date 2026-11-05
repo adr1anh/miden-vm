@@ -8,7 +8,7 @@ use miden_core::{
 
 use super::PackageCallables;
 use crate::{
-    CallableBinding, CallableProcedurePath, NamespacePlan,
+    CallableProcedurePath, NamespacePath, ProcedureName,
     interface::serialization::{
         Budget, CodecError, CodecLimits, HomeProfile, ProfileOperation, TypedIdProfile,
     },
@@ -74,8 +74,8 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn binding(home: Vec<CanonicalLabel>, components: &[&str]) -> CallableBinding {
-    CallableBinding::new(NamespacePlan::new(home), path(components)).unwrap()
+fn binding(home: Vec<CanonicalLabel>, components: &[&str]) -> ProcedureName {
+    ProcedureName::new(NamespacePath::new(home), path(components)).unwrap()
 }
 
 fn context(permitted_homes: Vec<Vec<CanonicalLabel>>) -> Context {

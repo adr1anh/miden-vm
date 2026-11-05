@@ -37,9 +37,8 @@ fn test_linking_imported_symbols_with_duplicate_prefix_components() -> TestResul
     bindings.add_module(&program)?;
     let lib_naming = bindings.admit_package(&lib)?;
     let assembler = Assembler::new(context.source_manager()).with_package(
-        Arc::from(lib),
+        CodePackage::new(Arc::from(lib), lib_naming.into()).unwrap(),
         Linkage::Static,
-        lib_naming,
     )?;
     let assembler = bindings.configure(assembler, [&*program])?;
     let _ = assembler.assemble_program("program", program)?;

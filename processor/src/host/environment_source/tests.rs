@@ -10,23 +10,23 @@ use miden_core::{
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::Operation,
     program::{
-        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionDescriptor, ImplementationRoot,
-        Namespace, ProcedureKey,
+        CanonicalLabel, EnvNode, EnvironmentRoot, ExecutionTarget, ImplementationRoot, Namespace,
+        ProcedureKey,
     },
 };
 use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceSpan};
 
-use super::{EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource};
+use super::{EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest};
 use crate::{
-    BaseHost, DefaultHost, ExecutionEnvironment, FutureMaybeSend, Host, LedgerLimits,
-    LoadedMastForest, OpeningError, OpeningLimits, OpeningStep, ProcessorState, ResolutionWitness,
-    SessionLimits, SyncHost, advice::AdviceMutation, event::EventError,
+    BaseHost, DefaultHost, FutureMaybeSend, Host, LedgerLimits, LoadedMastForest, OpeningError,
+    OpeningLimits, OpeningStep, ProcessorState, ResolutionLimits, ResolutionWitness, SessionLimits,
+    SyncHost, advice::AdviceMutation, event::EventError,
 };
 
 #[test]
 fn configuration_preserves_explicit_authority_and_limits() {
     let descriptor =
-        ExecutionDescriptor::new(ProcedureKey::new(word(10)), EnvironmentRoot::new(word(20)));
+        ExecutionTarget::new(ProcedureKey::new(word(10)), EnvironmentRoot::new(word(20)));
     let opening = OpeningLimits { max_depth: 0, ..opening_limits() };
     let ledger = LedgerLimits {
         max_occurrences: 0,
@@ -46,17 +46,17 @@ fn configuration_preserves_explicit_authority_and_limits() {
 
     // Const evaluation remains available to callers, including for deliberately restrictive policy.
     const fn configured_values(
-        descriptor: ExecutionDescriptor,
+        descriptor: ExecutionTarget,
         opening: OpeningLimits,
         ledger: LedgerLimits,
         session: SessionLimits,
-    ) -> (ExecutionDescriptor, OpeningLimits, LedgerLimits, SessionLimits) {
-        let environment = ExecutionEnvironment::new(descriptor, opening, ledger, session);
+    ) -> (ExecutionTarget, OpeningLimits, LedgerLimits, SessionLimits) {
+        let limits = ResolutionLimits::new(opening, ledger, session);
         (
-            environment.descriptor(),
-            environment.opening_limits(),
-            environment.ledger_limits(),
-            environment.session_limits(),
+            descriptor,
+            limits.opening_limits(),
+            limits.ledger_limits(),
+            limits.session_limits(),
         )
     }
 
@@ -74,7 +74,8 @@ async fn available_code_does_not_supply_missing_environment_evidence() {
         .unwrap();
     forest.make_root(body);
     let implementation = forest.local_procedure_digests().next().unwrap();
-    let mut host = DefaultHost::default().with_library(Arc::new(forest)).unwrap();
+    let mut host = DefaultHost::default();
+    host.mast_forest_store_mut().insert(Arc::new(forest));
     let request = EnvironmentWitnessRequest {
         root: EnvironmentRoot::new(word(50)),
         // Even a key whose bytes match available code does not authorize that implementation.
@@ -82,7 +83,15 @@ async fn available_code_does_not_supply_missing_environment_evidence() {
         limits: opening_limits(),
     };
 
-    assert!(SyncHost::get_mast_forest(&host, &implementation).is_some());
+    assert!(
+        SyncHost::get_mast_forest(
+            &host,
+            crate::CodeRequest::External {
+                implementation: ImplementationRoot::new(implementation)
+            }
+        )
+        .is_some()
+    );
     assert!(SyncHost::get_environment_witness(&mut host, request).unwrap().is_none());
     assert!(Host::get_environment_witness(&mut host, request).await.unwrap().is_none());
 
@@ -187,7 +196,7 @@ struct RecordingSource<F> {
     reply: F,
 }
 
-impl<F> EnvironmentWitnessSource for RecordingSource<F>
+impl<F> EnvironmentSource for RecordingSource<F>
 where
     F: Fn() -> Result<Option<ResolutionWitness>, EnvironmentSourceError> + Send + Sync,
 {
@@ -235,7 +244,7 @@ impl BaseHost for LegacySyncHost {
 }
 
 impl SyncHost for LegacySyncHost {
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, _request: crate::CodeRequest) -> Option<LoadedMastForest> {
         panic!("environment lookup must not fall back to code lookup")
     }
 
@@ -261,7 +270,7 @@ impl BaseHost for AsyncOnlyHost {
 impl Host for AsyncOnlyHost {
     fn get_mast_forest(
         &self,
-        _node_digest: &Word,
+        _request: crate::CodeRequest,
     ) -> impl FutureMaybeSend<Option<LoadedMastForest>> {
         async { panic!("environment lookup must not fall back to code lookup") }
     }
@@ -298,7 +307,7 @@ impl SyncHost for OverrideHost {
         Ok(Some(ResolutionWitness { path: vec![] }))
     }
 
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, _request: crate::CodeRequest) -> Option<LoadedMastForest> {
         panic!("environment lookup must not fall back to code lookup")
     }
 

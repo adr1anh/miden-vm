@@ -47,20 +47,23 @@ fn assert_prove_verify(
     let source_manager = Arc::new(DefaultSourceManager::default());
     let named =
         assemble_fixture_program(Assembler::new(source_manager.clone()), "program", source, &[]);
-    let program = named.program;
+    let program = named.0;
     let stack_inputs = stack_inputs_from_ints([0, 1]);
     let advice_inputs = AdviceInputs::default();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(named.environment.source());
+        .with_environment_source(named.1.source());
     println!("Proving with {hash_name}...");
+    host.load_library(program).unwrap();
     let witness = FastProcessor::new_with_options(
         stack_inputs,
         advice_inputs,
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_resolution_limits(named.1.resolution_limits()),
     )
     .expect("processor initialization failed")
-    .execute_for_proving_sync(&program, named.environment.execution(), &mut host)
+    .execute_for_proving_sync(named.1.target(), &mut host)
     .expect("execution failed");
     let claim = witness.claim();
     let stack_outputs = *claim.stack_outputs();
@@ -134,7 +137,7 @@ fn assert_recursive_verify(claim: &ExecutionClaim, proof: &ExecutionProof) {
     }
     profile
         .authorize(
-            fixture.execution().descriptor().environment_root(),
+            fixture.target().environment_root(),
             environment,
             &effective_advice,
             environment.visits(),
@@ -208,28 +211,31 @@ fn test_keccak_precompile_wrapper_prove_verify_final() {
     let source_manager = Arc::new(DefaultSourceManager::default());
     let named = assemble_fixture_program(
         Assembler::new(source_manager.clone())
-            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
             .expect("failed to link core library"),
         "keccak_precompile_wrapper_test",
         source,
         &[core_lib.naming().as_ref()],
     );
-    let program = named.program;
+    let program = named.0;
     let stack_inputs = StackInputs::default();
     let advice_inputs = AdviceInputs::default();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
         .with_library(&core_lib)
         .expect("failed to load CoreLibrary into the host");
 
+    host.load_library(program).unwrap();
     let witness = FastProcessor::new_with_options(
         stack_inputs,
         advice_inputs,
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_resolution_limits(named.1.resolution_limits()),
     )
     .expect("processor initialization failed")
-    .execute_for_proving_sync(&program, named.environment.execution(), &mut host)
+    .execute_for_proving_sync(named.1.target(), &mut host)
     .expect("failed to execute Keccak precompile program");
     let claim = witness.claim();
     let proof = Prover::new()
@@ -333,25 +339,28 @@ fn test_eidos_recursive_verify_with_precompile_requests() {
     let source_manager = Arc::new(DefaultSourceManager::default());
     let mut assembler = Assembler::new(source_manager.clone());
     assembler
-        .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .link_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to link core library package");
     let named =
         assemble_fixture_program(assembler, "program", source, &[core_lib.naming().as_ref()]);
-    let program = named.program;
+    let program = named.0;
 
     let stack_inputs = StackInputs::default();
     let mut host = DefaultHost::default()
         .with_source_manager(source_manager)
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
         .with_library(&core_lib)
         .expect("failed to load core library into the host");
+    host.load_library(program).unwrap();
     let witness = FastProcessor::new_with_options(
         stack_inputs,
         AdviceInputs::default(),
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_resolution_limits(named.1.resolution_limits()),
     )
     .expect("processor initialization failed")
-    .execute_for_proving_sync(&program, named.environment.execution(), &mut host)
+    .execute_for_proving_sync(named.1.target(), &mut host)
     .expect("execution failed");
     let claim = witness.claim();
     let proof = Prover::new()
@@ -379,10 +388,12 @@ mod prover_api_lifecycle {
     use miden_core::{
         Felt, ONE, Word, ZERO,
         deferred::{Node, PrecompileWitnessEntry, deferred_chunks_frame},
-        program::{EnvironmentRoot, ExecutionDescriptor, ProcedureKey},
+        program::{EnvironmentRoot, ExecutionTarget, ProcedureKey},
     };
     use miden_precompiles::{UintDomain, UintPrecompile};
-    use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
+    use miden_utils_testing::librarytree::{
+        FixtureEnvironment, assemble_fixture_program, trace_limits,
+    };
     use miden_vm::{
         DefaultHost, ExecutionClaim, ExecutionOptions, ExecutionProof, ExecutionWitness,
         FastProcessor, HashFunction, PrecompileLimits, PrecompileProof, PrecompileStatus,
@@ -393,7 +404,7 @@ mod prover_api_lifecycle {
     use super::minimum_conjectured_security_level;
 
     struct ProgramFixture {
-        named: NamedProgram,
+        named: (miden_mast_package::CodePackage, FixtureEnvironment),
         source_manager: Arc<DefaultSourceManager>,
     }
 
@@ -401,7 +412,9 @@ mod prover_api_lifecycle {
         fn host(&self) -> DefaultHost {
             DefaultHost::default()
                 .with_source_manager(self.source_manager.clone())
-                .with_environment_source(self.named.environment.source())
+                .with_environment_source(self.named.1.source())
+                .with_library(self.named.0.clone())
+                .expect("fixture code must load")
         }
     }
 
@@ -418,13 +431,13 @@ mod prover_api_lifecycle {
 
     fn execute(program: &ProgramFixture) -> ExecutionWitness {
         FastProcessor::new(StackInputs::default())
-            .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
-            .expect("fixture execution options must be valid")
-            .execute_for_proving_sync(
-                &program.named.program,
-                program.named.environment.execution(),
-                &mut program.host(),
+            .with_options(
+                ExecutionOptions::default()
+                    .with_environment_trace_limits(trace_limits())
+                    .with_resolution_limits(program.named.1.resolution_limits()),
             )
+            .expect("fixture execution options must be valid")
+            .execute_for_proving_sync(program.named.1.target(), &mut program.host())
             .expect("execution should produce a witness")
     }
 
@@ -502,7 +515,7 @@ mod prover_api_lifecycle {
     }
 
     fn assert_complete(
-        execution_descriptor: ExecutionDescriptor,
+        execution_descriptor: ExecutionTarget,
         stack_inputs: StackInputs,
         stack_outputs: StackOutputs,
         proof: &ExecutionProof,
@@ -525,10 +538,7 @@ mod prover_api_lifecycle {
         let program = assemble("begin push.1 drop end");
         let witness = execute(&program);
         let claim = witness.claim();
-        assert_eq!(
-            claim.execution_descriptor(),
-            program.named.environment.execution().descriptor(),
-        );
+        assert_eq!(claim.execution_descriptor(), program.named.1.target(),);
         let (vm_witness, precompile_witness) = witness.into_parts();
         assert!(precompile_witness.is_none());
 
@@ -556,7 +566,7 @@ mod prover_api_lifecycle {
                 let mut elements = claim.to_elements();
                 elements[coordinate] += ONE;
                 let changed = ExecutionClaim::new(
-                    ExecutionDescriptor::new(
+                    ExecutionTarget::new(
                         ProcedureKey::new(Word::new(elements[0..4].try_into().unwrap())),
                         EnvironmentRoot::new(Word::new(elements[4..8].try_into().unwrap())),
                     ),
@@ -598,24 +608,28 @@ mod prover_api_lifecycle {
             let mut buffered_host = program.host();
             let (buffered_outputs, buffered_proof) = prove_sync(
                 &prover,
-                &program.named.program,
-                program.named.environment.execution(),
+                program.named.1.target(),
                 stack_inputs,
                 AdviceInputs::default(),
                 &mut buffered_host,
-                execution_options.clone().with_overlapped_trace_build(false),
+                execution_options
+                    .clone()
+                    .with_resolution_limits(program.named.1.resolution_limits())
+                    .with_overlapped_trace_build(false),
             )
             .expect("buffered execute-and-prove should succeed");
 
             let mut overlapped_host = program.host();
             let (overlapped_outputs, overlapped_proof) = prove_sync(
                 &prover,
-                &program.named.program,
-                program.named.environment.execution(),
+                program.named.1.target(),
                 stack_inputs,
                 AdviceInputs::default(),
                 &mut overlapped_host,
-                execution_options.clone().with_overlapped_trace_build(true),
+                execution_options
+                    .clone()
+                    .with_resolution_limits(program.named.1.resolution_limits())
+                    .with_overlapped_trace_build(true),
             )
             .expect("overlapped execute-and-prove should succeed");
 
@@ -625,13 +639,13 @@ mod prover_api_lifecycle {
             // Parallel proof-of-work grinding may select different valid witnesses, so verify both
             // proofs instead of requiring byte-identical encodings.
             assert_complete(
-                program.named.environment.execution().descriptor(),
+                program.named.1.target(),
                 stack_inputs,
                 buffered_outputs,
                 &buffered_proof,
             );
             assert_complete(
-                program.named.environment.execution().descriptor(),
+                program.named.1.target(),
                 stack_inputs,
                 overlapped_outputs,
                 &overlapped_proof,
@@ -854,16 +868,16 @@ mod execution_witness_serialization {
         serde::DeserializationError,
     };
     use miden_mast_package::{
-        CallableBinding, CallableProcedurePath, Package, PackageCallables, PackageId,
-        PackageNaming, TargetType, Version,
+        CallableProcedurePath, Package, PackageCallables, PackageId, PackageSymbols, ProcedureName,
+        TargetType, Version,
     };
     use miden_processor::{
-        DefaultHost, EnvironmentTraceLimits, ExecutionOptions, FastProcessor, HostLibrary,
-        ReplayReadLimits, StackInputs, advice::AdviceInputs, trace::build_trace,
+        DefaultHost, EnvironmentTraceLimits, ExecutionOptions, FastProcessor, ReplayReadLimits,
+        StackInputs, advice::AdviceInputs, trace::build_trace,
     };
     use miden_prover::{HashFunction, Prover};
     use miden_utils_testing::librarytree::{
-        FixtureEnvironment, NamedProgram, assemble_fixture_program, trace_limits,
+        FixtureEnvironment, assemble_fixture_program, trace_limits,
     };
     #[cfg(feature = "arbitrary")]
     use miden_utils_testing::proptest::prelude::*;
@@ -872,13 +886,13 @@ mod execution_witness_serialization {
 
     /// Retains authority independently of the witness bytes, with policies selected before capture.
     struct WitnessFixture {
-        named: NamedProgram,
+        named: (miden_mast_package::CodePackage, FixtureEnvironment),
         trace_limits: EnvironmentTraceLimits,
         transport_limits: ReplayReadLimits,
     }
 
     impl WitnessFixture {
-        fn new(named: NamedProgram) -> Self {
+        fn new(named: (miden_mast_package::CodePackage, FixtureEnvironment)) -> Self {
             Self {
                 named,
                 trace_limits: trace_limits(),
@@ -898,7 +912,8 @@ mod execution_witness_serialization {
         fn read(&self, bytes: &[u8]) -> Result<ExecutionWitness, DeserializationError> {
             ExecutionWitness::read_from_bytes_with_limits(
                 bytes,
-                &self.named.environment.execution(),
+                self.named.1.target(),
+                self.named.1.resolution_limits(),
                 self.trace_limits,
                 self.transport_limits,
             )
@@ -908,19 +923,22 @@ mod execution_witness_serialization {
     fn fixture_host(
         source_manager: Arc<DefaultSourceManager>,
         environment: &FixtureEnvironment,
+        code: &miden_mast_package::CodePackage,
     ) -> DefaultHost {
         DefaultHost::default()
             .with_source_manager(source_manager)
             .with_environment_source(environment.source())
+            .with_library(code.clone())
+            .expect("fixture code must load")
     }
 
-    fn create_simple_library() -> HostLibrary {
+    fn create_simple_library() -> Arc<MastForest> {
         let mut mast_forest = MastForest::new();
         let swap_block = BasicBlockNodeBuilder::new(vec![Operation::Swap, Operation::Swap])
             .add_to_forest(&mut mast_forest)
             .unwrap();
         mast_forest.make_root(swap_block);
-        HostLibrary::from(Arc::new(mast_forest))
+        Arc::new(mast_forest)
     }
 
     fn external_lib_proc_digest() -> Word {
@@ -931,7 +949,7 @@ mod execution_witness_serialization {
         forest.get_node_by_id(swap_block).unwrap().digest()
     }
 
-    fn external_program() -> NamedProgram {
+    fn external_program() -> (miden_mast_package::CodePackage, FixtureEnvironment) {
         let mut program = MastForest::new();
         let basic_block = BasicBlockNodeBuilder::new(vec![Operation::Pad, Operation::Drop])
             .add_to_forest(&mut program)
@@ -946,7 +964,7 @@ mod execution_witness_serialization {
         // This test owns a hand-built structural ExternalNode forest. Name its one local entry
         // explicitly, while retaining the external forest and its separate host code supply.
         let namespace = FixtureNamespace::assembly_tests();
-        let entry = CallableBinding::new(
+        let entry = ProcedureName::new(
             namespace.namespace_plan().clone(),
             CallableProcedurePath::from_semantic_components(vec!["external_witness_entry".into()])
                 .unwrap(),
@@ -954,7 +972,7 @@ mod execution_witness_serialization {
         .unwrap();
         let key = entry.key();
         let naming = Arc::new(
-            PackageNaming::new(
+            PackageSymbols::new(
                 namespace.namespace_plan().clone(),
                 PackageCallables::new(
                     [entry],
@@ -979,8 +997,8 @@ mod execution_witness_serialization {
             .unwrap(),
         );
         let environment = FixtureEnvironment::new(key, [naming.as_ref()]).unwrap();
-        let program = package.try_into_program(&naming).unwrap();
-        NamedProgram { program, environment, package, naming }
+        let code = miden_mast_package::CodePackage::new(package, naming).unwrap();
+        (code, environment)
     }
 
     fn stack_neutral_program_source(operations: &[u8]) -> String {
@@ -1009,17 +1027,15 @@ mod execution_witness_serialization {
             &[],
         );
         let fixture = WitnessFixture::new(named);
-        let mut host = fixture_host(source_manager, &fixture.named.environment);
+        let mut host = fixture_host(source_manager, &fixture.named.1, &fixture.named.0);
         let witness = FastProcessor::new(stack_inputs)
             .with_options(
-                ExecutionOptions::default().with_environment_trace_limits(fixture.trace_limits),
+                ExecutionOptions::default()
+                    .with_environment_trace_limits(fixture.trace_limits)
+                    .with_resolution_limits(fixture.named.1.resolution_limits()),
             )
             .expect("fixture execution options must be valid")
-            .execute_for_proving_sync(
-                &fixture.named.program,
-                fixture.named.environment.execution(),
-                &mut host,
-            )
+            .execute_for_proving_sync(fixture.named.1.target(), &mut host)
             .expect("execution should produce a witness");
         (witness, fixture)
     }
@@ -1029,12 +1045,21 @@ mod execution_witness_serialization {
         name: &str,
         execution: (ExecutionWitness, WitnessFixture),
     ) {
+        use miden_core::serde::Serializable;
+
         let (witness, fixture) = execution;
         let bytes = fixture.write(&witness);
         fixture
             .read(&bytes)
             .expect("witness seed should pass adversarial byte-slice decoding");
-        std::fs::write(corpus_dir.join(name), bytes).expect("witness seed should be writable");
+        // The fuzz caller supplies authority separately from replay-v6. This envelope uses the
+        // fixture owner's selected target; it never extracts expected identities from the wire.
+        let target = fixture.named.1.target();
+        let mut seed = Vec::with_capacity(2 * Word::SERIALIZED_SIZE + bytes.len());
+        target.entry_key().write_into(&mut seed);
+        target.environment_root().write_into(&mut seed);
+        seed.extend_from_slice(&bytes);
+        std::fs::write(corpus_dir.join(name), seed).expect("witness seed should be writable");
     }
 
     #[test]
@@ -1081,7 +1106,7 @@ mod execution_witness_serialization {
             let restored_trace =
                 build_trace(restored_vm, &miden_vm_stark::memory::default_budget()).expect("restored generated witness should build a trace");
             prop_assert_eq!(restored_trace.stack_outputs(), original_trace.stack_outputs());
-            prop_assert_eq!(restored_trace.program_info(), original_trace.program_info());
+            prop_assert_eq!(restored_trace.entry_implementation(), original_trace.entry_implementation());
             prop_assert_eq!(
                 restored_trace.trace_len_summary(),
                 original_trace.trace_len_summary()
@@ -1108,21 +1133,21 @@ mod execution_witness_serialization {
         let fixture = WitnessFixture::new(external_program());
         let stack_inputs = StackInputs::default();
         let advice_inputs = AdviceInputs::default();
-        let mut host =
-            fixture_host(Arc::new(DefaultSourceManager::default()), &fixture.named.environment);
-        host.load_library(create_simple_library())
-            .expect("failed to load test library into host");
+        let mut host = fixture_host(
+            Arc::new(DefaultSourceManager::default()),
+            &fixture.named.1,
+            &fixture.named.0,
+        );
+        host.mast_forest_store_mut().insert(create_simple_library());
         let witness = FastProcessor::new_with_options(
             stack_inputs,
             advice_inputs,
-            ExecutionOptions::default().with_environment_trace_limits(fixture.trace_limits),
+            ExecutionOptions::default()
+                .with_environment_trace_limits(fixture.trace_limits)
+                .with_resolution_limits(fixture.named.1.resolution_limits()),
         )
         .expect("invalid advice inputs")
-        .execute_for_proving_sync(
-            &fixture.named.program,
-            fixture.named.environment.execution(),
-            &mut host,
-        )
+        .execute_for_proving_sync(fixture.named.1.target(), &mut host)
         .expect("execution should produce a witness");
 
         let claim = witness.claim();
@@ -1140,7 +1165,7 @@ mod execution_witness_serialization {
         let restored_trace = build_trace(restored_vm, &miden_vm_stark::memory::default_budget())
             .expect("restored witness builds trace");
         assert_eq!(restored_trace.stack_outputs(), original_trace.stack_outputs());
-        assert_eq!(restored_trace.program_info(), original_trace.program_info());
+        assert_eq!(restored_trace.entry_implementation(), original_trace.entry_implementation());
         assert_eq!(restored_trace.trace_len_summary(), original_trace.trace_len_summary());
         assert_eq!(
             restored_trace.public_inputs().to_air_inputs(),
@@ -1177,17 +1202,15 @@ mod execution_witness_serialization {
             &[],
         );
         let fixture = WitnessFixture::new(named);
-        let mut host = fixture_host(source_manager, &fixture.named.environment);
+        let mut host = fixture_host(source_manager, &fixture.named.1, &fixture.named.0);
         let witness = FastProcessor::new(StackInputs::default())
             .with_options(
-                ExecutionOptions::default().with_environment_trace_limits(fixture.trace_limits),
+                ExecutionOptions::default()
+                    .with_environment_trace_limits(fixture.trace_limits)
+                    .with_resolution_limits(fixture.named.1.resolution_limits()),
             )
             .expect("fixture execution options must be valid")
-            .execute_for_proving_sync(
-                &fixture.named.program,
-                fixture.named.environment.execution(),
-                &mut host,
-            )
+            .execute_for_proving_sync(fixture.named.1.target(), &mut host)
             .expect("execution should produce a witness");
 
         let witness_bytes = fixture.write(&witness);

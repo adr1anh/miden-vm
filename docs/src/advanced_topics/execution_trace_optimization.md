@@ -15,7 +15,7 @@ padded AIR matrices:
 | AIR | Purpose | Growth rule |
 | --- | --- | --- |
 | Core | System, decoder, and operand stack | Primarily one row per VM operation |
-| Chiplets | Hash controller, bitwise, memory, ACE, and kernel ROM | Rows added when operations use a chiplet |
+| Chiplets | Library authentication, AEAD, hash controller, bitwise, memory, and ACE | Rows added when operations use a chiplet |
 | Eidos compression | Native Eidos computations | One 32-row cycle per physical compression |
 | And8 lookup | Byte AND, Eidos compression rotations, and 16-bit range checks | Fixed at $2^{16}$ rows |
 
@@ -26,6 +26,11 @@ represented by multiplicities rather than additional rows.
 This distinction matters when optimizing code. A program can reduce its VM operation count while
 increasing Eidos compression or chiplet work, and therefore make the proof more expensive. Conversely, many
 range-check requests increase And8 multiplicities but do not increase that AIR's height.
+
+Library rows authenticate environment bindings and invocation uses. Their hash requests use the
+Controller and Eidos compression traces; AEAD work also uses the stacked Chiplets trace. Syscall
+resource accounting includes the authenticated bindings, their invocation uses, and the associated
+Controller and compression work.
 
 The runtime applies a hard `2^29`-row limit while building the variable-height traces. Execution
 stops with `TraceLenExceeded` rather than attempting an oversized allocation.
@@ -44,7 +49,7 @@ AIR can therefore produce a discrete proving-cost jump even when the other AIR h
 unchanged. In particular:
 
 - batching ordinary work affects the Core height;
-- memory, ACE, bitwise, and controller operations affect the stacked Chiplets height;
+- Library authentication, AEAD, memory, ACE, bitwise, and Controller operations affect the stacked Chiplets height;
 - every native hash, Merkle step, or control-block compression contributes a 32-row Eidos compression cycle;
 - byte operations and range checks change lookup multiplicities, not the fixed And8 height.
 

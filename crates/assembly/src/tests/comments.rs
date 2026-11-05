@@ -8,7 +8,7 @@ fn comment_simple() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin # simple comment \n push.1 push.2 add end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -32,7 +32,7 @@ fn comment_in_nested_control_blocks() -> TestResult {
         end"
     );
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -41,7 +41,7 @@ fn comment_before_program() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "# starting comment \n begin push.1 push.2 add end");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -50,7 +50,7 @@ fn comment_after_program() -> TestResult {
     let context = TestContext::default();
     let source = source_file!(&context, "begin push.1 push.2 add end # closing comment");
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -66,7 +66,7 @@ begin
 end"
     );
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -81,7 +81,7 @@ begin push.A adv.push_mapval assert end"
     );
 
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -96,7 +96,7 @@ begin push.A adv.push_mapval assert end"
     );
 
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 
@@ -111,6 +111,6 @@ begin adv.has_mapkey assert end"
     );
 
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }

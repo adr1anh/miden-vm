@@ -18,12 +18,13 @@ use miden_air_definitions::vm::{
         },
     },
 };
+use miden_assembly::CodePackage;
 use miden_core::{
     Felt,
     field::QuadFelt,
     mast::{BasicBlockNodeBuilder, LoopNodeBuilder, MastForest},
     operations::{Operation, opcodes},
-    program::{Program, StackOutputs},
+    program::StackOutputs,
     utils::{Matrix, RowMajorMatrix},
 };
 use miden_processor::{
@@ -34,37 +35,39 @@ use miden_stark::{
     air::BaseAir,
     lookup::{Challenges, LookupMessage, build_lookup_fractions},
 };
+use miden_utils_testing::librarytree::fixture_code;
 
 use crate::repro_harness::{ReproTrace, core_row_mut};
 
-fn build_loop_program(body_ops: Vec<Operation>) -> Program {
+fn build_loop_program(body_ops: Vec<Operation>) -> CodePackage {
     let mut mast_forest = MastForest::new();
     let body = BasicBlockNodeBuilder::new(body_ops).add_to_forest(&mut mast_forest).unwrap();
     let root = LoopNodeBuilder::new(body).add_to_forest(&mut mast_forest).unwrap();
     mast_forest.make_root(root);
-    Program::new(mast_forest.into(), root)
+    fixture_code(mast_forest.into(), root)
 }
 
-fn build_basic_program(ops: Vec<Operation>) -> Program {
+fn build_basic_program(ops: Vec<Operation>) -> CodePackage {
     let mut mast_forest = MastForest::new();
     let root = BasicBlockNodeBuilder::new(ops).add_to_forest(&mut mast_forest).unwrap();
     mast_forest.make_root(root);
-    Program::new(mast_forest.into(), root)
+    fixture_code(mast_forest.into(), root)
 }
 
-fn execute(program: &Program, stack: &[u64]) -> VmTrace {
+fn execute(program: &CodePackage, stack: &[u64]) -> VmTrace {
     let stack = stack.iter().map(|&v| Felt::new_unchecked(v)).collect::<Vec<_>>();
     let environment = crate::named_fixture::raw_environment(program, "repeat-loop-schema");
     let mut host = DefaultHost::default().with_environment_source(environment.source());
+    host.load_library(program.clone()).unwrap();
     let (trace, precompile_witness) = FastProcessor::new(StackInputs::new(&stack).unwrap())
         .with_options(
             miden_processor::ExecutionOptions::default()
+                .with_resolution_limits(environment.resolution_limits())
                 .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
         )
         .unwrap()
         .execute_and_build_trace_sync(
-            program,
-            environment.execution(),
+            environment.target(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

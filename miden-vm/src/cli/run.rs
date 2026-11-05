@@ -93,7 +93,8 @@ impl RunCmd {
         let inputs = self.execution.admit()?;
         let execution_options = self
             .get_execution_options()?
-            .with_environment_trace_limits(inputs.trace_limits());
+            .with_environment_trace_limits(inputs.trace_limits())
+            .with_resolution_limits(inputs.resolution_limits());
         println!("===============================================================================");
         println!("Run program: {}", self.program_file.display());
         println!("-------------------------------------------------------------------------------");
@@ -102,14 +103,12 @@ impl RunCmd {
 
         let naming = self.naming.read()?;
         let libraries = Libraries::new(&self.library_paths, &naming)?;
-        let (trace, program_hash) =
-            run_program(self, execution_options, &inputs, &naming, &libraries)?;
+        let trace = run_program(self, execution_options, &inputs, &naming, &libraries)?;
 
-        println!(
-            "Executed the program with hash {} in {} ms",
-            hex::encode(program_hash),
-            now.elapsed().as_millis()
-        );
+        println!("Entry key: {}", inputs.target().entry_key().as_word());
+        println!("Environment root: {}", inputs.target().environment_root().as_word());
+        println!("Entry implementation: {}", trace.entry_implementation().as_word());
+        println!("Executed the program in {} ms", now.elapsed().as_millis());
 
         if let Some(output_path) = &self.output_file {
             // write outputs to file if one was specified
@@ -172,13 +171,13 @@ fn run_program(
     inputs: &AdmittedExecutionInputs,
     naming: &miden_vm::internal::naming_inputs::NamingInputs,
     libraries: &Libraries,
-) -> Result<(VmTrace, [u8; 32]), Report> {
+) -> Result<VmTrace, Report> {
     let loaded = load_program(
         &params.program_file,
         libraries,
         params.kernel_file.as_deref(),
         naming,
-        inputs.environment().descriptor().entry_key(),
+        inputs.target().entry_key(),
     )?;
     let input_data = InputFile::read(&params.input_file, &params.program_file)?;
     let stack_inputs = input_data.parse_stack_inputs().map_err(Report::msg)?;
@@ -190,33 +189,13 @@ fn run_program(
         host = host.with_source_manager(source_manager);
     }
     load_program_libraries(&mut host, &loaded, libraries)?;
-    let program_hash = loaded.program.hash().into();
-    let debug_info = loaded.target.package.debug_info().map_err(Report::msg)?;
-    let entry_source = loaded.target.package.entrypoint_source_node();
     let processor = FastProcessor::new_with_options(stack_inputs, advice_inputs, exec_options)
         .map_err(Report::msg)?;
-    let witness = match (debug_info.as_ref(), entry_source) {
-        (Some(debug_info), Some(source_node)) => processor
-            .execute_for_proving_with_package_debug_info_at_source_node_sync(
-                &loaded.program,
-                inputs.environment(),
-                debug_info,
-                source_node,
-                &mut host,
-            ),
-        (Some(debug_info), None) => processor.execute_for_proving_with_package_debug_info_sync(
-            &loaded.program,
-            inputs.environment(),
-            debug_info,
-            &mut host,
-        ),
-        (None, _) => {
-            processor.execute_for_proving_sync(&loaded.program, inputs.environment(), &mut host)
-        },
-    }
-    .wrap_err("Failed to execute program")?;
+    let witness = processor
+        .execute_for_proving_sync(inputs.target(), &mut host)
+        .wrap_err("Failed to execute program")?;
     let (vm_witness, _) = witness.into_parts();
     let trace = build_trace(vm_witness, &canonical_budget(params.max_prover_memory))
         .wrap_err("Failed to build trace")?;
-    Ok((trace, program_hash))
+    Ok(trace)
 }

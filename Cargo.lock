@@ -2402,6 +2402,7 @@ dependencies = [
  "miden-crypto",
  "miden-precompiles",
  "miden-processor",
+ "miden-test-utils",
  "p256",
  "wycheproof-ng-core",
  "wycheproof-ng-dh",

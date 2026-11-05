@@ -51,6 +51,8 @@ pub enum ExecutionError {
     CycleLimitExceeded(u32),
     #[error("execution is no longer in a state that permits transitions or successful export")]
     InvalidExecutionState,
+    #[error("execution requires explicit resolution limits")]
+    MissingResolutionLimits,
     #[error("keyed tracing requires explicit environment trace limits")]
     MissingEnvironmentTraceLimits,
     #[error("environment resolution session failed: {0}")]

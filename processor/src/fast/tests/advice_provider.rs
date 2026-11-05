@@ -144,16 +144,19 @@ fn test_advice_provider() {
 
     let test =
         Test::new("program", program_source, false).with_kernel_source("kernel", kernel_source);
-    let (program, kernel_lib, _) = test.compile().unwrap();
-    let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
+    let (program, kernel_lib) = test.compile().unwrap();
+    let (target, resolution_limits, source) =
+        native_fixture_environment(&test.fixture_environment().unwrap());
     let kernel_lib = kernel_lib.expect("test has an assembled kernel");
-    let mut fast_host = TestHost::with_kernel_forest(kernel_lib.mast_forest().clone())
+    let mut fast_host = TestHost::with_kernel_forest(kernel_lib.package().mast_forest().clone())
+        .with_code(program)
         .with_environment_source(source);
     let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_resolution_limits(resolution_limits))
+        .unwrap()
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
-    let fast_stack_outputs =
-        processor.execute_sync(&program, environment, &mut fast_host).unwrap().stack;
+    let fast_stack_outputs = processor.execute_sync(target, &mut fast_host).unwrap().stack;
 
     // check outputs
     insta::assert_debug_snapshot!("stack_outputs", fast_stack_outputs);

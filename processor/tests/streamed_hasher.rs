@@ -55,12 +55,17 @@ begin
 end
 ";
 
-fn processor(stack: &[u64], advice: AdviceInputs) -> FastProcessor {
+fn processor(
+    stack: &[u64],
+    advice: AdviceInputs,
+    limits: miden_processor::ResolutionLimits,
+) -> FastProcessor {
     let stack: Vec<Felt> = stack.iter().map(|&v| Felt::new(v).unwrap()).collect();
     FastProcessor::new_with_options(
         StackInputs::new(&stack).unwrap(),
         advice,
         ExecutionOptions::default()
+            .with_resolution_limits(limits)
             .with_environment_trace_limits(trace_limits())
             .with_core_trace_fragment_size(64)
             .expect("valid fragment size"),
@@ -75,8 +80,9 @@ fn assert_overlapped_matches_buffered(program_src: &str, stack: &[u64], advice: 
 
     let buffered = {
         let mut host = DefaultHost::default().with_environment_source(environment.source());
-        let execution_witness = processor(stack, advice.clone())
-            .execute_for_proving_sync(&program, environment.execution(), &mut host)
+        host.load_library(program.clone()).unwrap();
+        let execution_witness = processor(stack, advice.clone(), environment.resolution_limits())
+            .execute_for_proving_sync(environment.target(), &mut host)
             .unwrap();
         let (vm_witness, precompiles_witness) = execution_witness.into_parts();
         assert!(precompiles_witness.is_none());
@@ -85,19 +91,20 @@ fn assert_overlapped_matches_buffered(program_src: &str, stack: &[u64], advice: 
 
     let streamed = {
         let mut host = DefaultHost::default().with_environment_source(environment.source());
-        let (trace, precompiles_witness) = processor(stack, advice.clone())
-            .execute_and_build_trace_sync(
-                &program,
-                environment.execution(),
-                &mut host,
-                &miden_vm_stark::memory::default_budget(),
-            )
-            .unwrap();
+        host.load_library(program).unwrap();
+        let (trace, precompiles_witness) =
+            processor(stack, advice.clone(), environment.resolution_limits())
+                .execute_and_build_trace_sync(
+                    environment.target(),
+                    &mut host,
+                    &miden_vm_stark::memory::default_budget(),
+                )
+                .unwrap();
         assert!(precompiles_witness.is_none());
         trace
     };
 
-    assert_eq!(buffered.program_hash(), streamed.program_hash());
+    assert_eq!(buffered.entry_implementation(), streamed.entry_implementation());
     let (b_core, b_chiplets, b_eidos_compression, b_and8) =
         buffered.main_trace().clone_air_matrices();
     let (s_core, s_chiplets, s_eidos_compression, s_and8) =
@@ -211,10 +218,10 @@ fn overlap_builder_thread_enters_the_instrument_span() {
     let caller = std::thread::current().id();
     tracing::subscriber::with_default(subscriber, || {
         let mut host = DefaultHost::default().with_environment_source(environment.source());
-        processor(&[1], AdviceInputs::default())
+        host.load_library(program.clone()).unwrap();
+        processor(&[1], AdviceInputs::default(), environment.resolution_limits())
             .execute_and_build_trace_sync(
-                &program,
-                environment.execution(),
+                environment.target(),
                 &mut host,
                 &miden_vm_stark::memory::default_budget(),
             )

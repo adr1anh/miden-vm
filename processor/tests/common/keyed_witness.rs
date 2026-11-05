@@ -3,41 +3,49 @@
 extern crate alloc;
 
 use miden_core::{
-    mast::{BasicBlockNodeBuilder, MastForest},
+    mast::{BasicBlockNodeBuilder, MastForest, MastNodeExt},
     operations::Operation,
-    program::{CanonicalLabel, EnvNode, ExecutionDescriptor, ImplementationRoot, Namespace},
+    program::{CanonicalLabel, EnvNode, ExecutionTarget, ImplementationRoot, Namespace},
+};
+use miden_mast_package::{
+    CallableProcedurePath, CodePackage, NamespacePath, Package, PackageCallables, PackageId,
+    PackageProcedureOccurrence, PackageSymbols, ProcedureName, TargetType, Version,
 };
 
 use self::alloc::{sync::Arc, vec, vec::Vec};
 use super::processor::{
-    DefaultHost, EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
-    EnvironmentWitnessSource, ExecutionEnvironment, ExecutionOptions, ExecutionWitness,
-    FastProcessor, Felt, LedgerLimits, OpeningLimits, OpeningStep, Program, ReplayReadLimits,
+    DefaultHost, EnvironmentSource, EnvironmentSourceError, EnvironmentTraceLimits,
+    EnvironmentWitnessRequest, ExecutionOptions, ExecutionWitness, FastProcessor, Felt,
+    LedgerLimits, OpeningLimits, OpeningStep, ReplayReadLimits, ResolutionLimits,
     ResolutionWitness, SessionLimits, StackInputs,
 };
 
 pub struct WitnessFixture {
     pub witness: ExecutionWitness,
-    pub environment: ExecutionEnvironment,
+    pub target: ExecutionTarget,
+    pub resolution_limits: ResolutionLimits,
 }
 
 pub struct ExecutionFixture {
-    pub program: Program,
-    pub environment: ExecutionEnvironment,
+    // The integration reader inspects code; unit replay consumers use the host-owned clone.
+    #[allow(dead_code)]
+    pub code: CodePackage,
+    pub target: ExecutionTarget,
+    pub resolution_limits: ResolutionLimits,
     pub host: DefaultHost,
 }
 
 struct EntrySource {
-    environment: ExecutionEnvironment,
+    target: ExecutionTarget,
     node: EnvNode,
 }
 
-impl EnvironmentWitnessSource for EntrySource {
+impl EnvironmentSource for EntrySource {
     fn get(
         &self,
         request: EnvironmentWitnessRequest,
     ) -> Result<Option<ResolutionWitness>, EnvironmentSourceError> {
-        let descriptor = self.environment.descriptor();
+        let descriptor = self.target;
         if request.root != descriptor.environment_root() || request.key != descriptor.entry_key() {
             return Ok(None);
         }
@@ -54,21 +62,40 @@ pub fn execution_fixture(operations: Vec<Operation>) -> ExecutionFixture {
     let mut forest = MastForest::new();
     let root = BasicBlockNodeBuilder::new(operations).add_to_forest(&mut forest).unwrap();
     forest.make_root(root);
-    let program = Program::new(Arc::new(forest), root);
-
-    execution_fixture_for_program(program)
-}
-
-/// Authenticates the entry binding for a program without retained runtime invocations.
-pub fn execution_fixture_for_program(program: Program) -> ExecutionFixture {
     let label = CanonicalLabel::text("entry").unwrap().commitment();
     let entry = Namespace::initial().procedure_key(label);
-    let node = EnvNode::Mast {
-        label,
-        implementation: ImplementationRoot::new(program.hash()),
-    };
-    let environment = ExecutionEnvironment::new(
-        ExecutionDescriptor::new(entry, node.commitment().unwrap()),
+    let implementation = ImplementationRoot::new(forest[root].digest());
+    let node = EnvNode::Mast { label, implementation };
+    let target = ExecutionTarget::new(entry, node.commitment().unwrap());
+    let home = NamespacePath::new(vec![]);
+    let name = ProcedureName::new(
+        home.clone(),
+        CallableProcedurePath::from_semantic_components(vec!["entry".into()]).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(name.key(), entry);
+    let symbols = Arc::new(
+        PackageSymbols::new(
+            home,
+            PackageCallables::new([name], [], [(entry, implementation)]).unwrap(),
+            Some(entry),
+        )
+        .unwrap(),
+    );
+    let package = Package::create(
+        PackageId::from("keyed-witness-fixture"),
+        Version::new(1, 0, 0),
+        TargetType::Executable,
+        Arc::new(forest),
+        [],
+        [],
+        &symbols,
+    )
+    .unwrap()
+    .with_procedure_occurrences([PackageProcedureOccurrence::new(entry, root, None)], &symbols)
+    .unwrap();
+    let code = CodePackage::new(Arc::new(package), symbols).unwrap();
+    let resolution_limits = ResolutionLimits::new(
         OpeningLimits {
             max_nodes: 1,
             max_depth: 0,
@@ -93,19 +120,29 @@ pub fn execution_fixture_for_program(program: Program) -> ExecutionFixture {
             max_prepare_peak_bytes: 131_072,
         },
     );
-    let host =
-        DefaultHost::default().with_environment_source(Arc::new(EntrySource { environment, node }));
-    ExecutionFixture { program, environment, host }
+    let mut host =
+        DefaultHost::default().with_environment_source(Arc::new(EntrySource { target, node }));
+    host.load_library(code.clone()).unwrap();
+    ExecutionFixture { code, target, resolution_limits, host }
 }
 
 pub fn execution_witness(operations: Vec<Operation>, stack: StackInputs) -> WitnessFixture {
-    let ExecutionFixture { program, environment, mut host } = execution_fixture(operations);
+    let ExecutionFixture {
+        code: _,
+        target,
+        resolution_limits,
+        mut host,
+    } = execution_fixture(operations);
     let witness = FastProcessor::new(stack)
-        .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+        .with_options(
+            ExecutionOptions::default()
+                .with_resolution_limits(resolution_limits)
+                .with_environment_trace_limits(trace_limits()),
+        )
         .unwrap()
-        .execute_for_proving_sync(&program, environment, &mut host)
+        .execute_for_proving_sync(target, &mut host)
         .expect("authenticated single-block execution should produce a witness");
-    WitnessFixture { witness, environment }
+    WitnessFixture { witness, target, resolution_limits }
 }
 
 pub fn deferred_witness() -> WitnessFixture {

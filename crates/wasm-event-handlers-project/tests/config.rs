@@ -13,7 +13,7 @@ use miden_assembly::{
     diagnostics::Report,
     testing::{TestRegistry, configure_project_fixture},
 };
-use miden_mast_package::{MAX_MODULE_BYTES, Package as MastPackage};
+use miden_mast_package::{CodePackage, MAX_MODULE_BYTES, Package as MastPackage};
 use miden_processor::DefaultHost;
 // The tests write the manifest records the guest SDK macro normally writes.
 use miden_wasm_event_handlers::{
@@ -65,8 +65,9 @@ fn write_handler_module_for(root: &Path, event: &str) {
 }
 
 /// Returns the event names of the handler section `package` carries.
-fn events(package: &MastPackage) -> Vec<String> {
+fn events(package: &CodePackage) -> Vec<String> {
     package
+        .package()
         .event_handlers()
         .expect("the section decodes")
         .expect("the package carries the section")
@@ -186,7 +187,7 @@ fn assemble_with(
     manifest_path: &Path,
     target: ProjectTargetSelector<'_>,
     processor: impl PackagePostProcessor + 'static,
-) -> Result<Arc<MastPackage>, Report> {
+) -> Result<CodePackage, Report> {
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(manifest_path, &mut registry)?;
@@ -209,7 +210,7 @@ fn absolute_module_metadata(dir: &Path) -> String {
 fn assemble(
     manifest_path: &Path,
     target: ProjectTargetSelector<'_>,
-) -> Result<Arc<MastPackage>, Report> {
+) -> Result<CodePackage, Report> {
     assemble_with(manifest_path, target, WasmEventHandlerProcessor::new())
 }
 
@@ -230,7 +231,7 @@ fn an_absent_table_leaves_the_package_unchanged() {
 
     let package = assemble(&manifest_path, ProjectTargetSelector::Library)
         .expect("a project without the table assembles");
-    assert_eq!(package.event_handlers().expect("the section decodes"), None);
+    assert_eq!(package.package().event_handlers().expect("the section decodes"), None);
 }
 
 #[test]
@@ -348,9 +349,9 @@ fn the_section_attaches_to_every_target_of_the_package() {
     for target in [ProjectTargetSelector::Library, ProjectTargetSelector::Executable("main")] {
         let package = assemble(&manifest_path, target).expect("the target assembles");
         assert!(
-            package.event_handlers().expect("the section decodes").is_some(),
+            package.package().event_handlers().expect("the section decodes").is_some(),
             "target '{}' lost the handler section",
-            package.name,
+            package.package().name,
         );
     }
 }
@@ -366,10 +367,12 @@ fn an_executable_and_its_project_kernel_carry_the_identical_section() {
     let package = assemble(&manifest_path, ProjectTargetSelector::Executable("main"))
         .expect("the executable target assembles");
     let section = package
+        .package()
         .event_handlers()
         .expect("the section decodes")
         .expect("the executable package carries the section");
     let kernel = package
+        .package()
         .try_embedded_kernel_package()
         .expect("the embedded kernel package decodes")
         .expect("the executable package embeds its project kernel");
@@ -591,7 +594,7 @@ impl PackagePostProcessor for SharedProcessor {
 fn assemble_shared(
     processor: &Arc<WasmEventHandlerProcessor>,
     manifest_path: &Path,
-) -> Result<Arc<MastPackage>, Report> {
+) -> Result<CodePackage, Report> {
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(manifest_path, &mut registry)?;

@@ -77,15 +77,13 @@ pub(super) fn execute_trace_inputs(case: RecursionCase, mut host: DefaultHost) -
     let processor = FastProcessor::new_with_options(
         StackInputs::default(),
         case.advice_inputs,
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_resolution_limits(case.environment.resolution_limits()),
     )
     .expect("recursive verifier advice should fit provider limits");
     processor
-        .execute_for_proving_sync(
-            &case.program.program,
-            case.program.environment.execution(),
-            &mut host,
-        )
+        .execute_for_proving_sync(case.environment.target(), &mut host)
         .expect("execute recursive verifier")
 }
 
@@ -111,12 +109,13 @@ pub(super) fn prove_recursive_case(
 ) -> (StackOutputs, ExecutionProof) {
     prove_sync(
         prover,
-        &case.program.program,
-        case.program.environment.execution(),
+        case.environment.target(),
         StackInputs::default(),
         case.advice_inputs,
         &mut host,
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_resolution_limits(case.environment.resolution_limits()),
     )
     .expect("prove recursive verifier")
 }
@@ -127,20 +126,18 @@ fn prove_recursive_once(prover: &Prover, case: &RecursionCase) -> (f64, usize) {
     let start = Instant::now();
     let (stack_outputs, proof) = prove_sync(
         prover,
-        &case.program.program,
-        case.program.environment.execution(),
+        case.environment.target(),
         StackInputs::default(),
         advice_inputs,
         &mut host,
-        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_resolution_limits(case.environment.resolution_limits()),
     )
     .expect("prove recursive verifier");
     let elapsed_ms = start.elapsed().as_secs_f64() * 1_000.0;
-    let claim = ExecutionClaim::new(
-        case.program.environment.execution().descriptor(),
-        StackInputs::default(),
-        stack_outputs,
-    );
+    let claim =
+        ExecutionClaim::new(case.environment.target(), StackInputs::default(), stack_outputs);
     assert!(
         Verifier::new()
             .verify(&claim, &proof)

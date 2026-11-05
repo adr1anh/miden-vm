@@ -29,7 +29,10 @@ fn merge_programs(
 
     let mut assembler = Assembler::new(context.source_manager());
     let lib_naming = naming.admit_package(&lib_a)?;
-    assembler.link_package(Arc::clone(&lib_a), Linkage::Dynamic, lib_naming)?;
+    assembler.link_package(
+        miden_mast_package::CodePackage::new(Arc::clone(&lib_a), lib_naming.into()).unwrap(),
+        Linkage::Dynamic,
+    )?;
     let module = context.parse_module(program_b)?;
     naming.add_module(&module)?;
     let lib_b = naming

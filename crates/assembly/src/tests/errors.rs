@@ -459,8 +459,12 @@ end
         .assemble(program_src)
         .expect("program assembly must succeed");
 
-    let entry = program.get_node_by_id(program.entrypoint()).expect("missing entrypoint node");
-    let mast = format!("{}", entry.to_display(program.mast_forest()));
+    let entry = program
+        .package()
+        .mast_forest()
+        .get_node_by_id(entry_node(&program))
+        .expect("missing entrypoint node");
+    let mast = format!("{}", entry.to_display(program.package().mast_forest()));
 
     let toks: Vec<&str> = mast.split_whitespace().collect();
     let pad_incr_pairs = toks.windows(2).filter(|w| w[0] == "pad" && w[1] == "incr").count();

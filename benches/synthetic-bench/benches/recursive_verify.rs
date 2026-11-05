@@ -29,10 +29,8 @@ use miden_core::{
 };
 use miden_core_lib::CoreLibrary;
 use miden_processor::{DefaultHost, advice::AdviceInputs};
-use miden_utils_testing::librarytree::{
-    FixtureEnvironment, NamedProgram, assemble_fixture_program,
-};
-use miden_vm::Assembler;
+use miden_utils_testing::librarytree::{FixtureEnvironment, assemble_fixture_program};
+use miden_vm::{Assembler, CodePackage};
 use miden_vm_synthetic_bench::{
     calibrator::calibrate,
     snapshot::DEFAULT_SCENARIOS,
@@ -61,14 +59,15 @@ use measurements::{
 struct RecursionCase {
     scenario: String,
     composition: ProofComposition,
-    program: NamedProgram,
+    code: CodePackage,
+    environment: FixtureEnvironment,
     core_lib: CoreLibrary,
     advice_inputs: AdviceInputs,
 }
 
 impl RecursionCase {
     fn host(&self) -> DefaultHost {
-        recursive_host(&self.program.environment, &self.core_lib)
+        recursive_host(&self.code, &self.environment, &self.core_lib)
     }
 }
 
@@ -149,22 +148,21 @@ fn assemble_recursive_program(
     source: &str,
     core_lib: &CoreLibrary,
     fragment: Arc<ValidatedEnvironment>,
-) -> NamedProgram {
+) -> (CodePackage, FixtureEnvironment) {
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("link core library");
-    let mut program =
+    let (code, _) =
         assemble_fixture_program(assembler, "recursive_verifier", source, &[core_lib.naming()]);
-    program.environment = FixtureEnvironment::new_with_fragments(
-        program
-            .naming
+    let environment = FixtureEnvironment::new_with_fragments(
+        code.symbols()
             .entry_key()
             .expect("recursive benchmark program must select an entry"),
-        [program.naming.as_ref(), core_lib.naming().as_ref()],
+        [code.symbols().as_ref(), core_lib.naming().as_ref()],
         &[fragment],
     )
     .expect("recursive benchmark must mount the exact core fragment");
-    program
+    (code, environment)
 }
 
 fn dump_recursive_program_source(scenario: &str, composition: ProofComposition, source: &str) {
@@ -233,12 +231,13 @@ fn build_recursive_verifier_case(
         source.len(),
     );
 
-    let program = assemble_recursive_program(&source, core_lib, vm_profile.shared_fragment());
-    effective_advice.merge(program.package.mast_forest().advice_map()).expect(
+    let (code, fixture_environment) =
+        assemble_recursive_program(&source, core_lib, vm_profile.shared_fragment());
+    effective_advice.merge(code.package().mast_forest().advice_map()).expect(
         "recursive program advice must not conflict with selected package or request advice",
     );
-    let environment = program.environment.validated_environment();
-    let expected_root = program.environment.execution().descriptor().environment_root();
+    let environment = fixture_environment.validated_environment();
+    let expected_root = fixture_environment.target().environment_root();
     for profile in [&vm_profile, &pvm_profile] {
         profile
             .authorize(expected_root, environment, &effective_advice, environment.visits())
@@ -248,15 +247,21 @@ fn build_recursive_verifier_case(
     RecursionCase {
         scenario: scenario.to_string(),
         composition,
-        program,
+        code,
+        environment: fixture_environment,
         core_lib: core_lib.clone(),
         advice_inputs,
     }
 }
 
-fn recursive_host(environment: &FixtureEnvironment, core_lib: &CoreLibrary) -> DefaultHost {
+fn recursive_host(
+    code: &CodePackage,
+    environment: &FixtureEnvironment,
+    core_lib: &CoreLibrary,
+) -> DefaultHost {
     let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(core_lib).expect("load core library");
+    host.load_library(code.clone()).expect("load recursive benchmark package");
     host
 }
 

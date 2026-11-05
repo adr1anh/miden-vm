@@ -7,7 +7,7 @@ use miden_air_definitions::vm::{
 };
 use miden_core::{
     Felt,
-    program::{ExecutionClaim, ExecutionDescriptor, StackOutputs},
+    program::{ExecutionClaim, ExecutionTarget, StackOutputs},
     proof::{ExecutionProof, HashFunction, PrecompileStatus, VmProof},
     utils::{Matrix, RowMajorMatrix},
 };
@@ -43,8 +43,8 @@ pub struct ReproTrace {
     chiplets: RowMajorMatrix<Felt>,
     eidos_compression: RowMajorMatrix<Felt>,
     and8: RowMajorMatrix<Felt>,
-    program_info: miden_processor::ProgramInfo,
-    execution_descriptor: ExecutionDescriptor,
+    entry_implementation: miden_core::program::ImplementationRoot,
+    execution_descriptor: ExecutionTarget,
     init_stack: miden_processor::StackInputs,
     precompile_root: miden_core::deferred::DeferredRoot,
     outputs: StackOutputs,
@@ -62,7 +62,7 @@ impl ReproTrace {
             chiplets,
             eidos_compression,
             and8,
-            program_info: trace.program_info().clone(),
+            entry_implementation: trace.entry_implementation(),
             execution_descriptor: trace.execution_descriptor(),
             init_stack: trace.init_stack_state(),
             precompile_root: trace.precompile_root(),
@@ -149,7 +149,7 @@ impl ReproTrace {
         }
         profile
             .authorize(
-                fixture.execution().descriptor().environment_root(),
+                fixture.target().environment_root(),
                 environment,
                 &effective_advice,
                 environment.visits(),
@@ -293,7 +293,7 @@ impl ReproTrace {
             ],
         );
         let trace = VmTrace::new_from_parts(
-            self.program_info.clone(),
+            self.entry_implementation,
             self.execution_descriptor,
             self.init_stack,
             outputs,

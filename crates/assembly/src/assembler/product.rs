@@ -1,7 +1,8 @@
 use miden_assembly_syntax::PathComponent;
 use miden_core::mast::MastForest;
 use miden_mast_package::{
-    Dependency, PackageCallables, PackageNaming, debug_info::PackageDebugInfo,
+    CodePackage, Dependency, PackageCallables, PackageProcedureOccurrence, PackageSymbols,
+    debug_info::PackageDebugInfo,
 };
 
 use super::*;
@@ -14,7 +15,7 @@ pub struct AssemblyProduct {
     package: Box<Package>,
     kernel_package: Option<Arc<Package>>,
     debug_info: Box<PackageDebugInfo>,
-    naming: PackageNaming,
+    naming: PackageSymbols,
     callable_sources: CallableSources,
 }
 
@@ -23,17 +24,25 @@ pub struct AssemblyProduct {
 pub(super) type CallableSources =
     BTreeMap<Arc<Path>, (ProcedureKey, Option<(MastNodeId, DebugSourceNodeId)>)>;
 
+/// Callable identities and their exact code/source selections after forest finalization.
+pub(super) struct FinalizedCallables {
+    pub(super) callables: PackageCallables,
+    pub(super) sources: CallableSources,
+    pub(super) occurrences: Vec<PackageProcedureOccurrence>,
+}
+
 /// Transient compiler references which must be resolved before the forest builder is consumed.
 pub(super) struct PendingCallables {
-    definitions: Vec<(Arc<Path>, CallableBinding, Option<MastNodeUse>, bool)>,
-    imported: Vec<(CallableBinding, Option<ImplementationRoot>)>,
+    definitions: Vec<(Arc<Path>, ProcedureName, Option<MastNodeUse>, bool)>,
+    imported: Vec<(ProcedureName, Option<ImplementationRoot>)>,
+    imported_sources: Vec<(ProcedureKey, MastNodeRef, Option<SourceNodeRef>)>,
     visible_paths: Vec<(CallableProcedurePath, ProcedureKey)>,
 }
 
 impl Assembler {
     pub(super) fn pending_callables(
         &self,
-        builder: &MastForestBuilder,
+        builder: &mut MastForestBuilder,
         visible_paths: impl IntoIterator<Item = (Arc<Path>, ProcedureKey)>,
     ) -> Result<PendingCallables, Report> {
         let retained = self
@@ -63,7 +72,7 @@ impl Assembler {
         // descriptor or a defining source path in this compilation.
         let mut imported = Vec::new();
         let mut retain_imported =
-            |naming: &PackageNaming| {
+            |naming: &PackageSymbols| {
                 let callables = naming.callables();
                 imported.extend(callables.bindings().map(|(&key, binding)| {
                     (binding.clone(), callables.selected_implementation(key))
@@ -94,7 +103,13 @@ impl Assembler {
                 Ok((path, key))
             })
             .collect::<Result<Vec<_>, Report>>()?;
-        Ok(PendingCallables { definitions, imported, visible_paths })
+        let imported_sources = builder.retained_static_procedure_occurrences()?;
+        Ok(PendingCallables {
+            definitions,
+            imported,
+            imported_sources,
+            visible_paths,
+        })
     }
 }
 
@@ -126,11 +141,12 @@ impl PendingCallables {
         mast: &MastForest,
         node_id_by_ref: &BTreeMap<MastNodeRef, MastNodeId>,
         source_id_by_ref: &BTreeMap<SourceNodeRef, DebugSourceNodeId>,
-    ) -> Result<(PackageCallables, CallableSources), Report> {
+    ) -> Result<FinalizedCallables, Report> {
         let mut bindings = BTreeMap::new();
         let mut implementations = BTreeMap::new();
         let mut source_definitions = BTreeSet::new();
         let mut sources = BTreeMap::new();
+        let mut occurrences = BTreeMap::new();
         for (path, binding, body, is_source_definition) in self.definitions {
             let key = binding.key();
             // Imported descriptors and declaration aliases may refer to one canonical callable.
@@ -166,6 +182,10 @@ impl PendingCallables {
                         "conflicting selected implementations for callable key {key:?}"
                     )));
                 }
+                if is_source_definition && !mast[node].is_external() {
+                    occurrences
+                        .insert(key, PackageProcedureOccurrence::new(key, node, Some(source)));
+                }
                 Some((node, source))
             } else {
                 None
@@ -191,10 +211,36 @@ impl PendingCallables {
                 )));
             }
         }
+        for (key, node_ref, source_ref) in self.imported_sources {
+            let node = node_id_by_ref.get(&node_ref).copied().ok_or_else(|| {
+                Report::msg(format!("static callable occurrence for {key:?} was not finalized"))
+            })?;
+            let source = source_ref
+                .map(|source_ref| {
+                    source_id_by_ref.get(&source_ref).copied().ok_or_else(|| {
+                        Report::msg(format!(
+                            "static callable source occurrence for {key:?} was not finalized"
+                        ))
+                    })
+                })
+                .transpose()?;
+            let occurrence = PackageProcedureOccurrence::new(key, node, source);
+            if let Some(previous) = occurrences.insert(key, occurrence)
+                && (previous.exec_node() != node || previous.source_node() != source)
+            {
+                return Err(Report::msg(format!(
+                    "conflicting exact package occurrences for callable key {key:?}"
+                )));
+            }
+        }
         let callables =
             PackageCallables::new(bindings.into_values(), self.visible_paths, implementations)
                 .into_diagnostic()?;
-        Ok((callables, sources))
+        let mut occurrences = occurrences.into_values().collect::<Vec<_>>();
+        occurrences.sort_by(|left, right| {
+            left.key().as_word().as_bytes().cmp(&right.key().as_word().as_bytes())
+        });
+        Ok(FinalizedCallables { callables, sources, occurrences })
     }
 }
 
@@ -203,7 +249,7 @@ impl AssemblyProduct {
         package: Box<Package>,
         kernel: Option<Arc<Package>>,
         debug_info: Box<PackageDebugInfo>,
-        naming: PackageNaming,
+        naming: PackageSymbols,
         callable_sources: CallableSources,
     ) -> Self {
         assert!(
@@ -220,7 +266,7 @@ impl AssemblyProduct {
     }
 
     /// Returns the compiler's complete canonical naming inventory without profile admission.
-    pub fn naming(&self) -> &PackageNaming {
+    pub fn naming(&self) -> &PackageSymbols {
         &self.naming
     }
 
@@ -252,20 +298,8 @@ impl AssemblyProduct {
     }
 
     /// Returns the explicit caller home supplied to this compilation, without admitting it.
-    pub fn namespace_plan(&self) -> &NamespacePlan {
+    pub fn namespace_plan(&self) -> &NamespacePath {
         self.naming.namespace_plan()
-    }
-
-    /// Extracts executable code using this compilation's exact retained entry metadata.
-    ///
-    /// No raw naming decoder or default home policy is involved. This supplies code/source hints,
-    /// while the execution environment and authenticated entry opening remain caller inputs.
-    pub fn into_program(
-        self,
-        emit_debug_info: bool,
-    ) -> Result<miden_core::program::Program, Report> {
-        let naming = self.naming.clone();
-        self.into_artifact(emit_debug_info)?.try_into_program(&naming)
     }
 
     pub fn extend_dependencies(
@@ -279,13 +313,33 @@ impl AssemblyProduct {
         Ok(())
     }
 
-    /// Extracts the Package9 artifact, retaining required callable, home and entry metadata.
+    /// Finalizes this compilation as owned package code and its exact checked symbols.
+    ///
+    /// The package retains advice, callable occurrences and optional source metadata together.
+    /// These code-supply hints do not grant selected-profile admission or execution authority.
+    pub fn into_code_package(self, emit_debug_info: bool) -> Result<CodePackage, Report> {
+        let (package, symbols) = self.finalize_artifact(emit_debug_info)?;
+        CodePackage::new(Arc::from(package), Arc::new(symbols)).map_err(Report::msg)
+    }
+
+    /// Extracts the Package10 artifact, retaining required callable, home and entry metadata.
     ///
     /// Required naming persists independently of optional debug information. Decoding its raw
     /// transport still requires explicit selected-profile policy, context and resource limits.
     pub fn into_artifact(self, emit_debug_info: bool) -> Result<Box<Package>, Report> {
+        self.finalize_artifact(emit_debug_info).map(|(package, _)| package)
+    }
+
+    fn finalize_artifact(
+        self,
+        emit_debug_info: bool,
+    ) -> Result<(Box<Package>, PackageSymbols), Report> {
         let Self {
-            mut package, kernel_package, debug_info, ..
+            mut package,
+            kernel_package,
+            debug_info,
+            naming,
+            ..
         } = self;
         // Section: embedded kernel package
         if package.is_program()
@@ -317,9 +371,11 @@ impl AssemblyProduct {
                     ))
                 })?;
             package.sections.push(Section::new(SectionId::DEBUG_INFO, bytes));
+        } else {
+            package.strip_debug_info().into_diagnostic()?;
         }
 
-        Ok(package)
+        Ok((package, naming))
     }
 }
 
@@ -329,6 +385,8 @@ fn linked_kernel_package_section(package: &Package) -> Section {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::String;
+
     use miden_core::{program::CanonicalLabel, serde::Deserializable};
     use miden_mast_package::{
         debug_info::{MAX_DEBUG_INFO_STRING_SIZE, PackageDebugInfoBuilder},
@@ -381,7 +439,9 @@ mod tests {
             let mut product = executable_product(&context);
             product.kernel_package = Some(kernel.clone());
             product.extend_dependencies(requirements).unwrap();
-            let artifact = product.into_artifact(false).unwrap();
+            let code = product.into_code_package(false).unwrap();
+            let artifact = code.package();
+            artifact.check_naming(code.symbols()).unwrap();
             let dependencies = artifact.manifest.dependencies().cloned().collect::<Vec<_>>();
 
             assert_eq!(dependencies, vec![ordinary_supply.clone(), exact_kernel.clone()]);
@@ -405,14 +465,14 @@ mod tests {
             let mut product = executable_product(&context);
             product.kernel_package = Some(kernel.clone());
             product.extend_dependencies(requirements).unwrap();
-            assert!(product.into_artifact(false).is_err());
+            assert!(product.into_code_package(false).is_err());
         }
     }
 
     struct ExactFixtureHome;
 
     impl TypedIdProfile for ExactFixtureHome {
-        type Context = NamespacePlan;
+        type Context = NamespacePath;
         type Error = &'static str;
 
         fn validate_typed_id(
@@ -464,11 +524,11 @@ mod tests {
         let twin_key = dependency.callable_key_for_definition(twin_path).unwrap();
         assert_ne!(callback_key, twin_key);
         assert_eq!(naming.callables().selected_implementation(twin_key), Some(callback_root));
-        let dependency: Arc<Package> = dependency.into_artifact(false).unwrap().into();
+        let dependency = dependency.into_code_package(false).unwrap();
 
         for linkage in [Linkage::Static, Linkage::Dynamic] {
             let assembler = Assembler::new(context.source_manager())
-                .with_package(dependency.clone(), linkage, naming.clone())
+                .with_package(dependency.clone(), linkage)
                 .unwrap();
             let product = names
                 .configure(assembler, [&*caller])
@@ -496,6 +556,145 @@ mod tests {
                 package.mast_forest().find_procedure_root(callback_root.into_word()).is_some(),
                 linkage == Linkage::Static,
             );
+            for key in [callback_key, twin_key] {
+                let occurrence = package.procedure_occurrence(key);
+                assert_eq!(occurrence.is_some(), linkage == Linkage::Static);
+                if let Some(occurrence) = occurrence {
+                    assert_eq!(occurrence.source_node(), None, "no imported source graph");
+                    assert_eq!(
+                        package.mast_forest()[occurrence.exec_node()].digest(),
+                        callback_root.into_word(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn code_package_retains_exact_local_occurrences_for_equal_digest_private_helpers() {
+        for emit_debug_info in [false, true] {
+            let context = TestContext::default();
+            let module = context
+                .parse_module(
+                    "namespace app\nproc callback push.7 end\nproc twin push.7 end\nbegin push.7 end",
+                )
+                .unwrap();
+            let mut names = FixtureNamespace::assembly_tests();
+            names.add_module(&module).unwrap();
+            let product = names
+                .configure(Assembler::new(context.source_manager()), [&*module])
+                .unwrap()
+                .assemble_executable_modules("app".into(), module, [])
+                .unwrap();
+            let expected = ["::app::callback", "::app::twin"].map(|path| {
+                let path = Path::new(path);
+                (
+                    product.callable_key_for_definition(path).unwrap(),
+                    product.callable_source_for_definition(path).unwrap(),
+                )
+            });
+            assert_ne!(expected[0].0, expected[1].0);
+            assert_ne!(expected[0].1.1, expected[1].1.1);
+            let entry_key = product.entry_key().unwrap();
+            let entry_source = product.package.entrypoint_source_node();
+            let symbols = product.naming().clone();
+            let code = product.into_code_package(emit_debug_info).unwrap();
+            assert_eq!(**code.symbols(), symbols);
+            let package = code.package();
+            package.check_naming(code.symbols()).unwrap();
+            for (key, (exec_node, source_node)) in expected {
+                let occurrence = package.procedure_occurrence(key).unwrap();
+                assert_eq!(occurrence.exec_node(), exec_node);
+                assert_eq!(occurrence.source_node(), emit_debug_info.then_some(source_node));
+            }
+            let [callback, twin] =
+                expected.map(|(key, _)| package.procedure_occurrence(key).unwrap());
+            assert_eq!(
+                package.mast_forest()[callback.exec_node()].digest(),
+                package.mast_forest()[twin.exec_node()].digest(),
+            );
+            let entry = package.procedure_occurrence(entry_key).unwrap();
+            assert_eq!(entry.source_node(), entry_source.filter(|_| emit_debug_info));
+            if emit_debug_info {
+                assert_ne!(entry.source_node(), callback.source_node());
+            }
+            assert_eq!(package.procedure_occurrences().len(), 3);
+            if let Some(debug) = package.debug_info().unwrap() {
+                for occurrence in package.procedure_occurrences() {
+                    assert_eq!(
+                        debug.source_node(occurrence.source_node().unwrap()).unwrap().exec_node,
+                        occurrence.exec_node(),
+                    );
+                }
+            }
+            let bytes = package.to_bytes();
+            for decoded in [
+                Package::read_from_bytes(&bytes).unwrap(),
+                Package::read_from_bytes_trusted(&bytes).unwrap(),
+            ] {
+                assert_eq!(decoded.procedure_occurrences(), package.procedure_occurrences());
+            }
+        }
+    }
+
+    #[test]
+    fn static_import_remaps_exact_equal_digest_private_occurrences() {
+        fn function_names(debug: &PackageDebugInfo, source: DebugSourceNodeId) -> Vec<String> {
+            debug
+                .functions()
+                .iter()
+                .filter(|function| function.source_node.into_option() == Some(source))
+                .map(|function| debug[function.name_idx].to_string())
+                .collect()
+        }
+
+        let context = TestContext::default();
+        let dependency = context
+            .parse_module(
+                "namespace dep\npub proc run exec.callback exec.twin end\nproc callback push.7 end\nproc twin push.7 end",
+            )
+            .unwrap();
+        let caller = context.parse_module("use dep\nbegin exec.dep::run end").unwrap();
+        let mut names = FixtureNamespace::assembly_tests();
+        names.add_module(&dependency).unwrap();
+        names.add_module(&caller).unwrap();
+        let dependency = names
+            .configure(Assembler::new(context.source_manager()), [&*dependency])
+            .unwrap()
+            .assemble_library_modules("dep".into(), dependency, [], TargetType::Library)
+            .unwrap();
+        let keys = ["::dep::callback", "::dep::twin"]
+            .map(|path| dependency.callable_key_for_definition(Path::new(path)).unwrap());
+        let dependency = dependency.into_code_package(true).unwrap();
+        let dependency_debug = dependency.package().debug_info().unwrap().unwrap();
+        let expected_functions = keys.map(|key| {
+            let source =
+                dependency.package().procedure_occurrence(key).unwrap().source_node().unwrap();
+            let functions = function_names(&dependency_debug, source);
+            assert!(!functions.is_empty());
+            functions
+        });
+        let assembler = Assembler::new(context.source_manager())
+            .with_package(dependency, Linkage::Static)
+            .unwrap();
+        let product = names
+            .configure(assembler, [&*caller])
+            .unwrap()
+            .assemble_executable_modules("caller".into(), caller, [])
+            .unwrap();
+        assert_eq!(product.callable_source_for_definition(Path::new("::dep::callback")), None);
+        let package = product.into_artifact(true).unwrap();
+        let debug = package.debug_info().unwrap().unwrap();
+        let occurrences = keys.map(|key| package.procedure_occurrence(key).unwrap());
+        assert_ne!(occurrences[0].source_node(), occurrences[1].source_node());
+        assert_eq!(
+            package.mast_forest()[occurrences[0].exec_node()].digest(),
+            package.mast_forest()[occurrences[1].exec_node()].digest(),
+        );
+        for (occurrence, expected_functions) in occurrences.into_iter().zip(expected_functions) {
+            let source = occurrence.source_node().unwrap();
+            assert_eq!(debug.source_node(source).unwrap().exec_node, occurrence.exec_node());
+            assert_eq!(function_names(&debug, source), expected_functions);
         }
     }
 
@@ -555,13 +754,13 @@ mod tests {
                 let package = product.into_artifact(emit_debug_info).unwrap();
                 assert_eq!(
                     package
-                        .admit_naming(&ExactFixtureHome, names.namespace_plan(), limits)
+                        .validate_symbols(&ExactFixtureHome, names.namespace_plan(), limits)
                         .unwrap(),
                     expected,
                 );
                 assert!(
                     package
-                        .admit_naming(&ExactFixtureHome, &NamespacePlan::new(vec![]), limits)
+                        .validate_symbols(&ExactFixtureHome, &NamespacePath::new(vec![]), limits)
                         .is_err(),
                 );
                 assert_eq!(package.debug_info().unwrap().is_some(), emit_debug_info);
@@ -571,9 +770,10 @@ mod tests {
                     Package::read_from_bytes_trusted(&bytes).unwrap(),
                 ] {
                     assert_eq!(decoded.naming_transport(), package.naming_transport());
+                    assert_eq!(decoded.procedure_occurrences(), package.procedure_occurrences());
                     assert_eq!(
                         decoded
-                            .admit_naming(&ExactFixtureHome, names.namespace_plan(), limits)
+                            .validate_symbols(&ExactFixtureHome, names.namespace_plan(), limits)
                             .unwrap(),
                         expected,
                     );

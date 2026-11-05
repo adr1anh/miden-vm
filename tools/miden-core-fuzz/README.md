@@ -47,17 +47,7 @@ cargo +nightly fuzz run mast_forest_validate --fuzz-dir tools/miden-core-fuzz
 
 These targets exercise core deserializers directly.
 
-The **`program_deserialize`** target tests `Program::read_from_bytes`.
-
-```bash
-cargo +nightly fuzz run program_deserialize --fuzz-dir tools/miden-core-fuzz
-```
-
-The **`program_serde_deserialize`** target tests `Program` JSON deserialization via `serde_json`.
-
-```bash
-cargo +nightly fuzz run program_serde_deserialize --fuzz-dir tools/miden-core-fuzz
-```
+Executable code uses the bounded package deserializers below; the legacy Program wire format is retired.
 
 The **`kernel_deserialize`** target tests `KernelDescriptor::read_from_bytes`.
 
@@ -115,6 +105,31 @@ claim allocation-bounded generic Serde.
 
 ```bash
 cargo +nightly fuzz run execution_proof_serde_deserialize --fuzz-dir tools/miden-core-fuzz
+```
+
+The **`execution_witness_deserialize`** target reads a fuzz-only caller envelope:
+`K_entry[32] || R_E[32] || replay-v6 bytes`. Both prefix identities use canonical `Word`
+encoding and are supplied to the bounded witness reader as the caller's expected target.
+The harness never discovers authority from the witness payload. Fixed explicit policies cap the
+payload at 4 MiB and keyed validation peak at 16 MiB, with separate finite opening, ledger,
+session, trace-event and validation-work limits. Successful reads must survive two canonical
+encode/decode cycles; changed caller identities, explicit zero read limits and trailing bytes
+must reject. This envelope does not change the production replay format.
+
+```bash
+cargo +nightly fuzz run execution_witness_deserialize --fuzz-dir tools/miden-core-fuzz
+```
+
+Regenerate its `ordinary.bin` and `deferred.bin` corpus entries with the ignored
+`generate_execution_witness_fuzz_seeds` integration-test generator after format/API changes.
+The generator prefixes the independently owned fixture target; older raw replay-only corpus
+files do not reach successful bounded decoding under this envelope.
+
+The library tests replay both seeds through the same decoder and rejection oracles. They require
+successful decoding, so a seed that merely rejects cannot pass:
+
+```bash
+cargo test --manifest-path tools/miden-core-fuzz/Cargo.toml --lib witness_seed_reaches_all_oracles
 ```
 
 The **`deferred_state_wire_deserialize`** target exercises checked portable singleton-witness

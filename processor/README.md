@@ -8,9 +8,37 @@ The processor provides multiple APIs depending on your use case:
 The `ProgramExecutor` trait provides a pluggable ordinary-execution interface returning
 `ExecutionOutput`, with `FastProcessor` as its default implementation:
 
-Pass the program as `&Program`, its public inputs as `StackInputs`, and its private inputs as
-`AdviceInputs`. The `Host` supplies non-deterministic inputs and receives messages from the VM.
-`ExecutionOptions` sets limits such as the maximum allowed number of cycles.
+Pass the caller-authorized `ExecutionTarget` by value, public inputs as `StackInputs`, and private
+inputs as `AdviceInputs`. The target contains the expected entry procedure key `K_entry` and
+environment root `R_E`. The `Host` owns loaded package code, supplies untrusted environment
+lookup evidence and non-deterministic inputs, and receives messages from the VM.
+
+Keep code, checked symbols, advice, and exact source metadata together in the `CodePackage`
+produced by assembly or project compilation. Load it with `DefaultHost::load_library(code)` or
+`DefaultHost::with_library(code)`, and configure the opening-evidence source with
+`DefaultHost::with_environment_source`. Its `EnvironmentSource` trait returns untrusted openings;
+each still authenticates against the caller's expected root and key. Execution uses
+`execute_sync(target, &mut host)` or its async analogue, `execute(target, &mut host).await`.
+
+`ExecutionOptions` sets limits such as the maximum allowed number of cycles. Construct
+`ResolutionLimits::new(opening, ledger, session)` with caller-selected `OpeningLimits`,
+`LedgerLimits`, and `SessionLimits`, and install it with `with_resolution_limits`. These policies
+have no default. Missing policies reject before entry authentication or host calls; explicit zero
+limits remain zero. Tracing additionally requires caller-selected `EnvironmentTraceLimits` through
+`with_environment_trace_limits`, also without a default.
+
+Resolution policies bound candidate openings, retained opening occurrences, and session accounting
+separately. Trace policies bound event count, accounted retained bytes, trace preparation peak,
+and validation work. They do not bound allocator metadata, fixed stack storage, process RSS, or
+prior host allocations. Native session preparation has its own resolution limit; a combined
+native/trace ceiling requires checked addition of the two policies.
+
+The caller authorizes the target independently of the host's packages and evidence. Every retained
+runtime invocation authenticates a binding under the same `R_E` before the host supplies code for
+the selected implementation root `D`. Generic host loading by `D` remains available subject to
+requested-root and procedure-root checks; code availability alone does not authorize a call.
+Syscalls require an authenticated immediate parent namespace equal to the fixed, nonzero
+`N0 = Namespace::initial()`. Package and source metadata confer no syscall privilege.
 
 The async trait method returns `Result<ExecutionOutput, ExecutionError>`, containing the final stack
 state, advice provider, memory, and deferred state on success.
@@ -18,11 +46,12 @@ state, advice provider, memory, and deferred state on success.
 ### Low-level API
 For more control over execution and trace generation, you can use `FastProcessor` directly:
 
-`FastProcessor::execute()` runs a program without trace generation overhead and returns an
+`FastProcessor::execute(target, &mut host)` runs without trace generation overhead and returns an
 `ExecutionOutput` with the final stack state and other execution results.
 
 `FastProcessor::execute_for_proving()` and `FastProcessor::execute_for_proving_sync()` run a
-program while collecting the complete post-execution `ExecutionWitness`. Pass the `VmWitness`
+target while collecting the complete post-execution `ExecutionWitness`. Both take the target and
+host separately from processor options. Pass the `VmWitness`
 from `ExecutionWitness::into_parts()` and a caller-supplied proving budget to `build_trace()` to
 construct the full `VmTrace`. Trace
 building is parallel when the `concurrent` feature is enabled.
@@ -32,6 +61,21 @@ synchronous path that overlaps execution with hasher trace construction. It retu
 `(VmTrace, Option<PrecompileWitness>)`. Execution stays on the calling thread while Rayon may run
 the hasher builder on a worker. A caller with no separate Rayon worker uses compact buffered replay
 and builds the trace after execution.
+
+The target and selected resolution policies remain immutable through step/resume execution.
+Host-owned packages retain exact source occurrences, including private entry metadata. Debug
+metadata supplies diagnostics rather than authority. A built `VmTrace::entry_implementation()`
+reports the authenticated selected `D`, separately from the expected target and public claim.
+
+### Witness transport
+
+Replay format v6 is read with
+`ExecutionWitness::read_from_bytes_with_limits(bytes, target, resolution_limits, trace_limits, read_limits)`.
+The reader requires the caller's expected `ExecutionTarget`, explicit `ResolutionLimits` and
+`EnvironmentTraceLimits`, and bounded `ReplayReadLimits`. It revalidates the replay under those
+policies and clamps resource use to the supplied limits, preserving explicit zeros. Host package
+ownership metadata does not become replay authority. Rust API changes do not change the selected
+canonical label codecs, claim40 v2 semantics, or replay v6 wire format.
 
 ## Processor components
 The processor is separated into two main components: **execution** and **trace generation**.

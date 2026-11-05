@@ -1,22 +1,22 @@
 use miden_core::program::{LabelError, Namespace, ProcedureKey};
 
-use crate::{CallableProcedurePath, NamespacePlan};
+use crate::{CallableProcedurePath, NamespacePath};
 
 /// A declaration's explicit canonical name, independent of its implementation and source aliases.
 ///
 /// This derives a callable identity; it does not authenticate an environment binding or authorize
 /// the supplied home. The owning profile must validate publisher and home policy separately.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CallableBinding {
-    namespace_plan: NamespacePlan,
+pub struct ProcedureName {
+    namespace_plan: NamespacePath,
     path: CallableProcedurePath,
     key: ProcedureKey,
     parent_namespace: Namespace,
 }
 
-impl CallableBinding {
+impl ProcedureName {
     pub fn new(
-        namespace_plan: NamespacePlan,
+        namespace_plan: NamespacePath,
         path: CallableProcedurePath,
     ) -> Result<Self, LabelError> {
         let key = namespace_plan.callable_procedure_key(&path)?;
@@ -29,7 +29,7 @@ impl CallableBinding {
         })
     }
 
-    pub fn namespace_plan(&self) -> &NamespacePlan {
+    pub fn namespace_plan(&self) -> &NamespacePath {
         &self.namespace_plan
     }
 

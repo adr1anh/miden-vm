@@ -23,10 +23,10 @@ use miden_core::{
     utils::{IndexVec, bytes_to_packed_u32_elements},
 };
 use miden_mast_package::{
-    ManifestValidationError,
+    ManifestValidationError, PackageProcedureOccurrence,
     debug_info::{
         DebugFunctionIdx, DebugInfoBuilder, DebugInfoTableRemapping, DebugLocIdx, DebugSourceAsmOp,
-        DebugSourceInlineCall, DebugSourceVar, FunctionInfo, PackageDebugInfo,
+        DebugSourceInlineCall, DebugSourceNodeId, DebugSourceVar, FunctionInfo, PackageDebugInfo,
     },
 };
 
@@ -154,6 +154,10 @@ pub struct MastForestBuilder {
     statically_linked_source_forests: Vec<Arc<MastForest>>,
     /// Package-owned debug info decoded from each statically-linked package, when available.
     statically_linked_package_debug_info: Vec<Option<PackageDebugInfo>>,
+    /// Exact callable occurrences retained by each static package, parallel to its source forest.
+    statically_linked_procedure_occurrences: Vec<Vec<PackageProcedureOccurrence>>,
+    /// Exact input source IDs mapped to their canonical imported execution/source uses.
+    statically_linked_source_uses: BTreeMap<(usize, DebugSourceNodeId), MastNodeUse>,
     /// Shared-table mappings imported lazily from each statically-linked package.
     statically_linked_debug_table_remappings: Vec<Option<Arc<DebugInfoTableRemapping>>>,
     /// Maps each statically linked source forest commitment to its positions in the merged forest
@@ -173,6 +177,7 @@ pub(crate) struct StaticLibrary<'a> {
     /// This field is expected to hold _validated_ package debug info - invalid debug info may
     /// cause panics during assembly.
     debug_info: Option<PackageDebugInfo>,
+    procedure_occurrences: Vec<PackageProcedureOccurrence>,
     source_library_commitment: Word,
 }
 
@@ -181,6 +186,7 @@ impl<'a> StaticLibrary<'a> {
         Self {
             mast,
             debug_info,
+            procedure_occurrences: Vec::new(),
             // Direct forest-backed static libraries do not have a package commitment, so their
             // source identity is the full forest commitment. This keeps provenance
             // hints scoped to the same roots, external dependencies, and advice as
@@ -193,9 +199,11 @@ impl<'a> StaticLibrary<'a> {
         library: &'a LinkLibrary,
         debug_info: Option<PackageDebugInfo>,
     ) -> Result<Self, ManifestValidationError> {
-        library.package.check_naming(library.naming())?;
-        Ok(Self::from_mast_forest(library.mast().as_ref(), debug_info)
-            .with_source_library_commitment(library.commitment()))
+        library.package().check_naming(library.naming())?;
+        let mut library_data = Self::from_mast_forest(library.mast().as_ref(), debug_info)
+            .with_source_library_commitment(library.commitment());
+        library_data.procedure_occurrences = library.package().procedure_occurrences().to_vec();
+        Ok(library_data)
     }
 
     fn with_source_library_commitment(mut self, source_library_commitment: Word) -> Self {
@@ -250,6 +258,10 @@ impl MastForestBuilder {
             .collect::<Vec<_>>();
         let statically_linked_debug_table_remappings =
             static_libraries.iter().map(|_| None).collect();
+        let statically_linked_procedure_occurrences = static_libraries
+            .iter()
+            .map(|library| library.procedure_occurrences.clone())
+            .collect();
         let mut statically_linked_forest_indices_by_commitment = BTreeMap::new();
         for (idx, library) in static_libraries.iter().enumerate() {
             statically_linked_forest_indices_by_commitment
@@ -270,6 +282,7 @@ impl MastForestBuilder {
             statically_linked_mast: Arc::new(statically_linked_mast),
             statically_linked_source_forests,
             statically_linked_package_debug_info,
+            statically_linked_procedure_occurrences,
             statically_linked_debug_table_remappings,
             statically_linked_forest_indices_by_commitment,
             statically_linked_root_map,

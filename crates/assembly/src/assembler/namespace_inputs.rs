@@ -14,10 +14,10 @@ use miden_assembly_syntax::{
 use miden_core::program::Namespace;
 #[cfg(any(feature = "std", test))]
 use miden_core::{Word, chiplets::hasher};
-use miden_mast_package::{CallableProcedurePath, NamespacePlan};
+use miden_mast_package::{CallableProcedurePath, NamespacePath};
 
 use super::Assembler;
-use crate::{CallableBinding, Path, linker::SymbolResolutionContext};
+use crate::{Path, ProcedureName, linker::SymbolResolutionContext};
 
 /// Raw namespace configuration for one assembly target, independent of code supply.
 ///
@@ -30,14 +30,14 @@ use crate::{CallableBinding, Path, linker::SymbolResolutionContext};
 /// perform home/profile or execution-environment admission.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NamespaceInputs {
-    namespace_plan: Option<NamespacePlan>,
+    namespace_plan: Option<NamespacePath>,
     declarations: BTreeMap<Arc<Path>, CallableInput>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum CallableInput {
     LocalPath(CallableProcedurePath),
-    Bound(CallableBinding),
+    Bound(ProcedureName),
 }
 
 impl NamespaceInputs {
@@ -47,13 +47,13 @@ impl NamespaceInputs {
     }
 
     /// Supplies the home used to derive bindings for local canonical paths at compilation time.
-    pub fn with_namespace_plan(mut self, plan: NamespacePlan) -> Self {
+    pub fn with_namespace_plan(mut self, plan: NamespacePath) -> Self {
         self.namespace_plan = Some(plan);
         self
     }
 
     /// Returns the explicitly supplied caller home, if any.
-    pub fn namespace_plan(&self) -> Option<&NamespacePlan> {
+    pub fn namespace_plan(&self) -> Option<&NamespacePath> {
         self.namespace_plan.as_ref()
     }
 
@@ -82,14 +82,14 @@ impl NamespaceInputs {
     }
 
     /// Resolves local paths under the final caller home while preserving complete foreign bindings.
-    pub(crate) fn resolved_bindings(&self) -> Result<BTreeMap<Arc<Path>, CallableBinding>, Report> {
+    pub(crate) fn resolved_bindings(&self) -> Result<BTreeMap<Arc<Path>, ProcedureName>, Report> {
         let caller = self.require_namespace_plan()?;
         self.declarations
             .iter()
             .map(|(declaration, input)| {
                 let binding = match input {
                     CallableInput::LocalPath(path) => {
-                        CallableBinding::new(caller.clone(), path.clone()).into_diagnostic()?
+                        ProcedureName::new(caller.clone(), path.clone()).into_diagnostic()?
                     },
                     CallableInput::Bound(binding) => binding.clone(),
                 };
@@ -98,9 +98,9 @@ impl NamespaceInputs {
             .collect()
     }
 
-    fn require_namespace_plan(&self) -> Result<&NamespacePlan, Report> {
+    fn require_namespace_plan(&self) -> Result<&NamespacePath, Report> {
         self.namespace_plan()
-            .ok_or_else(|| Report::msg("assembly requires an explicit caller NamespacePlan"))
+            .ok_or_else(|| Report::msg("assembly requires an explicit caller NamespacePath"))
     }
 
     /// Names a defining source declaration under the caller home supplied at compilation time.
@@ -116,14 +116,14 @@ impl NamespaceInputs {
     pub fn with_callable_binding(
         self,
         declaration: Arc<Path>,
-        binding: CallableBinding,
+        binding: ProcedureName,
     ) -> Result<Self, Report> {
         self.with_callable_input(declaration, CallableInput::Bound(binding))
     }
 
     /// Names concrete source procedures by their semantic defining paths under the caller home.
     ///
-    /// This is an explicit opt-in convention requiring an already supplied [`NamespacePlan`].
+    /// This is an explicit opt-in convention requiring an already supplied [`NamespacePath`].
     /// Private helpers and executable entrypoints receive names; aliases and re-exports retain
     /// their defining procedures' bindings. Only the absolute source-root component is omitted
     /// from canonical paths. Existing local-path overrides and complete bindings are preserved.
@@ -342,9 +342,9 @@ impl NamespaceInputs {
                 let canonical =
                     CallableProcedurePath::from_semantic_components(vec![name.to_string()])
                         .into_diagnostic()?;
-                CallableBinding::new(NamespacePlan::new(vec![]), canonical).into_diagnostic()?
+                ProcedureName::new(NamespacePath::new(vec![]), canonical).into_diagnostic()?
             } else {
-                CallableBinding::new(caller.clone(), Self::default_callable_path(&declaration)?)
+                ProcedureName::new(caller.clone(), Self::default_callable_path(&declaration)?)
                     .into_diagnostic()?
             };
             validate_kernel_binding(&declaration, &binding, exported)?;
@@ -405,7 +405,7 @@ impl NamespaceInputs {
         Ok(self)
     }
 
-    pub(super) fn into_namespace_plan(self) -> Option<NamespacePlan> {
+    pub(super) fn into_namespace_plan(self) -> Option<NamespacePath> {
         self.namespace_plan
     }
 }
@@ -417,7 +417,7 @@ fn absolute_callable_path(path: &Path) -> Result<Arc<Path>, Report> {
 
 fn validate_kernel_binding(
     declaration: &Path,
-    binding: &CallableBinding,
+    binding: &ProcedureName,
     exported: bool,
 ) -> Result<(), Report> {
     let at_root = binding.parent_namespace() == Namespace::initial();
@@ -450,7 +450,7 @@ fn append_cache_bytes(bytes: &mut Vec<u8>, value: &[u8]) -> Result<(), Report> {
 }
 
 #[cfg(any(feature = "std", test))]
-fn append_cache_home(bytes: &mut Vec<u8>, plan: &NamespacePlan) -> Result<(), Report> {
+fn append_cache_home(bytes: &mut Vec<u8>, plan: &NamespacePath) -> Result<(), Report> {
     append_cache_len(bytes, plan.home().len())?;
     for label in plan.home() {
         append_cache_bytes(bytes, label.as_bytes())?;
@@ -494,7 +494,7 @@ impl Assembler {
         append_cache_len(&mut bytes, libraries.len())?;
         for library in libraries {
             // The full artifact includes debug/other sections as well as exact required naming.
-            bytes.extend_from_slice(&library.package.commitment().as_bytes());
+            bytes.extend_from_slice(&library.package().commitment().as_bytes());
             bytes.push(match library.linkage {
                 miden_project::Linkage::Static => 0,
                 miden_project::Linkage::Dynamic => 1,

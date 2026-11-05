@@ -186,7 +186,7 @@ fn core_packages_do_not_block_sibling_miden_namespaces() {
     let core_lib = CoreLibrary::default();
     let mut assembler = Assembler::new(source_manager);
     assembler
-        .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .link_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("official Miden packages should link");
 
     let mut names = miden_assembly::testing::FixtureNamespace::assembly_tests();

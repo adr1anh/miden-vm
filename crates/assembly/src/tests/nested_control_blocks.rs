@@ -21,7 +21,7 @@ fn nested_control_blocks() -> TestResult {
         end"
     );
     let program = context.assemble(source)?;
-    insta::assert_snapshot!(program);
+    insta::assert_snapshot!(render_entry(&program));
     Ok(())
 }
 

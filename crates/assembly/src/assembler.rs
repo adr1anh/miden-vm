@@ -31,9 +31,9 @@ use miden_core::{
     serde::Serializable,
 };
 use miden_mast_package::{
-    CallableProcedurePath, ConstantExport, NamespacePlan, Package, PackageDebugInfoError,
-    PackageExport, PackageId, PackageModule, PackageNaming, PackageSubmodule, ProcedureExport,
-    Section, SectionId, TypeExport,
+    CallableProcedurePath, CodePackage, ConstantExport, NamespacePath, Package,
+    PackageDebugInfoError, PackageExport, PackageId, PackageModule, PackageSubmodule,
+    PackageSymbols, ProcedureExport, Section, SectionId, TypeExport,
     debug_info::{DebugSourceNodeId, PackageDebugInfo},
 };
 use miden_project::{Linkage, PackageSourceMount, TargetType};
@@ -41,8 +41,7 @@ use miden_project::{Linkage, PackageSourceMount, TargetType};
 use self::error::AssemblerError;
 pub use self::{namespace_inputs::NamespaceInputs, product::AssemblyProduct};
 use crate::{
-    CallableBinding, CallableDeclaration, GlobalItemIndex, ModuleIndex, Procedure,
-    ProcedureContext,
+    CallableDeclaration, GlobalItemIndex, ModuleIndex, Procedure, ProcedureContext, ProcedureName,
     ast::Path,
     basic_block_builder::{ActiveInlineCall, BasicBlockBuilder},
     fmp::{fmp_end_frame_sequence, fmp_initialization_sequence, fmp_start_frame_sequence},
@@ -211,13 +210,12 @@ impl Assembler {
 
     /// Start building an [`Assembler`] with a kernel defined by the provided kernel package.
     ///
-    /// `naming` must be retained from compilation or admitted with an explicit selected profile.
+    /// The code owner retains exact checked symbols, advice and source metadata.
     pub fn with_kernel(
         source_manager: Arc<dyn SourceManager>,
-        kernel: Arc<Package>,
-        naming: impl Into<Arc<PackageNaming>>,
+        kernel: CodePackage,
     ) -> Result<Self, Report> {
-        let linker = Box::new(Linker::with_kernel(source_manager.clone(), kernel, naming)?);
+        let linker = Box::new(Linker::with_kernel(source_manager.clone(), kernel)?);
         Ok(Self {
             source_manager,
             linker,
@@ -264,13 +262,13 @@ impl Assembler {
     /// Every callable still needs a canonical path through [`Self::with_callable_path`]. Source
     /// namespaces, aliases and package code never fill in either part of this metadata.
     /// This configures naming only, without home/profile or execution-environment admission.
-    pub fn with_namespace_plan(mut self, plan: NamespacePlan) -> Self {
+    pub fn with_namespace_plan(mut self, plan: NamespacePath) -> Self {
         self.namespace_inputs = self.namespace_inputs.with_namespace_plan(plan);
         self
     }
 
     /// Returns the explicitly configured home for locally defined callables, if supplied.
-    pub fn namespace_plan(&self) -> Option<&NamespacePlan> {
+    pub fn namespace_plan(&self) -> Option<&NamespacePath> {
         self.namespace_inputs.namespace_plan()
     }
 
@@ -291,7 +289,7 @@ impl Assembler {
     pub fn with_callable_binding(
         mut self,
         declaration: Arc<Path>,
-        binding: CallableBinding,
+        binding: ProcedureName,
     ) -> Result<Self, Report> {
         self.namespace_inputs =
             self.namespace_inputs.with_callable_binding(declaration, binding)?;
@@ -308,7 +306,7 @@ impl Assembler {
         Ok(self)
     }
 
-    fn callable_binding(&self, gid: GlobalItemIndex) -> Result<&CallableBinding, Report> {
+    fn callable_binding(&self, gid: GlobalItemIndex) -> Result<&ProcedureName, Report> {
         self.linker[gid].callable_binding().ok_or_else(|| {
             Report::msg(format!(
                 "missing canonical callable binding for '{}::{}'",
@@ -411,30 +409,19 @@ impl Assembler {
         Ok(())
     }
 
-    /// Link against `package` with the specified linkage mode during assembly.
+    /// Link against `code` with the specified linkage mode during assembly.
     ///
-    /// `naming` must match the package's required metadata exactly and come from compilation or
-    /// explicit selected-profile admission of its raw transport.
-    pub fn with_package(
-        mut self,
-        package: Arc<Package>,
-        linkage: Linkage,
-        naming: impl Into<Arc<PackageNaming>>,
-    ) -> Result<Self, Report> {
-        self.link_package(package, linkage, naming)?;
+    /// The code owner retains exact checked symbols, advice and source metadata.
+    pub fn with_package(mut self, code: CodePackage, linkage: Linkage) -> Result<Self, Report> {
+        self.link_package(code, linkage)?;
         Ok(self)
     }
 
-    /// Link against `package` with the specified linkage mode during assembly.
+    /// Link against `code` with the specified linkage mode during assembly.
     ///
-    /// `naming` must match the package's required metadata exactly and come from compilation or
-    /// explicit selected-profile admission of its raw transport.
-    pub fn link_package(
-        &mut self,
-        package: Arc<Package>,
-        linkage: Linkage,
-        naming: impl Into<Arc<PackageNaming>>,
-    ) -> Result<(), Report> {
+    /// The code owner retains exact checked symbols, advice and source metadata.
+    pub fn link_package(&mut self, code: CodePackage, linkage: Linkage) -> Result<(), Report> {
+        let package = code.package();
         match package.kind {
             TargetType::Kernel => {
                 if self.has_kernel() {
@@ -444,54 +431,45 @@ impl Assembler {
                     )));
                 }
 
-                self.linker.link_with_kernel(package, naming)?;
+                self.linker.link_with_kernel(code)?;
                 Ok(())
             },
             TargetType::Executable => {
                 Err(Report::msg("cannot add executable packages to an assembler"))
             },
             _ => {
-                self.linker.link_library(
-                    LinkLibrary::from_package(package, naming)
-                        .map_err(Report::msg)?
-                        .with_linkage(linkage),
-                )?;
+                self.linker
+                    .link_library(LinkLibrary::from_code_package(code).with_linkage(linkage))?;
                 Ok(())
             },
         }
     }
 
-    /// Links a library package at an explicit source prefix, retaining its exact canonical naming.
+    /// Links a library package at an explicit source prefix, retaining its exact canonical symbols.
     ///
     /// Kernel attachment remains a separate operation through [`Self::link_package`].
     pub fn with_package_at(
         mut self,
-        package: Arc<Package>,
+        code: CodePackage,
         linkage: Linkage,
-        naming: impl Into<Arc<PackageNaming>>,
         mount: PackageSourceMount,
     ) -> Result<Self, Report> {
-        self.link_package_at(package, linkage, naming, mount)?;
+        self.link_package_at(code, linkage, mount)?;
         Ok(self)
     }
 
     /// Links a library package at an explicit source prefix without rebasing its callable keys.
     ///
-    /// Naming admission and every route/surface/capacity check complete before linker mutation.
+    /// Every route/surface/capacity check completes before linker mutation.
     /// Kernel packages require separate attachment through [`Self::link_package`].
     pub fn link_package_at(
         &mut self,
-        package: Arc<Package>,
+        code: CodePackage,
         linkage: Linkage,
-        naming: impl Into<Arc<PackageNaming>>,
         mount: PackageSourceMount,
     ) -> Result<(), Report> {
-        self.linker.link_library_at(
-            LinkLibrary::from_package(package, naming)
-                .map_err(Report::msg)?
-                .with_linkage(linkage),
-            mount,
-        )?;
+        self.linker
+            .link_library_at(LinkLibrary::from_code_package(code).with_linkage(linkage), mount)?;
         Ok(())
     }
 }
@@ -742,7 +720,7 @@ impl Assembler {
         };
 
         let callables = self.pending_callables(
-            &mast_forest_builder,
+            &mut mast_forest_builder,
             exports.values().filter_map(|export| match export {
                 PendingPackageExport::Procedure(export) => Some((export.path.clone(), export.key)),
                 _ => None,
@@ -753,8 +731,11 @@ impl Assembler {
         }
         let (mast_forest, node_id_by_ref, debug_info, source_id_by_ref) =
             mast_forest_builder.build()?.into_parts_with_debug_info();
-        let (callables, callable_sources) =
-            callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
+        let product::FinalizedCallables {
+            callables,
+            sources: callable_sources,
+            occurrences: procedure_occurrences,
+        } = callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
         let exports = exports
             .into_iter()
             .map(|(path, export)| {
@@ -774,6 +755,7 @@ impl Assembler {
             kind,
             callables,
             callable_sources,
+            procedure_occurrences,
         )
     }
 
@@ -1275,12 +1257,12 @@ impl Assembler {
             .expect("compiled entrypoint has a callable binding")
             .key();
         let entry_path = namespace.join(ast::ProcedureName::MAIN_PROC_NAME).into();
-        let callables = self.pending_callables(&mast_forest_builder, [(entry_path, entry_key)])?;
+        let callables =
+            self.pending_callables(&mut mast_forest_builder, [(entry_path, entry_key)])?;
 
         let (mast_forest, node_id_by_ref, debug_info, source_id_by_ref) =
             mast_forest_builder.build()?.into_parts_with_debug_info();
-        let (callables, callable_sources) =
-            callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
+        let callables = callables.finish(&mast_forest, &node_id_by_ref, &source_id_by_ref)?;
         let entry_node_id = *node_id_by_ref.get(&entry_node_ref).ok_or_else(|| {
             Report::msg(format!("entrypoint ref {entry_node_ref} was not finalized"))
         })?;
@@ -1296,7 +1278,6 @@ impl Assembler {
             entry_source_id,
             kernel_package,
             callables,
-            callable_sources,
             entry_key,
         )
     }
@@ -1311,6 +1292,7 @@ impl Assembler {
         kind: TargetType,
         callables: miden_mast_package::PackageCallables,
         callable_sources: product::CallableSources,
+        procedure_occurrences: Vec<miden_mast_package::PackageProcedureOccurrence>,
     ) -> Result<AssemblyProduct, Report> {
         #[cfg(feature = "std")]
         if self.emit_debug_info
@@ -1319,7 +1301,7 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
-        let naming = PackageNaming::new(
+        let naming = PackageSymbols::new(
             self.namespace_inputs
                 .into_namespace_plan()
                 .expect("prebinding requires an explicit caller home"),
@@ -1338,7 +1320,9 @@ impl Assembler {
                 None,
                 &naming,
             )
-            .map_err(Report::msg)?,
+            .map_err(Report::msg)?
+            .with_procedure_occurrences(procedure_occurrences, &naming)
+            .into_diagnostic()?,
         );
         Ok(AssemblyProduct::new(package, None, debug_info, naming, callable_sources))
     }
@@ -1347,13 +1331,14 @@ impl Assembler {
         self.linker
             .static_libraries()
             .map(|lib| {
-                let debug_info = match lib.package.debug_info() {
+                lib.package().check_procedure_occurrences(lib.naming()).into_diagnostic()?;
+                let debug_info = match lib.package().debug_info() {
                     Ok(debug_info) => debug_info,
                     Err(PackageDebugInfoError::UntrustedSections) => None,
                     Err(err) => {
                         return Err(Report::msg(format!(
                             "failed to decode debug info for statically linked package '{}': {err}",
-                            lib.package.name
+                            lib.package().name
                         )));
                     },
                 };
@@ -1371,8 +1356,7 @@ impl Assembler {
         entrypoint: MastNodeId,
         entrypoint_source_id: Option<DebugSourceNodeId>,
         kernel: Option<Arc<Package>>,
-        callables: miden_mast_package::PackageCallables,
-        callable_sources: product::CallableSources,
+        callables: product::FinalizedCallables,
         entry_key: ProcedureKey,
     ) -> Result<AssemblyProduct, Report> {
         #[cfg(feature = "std")]
@@ -1380,7 +1364,12 @@ impl Assembler {
             debuginfo::trim_paths(&mut debug_info, &trimmer);
         }
 
-        let naming = PackageNaming::new(
+        let product::FinalizedCallables {
+            callables,
+            sources: callable_sources,
+            occurrences: procedure_occurrences,
+        } = callables;
+        let naming = PackageSymbols::new(
             self.namespace_inputs
                 .into_namespace_plan()
                 .expect("prebinding requires an explicit caller home"),
@@ -1404,7 +1393,9 @@ impl Assembler {
                 None,
                 &naming,
             )
-            .map_err(Report::msg)?,
+            .map_err(Report::msg)?
+            .with_procedure_occurrences(procedure_occurrences, &naming)
+            .into_diagnostic()?,
         );
 
         Ok(AssemblyProduct::new(package, kernel, debug_info, naming, callable_sources))

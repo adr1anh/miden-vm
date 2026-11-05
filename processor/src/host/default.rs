@@ -1,19 +1,15 @@
 use alloc::{sync::Arc, vec::Vec};
 use core::fmt;
 
-use miden_core::{
-    Word,
-    events::{EventId, EventName},
-    mast::MastForest,
-};
+use miden_core::events::{EventId, EventName};
 use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceManager, SourceSpan};
-use miden_mast_package::{PackageDebugInfoError, debug_info::PackageDebugInfo};
+use miden_mast_package::CodePackage;
 
 use super::handlers::{
     EventError, EventHandler, EventHandlerRegistry, TraceError, TraceHandler, TraceHandlerRegistry,
 };
 use crate::{
-    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    BaseHost, CodeRequest, EnvironmentSource, EnvironmentSourceError, EnvironmentWitnessRequest,
     ExecutionError, LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState,
     ResolutionWitness, SyncHost, advice::AdviceMutation,
 };
@@ -28,14 +24,14 @@ pub struct DefaultHost<S: SourceManager = DefaultSourceManager> {
     event_handlers: EventHandlerRegistry,
     trace_handlers: TraceHandlerRegistry,
     source_manager: Arc<S>,
-    environment_source: Option<EnvironmentSource>,
+    environment_source: Option<EnvironmentSourceHandle>,
 }
 
-struct EnvironmentSource(Arc<dyn EnvironmentWitnessSource>);
+struct EnvironmentSourceHandle(Arc<dyn EnvironmentSource>);
 
-impl fmt::Debug for EnvironmentSource {
+impl fmt::Debug for EnvironmentSourceHandle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("EnvironmentWitnessSource").finish_non_exhaustive()
+        formatter.debug_struct("EnvironmentSource").finish_non_exhaustive()
     }
 }
 
@@ -75,12 +71,21 @@ where
     /// The host forwards each bounded request; its caller must authenticate returned candidates.
     /// An absent source or `None` response means evidence is unavailable, not nonmembership or
     /// authority to execute code by implementation digest.
-    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentWitnessSource>) -> Self {
-        self.environment_source = Some(EnvironmentSource(source));
+    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentSource>) -> Self {
+        self.environment_source = Some(EnvironmentSourceHandle(source));
         self
     }
 
-    /// Loads a [`HostLibrary`] containing a [`MastForest`] with its list of event handlers.
+    /// Returns mutable access to the low-level store of untrusted code witnesses.
+    ///
+    /// Raw forest insertion assigns no procedure names or keys and supplies no authority for an
+    /// entry key or environment root. Execution still authenticates requested bindings and checks
+    /// returned code against the requested implementation digest and procedure roots.
+    pub fn mast_forest_store_mut(&mut self) -> &mut MemMastForestStore {
+        &mut self.store
+    }
+
+    /// Loads a [`HostLibrary`] containing owned package code and its event handlers.
     ///
     /// The load is atomic: if one handler fails to register, the host keeps the state it had
     /// before the call. It holds no handler of the library and it does not hold the MAST forest.
@@ -105,15 +110,11 @@ where
             registered.push(id);
         }
 
-        self.store.insert_loaded(LoadedMastForest::with_package_debug_info(
-            library.mast_forest,
-            library.package_debug_info,
-        ));
+        self.store.insert_loaded(LoadedMastForest::from_code_package(library.code));
         Ok(())
     }
 
-    /// Adds a [`HostLibrary`] containing a [`MastForest`] with its list of event handlers.
-    /// to the host.
+    /// Adds a [`HostLibrary`] containing owned package code and its event handlers to the host.
     pub fn with_library(mut self, library: impl Into<HostLibrary>) -> Result<Self, ExecutionError> {
         self.load_library(library)?;
         Ok(self)
@@ -221,8 +222,8 @@ where
         }
     }
 
-    fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest> {
-        self.store.get(node_digest)
+    fn get_mast_forest(&self, request: CodeRequest) -> Option<LoadedMastForest> {
+        self.store.get(request)
     }
 
     fn on_event(
@@ -273,7 +274,7 @@ impl BaseHost for NoopHost {
 
 impl SyncHost for NoopHost {
     #[inline(always)]
-    fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
+    fn get_mast_forest(&self, _request: CodeRequest) -> Option<LoadedMastForest> {
         None
     }
 
@@ -289,18 +290,34 @@ impl SyncHost for NoopHost {
 // HOST LIBRARY
 // ================================================================================================
 
-/// A rich library representing a [`MastForest`] which also exports
-/// a list of handlers for events it may call.
+/// Package code and the event handlers for events it may call.
+///
+/// The code retains its exact checked symbols, advice and source metadata. Loading it makes code
+/// available; the execution caller still supplies the expected target and environment root.
 pub struct HostLibrary {
-    /// A `MastForest` with procedures exposed by this library.
-    pub mast_forest: Arc<MastForest>,
-    /// Package-owned debug info that belongs to `mast_forest`.
-    pub package_debug_info: Result<Option<PackageDebugInfo>, PackageDebugInfoError>,
-    /// List of handlers along with their event names to call them with `emit`.
-    pub handlers: Vec<(EventName, Arc<dyn EventHandler>)>,
+    code: CodePackage,
+    handlers: Vec<(EventName, Arc<dyn EventHandler>)>,
 }
 
 impl HostLibrary {
+    /// Creates a host library retaining the complete code package.
+    ///
+    /// Packaged Wasm event handlers are not loaded: this crate cannot depend on the Wasm runner.
+    /// Use `miden_wasm_event_handlers::host_library_from_package` to load those handlers.
+    pub fn new(code: CodePackage) -> Self {
+        Self { code, handlers: Vec::new() }
+    }
+
+    /// Returns the complete package code and its exact checked symbols.
+    pub fn code(&self) -> &CodePackage {
+        &self.code
+    }
+
+    /// Returns the event handlers registered when this library is loaded.
+    pub fn handlers(&self) -> &[(EventName, Arc<dyn EventHandler>)] {
+        &self.handlers
+    }
+
     /// Replaces the event handlers of this library.
     ///
     /// Use this to supply handlers that the source of the library does not provide, for example
@@ -311,53 +328,9 @@ impl HostLibrary {
     }
 }
 
-impl Default for HostLibrary {
-    fn default() -> Self {
-        Self {
-            mast_forest: Arc::new(MastForest::new()),
-            package_debug_info: Ok(None),
-            handlers: Vec::new(),
-        }
-    }
-}
-
-/// Converts a package into a host library.
-///
-/// The packaged Wasm event handlers are NOT loaded: this crate cannot depend on the Wasm runner
-/// crate. To get a library with the handlers of the `event_handlers` section, use
-/// `miden_wasm_event_handlers::host_library_from_package`.
-impl From<Arc<miden_mast_package::Package>> for HostLibrary {
-    fn from(package: Arc<miden_mast_package::Package>) -> Self {
-        let package_debug_info = match package.debug_info() {
-            Ok(debug_info) => Ok(debug_info),
-            Err(PackageDebugInfoError::UntrustedSections) => Ok(None),
-            Err(err) => Err(err),
-        };
-        Self {
-            mast_forest: package.mast_forest().clone(),
-            package_debug_info,
-            handlers: vec![],
-        }
-    }
-}
-
-impl From<Arc<MastForest>> for HostLibrary {
-    fn from(mast_forest: Arc<MastForest>) -> Self {
-        Self {
-            mast_forest,
-            package_debug_info: Ok(None),
-            handlers: vec![],
-        }
-    }
-}
-
-impl From<&Arc<MastForest>> for HostLibrary {
-    fn from(mast_forest: &Arc<MastForest>) -> Self {
-        Self {
-            mast_forest: mast_forest.clone(),
-            package_debug_info: Ok(None),
-            handlers: vec![],
-        }
+impl From<CodePackage> for HostLibrary {
+    fn from(code: CodePackage) -> Self {
+        Self::new(code)
     }
 }
 
@@ -366,7 +339,16 @@ impl From<&Arc<MastForest>> for HostLibrary {
 
 #[cfg(test)]
 mod tests {
-    use miden_core::{mast::BasicBlockNodeBuilder, operations::Operation};
+    use miden_core::{
+        mast::{BasicBlockNodeBuilder, MastForest, MastNodeExt},
+        operations::Operation,
+        program::{CanonicalLabel, ImplementationRoot},
+    };
+    use miden_mast_package::{
+        CallableProcedurePath, NamespacePath, Package, PackageCallables, PackageDebugInfoError,
+        PackageId, PackageProcedureOccurrence, PackageSymbols, ProcedureName, Section, SectionId,
+        TargetType, Version,
+    };
 
     use super::{super::handlers::NoopEventHandler, *};
     use crate::errors::HostError;
@@ -379,13 +361,41 @@ mod tests {
             .unwrap();
         mast_forest.make_root(block);
 
+        let home = NamespacePath::new(vec![CanonicalLabel::text("host-test").unwrap()]);
+        let path =
+            CallableProcedurePath::from_semantic_components(vec!["procedure".into()]).unwrap();
+        let binding = ProcedureName::new(home.clone(), path).unwrap();
+        let key = binding.key();
+        let selected = [(key, ImplementationRoot::new(mast_forest[block].digest()))];
+        let symbols = Arc::new(
+            PackageSymbols::new(
+                home,
+                PackageCallables::new([binding], [], selected).unwrap(),
+                None,
+            )
+            .unwrap(),
+        );
+        let package = Package::create(
+            PackageId::from("host-test"),
+            Version::new(1, 0, 0),
+            TargetType::Library,
+            Arc::new(mast_forest),
+            [],
+            [],
+            &symbols,
+        )
+        .unwrap()
+        .with_procedure_occurrences([PackageProcedureOccurrence::new(key, block, None)], &symbols)
+        .unwrap();
+        let code = CodePackage::new(Arc::new(package), symbols).unwrap();
+
         let handlers = events
             .iter()
             .map(|event| {
                 (EventName::new(event), Arc::new(NoopEventHandler) as Arc<dyn EventHandler>)
             })
             .collect();
-        HostLibrary::from(Arc::new(mast_forest)).set_handlers(handlers)
+        HostLibrary::new(code).set_handlers(handlers)
     }
 
     /// Returns `true` when the host resolves a handler for the named event.
@@ -396,14 +406,64 @@ mod tests {
     #[test]
     fn load_library_registers_the_handlers_and_the_forest() {
         let library = library(&["test::a", "test::b"]);
-        let procedure = library.mast_forest.local_procedure_digests().next().unwrap();
+        let procedure =
+            library.code().package().mast_forest().local_procedure_digests().next().unwrap();
 
+        let code = library.code().clone();
+        let occurrence = code.package().procedure_occurrences()[0];
         let mut host = DefaultHost::default();
         host.load_library(library).unwrap();
 
         assert!(is_registered(&host, "test::a"));
         assert!(is_registered(&host, "test::b"));
-        assert!(host.get_mast_forest(&procedure).is_some());
+        let loaded = host
+            .get_mast_forest(CodeRequest::External {
+                implementation: ImplementationRoot::new(procedure),
+            })
+            .expect("the forest is loaded");
+        let retained = loaded.code_package().expect("the whole code package is retained");
+        assert!(Arc::ptr_eq(retained.package(), code.package()));
+        assert!(Arc::ptr_eq(loaded.symbols().unwrap(), code.symbols()));
+        assert_eq!(loaded.procedure_occurrence(occurrence.key()), Some(&occurrence));
+    }
+
+    #[test]
+    fn rich_load_retains_deferred_package_debug_failure() {
+        let code = library(&[]).code().clone();
+        let mut package = code.package().as_ref().clone();
+        package.sections.push(Section::new(SectionId::DEBUG_INFO, vec![0xff]));
+        let code = CodePackage::new(Arc::new(package), code.symbols().clone()).unwrap();
+        let procedure = code.package().mast_forest().local_procedure_digests().next().unwrap();
+        let mut host = DefaultHost::default();
+        host.load_library(code.clone()).unwrap();
+
+        let loaded = host
+            .get_mast_forest(CodeRequest::External {
+                implementation: ImplementationRoot::new(procedure),
+            })
+            .unwrap();
+        assert!(Arc::ptr_eq(loaded.code_package().unwrap().package(), code.package()));
+        let error = loaded.package_debug_info().expect_err("malformed debug info stays an error");
+        assert!(matches!(&*error, PackageDebugInfoError::DecodeSection { .. }));
+    }
+
+    #[test]
+    fn failed_load_library_preserves_prior_equal_digest_owner() {
+        let initial = library(&[]);
+        let row = initial.code().package().procedure_occurrences()[0];
+        let implementation = ImplementationRoot::new(
+            initial.code().package().mast_forest()[row.exec_node()].digest(),
+        );
+        let request = CodeRequest::Procedure { key: row.key(), implementation };
+        let mut host = DefaultHost::default();
+        host.load_library(initial).unwrap();
+        let before = host.get_mast_forest(request).unwrap();
+        host.register_handler(EventName::new("test::b"), Arc::new(NoopEventHandler))
+            .unwrap();
+
+        assert!(host.load_library(library(&["test::a", "test::b"])).is_err());
+        assert!(!is_registered(&host, "test::a"));
+        assert_eq!(host.get_mast_forest(request), Some(before));
     }
 
     #[test]
@@ -414,7 +474,8 @@ mod tests {
 
         // The second handler of the library collides with the handler of the host.
         let library = library(&["test::a", "test::b"]);
-        let procedure = library.mast_forest.local_procedure_digests().next().unwrap();
+        let procedure =
+            library.code().package().mast_forest().local_procedure_digests().next().unwrap();
         let err = host.load_library(library).unwrap_err();
 
         assert!(
@@ -422,6 +483,12 @@ mod tests {
             "unexpected error: {err}"
         );
         assert!(!is_registered(&host, "test::a"), "the first handler must be rolled back");
-        assert!(host.get_mast_forest(&procedure).is_none(), "the forest must not be loaded");
+        assert!(
+            host.get_mast_forest(CodeRequest::External {
+                implementation: ImplementationRoot::new(procedure)
+            })
+            .is_none(),
+            "the forest must not be loaded"
+        );
     }
 }

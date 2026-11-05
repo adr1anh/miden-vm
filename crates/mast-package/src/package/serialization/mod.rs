@@ -15,6 +15,7 @@
 //!
 //! #### Manifest
 //! - required naming (`u32` byte length, followed by opaque NamingV1 transport)
+//! - exact keyed occurrences (`u32` byte length, then `u32` count and sorted scalar rows)
 //! - `manifest` (see [`crate::PackageManifest`])
 //!
 //! #### Custom Sections
@@ -63,7 +64,7 @@ use super::{
 };
 use crate::{
     Dependency, ManifestValidationError, Package, PackageExport, PackageManifest, Section,
-    UnverifiedPackageNaming, debug_info::DebugSourceNodeId, interface::serialization::CodecLimits,
+    UnverifiedPackageSymbols, debug_info::DebugSourceNodeId, interface::serialization::CodecLimits,
 };
 
 #[cfg(test)]
@@ -78,7 +79,7 @@ const MAGIC_PACKAGE: &[u8; 5] = b"MASP\0";
 /// The format version.
 ///
 /// If future modifications are made to this format, the version should be incremented by 1.
-const VERSION: [u8; 3] = [9, 0, 0];
+const VERSION: [u8; 3] = [10, 0, 0];
 
 /// Byte-read budget multiplier for package deserialization from a byte slice.
 ///
@@ -115,6 +116,11 @@ impl Package {
         let naming = self.naming_transport().as_bytes();
         target.write_u32(u32::try_from(naming.len()).expect("preflighted NamingV1 length"));
         target.write_bytes(naming);
+
+        let occurrence_len = super::occurrences::payload_len(&self.procedure_occurrences)
+            .expect("preflighted procedure occurrence length");
+        target.write_u32(u32::try_from(occurrence_len).expect("preflighted occurrence length"));
+        super::occurrences::write_payload(&self.procedure_occurrences, target);
 
         // Write manifest
         self.manifest.write_into(target);
@@ -250,14 +256,24 @@ impl Package {
 
         // Both reader modes preserve bounded, opaque naming transport. Neither mode installs
         // a default home policy or validates unknown external TypedId codecs. Canonical metadata
-        // is available only through Package::admit_naming with current explicit caller evidence.
+        // is available only through Package::validate_symbols with current explicit caller
+        // evidence.
         let naming_len = source.read_u32()?;
         let naming_bytes = source.read_slice(naming_len as usize)?;
         // Every record/component/blob occupies at least one payload byte. These input-derived
         // transport bounds do not replace the caller's admission limits or selected profile.
         let transport_limits = CodecLimits::new(naming_len, naming_len, naming_len, naming_len);
         let naming =
-            UnverifiedPackageNaming::from_bytes_with_limits(naming_bytes, transport_limits)
+            UnverifiedPackageSymbols::from_bytes_with_limits(naming_bytes, transport_limits)
+                .map_err(|error| DeserializationError::InvalidValue(error.to_string()))?;
+
+        // Required exact occurrences remain code/source supply hints, never authority. The
+        // complete framed payload is scanned before allocation under input-derived finite bounds.
+        let occurrence_len = source.read_u32()?;
+        let occurrence_bytes = source.read_slice(occurrence_len as usize)?;
+        let occurrence_limits = CodecLimits::new(occurrence_len, occurrence_len, 0, 0);
+        let procedure_occurrences =
+            super::occurrences::read_payload(occurrence_bytes, &mast, occurrence_limits)
                 .map_err(|error| DeserializationError::InvalidValue(error.to_string()))?;
 
         // Read manifest
@@ -277,6 +293,7 @@ impl Package {
             kind,
             mast,
             naming,
+            procedure_occurrences,
             manifest,
             sections,
             debug_sections_trusted: true,
@@ -309,9 +326,9 @@ impl Deserializable for Package {
     ///
     /// This validates the embedded MAST forest, manifest references, and package-owned debug
     /// information before returning an unadmitted code container. Required naming is opaque,
-    /// structurally bounded transport: use [`Package::admit_naming`] with explicit current policy,
-    /// context and limits before using canonical bindings. The caller's [`ByteReader`] controls
-    /// the resource budget. For
+    /// structurally bounded transport: use [`Package::validate_symbols`] with explicit current
+    /// policy, context and limits before using canonical bindings. The caller's [`ByteReader`]
+    /// controls the resource budget. For
     /// a byte slice, prefer [`Package::read_from_bytes`], which applies a finite byte-read budget.
     /// Use [`Package::read_from_trusted`] for packages written and retained by the same trusted
     /// system when repeating these checks is unnecessary.

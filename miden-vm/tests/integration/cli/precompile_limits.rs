@@ -189,21 +189,19 @@ fn cli_precompile_execution_and_export_limits_cover_masm_and_masp() {
     // while the library continues to account for both scopes independently.
     for requests in [1, 3] {
         let program = write_program(dir.path(), &precompile_source(requests, 1));
-        let mut host =
-            DefaultHost::default().with_environment_source(program.named.environment.source());
+        let mut host = DefaultHost::default().with_environment_source(program.named.1.source());
+        host.load_library(program.named.0.clone()).unwrap();
         let (_, portable) =
             FastProcessor::new(StackInputs::default())
                 .with_options(
-                    ExecutionOptions::default().with_environment_trace_limits(
-                        miden_utils_testing::librarytree::trace_limits(),
-                    ),
+                    ExecutionOptions::default()
+                        .with_resolution_limits(program.named.1.resolution_limits())
+                        .with_environment_trace_limits(
+                            miden_utils_testing::librarytree::trace_limits(),
+                        ),
                 )
                 .unwrap()
-                .execute_for_proving_sync(
-                    &program.named.program,
-                    program.named.environment.execution(),
-                    &mut host,
-                )
+                .execute_for_proving_sync(program.named.1.target(), &mut host)
                 .unwrap()
                 .into_parts();
         let prepared = portable

@@ -105,14 +105,53 @@ fn cli_run() {
 
     cmd.arg("-n").arg("1").arg("-m").arg("8192").arg("-e").arg("8192");
 
+    let expected = inputs.named.1.target();
+    let implementation = inputs
+        .named
+        .0
+        .symbols()
+        .callables()
+        .selected_implementation(expected.entry_key())
+        .unwrap();
     let output = cmd.unwrap();
 
     output
         .assert()
-        .stdout(predicate::str::contains("Executed the program with hash"))
+        .stdout(predicate::str::contains(format!(
+            "Entry key: {}",
+            expected.entry_key().as_word()
+        )))
+        .stdout(predicate::str::contains(format!(
+            "Environment root: {}",
+            expected.environment_root().as_word()
+        )))
+        .stdout(predicate::str::contains(format!(
+            "Entry implementation: {}",
+            implementation.as_word()
+        )))
+        .stdout(predicate::str::contains("Executed the program in"))
         .stdout(predicate::str::contains("VM trace rows:"))
         .stdout(predicate::str::contains("Core rows:"))
         .stdout(predicate::str::contains("Byte-pair lookup rows:"));
+}
+
+fn assert_missing_inputs_file(mut command: Command, expected_basename: &str) {
+    let assertion = command
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Failed to open input file"))
+        .stderr(predicate::str::contains("No such file or directory"));
+    // Diagnostic wrapping can split a filename under a long temporary directory. Remove display
+    // continuation prefixes and line breaks while retaining the complete filename assertion.
+    let stderr = String::from_utf8_lossy(&assertion.get_output().stderr);
+    let unwrapped = stderr
+        .lines()
+        .map(|line| line.trim().trim_start_matches(['|', '│']).trim())
+        .collect::<String>();
+    assert!(
+        unwrapped.contains(expected_basename),
+        "missing inferred input filename: {stderr}"
+    );
 }
 
 #[test]
@@ -122,13 +161,8 @@ fn run_rejects_missing_inferred_inputs_file() {
     fs::write(&program_path, "begin push.1 end").unwrap();
 
     let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
-    let mut cmd = inputs.command(working_dir.path(), "run", &program_path);
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("Failed to open input file"))
-        .stderr(predicate::str::contains("miden-vm-cli-missing-run-"))
-        .stderr(predicate::str::contains("test.inputs"))
-        .stderr(predicate::str::contains("No such file or directory"));
+    let cmd = inputs.command(working_dir.path(), "run", &program_path);
+    assert_missing_inputs_file(cmd, "miden-vm-cli-missing-run-inputs-test.inputs");
 }
 
 #[test]
@@ -138,13 +172,8 @@ fn prove_rejects_missing_inferred_inputs_file() {
     fs::write(&program_path, "begin push.1 end").unwrap();
 
     let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
-    let mut cmd = inputs.command(working_dir.path(), "prove", &program_path);
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("Failed to open input file"))
-        .stderr(predicate::str::contains("miden-vm-cli-missing-prove-"))
-        .stderr(predicate::str::contains("test.inputs"))
-        .stderr(predicate::str::contains("No such file or directory"));
+    let cmd = inputs.command(working_dir.path(), "prove", &program_path);
+    assert_missing_inputs_file(cmd, "miden-vm-cli-missing-prove-inputs-test.inputs");
 }
 
 #[test]
@@ -181,7 +210,7 @@ fn cli_compile_emits_package_with_independently_expected_naming() {
     cmd.assert().success();
 
     let package = Package::deserialize_from_file(&output).unwrap();
-    package.check_naming(&inputs.named.naming).unwrap();
+    package.check_naming(inputs.named.0.symbols()).unwrap();
     assert_eq!(fs::read(&sidecar).unwrap(), fs::read(&inputs.expected_naming).unwrap());
     inputs.command(working_dir.path(), "run", &output).assert().success();
 
@@ -194,7 +223,7 @@ fn cli_compile_emits_package_with_independently_expected_naming() {
     cmd.assert().success();
     Package::deserialize_from_file(&second)
         .unwrap()
-        .check_naming(&inputs.named.naming)
+        .check_naming(inputs.named.0.symbols())
         .unwrap();
     assert_eq!(fs::read(&sidecar).unwrap(), previous_sidecar);
     assert!(!second.with_extension("naming").exists());
@@ -367,6 +396,61 @@ fn cli_verify_binds_caller_descriptor_and_public_io_without_execution_evidence()
         .failure()
         .stderr(predicate::str::contains("Program failed verification!"))
         .stdout(predicate::str::contains("Proof status:").not());
+}
+
+#[test]
+fn cli_prove_verify_supports_every_transcript_hash() {
+    use miden_vm::{ExecutionProof, HashFunction};
+
+    let working_dir = TempDir::new().unwrap();
+    let program_path = working_dir.path().join("transcript.masm");
+    fs::write(&program_path, "begin push.7 drop end").unwrap();
+    fs::write(program_path.with_extension("inputs"), r#"{"operand_stack":[]}"#).unwrap();
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
+    let expected = inputs.named.1.target();
+    let implementation = inputs
+        .named
+        .0
+        .symbols()
+        .callables()
+        .selected_implementation(expected.entry_key())
+        .unwrap();
+
+    for (name, hash) in [
+        ("blake3-256", HashFunction::Blake3_256),
+        ("keccak", HashFunction::Keccak),
+        ("eidos", HashFunction::Eidos),
+    ] {
+        inputs
+            .command(working_dir.path(), "prove", &program_path)
+            .args(["--hasher", name])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!(
+                "Entry key: {}",
+                expected.entry_key().as_word()
+            )))
+            .stdout(predicate::str::contains(format!(
+                "Environment root: {}",
+                expected.environment_root().as_word()
+            )))
+            .stdout(predicate::str::contains(format!(
+                "Entry implementation: {}",
+                implementation.as_word()
+            )))
+            .stdout(predicate::str::contains("Proof status: complete"));
+
+        let proof = ExecutionProof::read_from_bytes(
+            &fs::read(program_path.with_extension("proof")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(proof.vm().proof.hash_fn(), hash, "CLI transcript selection: {name}");
+        inputs
+            .verify_command(working_dir.path(), program_path.with_extension("proof"))
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Proof status: complete"));
+    }
 }
 
 #[cfg(unix)]
@@ -846,13 +930,15 @@ fn run_loads_a_masp_whose_kernel_shares_the_handler_section() {
     let program_path = working_dir.path().join("prog.masm");
     fs::write(&program_path, "begin push.1 drop end").unwrap();
     let mut inputs = ProgramFixture::new(working_dir.path(), &program_path, Some(&kernel), &[]);
-    let mut package = inputs.named.package.as_ref().clone();
+    let mut package = inputs.named.0.package().as_ref().clone();
     package
         .attach_event_handlers(&section)
         .expect("the executable package takes the section");
 
     let package_path = working_dir.path().join("prog.masp");
-    inputs.named.package = Arc::new(package);
+    inputs.named.0 =
+        miden_mast_package::CodePackage::new(Arc::new(package), inputs.named.0.symbols().clone())
+            .unwrap();
     inputs.write_package(&package_path);
     fs::write(working_dir.path().join("prog.inputs"), r#"{"operand_stack":[]}"#).unwrap();
 

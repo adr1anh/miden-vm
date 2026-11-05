@@ -26,28 +26,28 @@ pub use miden_assembly_syntax::{
 };
 #[cfg(feature = "testing")]
 use miden_assembly_syntax::{ast::Form, debuginfo::SourceFile};
-use miden_core::program::{CanonicalLabel, Program};
-use miden_mast_package::{NamespacePlan, Package, PackageId, PackageNaming};
+use miden_core::program::CanonicalLabel;
+use miden_mast_package::{CodePackage, NamespacePath, Package, PackageId, PackageSymbols};
 #[cfg(feature = "std")]
 use miden_project::TargetType;
 
 #[cfg(feature = "std")]
 use crate::diagnostics::reporting::set_panic_hook;
-use crate::{CallableBinding, assembler::Assembler};
+use crate::{ProcedureName, assembler::Assembler};
 
 /// Admits fixture naming only under the complete homes explicitly chosen by its owner.
 /// Unknown TypedIds reject unless their exact codec/bytes occur in those expected homes.
 /// This test utility supplies no production publisher, registration or home policy.
 pub fn admit_fixture_package(
     package: &Package,
-    homes: &[NamespacePlan],
-) -> Result<PackageNaming, Report> {
+    homes: &[NamespacePath],
+) -> Result<PackageSymbols, Report> {
     use miden_mast_package::interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile};
 
     struct ExpectedHomes;
 
     impl TypedIdProfile for ExpectedHomes {
-        type Context = [NamespacePlan];
+        type Context = [NamespacePath];
         type Error = &'static str;
 
         fn validate_typed_id(
@@ -56,7 +56,7 @@ pub fn admit_fixture_package(
             codec: u32,
             canonical_bytes: &[u8],
         ) -> Result<(), Self::Error> {
-            let expected = context.iter().flat_map(NamespacePlan::home).any(|label| {
+            let expected = context.iter().flat_map(NamespacePath::home).any(|label| {
                 let bytes = label.as_bytes();
                 bytes[1] == 3
                     && u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) == codec
@@ -85,7 +85,7 @@ pub fn admit_fixture_package(
     }
 
     package
-        .admit_naming(
+        .validate_symbols(
             &ExpectedHomes,
             homes,
             CodecLimits::new(4 * 1024 * 1024, 100_000, 100_000, 4 * 1024 * 1024),
@@ -96,30 +96,34 @@ pub fn admit_fixture_package(
 /// Admits only the explicit ordinary and root homes selected by assembly fixtures.
 ///
 /// Foreign homes require an explicitly chosen fixture profile instead of this helper.
-pub fn fixture_package_naming(package: &Package) -> Result<PackageNaming, Report> {
+pub fn fixture_package_naming(package: &Package) -> Result<PackageSymbols, Report> {
     admit_fixture_package(
         package,
         &[
             FixtureNamespace::assembly_tests().namespace_plan().clone(),
-            NamespacePlan::new(vec![]),
+            NamespacePath::new(vec![]),
         ],
     )
 }
 
 /// Selects fixture executable code without reconstructing environment or kernel authority.
-pub fn fixture_program(package: &Package) -> Program {
+pub fn fixture_program(package: &Package) -> CodePackage {
     let naming =
         fixture_package_naming(package).expect("fixture must use an explicitly allowed home");
-    package.unwrap_program(&naming)
+    package
+        .check_executable_code(&naming)
+        .expect("fixture must supply executable code");
+    CodePackage::new(Arc::new(package.clone()), Arc::new(naming))
+        .expect("fixture code and symbols must belong together")
 }
 
 /// Chaining convenience restricted to the explicit assembly fixture home convention.
 pub trait FixtureProgram {
-    fn fixture_program(&self) -> Program;
+    fn fixture_program(&self) -> CodePackage;
 }
 
 impl FixtureProgram for Package {
-    fn fixture_program(&self) -> Program {
+    fn fixture_program(&self) -> CodePackage {
         fixture_program(self)
     }
 }
@@ -133,13 +137,13 @@ impl FixtureProgram for Package {
 /// for explicitly supplied namespace and callable metadata.
 #[derive(Clone, Debug)]
 pub struct FixtureNamespace {
-    namespace_plan: NamespacePlan,
-    bindings: BTreeMap<Arc<Path>, CallableBinding>,
+    namespace_plan: NamespacePath,
+    bindings: BTreeMap<Arc<Path>, ProcedureName>,
 }
 
 impl FixtureNamespace {
     /// Retains the complete typed home chosen by the fixture owner.
-    pub fn new(namespace_plan: NamespacePlan) -> Self {
+    pub fn new(namespace_plan: NamespacePath) -> Self {
         Self {
             namespace_plan,
             bindings: BTreeMap::new(),
@@ -150,18 +154,18 @@ impl FixtureNamespace {
     ///
     /// These labels are a test utility convention, with no Protocol identity or admission claim.
     pub fn assembly_tests() -> Self {
-        Self::new(NamespacePlan::new(vec![
+        Self::new(NamespacePath::new(vec![
             CanonicalLabel::text("miden-assembly-test-fixtures").unwrap(),
             CanonicalLabel::revision(NonZeroU32::new(1).unwrap()),
         ]))
     }
 
-    pub fn namespace_plan(&self) -> &NamespacePlan {
+    pub fn namespace_plan(&self) -> &NamespacePath {
         &self.namespace_plan
     }
 
     /// Revalidates a package against this fixture's caller home and explicitly configured bindings.
-    pub fn admit_package(&self, package: &Package) -> Result<PackageNaming, Report> {
+    pub fn admit_package(&self, package: &Package) -> Result<PackageSymbols, Report> {
         let mut homes = vec![self.namespace_plan.clone()];
         for binding in self.bindings.values() {
             if !homes.contains(binding.namespace_plan()) {
@@ -183,7 +187,7 @@ impl FixtureNamespace {
             let declaration = module.path().join(item.name());
             let canonical = crate::NamespaceInputs::default_callable_path(&declaration)?;
             let binding =
-                CallableBinding::new(self.namespace_plan.clone(), canonical).into_diagnostic()?;
+                ProcedureName::new(self.namespace_plan.clone(), canonical).into_diagnostic()?;
             self.add_binding(declaration.into(), binding)?;
         }
         Ok(())
@@ -257,7 +261,7 @@ impl FixtureNamespace {
     pub fn add_binding(
         &mut self,
         declaration: Arc<Path>,
-        binding: CallableBinding,
+        binding: ProcedureName,
     ) -> Result<(), Report> {
         let declaration = absolute_fixture_path(&declaration)?;
         if let Some(existing) = self.bindings.get(&declaration) {
@@ -272,7 +276,7 @@ impl FixtureNamespace {
         Ok(())
     }
 
-    pub fn binding(&self, declaration: &Path) -> Option<&CallableBinding> {
+    pub fn binding(&self, declaration: &Path) -> Option<&ProcedureName> {
         let declaration = declaration.to_absolute().ok()?;
         self.bindings.get(declaration.as_ref())
     }
@@ -290,7 +294,7 @@ impl FixtureNamespace {
     ) -> Result<Assembler, Report> {
         if assembler.namespace_plan().is_some_and(|plan| plan != &self.namespace_plan) {
             return Err(Report::msg(
-                "fixture namespace conflicts with the assembler's explicit NamespacePlan",
+                "fixture namespace conflicts with the assembler's explicit NamespacePath",
             ));
         }
         let mut declarations = BTreeSet::new();
@@ -490,7 +494,10 @@ impl TestContext {
     #[track_caller]
     pub fn add_library(&mut self, package: Arc<Package>) -> Result<(), Report> {
         let naming = self.fixture_namespace.admit_package(&package)?;
-        self.assembler.link_package(package, miden_project::Linkage::Dynamic, naming)
+        self.assembler.link_package(
+            CodePackage::new(package, naming.into()).map_err(Report::msg)?,
+            miden_project::Linkage::Dynamic,
+        )
     }
 
     /// Adds a foreign fixture package using explicitly supplied binding metadata.
@@ -514,17 +521,20 @@ impl TestContext {
             fixture_namespace.add_binding(export.path.clone(), binding.clone())?;
         }
         let naming = bindings.admit_package(&package)?;
-        self.assembler.link_package(package, miden_project::Linkage::Dynamic, naming)?;
+        self.assembler.link_package(
+            CodePackage::new(package, naming.into()).map_err(Report::msg)?,
+            miden_project::Linkage::Dynamic,
+        )?;
         self.fixture_namespace = fixture_namespace;
         Ok(())
     }
 
-    /// Compile a [Program] from `source` using the [Assembler] constructed by this context.
+    /// Compile a [CodePackage] from `source` using the [Assembler] constructed by this context.
     ///
     /// NOTE: Any modules added by, e.g. `add_module`, will be available to the executable
     /// module represented in `source`.
     #[track_caller]
-    pub fn assemble(&self, source: impl Parse) -> Result<Program, Report> {
+    pub fn assemble(&self, source: impl Parse) -> Result<CodePackage, Report> {
         let module = self.parse_module(source)?;
         if !module.is_executable() {
             return Err(Report::msg(
@@ -536,7 +546,7 @@ impl TestContext {
         let assembler = fixture_namespace.configure(self.assembler(), [&*module])?;
         assembler
             .assemble_executable_modules("test".into(), module, [])?
-            .into_program(self.assembler.emit_debug_info)
+            .into_code_package(self.assembler.emit_debug_info)
     }
 
     /// Compile a library package from `modules` using the [Assembler] constructed by this context.
@@ -596,7 +606,7 @@ mod package_features {
         sync::{Arc, Mutex},
     };
 
-    use miden_mast_package::{Package, PackageId};
+    use miden_mast_package::{CodePackage, Package, PackageId};
     use miden_package_registry::{
         PackageCache, PackageIndex, PackageProvider, PackageRecord, PackageRegistry, PackageStore,
         PackageVersions, Version, VersionRequirement,
@@ -619,7 +629,7 @@ mod package_features {
             .with_package_naming_provider(|package| {
                 let mut homes = vec![FixtureNamespace::assembly_tests().namespace_plan().clone()];
                 if package.is_kernel() {
-                    homes.push(NamespacePlan::new(vec![]));
+                    homes.push(NamespacePath::new(vec![]));
                 }
                 admit_fixture_package(package, &homes)
             });
@@ -836,7 +846,7 @@ mod package_features {
             &mut self,
             manifest_path: impl AsRef<std::path::Path>,
             profile: Option<&str>,
-        ) -> Result<Arc<Package>, Report> {
+        ) -> Result<CodePackage, Report> {
             let mut project_assembler = self.project_assembler_for_path(manifest_path)?;
             project_assembler.assemble(ProjectTargetSelector::Library, profile.unwrap_or("dev"))
         }
@@ -855,7 +865,7 @@ mod package_features {
             manifest_path: impl AsRef<std::path::Path>,
             name: Option<&str>,
             profile: Option<&str>,
-        ) -> Result<Arc<Package>, Report> {
+        ) -> Result<CodePackage, Report> {
             let mut project_assembler = self.project_assembler_for_path(manifest_path)?;
             project_assembler.assemble(
                 ProjectTargetSelector::Executable(name.unwrap_or(Path::EXEC_PATH)),

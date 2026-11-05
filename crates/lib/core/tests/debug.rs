@@ -40,9 +40,13 @@ fn execute_sync(
     host: &mut impl SyncHost,
     options: ExecutionOptions,
 ) -> Result<ExecutionOutput, ExecutionError> {
-    let processor = FastProcessor::new_with_options(stack_inputs, advice_inputs, options)
-        .expect("failed to construct FastProcessor");
-    processor.execute_sync(&named.program, named.environment.execution(), host)
+    let processor = FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        options.with_resolution_limits(named.1.resolution_limits()),
+    )
+    .expect("failed to construct FastProcessor");
+    processor.execute_sync(named.1.target(), host)
 }
 
 /// A [`fmt::Write`] that appends into a shared, thread-safe string buffer.
@@ -74,18 +78,17 @@ fn debug_handlers_with_writer(writer: SharedBuf) -> Vec<(EventName, Arc<dyn Even
 fn run(source: &str, advice: AdviceInputs) -> (String, ExecutionOutput) {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
     let buf = Arc::new(Mutex::new(String::new()));
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: debug_handlers_with_writer(SharedBuf(buf.clone())),
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone())
+        .set_handlers(debug_handlers_with_writer(SharedBuf(buf.clone())));
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -115,11 +118,13 @@ fn run_and_capture(source: &str, advice: AdviceInputs) -> String {
 fn run_with_default_core_handlers(source: &str, advice: AdviceInputs) -> ExecutionOutput {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&core_lib)
         .expect("failed to load core library handlers");
 
@@ -299,16 +304,15 @@ fn print_mem_rejects_out_of_bounds_range_end() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))),
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone())
+        .set_handlers(debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))));
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -342,16 +346,15 @@ fn print_mem_rejects_oversized_range() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))),
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone())
+        .set_handlers(debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))));
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -385,16 +388,15 @@ fn print_mem_rejects_full_range() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))),
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone())
+        .set_handlers(debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))));
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -588,19 +590,17 @@ fn debug_handlers_compose_with_default_core_handlers() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
     let mut handlers = core_lib.handlers();
     handlers.extend(advice_debug_handlers());
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers,
-    };
+    let host_lib = HostLibrary::new(core_lib.code_package().clone()).set_handlers(handlers);
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 
@@ -661,16 +661,15 @@ fn noop_debug_handlers_run_print_stack_without_output() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
     let named = naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
-    let host_lib = HostLibrary {
-        mast_forest: core_lib.mast_forest().clone(),
-        package_debug_info: Ok(None),
-        handlers: noop_debug_handlers(),
-    };
+    let host_lib =
+        HostLibrary::new(core_lib.code_package().clone()).set_handlers(noop_debug_handlers());
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(host_lib)
         .expect("failed to load host lib");
 

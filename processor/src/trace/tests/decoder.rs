@@ -30,7 +30,7 @@ use miden_core::{
         MastNodeExt, SplitNodeBuilder,
     },
     operations::{Operation, opcodes},
-    program::{ImplementationRoot, Program},
+    program::ImplementationRoot,
     utils::{Matrix, RowMajorMatrix},
 };
 
@@ -40,7 +40,7 @@ use super::{
     lookup_harness::{Expectations, InteractionLog},
     trace_binding, trace_named_program,
 };
-use crate::{RowIndex, StackInputs};
+use crate::{RowIndex, StackInputs, test_utils::fixture_code};
 
 // HELPERS
 // ================================================================================================
@@ -173,7 +173,7 @@ fn block_stack_call_frame_push_pop() {
         let implementation = ImplementationRoot::new(forest[callee].digest());
         let call_id = CallNodeBuilder::new(binding.key()).add_to_forest(&mut forest).unwrap();
         forest.make_root(call_id);
-        trace_named_program(Program::new(forest.into(), call_id), [(binding, implementation)])
+        trace_named_program(fixture_code(forest.into(), call_id), [(binding, implementation)])
     };
     let trace = build_trace_from_fixture(&program, &[]);
     let log = InteractionLog::new(&trace);
@@ -235,7 +235,7 @@ fn block_stack_split_push_pop(#[case] cond: u64) {
         let e = BasicBlockNodeBuilder::new(vec![Operation::Mul]).add_to_forest(&mut f).unwrap();
         let s = SplitNodeBuilder::new([t, e]).add_to_forest(&mut f).unwrap();
         f.make_root(s);
-        Program::new(f.into(), s)
+        fixture_code(f.into(), s)
     };
     let trace = build_trace_from_program(&program, &[cond]);
     let log = InteractionLog::new(&trace);
@@ -295,7 +295,7 @@ fn block_stack_loop_uses_loop_continuation() {
             .unwrap();
         let loop_id = LoopNodeBuilder::new(body).add_to_forest(&mut f).unwrap();
         f.make_root(loop_id);
-        Program::new(f.into(), loop_id)
+        fixture_code(f.into(), loop_id)
     };
     // Stack is top-first: 1 requests one repeat, then 0 exits the loop.
     let trace = build_trace_from_program(&program, &[1, 0]);
@@ -363,7 +363,7 @@ fn block_stack_split_wrapped_loop_uses_constant_is_loop() {
         let noop = BasicBlockNodeBuilder::new(vec![Operation::Noop]).add_to_forest(&mut f).unwrap();
         let split_id = SplitNodeBuilder::new([loop_id, noop]).add_to_forest(&mut f).unwrap();
         f.make_root(split_id);
-        Program::new(f.into(), split_id)
+        fixture_code(f.into(), split_id)
     };
     // Stack top-first: `1` drives SPLIT (enter true branch → LOOP), `0` is the value the LOOP
     // sees on `s_0` after the SPLIT-pop. Pad+Drop is net-zero, so the trailing condition at
@@ -489,7 +489,7 @@ fn block_hash_join_enqueue_dequeue() {
             .unwrap();
         let join_id = JoinNodeBuilder::new([bb1, bb2]).add_to_forest(&mut mast_forest).unwrap();
         mast_forest.make_root(join_id);
-        Program::new(mast_forest.into(), join_id)
+        fixture_code(mast_forest.into(), join_id)
     };
     let trace = build_trace_from_program(&program, &[]);
     let log = InteractionLog::new(&trace);
@@ -547,7 +547,7 @@ fn block_hash_loop_body_with_repeat() {
         let join_id = JoinNodeBuilder::new([bb1, bb2]).add_to_forest(&mut mast_forest).unwrap();
         let loop_id = LoopNodeBuilder::new(join_id).add_to_forest(&mut mast_forest).unwrap();
         mast_forest.make_root(loop_id);
-        Program::new(mast_forest.into(), loop_id)
+        fixture_code(mast_forest.into(), loop_id)
     };
 
     // Pad+Drop is a net-zero body, so the trailing condition at REPEAT/END is whatever the
@@ -631,7 +631,7 @@ fn block_hash_nested_loop_body_multiplicities_are_keyed_by_dynamic_address() {
         let inner_loop = LoopNodeBuilder::new(body).add_to_forest(&mut mast_forest).unwrap();
         let outer_loop = LoopNodeBuilder::new(inner_loop).add_to_forest(&mut mast_forest).unwrap();
         mast_forest.make_root(outer_loop);
-        Program::new(mast_forest.into(), outer_loop)
+        fixture_code(mast_forest.into(), outer_loop)
     };
 
     // Stack inputs mirror the nested-loop fragmentation fixture. The exact fixture shape is pinned
@@ -728,7 +728,7 @@ fn block_hash_split_enqueue_dequeue(#[case] cond: u64) {
         let e = BasicBlockNodeBuilder::new(vec![Operation::Mul]).add_to_forest(&mut f).unwrap();
         let s = SplitNodeBuilder::new([t, e]).add_to_forest(&mut f).unwrap();
         f.make_root(s);
-        Program::new(f.into(), s)
+        fixture_code(f.into(), s)
     };
     let trace = build_trace_from_program(&program, &[cond]);
     let log = InteractionLog::new(&trace);
@@ -1151,7 +1151,7 @@ fn decoder_dyncall_at_min_stack_depth_records_post_drop_ctx_info() {
     let target_hash: Vec<Felt> = target_binding.key().as_word().as_elements().to_vec();
 
     let program = trace_named_program(
-        Program::new(Arc::new(forest), root),
+        fixture_code(Arc::new(forest), root),
         [(target_binding, implementation)],
     );
 
@@ -1235,7 +1235,7 @@ fn decoder_dyncall_with_multiple_overflow_entries_records_correct_overflow_addr(
     forest.make_root(root);
 
     let program = trace_named_program(
-        Program::new(Arc::new(forest), root),
+        fixture_code(Arc::new(forest), root),
         [(target_binding, implementation)],
     );
 
@@ -1445,8 +1445,8 @@ fn system_state_changes_across_end_imply_a_caller_frame_flag() {
             .unwrap();
         forest.make_root(kernel_proc_id);
         let kernel_digest = forest[kernel_proc_id].digest();
-        let kernel_binding = miden_mast_package::CallableBinding::new(
-            miden_mast_package::NamespacePlan::new(vec![]),
+        let kernel_binding = miden_mast_package::ProcedureName::new(
+            miden_mast_package::NamespacePath::new(vec![]),
             miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
                 "syscall-target".into(),
             ])
@@ -1464,7 +1464,7 @@ fn system_state_changes_across_end_imply_a_caller_frame_flag() {
             JoinNodeBuilder::new([body_id, syscall_id]).add_to_forest(&mut forest).unwrap();
         forest.make_root(root_id);
         let fixture = trace_named_program(
-            Program::new(forest.into(), root_id),
+            fixture_code(forest.into(), root_id),
             [(kernel_binding, ImplementationRoot::new(kernel_digest))],
         );
         let trace = build_trace_from_fixture(&fixture, &[]);

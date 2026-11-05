@@ -10,6 +10,7 @@ use super::{
     data::{OutputFile, ProofFile},
     execution_inputs::DescriptorArgs,
     precompile_limits::PrecompileArgs,
+    utils::parse_byte_size,
 };
 
 #[derive(Debug, Clone, Parser)]
@@ -24,6 +25,16 @@ pub struct VerifyCmd {
     /// Path to proof file
     #[arg(short = 'p', long = "proof", value_parser)]
     proof_file: PathBuf,
+
+    /// Maximum proof file size in bytes (512M, 32Gi)
+    #[arg(
+        long = "max-proof-size",
+        value_name = "BYTES",
+        default_value_t = ProofFile::DEFAULT_MAX_FILE_SIZE,
+        value_parser = parse_byte_size
+    )]
+    max_proof_size: u64,
+
     #[command(flatten)]
     descriptor: DescriptorArgs,
 
@@ -43,6 +54,9 @@ impl VerifyCmd {
     pub fn execute(&self) -> Result<(), Report> {
         let verification_limits =
             self.precompile_limits.apply(default_verification_precompile_limits());
+        let max_proof_size = usize::try_from(self.max_proof_size).map_err(|_| {
+            Report::msg("--max-proof-size exceeds the addressable byte count on this platform")
+        })?;
         let (input_file, output_file) = self.infer_defaults()?;
 
         println!("===============================================================================");
@@ -60,8 +74,12 @@ impl VerifyCmd {
             OutputFile::read(&Some(output_file), self.proof_file.as_ref()).map_err(Report::msg)?;
 
         // load proof from file
-        let proof = ProofFile::read(&Some(self.proof_file.clone()), self.proof_file.as_ref())
-            .map_err(Report::msg)?;
+        let proof = ProofFile::read(
+            &Some(self.proof_file.clone()),
+            self.proof_file.as_ref(),
+            max_proof_size,
+        )
+        .map_err(Report::msg)?;
 
         // This unauthenticated variant is sufficient for CLI policy rejection. Only the
         // verifier below can establish proof validity, authenticate roots, and evaluate witnesses.
@@ -177,6 +195,31 @@ mod tests {
         // cleanup best-effort
         let _ = fs::remove_file(&proof_path);
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn proof_file_limit_defaults_and_explicit_units_are_preserved() {
+        assert_eq!(command().max_proof_size, ProofFile::DEFAULT_MAX_FILE_SIZE);
+        for (value, expected) in [("0", 0), ("123", 123), ("1Mi", 1024 * 1024)] {
+            let cmd = VerifyCmd::try_parse_from(
+                ["verify", "--proof", "missing.proof", "--max-proof-size", value]
+                    .into_iter()
+                    .chain(
+                        super::super::execution_inputs::tests::required_args().into_iter().take(4),
+                    ),
+            )
+            .unwrap();
+            assert_eq!(cmd.max_proof_size, expected);
+        }
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn unaddressable_proof_file_limit_rejects_before_file_access() {
+        let mut cmd = command();
+        cmd.max_proof_size = u64::MAX;
+        let err = cmd.execute().unwrap_err();
+        assert!(err.to_string().contains("--max-proof-size exceeds the addressable byte count"));
     }
 
     #[test]

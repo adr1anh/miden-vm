@@ -6,7 +6,7 @@ use miden_core::{
 };
 
 use super::{PackageCallables, PackageCallablesError};
-use crate::{CallableBinding, CallableProcedurePath, NamespacePlan};
+use crate::{CallableProcedurePath, NamespacePath, ProcedureName};
 
 fn path(components: &[&str]) -> CallableProcedurePath {
     CallableProcedurePath::from_semantic_components(
@@ -15,9 +15,9 @@ fn path(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn binding(home: &[&str], components: &[&str]) -> CallableBinding {
-    CallableBinding::new(
-        NamespacePlan::new(
+fn binding(home: &[&str], components: &[&str]) -> ProcedureName {
+    ProcedureName::new(
+        NamespacePath::new(
             home.iter().map(|component| CanonicalLabel::text(component).unwrap()).collect(),
         ),
         path(components),

@@ -71,21 +71,26 @@ fn test_memcopy_words() {
 
     let core_lib = CoreLibrary::default();
     let assembler = miden_assembly::Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
 
     let named =
         crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&core_lib)
         .unwrap();
 
     let processor = FastProcessor::new(StackInputs::default());
-    let exec_output = processor
-        .execute_sync(&named.program, named.environment.execution(), &mut host)
-        .unwrap();
+    let options = processor
+        .execution_options()
+        .clone()
+        .with_resolution_limits(named.1.resolution_limits());
+    let processor = processor.with_options(options).unwrap();
+    let exec_output = processor.execute_sync(named.1.target(), &mut host).unwrap();
 
     let dummy_clk = RowIndex::from(0_usize);
 
@@ -192,21 +197,26 @@ fn test_memcopy_elements() {
 
     let core_lib = CoreLibrary::default();
     let assembler = miden_assembly::Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .with_package(core_lib.code_package().clone(), Linkage::Dynamic)
         .expect("failed to load core library");
 
     let named =
         crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
     let mut host = DefaultHost::default()
-        .with_environment_source(named.environment.source())
+        .with_environment_source(named.1.source())
+        .with_library(named.0.clone())
+        .expect("fixture code must load into the host")
         .with_library(&core_lib)
         .unwrap();
 
     let processor = FastProcessor::new(StackInputs::default());
-    let exec_output = processor
-        .execute_sync(&named.program, named.environment.execution(), &mut host)
-        .unwrap();
+    let options = processor
+        .execution_options()
+        .clone()
+        .with_resolution_limits(named.1.resolution_limits());
+    let processor = processor.with_options(options).unwrap();
+    let exec_output = processor.execute_sync(named.1.target(), &mut host).unwrap();
 
     for addr in 2002_u32..2020_u32 {
         assert_eq!(

@@ -5,13 +5,13 @@ use miden_core::{
     mast::{MastForest, MastNode},
     program::CanonicalLabel,
 };
-use miden_project::{LibraryImport, LibrarySelection};
+use miden_project::{LibraryRef, LibrarySelection};
 
 use super::*;
 use crate::testing::TestContext;
 
-fn home(name: &str) -> NamespacePlan {
-    NamespacePlan::new(vec![CanonicalLabel::text(name).unwrap()])
+fn home(name: &str) -> NamespacePath {
+    NamespacePath::new(vec![CanonicalLabel::text(name).unwrap()])
 }
 
 fn canonical(components: &[&str]) -> CallableProcedurePath {
@@ -21,18 +21,18 @@ fn canonical(components: &[&str]) -> CallableProcedurePath {
     .unwrap()
 }
 
-fn library_import(selection: LibrarySelection) -> LibraryImport {
-    LibraryImport::new(home("published-home"), Word::new([Felt::from_u32(17); 4]), selection)
+fn library_import(selection: LibrarySelection) -> LibraryRef {
+    LibraryRef::new(home("published-home"), Word::new([Felt::from_u32(17); 4]), selection)
 }
 
-fn target_binding() -> CallableBinding {
+fn target_binding() -> ProcedureName {
     library_import(LibrarySelection::Latest)
         .callable_binding(canonical(&["run"]))
         .unwrap()
 }
 
-fn root_binding() -> CallableBinding {
-    CallableBinding::new(NamespacePlan::new(vec![]), canonical(&["run"])).unwrap()
+fn root_binding() -> ProcedureName {
+    ProcedureName::new(NamespacePath::new(vec![]), canonical(&["run"])).unwrap()
 }
 
 fn lower_caller(body: Option<&str>) -> (Assembler, GlobalItemIndex, MastForest, Word) {
@@ -41,7 +41,7 @@ fn lower_caller(body: Option<&str>) -> (Assembler, GlobalItemIndex, MastForest, 
 
 fn lower_caller_with_binding(
     body: Option<&str>,
-    binding: CallableBinding,
+    binding: ProcedureName,
 ) -> (Assembler, GlobalItemIndex, MastForest, Word) {
     let context = TestContext::default();
     let caller = context.parse_module(
@@ -210,7 +210,7 @@ fn caller_id(assembler: &Assembler) -> GlobalItemIndex {
     module + ItemIndex::new(index)
 }
 
-fn link_declared_caller(source: &str, binding: CallableBinding) -> (Assembler, GlobalItemIndex) {
+fn link_declared_caller(source: &str, binding: ProcedureName) -> (Assembler, GlobalItemIndex) {
     let context = TestContext::default();
     let caller = context.parse_module(source).unwrap();
     let mut assembler = Assembler::new(context.source_manager())
@@ -335,7 +335,7 @@ fn callable_symbols_reject_conflicting_rebinding() {
     let dep = assembler.linker.find_module_index(Path::new("::dep")).unwrap();
     let symbol = &assembler.linker[dep + ItemIndex::new(0)];
     assert!(symbol.bind_callable(target_binding()).is_ok());
-    let changed = CallableBinding::new(home("different-publisher"), canonical(&["run"])).unwrap();
+    let changed = ProcedureName::new(home("different-publisher"), canonical(&["run"])).unwrap();
     assert_ne!(changed.key(), target_binding().key());
     assert_eq!(symbol.bind_callable(changed.clone()).unwrap_err(), changed);
     assert_eq!(symbol.callable_binding(), Some(&target_binding()));
@@ -355,7 +355,7 @@ fn callable_symbols_reject_conflicting_rebinding() {
 fn unqualified_syscall_preserves_the_attached_kernel_alias_over_a_local_name() {
     let context = TestContext::default();
     let local_binding =
-        CallableBinding::new(home("caller-home"), canonical(&["private", "run"])).unwrap();
+        ProcedureName::new(home("caller-home"), canonical(&["private", "run"])).unwrap();
     assert_ne!(local_binding.key(), root_binding().key());
     let mut assembler = attached_kernel(&context)
         .with_callable_path(Arc::from(Path::new("::client::run")), canonical(&["private", "run"]))
@@ -433,8 +433,7 @@ fn unqualified_syscall_accepts_a_caller_alias_to_the_same_defining_symbol() {
 fn unqualified_syscall_uses_a_caller_import_when_the_attached_kernel_has_no_candidate() {
     let context = TestContext::default();
     let binding =
-        CallableBinding::new(root_binding().namespace_plan().clone(), canonical(&["other"]))
-            .unwrap();
+        ProcedureName::new(root_binding().namespace_plan().clone(), canonical(&["other"])).unwrap();
     let mut assembler = attached_kernel(&context);
     assembler
         .link_callable_declarations(
@@ -470,10 +469,10 @@ fn unqualified_syscall_uses_a_caller_import_when_the_attached_kernel_has_no_cand
 fn syscall_rejects_child_exports_including_textual_kernel_homes() {
     let bindings = [
         target_binding(),
-        CallableBinding::new(home("kernel"), canonical(&["run"])).unwrap(),
-        CallableBinding::new(NamespacePlan::new(vec![]), canonical(&["child", "run"])).unwrap(),
-        CallableBinding::new(
-            NamespacePlan::new(vec![
+        ProcedureName::new(home("kernel"), canonical(&["run"])).unwrap(),
+        ProcedureName::new(NamespacePath::new(vec![]), canonical(&["child", "run"])).unwrap(),
+        ProcedureName::new(
+            NamespacePath::new(vec![
                 CanonicalLabel::text("publisher").unwrap(),
                 CanonicalLabel::text("kernel").unwrap(),
             ]),
@@ -561,7 +560,7 @@ fn call_and_syscall_nodes_retain_keys_and_source_operations_without_code() {
 #[test]
 fn standard_pinned_names_change_only_with_explicit_binding_inputs_not_code_supply() {
     let revision = NonZeroU32::new(3).unwrap();
-    let pinned = library_import(LibrarySelection::Pinned(revision))
+    let pinned = library_import(LibrarySelection::Revision(revision))
         .callable_binding(canonical(&["run"]))
         .unwrap();
     let (_, _, missing, declaration_digest) = lower_caller_with_binding(None, pinned.clone());
@@ -574,7 +573,7 @@ fn standard_pinned_names_change_only_with_explicit_binding_inputs_not_code_suppl
     }
     let (_, _, _, latest_digest) = lower_caller(None);
     assert_ne!(declaration_digest, latest_digest);
-    let another = library_import(LibrarySelection::Pinned(NonZeroU32::new(4).unwrap()))
+    let another = library_import(LibrarySelection::Revision(NonZeroU32::new(4).unwrap()))
         .callable_binding(canonical(&["run"]))
         .unwrap();
     let (_, _, _, changed_revision_digest) = lower_caller_with_binding(None, another);

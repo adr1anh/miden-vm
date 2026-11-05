@@ -1,11 +1,7 @@
 use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 
-use proptest::prelude::*;
-use rand::{RngExt, SeedableRng};
-use rand_chacha::ChaCha20Rng;
-
 use crate::{
-    Felt, WORD_SIZE, Word,
+    Felt, Word,
     advice::AdviceMap,
     chiplets::hasher,
     mast::{
@@ -14,8 +10,6 @@ use crate::{
         MastNodeId, SparseMastForestBuilder, VisitKind,
     },
     operations::Operation,
-    program::{KernelDescriptor, ProgramInfo},
-    serde::{Deserializable, Serializable},
     utils::IndexVec,
 };
 
@@ -88,27 +82,6 @@ fn dyn_hash_is_correct() {
     let dyn_node_id = DynNodeBuilder::new_dyn().add_to_forest(&mut forest).unwrap();
     let dyn_node = forest.get_node_by_id(dyn_node_id).unwrap().unwrap_dyn();
     assert_eq!(expected_constant, dyn_node.digest());
-}
-
-proptest! {
-    #[test]
-    fn arbitrary_program_info_serialization_works(
-        kernel_count in prop::num::u8::ANY,
-        ref seed in any::<[u8; 32]>()
-    ) {
-        let program_hash = digest_from_seed(*seed);
-        let kernel: Vec<Word> = (0..kernel_count)
-            .scan(*seed, |seed, _| {
-                *seed = ChaCha20Rng::from_seed(*seed).random();
-                Some(digest_from_seed(*seed))
-            })
-            .collect();
-        let kernel = KernelDescriptor::new(&kernel).unwrap();
-        let program_info = ProgramInfo::new(program_hash, kernel);
-        let bytes = program_info.to_bytes();
-        let deser = ProgramInfo::read_from_bytes(&bytes).unwrap();
-        assert_eq!(program_info, deser);
-    }
 }
 
 #[test]
@@ -315,18 +288,4 @@ fn remove_nodes_rejects_nodes_referenced_by_retained_parents() {
     let mut nodes_to_remove = BTreeSet::new();
     nodes_to_remove.insert(child);
     forest.remove_nodes(&nodes_to_remove);
-}
-
-// HELPER FUNCTIONS
-// --------------------------------------------------------------------------------------------
-
-fn digest_from_seed(seed: [u8; 32]) -> Word {
-    let mut digest = [Felt::ZERO; WORD_SIZE];
-    digest.iter_mut().enumerate().for_each(|(i, d)| {
-        *d = <[u8; 8]>::try_from(&seed[i * 8..(i + 1) * 8])
-            .map(u64::from_le_bytes)
-            .map(Felt::new_unchecked)
-            .unwrap()
-    });
-    digest.into()
 }

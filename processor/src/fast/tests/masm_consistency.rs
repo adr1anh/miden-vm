@@ -240,22 +240,29 @@ fn test_masm_consistency(
         Some(kernel_source) => test.with_kernel_source("kernel", kernel_source),
         None => test,
     };
-    let (program, kernel_lib, _) = test.compile().unwrap();
-    let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
-    let mut host = DefaultHost::default().with_environment_source(source);
+    let (program, kernel_lib) = test.compile().unwrap();
+    let (target, resolution_limits, source) =
+        native_fixture_environment(&test.fixture_environment().unwrap());
+    let mut host = DefaultHost::default()
+        .with_environment_source(source)
+        .with_library(program)
+        .unwrap();
     if let Some(kernel_lib) = &kernel_lib {
-        host.load_library(kernel_lib.mast_forest()).unwrap();
+        host.mast_forest_store_mut().insert(kernel_lib.package().mast_forest().clone());
     }
 
     // fast processor
-    let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-    let fast_stack_outputs =
-        processor.execute_sync(&program, environment, &mut host).unwrap().stack;
+    let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap())
+        .with_options(ExecutionOptions::default().with_resolution_limits(resolution_limits))
+        .unwrap();
+    let fast_stack_outputs = processor.execute_sync(target, &mut host).unwrap().stack;
 
     // fast processor by step
     let stepped_stack_outputs = {
-        let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-        processor.execute_by_step_sync(&program, environment, &mut host).unwrap()
+        let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap())
+            .with_options(ExecutionOptions::default().with_resolution_limits(resolution_limits))
+            .unwrap();
+        processor.execute_by_step_sync(target, &mut host).unwrap()
     };
 
     assert_eq!(fast_stack_outputs, stepped_stack_outputs);
@@ -306,21 +313,29 @@ fn test_masm_errors_consistency(
         Some(kernel_source) => test.with_kernel_source("kernel", kernel_source),
         None => test,
     };
-    let (program, kernel_lib, _) = test.compile().unwrap();
-    let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
-    let mut host = DefaultHost::default().with_environment_source(source);
+    let (program, kernel_lib) = test.compile().unwrap();
+    let (target, resolution_limits, source) =
+        native_fixture_environment(&test.fixture_environment().unwrap());
+    let mut host = DefaultHost::default()
+        .with_environment_source(source)
+        .with_library(program)
+        .unwrap();
     if let Some(kernel_lib) = &kernel_lib {
-        host.load_library(kernel_lib.mast_forest()).unwrap();
+        host.mast_forest_store_mut().insert(kernel_lib.package().mast_forest().clone());
     }
 
     // fast processor
-    let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-    let fast_err = processor.execute_sync(&program, environment, &mut host).unwrap_err();
+    let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap())
+        .with_options(ExecutionOptions::default().with_resolution_limits(resolution_limits))
+        .unwrap();
+    let fast_err = processor.execute_sync(target, &mut host).unwrap_err();
 
     // fast processor by step
     let fast_stepped_err = {
-        let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-        processor.execute_by_step_sync(&program, environment, &mut host).unwrap_err()
+        let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap())
+            .with_options(ExecutionOptions::default().with_resolution_limits(resolution_limits))
+            .unwrap();
+        processor.execute_by_step_sync(target, &mut host).unwrap_err()
     };
 
     assert_eq!(fast_err.to_string(), fast_stepped_err.to_string());
@@ -345,11 +360,14 @@ fn test_log_deferred_correctness() {
 
     let program_source = "begin log_deferred end";
     let fixture = named_source(program_source).unwrap();
-    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
-    let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
-    let execution_output = processor
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
+    let mut host = DefaultHost::default()
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
         .unwrap();
+    let processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap();
+    let execution_output = processor.execute_sync(fixture.target, &mut host).unwrap();
 
     let actual_state_new = execution_output.stack.get_word(0).unwrap();
 
@@ -406,9 +424,14 @@ fn export_deferred_witness_opens_an_unlogged_shared_graph() {
             end"#,
     )
     .unwrap();
-    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
+    let mut host = DefaultHost::default()
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
+        .unwrap();
     let output = processor
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap()
+        .execute_sync(fixture.target, &mut host)
         .unwrap();
 
     assert_eq!(output.precompile_root(), logged_root);
@@ -454,7 +477,9 @@ fn successive_log_deferred_calls_build_an_ordered_and_chain() {
 
     let fixture = named_source("begin log_deferred dropw log_deferred end").unwrap();
 
-    let mut processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap());
+    let mut processor = FastProcessor::new(StackInputs::new(&stack_inputs).unwrap())
+        .with_options(ExecutionOptions::default().with_resolution_limits(fixture.resolution_limits))
+        .unwrap();
     processor.deferred_state_mut().register(first_node).unwrap();
     processor.deferred_state_mut().register(second_node).unwrap();
 
@@ -464,10 +489,11 @@ fn successive_log_deferred_calls_build_an_ordered_and_chain() {
         deferred_and_digest(deferred_and_digest(TRUE_DIGEST, second_statement), first_statement);
     assert_ne!(expected_root, reversed_root);
 
-    let mut host = DefaultHost::default().with_environment_source(fixture.source.clone());
-    let execution_output = processor
-        .execute_sync(&fixture.program, fixture.environment, &mut host)
+    let mut host = DefaultHost::default()
+        .with_environment_source(fixture.source)
+        .with_library(fixture.code)
         .unwrap();
+    let execution_output = processor.execute_sync(fixture.target, &mut host).unwrap();
 
     assert_eq!(execution_output.stack.get_word(0), Some(expected_root));
     assert_eq!(execution_output.precompile_root(), expected_root);

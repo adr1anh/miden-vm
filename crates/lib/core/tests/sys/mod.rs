@@ -53,11 +53,7 @@ fn masm_claim_commitment_matches_native() {
             .unwrap();
     let stack_outputs =
         StackOutputs::new(&[Felt::new_unchecked(8), Felt::new_unchecked(9)]).unwrap();
-    let claim = ExecutionClaim::new(
-        fixture.environment.execution().descriptor(),
-        stack_inputs,
-        stack_outputs,
-    );
+    let claim = ExecutionClaim::new(fixture.1.target(), stack_inputs, stack_outputs);
 
     // stage the canonical 40-felt encoding into a claim region at CLAIM_PTR
     const CLAIM_PTR: u64 = 1000;
