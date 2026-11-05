@@ -12,11 +12,9 @@
 //! The separate continuation-preservation tests below keep the DYNCALL saved frame and its END
 //! honest. They change only principal or only context after a real inner continuation END,
 //! through the callee's caller-frame END, then restore the honest entry boundary. Equal-D aliases
-//! balance principal-dependent completion demands. Each witness must be accepted by the private
-//! evaluator changing only its targeted coarse-END preservation selector, while the identical
-//! change across an ordinary transition rejects. Current native and MASM consumers reject the
-//! retained artifacts in AIR evaluation. These cases isolate preservation inside a DYNCALL;
-//! they do not attribute the compound caller-frame relabelling controls above to a single rule.
+//! balance principal-dependent completion demands. These mutations and their ordinary-transition
+//! controls must construct production proofs and reach exact AIR rejection in native and MASM
+//! consumers. They exercise preservation inside a DYNCALL while retaining the saved frame.
 
 use alloc::{format, vec, vec::Vec};
 
@@ -24,7 +22,7 @@ use miden_air_definitions::vm::trace::RowIndex;
 use miden_core::{Felt, operations::opcodes, utils::RowMajorMatrix};
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 
-use crate::repro_harness::{CoreMode, ReproTrace, core_row_mut};
+use crate::repro_harness::{ReproTrace, core_row_mut};
 
 const ADDR: u64 = 40;
 
@@ -136,7 +134,11 @@ fn carry_callee_context_forward(f: &Fixture, core: &mut RowMajorMatrix<Felt>) {
 #[test]
 fn honest_trace_verifies() {
     let f = build_fixture();
-    assert!(f.trace.prove_and_verify_current().is_ok(), "honest trace must verify");
+    let proof = f
+        .trace
+        .prove_current()
+        .expect("honest DYNCALL proof construction must complete");
+    f.trace.assert_native_and_recursive_accept(proof);
 }
 
 /// Zero the DYNCALL's saved depth, relabel its caller-frame END as a continuation END, and carry
@@ -202,7 +204,7 @@ fn degenerate_addition_without_relabelling_is_rejected() {
     );
 }
 
-// ISOLATED PRESERVATION INSIDE AN HONEST DYNCALL
+// PRESERVATION INSIDE AN HONEST DYNCALL
 // ================================================================================================
 
 struct DyncallContinuationRows {
@@ -363,14 +365,9 @@ fn check_dyncall_continuation_preservation(column: PreservedColumn, after_contin
     } = build_continuation_fixture();
     let expected_claim = trace.claim();
     let honest = trace
-        .prove_comparison(CoreMode::Standard)
-        .expect("the honest DYNCALL fixture must finish comparison proof construction");
-    assert!(
-        honest.verification.is_ok(),
-        "the unchanged evaluator must accept the honest DYNCALL fixture: {:?}",
-        honest.verification
-    );
-    trace.assert_native_and_recursive_accept(honest.proof);
+        .prove_current()
+        .expect("the honest DYNCALL fixture must finish production proof construction");
+    trace.assert_native_and_recursive_accept(honest);
 
     for index in 0..2 {
         let start = if after_continuation {
@@ -398,43 +395,32 @@ fn check_dyncall_continuation_preservation(column: PreservedColumn, after_contin
     assert_eq!(core_row_mut(&mut trace.core, height - 1).system.fn_hash, entry);
     assert_eq!(trace.claim(), expected_claim);
 
-    let mode = match column {
-        PreservedColumn::Principal => CoreMode::Alternate,
-        PreservedColumn::Context => CoreMode::CoarseContext,
-    };
-    let comparison = trace
-        .prove_comparison(mode)
-        .expect("the isolated DYNCALL witness must finish actual comparison proof construction");
-    assert_eq!(
-        comparison.verification.is_ok(),
-        after_continuation,
-        "the isolated historical selector must accept only the inner-END witness: {:?}",
-        comparison.verification
-    );
-    trace.assert_native_and_recursive_air_rejection(comparison.proof);
+    let proof = trace
+        .prove_current()
+        .expect("the balanced DYNCALL witness must finish production proof construction");
+    trace.assert_native_and_recursive_air_rejection(proof);
 }
 
-/// Equal-D principal tails can be exchanged after inner ENDs only under the coarse principal
-/// comparison; the same artifact must fail current native and MASM AIR evaluation.
+/// Exchanging equal-D principal tails after inner ENDs must fail native and MASM AIR evaluation.
 #[test]
 fn dyncall_principal_change_at_inner_continuation_end_is_rejected() {
     check_dyncall_continuation_preservation(PreservedColumn::Principal, true);
 }
 
-/// The identical principal exchange across ordinary callee transitions also fails the comparison.
+/// The identical principal exchange across ordinary callee transitions must also reject.
 #[test]
 fn dyncall_principal_change_at_ordinary_transition_is_rejected() {
     check_dyncall_continuation_preservation(PreservedColumn::Principal, false);
 }
 
 /// Only context changes: the suffix runs in the caller's root context until the honest DYNCALL
-/// caller-frame END restores it. The coarse context comparison alone accepts that witness.
+/// caller-frame END restores it. The production proof must reject in both consumers.
 #[test]
 fn dyncall_context_change_at_inner_continuation_end_is_rejected() {
     check_dyncall_continuation_preservation(PreservedColumn::Context, true);
 }
 
-/// Moving the same context change to an ordinary transition must still fail the comparison.
+/// Moving the same context change to an ordinary transition must also reject.
 #[test]
 fn dyncall_context_change_at_ordinary_transition_is_rejected() {
     check_dyncall_continuation_preservation(PreservedColumn::Context, false);

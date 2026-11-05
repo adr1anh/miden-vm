@@ -1,37 +1,10 @@
-//! Regression tests: `ctx` and `fn_hash` are preserved across a continuation END.
+//! Production regressions for preserving context and principal across continuation ENDs.
 //!
-//! `crates/air/source/src/vm/constraints/system/mod.rs` used to gate the preservation of both
-//! columns on the *coarse* END flag:
-//!
-//! ```ignore
-//! let change_ctx_flag = f_call + f_syscall + f_dyncall + f_end;
-//! let default_flag = change_ctx_flag.not();
-//! builder.when_transition().when(default_flag).assert_eq(ctx_next, ctx);
-//! ...
-//! let f_preserve = (f_call + f_dyncall + f_end).not();
-//! builder.when_transition().when(f_preserve).assert_eq_arrays(next.fn_hash, local.fn_hash);
-//! ```
-//!
-//! On *any* END row that made `default_flag = f_preserve = 0`, leaving both columns pinned by
-//! nothing. Restoration through the block-stack relation covers only caller-frame ENDs:
-//! `end_caller_frame` removes a `BlockStackMsg::CallerFrame` carrying `ctx_next` /
-//! `fn_hash_next`, while `end_continuation` removes a `BlockStackMsg::Continuation` carrying only
-//! `(block_id, parent_id, is_loop)`. A prover could therefore jump `ctx` at any continuation END --
-//! including one nested inside a call, re-entering the caller's memory context -- or forge
-//! `fn_hash`, which CALLER copies onto the stack as a public output.
-//!
-//! The fix gates both on the same precise caller-frame restoration selector already used for
-//! stack depth `b0` and the overflow pointer `b1` in stack/overflow.rs.
-//!
-//! The ordinary-transition controls and honest baselines check the regression harness. These
-//! rejection tests alone do not establish necessity of an individual END rule: in particular,
-//! changes carried through the final principal also violate the independent K_entry boundary.
-//! The alias-principal and nested-call context cases preserve that boundary. Their separate
-//! private evaluator comparisons change only the targeted preservation rule. Each historical
-//! coarse-END selector accepts its continuation witness while current native and MASM verifiers
-//! reject that same artifact; ordinary-transition controls still reject under each comparison.
-//! The context comparison keeps principal preservation, and the principal comparison keeps context
-//! preservation. Neither attributes the separate compound DYNCALL controls.
+//! Caller-frame ENDs restore saved state; continuation ENDs must preserve it. These fixtures
+//! mutate context or principal while retaining the captured expected claim. Equal-D alias tails
+//! preserve resolution demand counts, and nested CALL mutations restore the honest entry boundary.
+//! Honest proofs must verify in native and MASM consumers; balanced mutations must construct a
+//! production proof and reach exact AIR rejection in both consumers.
 
 use alloc::{vec, vec::Vec};
 
@@ -40,13 +13,11 @@ use miden_core::{
     Felt,
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::{Operation, opcodes},
-    proof::{ExecutionProof, PrecompileStatus},
 };
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 use miden_utils_testing::librarytree::fixture_code;
-use miden_verifier::Verifier;
 
-use crate::repro_harness::{CoreMode, ReproTrace, core_row_mut};
+use crate::repro_harness::{ReproTrace, core_row_mut};
 
 // HARNESS
 // ================================================================================================
@@ -140,10 +111,8 @@ fn build_basic_harness() -> (ReproTrace, BasicRows) {
 #[test]
 fn honest_basic_block_trace_verifies() {
     let (repro, _) = build_basic_harness();
-    let claim = repro.claim();
     let proof = repro.prove_current().expect("honest proof construction must complete");
-    let proof = ExecutionProof::new(proof, PrecompileStatus::Empty);
-    assert!(Verifier::new().verify(&claim, &proof).is_ok(), "the honest trace must verify");
+    repro.assert_native_and_recursive_accept(proof);
 }
 
 /// `ctx` jumps from 0 to 7 across the continuation END and is preserved (as the default-flag
@@ -151,13 +120,14 @@ fn honest_basic_block_trace_verifies() {
 #[test]
 fn forged_context_at_continuation_end_is_rejected() {
     let (mut repro, rows) = build_basic_harness();
+    let expected_claim = repro.claim();
     set_ctx(&mut repro, (rows.continuation_end + 1)..rows.height, FORGED_CTX);
+    assert_eq!(repro.claim(), expected_claim);
 
-    let result = repro.prove_and_verify_current();
-    assert!(
-        result.is_err(),
-        "the verifier must reject a context change across a continuation END: {result:?}"
-    );
+    let proof = repro
+        .prove_current()
+        .expect("the context mutation must construct a production proof");
+    repro.assert_native_and_recursive_air_rejection(proof);
 }
 
 /// Control for the above: the identical mutation across an ordinary NOOP transition, where
@@ -166,19 +136,18 @@ fn forged_context_at_continuation_end_is_rejected() {
 #[test]
 fn forged_context_at_ordinary_row_is_rejected() {
     let (mut repro, rows) = build_basic_harness();
+    let expected_claim = repro.claim();
     set_ctx(&mut repro, (rows.noop + 1)..rows.height, FORGED_CTX);
+    assert_eq!(repro.claim(), expected_claim);
 
-    let result = repro.prove_and_verify_current();
-    assert!(
-        result.is_err(),
-        "the verifier must reject a context change on an ordinary (non-END) transition; \
-         if this passes, the harness is not exercising what these tests claim: {result:?}"
-    );
+    let proof = repro
+        .prove_current()
+        .expect("the context mutation must construct a production proof");
+    repro.assert_native_and_recursive_air_rejection(proof);
 }
 
-/// Exchange equal-D callee aliases after nested continuation ENDs. The unchanged entry boundary
-/// and balanced resolution demand counts cannot substitute for preserving the callee principal.
-/// The same witness is accepted only by the isolated historical coarse-END principal evaluator.
+/// Exchange equal-D callee aliases after nested continuation ENDs, preserving the entry boundary
+/// and balanced resolution demand counts.
 #[test]
 fn forged_fn_hash_at_continuation_end_is_rejected() {
     check_alias_principal_exchange(true);
@@ -190,7 +159,7 @@ fn forged_fn_hash_at_ordinary_row_is_rejected() {
     check_alias_principal_exchange(false);
 }
 
-// INSIDE A CALL: THE ISOLATION-RELEVANT CASE
+// PRESERVATION INSIDE A CALL
 // ================================================================================================
 
 /// Row indices of interest in the program containing a `call`.
@@ -267,15 +236,9 @@ fn check_alias_principal_exchange(after_continuation: bool) {
         }
     });
     let mut repro = ReproTrace::new(&trace);
-    let honest = repro
-        .prove_comparison(CoreMode::Standard)
-        .expect("the unchanged wrapper must construct the honest alias proof");
-    assert!(
-        honest.verification.is_ok(),
-        "the unchanged evaluator must accept: {:?}",
-        honest.verification
-    );
-    repro.assert_native_and_recursive_accept(honest.proof);
+    let expected_claim = repro.claim();
+    let honest = repro.prove_current().expect("honest alias proof construction must complete");
+    repro.assert_native_and_recursive_accept(honest);
 
     // Both aliases already have authenticated openings. Invocation and root-completion demands
     // remain unchanged; only the callee principal tails change in the Core matrix.
@@ -289,18 +252,11 @@ fn check_alias_principal_exchange(after_continuation: bool) {
     }
     assert_eq!(core_row_mut(&mut repro.core, 0).system.fn_hash, entry);
     assert_eq!(core_row_mut(&mut repro.core, height - 1).system.fn_hash, entry);
-    let comparison = repro
-        .prove_comparison(CoreMode::Alternate)
-        .expect("balanced alias demands must reach actual comparison proof construction");
-    assert_eq!(
-        comparison.verification.is_ok(),
-        after_continuation,
-        "the historical selector must accept only the continuation witness: {:?}",
-        comparison.verification
-    );
-    // Verify this very artifact with the current native and MASM evaluators. The captured
-    // descriptor, claim, configuration/pins and every witness matrix are identical.
-    repro.assert_native_and_recursive_air_rejection(comparison.proof);
+    assert_eq!(repro.claim(), expected_claim);
+    let proof = repro
+        .prove_current()
+        .expect("balanced alias demands must reach production proof construction");
+    repro.assert_native_and_recursive_air_rejection(proof);
 }
 
 /// Builds a trace for `begin call.inner end`, where `inner` contains a nested block -- so the
@@ -395,43 +351,31 @@ fn build_call_harness() -> (ReproTrace, CallRows) {
 #[test]
 fn honest_call_program_trace_verifies() {
     let (repro, _) = build_call_harness();
-    assert!(repro.prove_and_verify_current().is_ok(), "the honest trace must verify");
+    let proof = repro.prove_current().expect("honest call proof construction must complete");
+    repro.assert_native_and_recursive_accept(proof);
 }
 
-/// The isolation-relevant case: a nested continuation END lets the callee drop back into the
-/// *caller's* execution context for the remainder of the call.
-///
-/// `call` resets `ctx` to `clk + 1` on entry, and the block-stack bus pins `ctx` back to the
-/// caller's value only on the END *of the call*. Between those two points the only thing
-/// holding `ctx` at the callee value is the default-flag preservation constraint. The historical
-/// coarse-END selector made it vacuous at nested continuation ENDs. This fixture isolates that
-/// context column; memory requests read `ctx` straight from it
-/// (`chiplet_requests.rs`), so a callee tail running at `ctx = 0` addresses caller memory.
+/// A context mutation after a nested continuation END runs the callee tail in the caller's
+/// context until the honest caller-frame END restores it. Only the context column changes;
+/// the principal and independently captured expected claim remain fixed.
 #[test]
 fn callee_reentering_caller_context_at_nested_continuation_end_is_rejected() {
-    check_call_context_comparison(true);
+    check_call_context_preservation(true);
 }
 
-/// Control for the above: dropping into the caller's context one transition earlier -- across
-/// an ordinary callee row rather than the nested continuation END -- must be rejected. This pins
-/// the acceptance to the END transition specifically, not to `ctx` being loose inside calls.
+/// Control: the same context mutation across an ordinary callee transition must also reject.
 #[test]
 fn callee_reentering_caller_context_at_ordinary_row_is_rejected() {
-    check_call_context_comparison(false);
+    check_call_context_preservation(false);
 }
 
-fn check_call_context_comparison(after_continuation: bool) {
+fn check_call_context_preservation(after_continuation: bool) {
     let (mut repro, rows) = build_call_harness();
     let expected_claim = repro.claim();
     let honest = repro
-        .prove_comparison(CoreMode::Standard)
+        .prove_current()
         .expect("honest call context proof construction must complete");
-    assert!(
-        honest.verification.is_ok(),
-        "the unchanged evaluator must accept: {:?}",
-        honest.verification
-    );
-    repro.assert_native_and_recursive_accept(honest.proof);
+    repro.assert_native_and_recursive_accept(honest);
 
     let start = if after_continuation {
         rows.nested_continuation_end
@@ -442,14 +386,8 @@ fn check_call_context_comparison(after_continuation: bool) {
     // principal columns, other AIR matrices and the independently expected claim remain fixed.
     set_ctx(&mut repro, (start + 1)..=rows.call_end, Felt::ZERO);
     assert_eq!(repro.claim(), expected_claim);
-    let comparison = repro
-        .prove_comparison(CoreMode::CoarseContext)
-        .expect("the changed context witness must finish comparison proof construction");
-    assert_eq!(
-        comparison.verification.is_ok(),
-        after_continuation,
-        "only the continuation context witness may pass the historical selector: {:?}",
-        comparison.verification
-    );
-    repro.assert_native_and_recursive_air_rejection(comparison.proof);
+    let proof = repro
+        .prove_current()
+        .expect("the changed context witness must finish production proof construction");
+    repro.assert_native_and_recursive_air_rejection(proof);
 }

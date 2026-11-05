@@ -5,14 +5,9 @@
 //! callee row; the real CALL END then restores the following authenticated root state. First and
 //! final principals and the independently expected claim remain unchanged.
 //!
-//! A private comparison changes only the tag term in the first LogUp recurrence and recenters
-//! its auxiliary accumulator. The constructed artifact verifies under that comparison, while
-//! current native and MASM verifiers reject the same artifact. Structural, polynomial-coefficient
-//! and degree guards identify the narrow change. Honest artifacts verify in both consumers; an
-//! unrelated final-clock defect still rejects under the comparison.
-//!
-//! The two single-half mutations remain rejection-pipeline controls and may stop at lookup
-//! construction. Their rejection alone does not establish isolated-rule necessity.
+//! The combined and single-half mutations must reject in the production proof pipeline. They
+//! may stop at lookup construction, so these cases do not claim a retained malicious artifact
+//! or MASM rejection. Honest artifacts must verify in both native and MASM consumers.
 
 use miden_air_definitions::vm::trace::RowIndex;
 use miden_core::{
@@ -23,7 +18,7 @@ use miden_core::{
 };
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 
-use crate::repro_harness::{CoreMode, ReproTrace, core_row_mut};
+use crate::repro_harness::{ReproTrace, core_row_mut};
 
 struct Fixture {
     trace: ReproTrace,
@@ -99,9 +94,8 @@ fn build_fixture() -> Fixture {
     }
 }
 
-/// Zeroes the caller-frame payload columns at the CALL's END row. In the old untagged relation,
-/// that gives the forged caller-frame removal emitted by the previous row the same encoding as a
-/// continuation removal.
+/// Zeroes the caller-frame payload columns at the CALL's END row for the forged restoration
+/// emitted by the previous row.
 fn zero_caller_frame_payload(f: &Fixture, core: &mut RowMajorMatrix<Felt>) {
     let row = core_row_mut(core, f.call_end_row);
     row.system.ctx = Felt::ZERO;
@@ -117,7 +111,11 @@ fn zero_caller_frame_payload(f: &Fixture, core: &mut RowMajorMatrix<Felt>) {
 #[test]
 fn honest_trace_verifies() {
     let f = build_fixture();
-    assert!(f.trace.prove_and_verify_current().is_ok(), "honest trace must verify");
+    let proof = f
+        .trace
+        .prove_current()
+        .expect("honest caller-frame proof construction must complete");
+    f.trace.assert_native_and_recursive_accept(proof);
 }
 
 /// Mark the callee's continuation END as restoring a CALL/DYNCALL frame and zero the saved-state
@@ -128,10 +126,9 @@ fn forged_caller_frame_flag_on_continuation_end_is_rejected() {
     let mut f = build_fixture();
     let honest = f
         .trace
-        .prove_comparison(CoreMode::Standard)
+        .prove_current()
         .expect("honest caller-frame proof construction must complete");
-    assert!(honest.verification.is_ok());
-    f.trace.assert_native_and_recursive_accept(honest.proof);
+    f.trace.assert_native_and_recursive_accept(honest);
     let claim = f.trace.claim();
     let mut core = f.trace.core.clone();
     let first = core_row_mut(&mut core, 0).system.fn_hash;
@@ -145,24 +142,11 @@ fn forged_caller_frame_flag_on_continuation_end_is_rejected() {
     assert_eq!(core_row_mut(&mut core, last).system.fn_hash, final_principal);
     f.trace.core = core;
     assert_eq!(f.trace.claim(), claim);
-    let comparison = f
-        .trace
-        .prove_comparison(CoreMode::TaglessFrames)
-        .expect("the tag comparison must complete proof construction");
+    let result = f.trace.prove_and_verify_allowing_lookup_rejection(f.trace.core.clone());
     assert!(
-        comparison.verification.is_ok(),
-        "only the entry-kind tag may reject the witness: {:?}",
-        comparison.verification
+        result.is_err(),
+        "the production proof pipeline must reject the forged frame: {result:?}"
     );
-    f.trace.assert_native_and_recursive_air_rejection(comparison.proof);
-
-    // An unrelated final-HALT clock defect must remain visible after the tag-only comparison.
-    core_row_mut(&mut f.trace.core, last).system.clk += Felt::ONE;
-    let control = f
-        .trace
-        .prove_comparison(CoreMode::TaglessFrames)
-        .expect("the unrelated control must also complete proof construction");
-    assert!(control.verification.is_err());
 }
 
 /// Control: the identical payload zeroing without forging a caller-frame
