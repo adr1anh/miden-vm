@@ -358,7 +358,7 @@ Pin benchmark revisions: origin/next `00b12150715891582864d256ef51c5ea46bfb282`,
 
 ### PR 18 Explicit host environment access and bounded in-memory openings
 
-**State:** planned; specification and draft scaffolding only. **Branch:** `adr1anh/librarytree-18-host-environment-access`. **Git base:** fork PR17 branch `adr1anh/librarytree-17-cleanup`, publication tip `3fc82b2c93ca75d0dc8882fbfee6f9bb0b66c1c7`; inherited specification `4331885ec`, qualified source `f1879315a`. **Dependencies:** 01/05/08/15 and qualified PR16/17. This follows the completed stack; it does not revoke its evidence. The user authorized an isolated worktree and a draft PR on `adr1anh/miden-vm`, including publishing this branch. Another agent owns publication of the preceding stack. Do not publish or rewrite those branches. PR18 source implementation has not started.
+**State:** planned; specification and draft scaffolding only. **Branch:** `adr1anh/librarytree-18-host-environment-access`. **Git base:** fork PR17 branch `adr1anh/librarytree-17-cleanup`, publication checkpoint `421389f977f07fc6f948603384213ca39f5cfe1c` (the PR targets the branch tip); inherited specification `4331885ec`, qualified source `f1879315a`. **Dependencies:** 01/05/08/15 and qualified PR16/17. This follows the completed stack; it does not revoke its evidence. The user authorized an isolated worktree and a draft PR on `adr1anh/miden-vm`, including publishing this branch. Another agent owns publication of the preceding stack. Do not publish or rewrite those branches. PR18 source implementation has not started.
 
 #### Problem and resulting behavior
 

@@ -2,7 +2,7 @@ The host currently retrieves environment openings through a request wrapper and 
 
 This is a specification and worktree-startup draft. Production implementation has not started. The complete contract, migration slices and acceptance gates are in [the PR18 plan card](https://github.com/adr1anh/miden-vm/blob/adr1anh/librarytree-18-host-environment-access/LIBRARYTREE_PLAN.md#pr-18-explicit-host-environment-access-and-bounded-in-memory-openings).
 
-Base: `adr1anh/librarytree-17-cleanup` on `adr1anh/miden-vm`, publication tip `3fc82b2c93ca75d0dc8882fbfee6f9bb0b66c1c7`. Head: `adr1anh/librarytree-18-host-environment-access` on the same fork. The preceding stack is published separately; this PR adds only PR18 startup/review documentation and references the inherited specification.
+Base: `adr1anh/librarytree-17-cleanup` on `adr1anh/miden-vm`, publication checkpoint `421389f977f07fc6f948603384213ca39f5cfe1c` (the PR targets the branch tip). Head: `adr1anh/librarytree-18-host-environment-access` on the same fork. The preceding stack is published separately; this PR adds only PR18 startup/review documentation and references the inherited specification.
 
 Planned work:
 
