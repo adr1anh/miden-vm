@@ -39,6 +39,8 @@ const FIXTURE_OPENING_LIMITS: OpeningLimits = OpeningLimits {
     max_storage_bytes: 4 * 1024 * 1024,
 };
 type FixturePath = Vec<(EnvironmentRoot, Option<usize>)>;
+// A local opening and its ordered collection item, before the collection prefix is attached.
+type MountedPaths = BTreeMap<ProcedureKey, (usize, FixturePath)>;
 
 /// Names every retained root under the explicit raw-test convention, independently of its digest.
 ///
@@ -185,7 +187,9 @@ impl FixtureEnvironment {
         Self::new_with_fragments(entry, naming, &[])
     }
 
-    /// Mounts each explicitly selected complete fragment as an ordered root-level List child.
+    /// Mounts complete fragments first, in input order, then uncovered selections in key order.
+    /// The collection splits at the midpoint recursively, without padding or namespace edges.
+    /// A singleton is mounted directly; an empty collection is represented by an empty List.
     /// Only preimages reachable from a fragment's validated root are imported. Exact selections
     /// already covered by fragments are retained there rather than duplicated as flat paths.
     pub fn new_with_fragments<'a>(
@@ -225,7 +229,7 @@ impl FixtureEnvironment {
                         .namespace_plan()
                         .home()
                         .len()
-                        .checked_add(binding.path().components().len())
+                        .checked_add(binding.path().components().len().saturating_sub(1))
                         .is_none_or(|depth| depth > MAX_DEPTH)
                     {
                         return Err(Report::msg("fixture callable path depth limit exceeded"));
@@ -249,13 +253,13 @@ impl FixtureEnvironment {
         });
         let mut children = Vec::new();
         let mut paths = BTreeMap::new();
-        let mut fragment_visits = 1usize; // Include the final parent List.
+        let mut fragment_visits = 0usize;
         for fragment in fragments {
             fragment_visits = fragment_visits
                 .checked_add(fragment.visits())
                 .filter(|visits| *visits <= MAX_NODES)
                 .ok_or_else(|| Report::msg("fixture fragment visit limit exceeded"))?;
-            if fragment.max_depth() >= MAX_DEPTH {
+            if fragment.max_depth() > MAX_DEPTH {
                 return Err(Report::msg("fixture fragment depth limit exceeded"));
             }
             if paths
@@ -321,19 +325,26 @@ impl FixtureEnvironment {
                 path.push((child, Some(0)));
             }
             path.reverse();
-            // Keep the actual parent slot with this path. A fragment can contribute many keys,
-            // so key-map iteration order cannot recover the top-level List position.
-            path.insert(0, (child, Some(children.len())));
+            // A fragment can contribute many keys, so retain the actual collection item index.
+            paths.insert(key, (children.len(), path));
             children.push(child);
-            paths.insert(key, path);
         }
-        let root = builder.insert(EnvNode::List(children)).map_err(Report::msg)?;
-        for path in paths.values_mut() {
-            path[0].0 = root;
-        }
+        // Count physical occurrences, including every new collection branch. The builder also
+        // enforces the complete traversal budget, including uncovered naming paths.
+        fragment_visits
+            .checked_add(collection_nodes(children.len()))
+            .filter(|visits| *visits <= MAX_NODES)
+            .ok_or_else(|| Report::msg("fixture fragment visit limit exceeded"))?;
+        let root = collection_root(&mut builder, &children)?;
+        let paths = paths
+            .into_iter()
+            .map(|(key, (slot, path))| {
+                collection_path(&builder, root, children.len(), slot, path).map(|path| (key, path))
+            })
+            .collect::<Result<BTreeMap<_, _>, Report>>()?;
         let environment = Arc::new(builder.finish(root).map_err(Report::msg)?);
         // Every advertised binding must be resolvable under the fixture's own opening policy.
-        // In particular, a mounted fragment adds its Lists to the enclosing root List's budget.
+        // Mounted Lists retain their finite per-node and aggregate opening budgets.
         for path in paths.values() {
             preflight_path(&environment, path, FIXTURE_OPENING_LIMITS).map_err(Report::msg)?;
         }
@@ -387,6 +398,67 @@ impl FixtureEnvironment {
     }
 }
 
+/// Number of collection occurrences added around the existing items.
+fn collection_nodes(count: usize) -> usize {
+    if count == 0 { 1 } else { count - 1 }
+}
+
+/// Stable midpoint splitting preserves item order and adds no namespace boundaries.
+/// Recursion is bounded by ceil(log2(MAX_BINDINGS)), independently of fragment depth.
+fn collection_root(
+    builder: &mut EnvironmentBuilder,
+    children: &[EnvironmentRoot],
+) -> Result<EnvironmentRoot, Report> {
+    match children {
+        [] => builder.insert(EnvNode::List(Vec::new())).map_err(Report::msg),
+        [root] => Ok(*root),
+        _ => {
+            let midpoint = children.len() / 2;
+            let left = collection_root(builder, &children[..midpoint])?;
+            let right = collection_root(builder, &children[midpoint..])?;
+            builder.insert(EnvNode::Merkle { left, right }).map_err(Report::msg)
+        },
+    }
+}
+
+/// Prepends the item's actual collection route to its unchanged local opening.
+fn collection_path(
+    builder: &EnvironmentBuilder,
+    mut root: EnvironmentRoot,
+    mut count: usize,
+    mut slot: usize,
+    local: FixturePath,
+) -> Result<FixturePath, Report> {
+    let mut prefix = Vec::new();
+    while count > 1 {
+        let midpoint = count / 2;
+        let EnvNode::Merkle { left, right } = builder.get(root).expect("built collection branch")
+        else {
+            unreachable!("non-singleton collection must be Merkle");
+        };
+        let branch = usize::from(slot >= midpoint);
+        prefix.push((root, Some(branch)));
+        if branch == 0 {
+            root = *left;
+            count = midpoint;
+        } else {
+            root = *right;
+            count -= midpoint;
+            slot -= midpoint;
+        }
+    }
+    let nodes = prefix
+        .len()
+        .checked_add(local.len())
+        .filter(|nodes| *nodes <= FIXTURE_OPENING_LIMITS.max_nodes)
+        .ok_or_else(|| Report::msg("fixture mounted opening depth limit exceeded"))?;
+    prefix
+        .try_reserve_exact(nodes - prefix.len())
+        .map_err(|_| Report::msg("fixture collection path allocation failed"))?;
+    prefix.extend(local);
+    Ok(prefix)
+}
+
 /// A cursor frame retains one occurrence per depth, even for a wide shared DAG.
 struct FragmentFrame {
     root: EnvironmentRoot,
@@ -400,7 +472,7 @@ fn import_fragment(
     builder: &mut EnvironmentBuilder,
     fragment: &ValidatedEnvironment,
     outer_slot: usize,
-    paths: &mut BTreeMap<ProcedureKey, FixturePath>,
+    paths: &mut MountedPaths,
 ) -> Result<(), Report> {
     let mut frames = Vec::new();
     frames
@@ -452,11 +524,10 @@ fn import_fragment(
                     return Err(Report::msg("duplicate fixture fragment binding"));
                 }
                 let mut path = Vec::new();
-                path.try_reserve_exact(frames.len() + 1)
+                path.try_reserve_exact(frames.len())
                     .map_err(|_| Report::msg("fixture fragment path allocation failed"))?;
-                path.push((fragment.root(), Some(outer_slot)));
                 path.extend(frames.iter().map(|frame| (frame.root, frame.selected_child)));
-                paths.insert(key, path);
+                paths.insert(key, (outer_slot, path));
             }
             frames[index].entered = true;
         }
@@ -690,9 +761,20 @@ mod tests {
     }
 
     fn naming(name: &str, implementation: u32) -> PackageSymbols {
-        let binding = ProcedureName::new(
+        naming_at(
             NamespacePath::new(alloc::vec![CanonicalLabel::text("selected-test-owner").unwrap()]),
-            CallableProcedurePath::from_semantic_components(alloc::vec![name.into()]).unwrap(),
+            &[name],
+            implementation,
+        )
+    }
+
+    fn naming_at(home: NamespacePath, path: &[&str], implementation: u32) -> PackageSymbols {
+        let binding = ProcedureName::new(
+            home,
+            CallableProcedurePath::from_semantic_components(
+                path.iter().map(|component| (*component).into()).collect(),
+            )
+            .unwrap(),
         )
         .unwrap();
         let key = binding.key();
@@ -707,6 +789,216 @@ mod tests {
             Some(key),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn collection_empty_singleton_and_uneven_shapes_are_explicit_and_balanced() {
+        fn inspect(
+            builder: &EnvironmentBuilder,
+            root: EnvironmentRoot,
+            leaves: &mut Vec<EnvironmentRoot>,
+        ) -> (usize, usize) {
+            if let EnvNode::Merkle { left, right } = builder.get(root).unwrap() {
+                let (left_count, left_depth) = inspect(builder, *left, leaves);
+                let (right_count, right_depth) = inspect(builder, *right, leaves);
+                assert!(right_count == left_count || right_count == left_count + 1);
+                (left_count + right_count, left_depth.max(right_depth) + 1)
+            } else {
+                leaves.push(root);
+                (1, 0)
+            }
+        }
+        for count in [0usize, 1, 2, 3, 5, 8, 17] {
+            let mut builder = EnvironmentBuilder::new(EnvironmentBuildLimits {
+                max_submitted_nodes: 34,
+                max_visits: 34,
+                max_depth: 5,
+                max_list_children: 0,
+                max_encoded_bytes: 4096,
+                max_bindings: 0,
+                max_storage_bytes: 64 * 1024,
+            });
+            let children = (0..count)
+                .map(|index| {
+                    builder
+                        .insert(EnvNode::Data {
+                            kind: 0,
+                            label: CanonicalLabel::text(&alloc::format!("data_{index}"))
+                                .unwrap()
+                                .commitment(),
+                            value: Word::default(),
+                        })
+                        .unwrap()
+                })
+                .collect::<Vec<_>>();
+            let root = collection_root(&mut builder, &children).unwrap();
+            if count == 0 {
+                assert_eq!(builder.get(root), Some(&EnvNode::List(Vec::new())));
+            } else {
+                let mut actual = Vec::new();
+                let (actual_count, depth) = inspect(&builder, root, &mut actual);
+                assert_eq!(actual, children);
+                assert_eq!(actual_count, count);
+                assert_eq!(depth, count.next_power_of_two().ilog2() as usize);
+                if count == 1 {
+                    assert_eq!(root, children[0]);
+                }
+            }
+            assert_eq!(builder.finish(root).unwrap().visits(), count + collection_nodes(count));
+        }
+        assert!(FixtureEnvironment::new(naming("entry", 1).entry_key().unwrap(), []).is_err());
+    }
+
+    #[test]
+    fn deterministic_collections_preserve_every_binding_and_syscall_namespace() {
+        let selected = [
+            naming("first", 1),
+            naming("second", 1),
+            naming("third", 3),
+            naming_at(NamespacePath::new(Vec::new()), &["kernel_export"], 4),
+            naming_at(
+                NamespacePath::new(alloc::vec![CanonicalLabel::text("home").unwrap()]),
+                &["module", "helper"],
+                5,
+            ),
+        ];
+        let entry = selected[0].entry_key().unwrap();
+        let fixture = FixtureEnvironment::new(entry, &selected).unwrap();
+        let reordered =
+            FixtureEnvironment::new(entry, selected.iter().rev().chain(selected.iter())).unwrap();
+        assert_eq!(fixture.environment.root(), reordered.environment.root());
+        assert_eq!(fixture.paths, reordered.paths);
+        assert_eq!(fixture.environment.bindings().len(), selected.len());
+        for naming in &selected {
+            let key = naming.entry_key().unwrap();
+            let canonical = naming.callables().binding(key).unwrap();
+            let binding = fixture.environment.binding(key).unwrap();
+            assert_eq!(binding.key(), canonical.key());
+            assert_eq!(binding.namespace(), canonical.parent_namespace());
+            assert_eq!(
+                binding.label(),
+                CanonicalLabel::text(canonical.path().components().last().unwrap())
+                    .unwrap()
+                    .commitment(),
+            );
+            assert_eq!(
+                binding.implementation(),
+                naming.callables().selected_implementation(key).unwrap()
+            );
+            let request = EnvironmentWitnessRequest {
+                root: fixture.environment.root(),
+                key,
+                limits: fixture.resolution_limits().opening_limits(),
+            };
+            let witness = fixture.source().get(request).unwrap().unwrap();
+            assert!(witness.path.iter().all(|step| !matches!(step.node, EnvNode::List(_))));
+            let resolved = witness.verify(request.root, key, request.limits).unwrap();
+            assert_eq!(resolved.namespace(), canonical.parent_namespace());
+            assert_eq!(resolved.implementation_root(), binding.implementation());
+        }
+        assert_eq!(
+            fixture
+                .environment
+                .binding(selected[3].entry_key().unwrap())
+                .unwrap()
+                .namespace(),
+            Namespace::initial()
+        );
+        assert_ne!(fixture.environment.binding(entry).unwrap().namespace(), Namespace::initial());
+    }
+
+    #[test]
+    fn openings_reuse_shared_merkle_prefixes_and_reject_changed_slots() {
+        let selected = [naming("a", 1), naming("b", 2), naming("c", 3), naming("d", 4)];
+        let fixture = FixtureEnvironment::new(selected[0].entry_key().unwrap(), &selected).unwrap();
+        let mut ledger = miden_processor::OpeningLedger::new(
+            fixture.environment.root(),
+            fixture.resolution_limits().ledger_limits(),
+        );
+        let keys = fixture.paths.keys().copied().collect::<Vec<_>>();
+        let request = |key| EnvironmentWitnessRequest {
+            root: fixture.environment.root(),
+            key,
+            limits: fixture.resolution_limits().opening_limits(),
+        };
+        for (key, expected_occurrences) in [(keys[0], 4), (keys[1], 6), (keys[0], 6)] {
+            let witness = fixture.source().get(request(key)).unwrap().unwrap();
+            let binding = witness.verify(request(key).root, key, request(key).limits).unwrap();
+            ledger.prepare(binding).unwrap().commit();
+            assert_eq!(ledger.counters().occurrences, expected_occurrences);
+            assert_eq!(ledger.counters().library_rows, 2 * expected_occurrences);
+        }
+        let mut altered = fixture.source().get(request(keys[0])).unwrap().unwrap();
+        altered.path[0].selected_child = Some(1);
+        assert!(altered.verify(request(keys[0]).root, keys[0], request(keys[0]).limits).is_err());
+    }
+
+    #[test]
+    fn merkle_openings_enforce_exact_node_depth_byte_and_storage_boundaries() {
+        let selected = [naming("a", 1), naming("b", 2), naming("c", 3)];
+        let fixture = FixtureEnvironment::new(selected[0].entry_key().unwrap(), &selected).unwrap();
+        let (&key, path) = fixture.paths.iter().max_by_key(|(_, path)| path.len()).unwrap();
+        let encoded = path
+            .iter()
+            .map(|(root, _)| fixture.environment.get(*root).unwrap().encoded_len().unwrap())
+            .sum();
+        let exact = OpeningLimits {
+            max_nodes: path.len(),
+            max_depth: path.len() - 1,
+            max_list_children: 0,
+            max_total_list_children: 0,
+            max_encoded_bytes: encoded,
+            max_storage_bytes: path.len() * core::mem::size_of::<OpeningStep>(),
+        };
+        let source = fixture.source();
+        let request = EnvironmentWitnessRequest {
+            root: fixture.environment.root(),
+            key,
+            limits: exact,
+        };
+        let witness = source.get(request).unwrap().unwrap();
+        witness.verify(request.root, key, exact).unwrap();
+        for limits in [
+            OpeningLimits { max_nodes: exact.max_nodes - 1, ..exact },
+            OpeningLimits { max_depth: exact.max_depth - 1, ..exact },
+            OpeningLimits {
+                max_encoded_bytes: exact.max_encoded_bytes - 1,
+                ..exact
+            },
+            OpeningLimits {
+                max_storage_bytes: exact.max_storage_bytes - 1,
+                ..exact
+            },
+        ] {
+            assert!(source.get(EnvironmentWitnessRequest { limits, ..request }).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn singleton_depth_limit_includes_no_wrapper_but_merkle_mounts_add_depth() {
+        let selected = naming_at(
+            NamespacePath::new(alloc::vec![CanonicalLabel::text("deep").unwrap(); MAX_DEPTH]),
+            &["entry"],
+            1,
+        );
+        let key = selected.entry_key().unwrap();
+        let singleton = FixtureEnvironment::new(key, [&selected]).unwrap();
+        assert_eq!(singleton.environment.max_depth(), MAX_DEPTH);
+        assert_eq!(singleton.paths[&key].len(), MAX_DEPTH + 1);
+        let fragment = singleton.environment.clone();
+        let mounted = FixtureEnvironment::new_with_fragments(
+            key,
+            [&selected],
+            core::slice::from_ref(&fragment),
+        )
+        .unwrap();
+        assert_eq!(mounted.environment.root(), fragment.root());
+        let shallow = naming("other", 2);
+        assert!(FixtureEnvironment::new(key, [&selected, &shallow]).is_err());
+        assert!(
+            FixtureEnvironment::new_with_fragments(key, [&selected, &shallow], &[fragment])
+                .is_err()
+        );
     }
 
     fn branching_fragment(
@@ -769,11 +1061,10 @@ mod tests {
         )
         .unwrap();
         let environment = fixture.validated_environment();
-        let EnvNode::List(children) = environment.get(environment.root()).unwrap() else {
-            panic!("fixture root must remain a List");
+        let EnvNode::Merkle { left, .. } = environment.get(environment.root()).unwrap() else {
+            panic!("two collection items must form a Merkle pair");
         };
-        assert_eq!(children.len(), 2, "covered naming selections must not be duplicated");
-        assert_eq!(children[0], fragment.root());
+        assert_eq!(*left, fragment.root(), "covered selections stay in the first fragment");
         assert_eq!(environment.bindings().len(), 3);
         assert!(
             environment.get(unrelated).is_none(),
@@ -805,12 +1096,66 @@ mod tests {
     }
 
     #[test]
-    fn mounted_fragment_opening_budgets_include_the_outer_list() {
-        fn wide_fragment(naming: &PackageSymbols, count: usize) -> Arc<ValidatedEnvironment> {
+    fn uneven_collection_keeps_fragment_order_and_all_local_paths() {
+        let first = naming("first", 1);
+        let second = naming("second", 2);
+        let third = naming("third", 3);
+        let fourth = naming("fourth", 4);
+        let entry = naming("entry", 5);
+        let (left, _) = branching_fragment(&first, &second);
+        let (right, _) = branching_fragment(&third, &fourth);
+        let fixture = FixtureEnvironment::new_with_fragments(
+            entry.entry_key().unwrap(),
+            [&entry, &first, &third],
+            &[left.clone(), right.clone()],
+        )
+        .unwrap();
+        let EnvNode::Merkle { left: first_item, right: pair } =
+            fixture.environment.get(fixture.environment.root()).unwrap()
+        else {
+            panic!("three items must split one and two");
+        };
+        assert_eq!(*first_item, left.root());
+        let EnvNode::Merkle { left: second_item, .. } = fixture.environment.get(*pair).unwrap()
+        else {
+            panic!("the last two items must form a pair");
+        };
+        assert_eq!(*second_item, right.root());
+        assert_eq!(fixture.environment.bindings().len(), 5);
+        for (selected, prefix, fragment_root) in [
+            (&first, 1, left.root()),
+            (&second, 1, left.root()),
+            (&third, 2, right.root()),
+            (&fourth, 2, right.root()),
+        ] {
+            let key = selected.entry_key().unwrap();
+            let request = EnvironmentWitnessRequest {
+                root: fixture.environment.root(),
+                key,
+                limits: fixture.resolution_limits().opening_limits(),
+            };
+            let witness = fixture.source().get(request).unwrap().unwrap();
+            assert_eq!(witness.path[prefix].node.commitment().unwrap(), fragment_root);
+            let binding = witness.verify(request.root, key, request.limits).unwrap();
+            assert_eq!(
+                binding.namespace(),
+                selected.callables().binding(key).unwrap().parent_namespace()
+            );
+            assert_eq!(
+                binding.implementation_root(),
+                selected.callables().selected_implementation(key).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn mounted_fragment_list_budgets_remain_finite_without_an_outer_list() {
+        fn wide_fragment(naming: &PackageSymbols, nested: bool) -> Arc<ValidatedEnvironment> {
+            let count = MAX_BINDINGS;
             let mut builder = EnvironmentBuilder::new(EnvironmentBuildLimits {
-                max_submitted_nodes: 4,
-                max_visits: count + 2,
-                max_depth: 2,
+                max_submitted_nodes: 5,
+                max_visits: count + 4,
+                max_depth: 4,
                 max_list_children: MAX_BINDINGS,
                 max_encoded_bytes: MAX_ENCODED_BYTES,
                 max_bindings: 1,
@@ -838,13 +1183,17 @@ mod tests {
                 .unwrap();
             let mut children = alloc::vec![data; count];
             children[0] = owner;
-            let root = builder.insert(EnvNode::List(children)).unwrap();
+            let mut root = builder.insert(EnvNode::List(children)).unwrap();
+            if nested {
+                root = builder.insert(EnvNode::List(alloc::vec![root])).unwrap();
+            }
             Arc::new(builder.finish(root).unwrap())
         }
 
         let selected = naming("entry", 1);
         let key = selected.entry_key().unwrap();
-        let accepted = wide_fragment(&selected, MAX_BINDINGS - 1);
+        let accepted = wide_fragment(&selected, false);
+        let fragment_root = accepted.root();
         let fixture =
             FixtureEnvironment::new_with_fragments(key, [&selected], &[accepted]).unwrap();
         let request = EnvironmentWitnessRequest {
@@ -852,6 +1201,7 @@ mod tests {
             key,
             limits: fixture.resolution_limits().opening_limits(),
         };
+        assert_eq!(request.root, fragment_root, "a singleton adds no collection wrapper");
         let witness = fixture.source().get(request).unwrap().unwrap();
         assert_eq!(
             witness
@@ -866,7 +1216,7 @@ mod tests {
         );
         witness.verify(request.root, key, request.limits).unwrap();
 
-        let rejected = wide_fragment(&selected, MAX_BINDINGS);
+        let rejected = wide_fragment(&selected, true);
         let error = FixtureEnvironment::new_with_fragments(key, [&selected], &[rejected])
             .err()
             .expect("the mounted path exceeds the aggregate List child opening budget");
@@ -900,7 +1250,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_fragment_constructor_preserves_the_original_root_and_path_shape() {
+    fn empty_fragment_input_uses_the_same_deterministic_merkle_collection() {
         let first = naming("first", 1);
         let second = naming("second", 2);
         let key = first.entry_key().unwrap();
@@ -929,7 +1279,12 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             original.environment.root(),
-            EnvNode::List(expected_children).commitment().unwrap()
+            EnvNode::Merkle {
+                left: expected_children[0],
+                right: expected_children[1]
+            }
+            .commitment()
+            .unwrap()
         );
         assert!(original.paths.values().all(|path| path.len() == 3));
     }

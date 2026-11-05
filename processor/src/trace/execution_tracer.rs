@@ -828,7 +828,6 @@ impl ExecutionTracer {
                 Some(ExecutionContextInfo::new(
                     processor.system().ctx(),
                     processor.system().caller_hash(),
-                    processor.stack().depth(),
                     overflow_addr,
                 ))
             },
@@ -855,19 +854,15 @@ impl ExecutionTracer {
                     // When the stack is already at MIN_STACK_DEPTH the drop does not reduce
                     // the depth and the overflow address is ZERO — mirroring the same guard
                     // already present in the parallel-tracer path.  See #2813 / PR #2904.
-                    let (stack_depth_after_drop, overflow_addr) =
+                    let overflow_addr =
                         if Processor::stack(processor).depth() > MIN_STACK_DEPTH as u32 {
-                            (
-                                processor.stack().depth() - 1,
-                                self.overflow_table.clk_after_pop_in_current_ctx(),
-                            )
+                            self.overflow_table.clk_after_pop_in_current_ctx()
                         } else {
-                            (processor.stack().depth(), ZERO)
+                            ZERO
                         };
                     Some(ExecutionContextInfo::new(
                         processor.system().ctx(),
                         processor.system().caller_hash(),
-                        stack_depth_after_drop,
                         overflow_addr,
                     ))
                 } else {

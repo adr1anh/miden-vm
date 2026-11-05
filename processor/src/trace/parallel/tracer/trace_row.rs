@@ -46,12 +46,10 @@ struct DecoderRow {
     pub opcode: u8,
     /// The two child hashes for start operations (first hash, second hash)
     pub hasher_state: (Word, Word),
-    /// Authenticated implementation root, present only on a keyed invocation row.
-    pub resolved_digest: Word,
     /// Whether this row is an operation within a basic block
     pub in_basic_block: bool,
-    /// Remaining operation groups for basic-block decoding. LOOP multiplicity is filled after
-    /// trace rows are assembled.
+    /// Remaining operation groups, or DYNCALL's saved caller overflow pointer. LOOP multiplicity
+    /// is filled after trace rows are assembled.
     pub group_count: Felt,
     /// The index of the operation within its operation group, or 0 if this is not a row containing
     /// an operation in a basic block.
@@ -73,7 +71,6 @@ impl DecoderRow {
         Self {
             opcode,
             hasher_state,
-            resolved_digest: Word::default(),
             addr,
             in_basic_block: false,
             group_count: ZERO,
@@ -104,7 +101,6 @@ impl DecoderRow {
         Ok(Self {
             opcode,
             hasher_state,
-            resolved_digest: Word::default(),
             addr,
             in_basic_block: false,
             group_count,
@@ -140,7 +136,6 @@ impl DecoderRow {
         Ok(Self {
             opcode: operation.op_code(),
             hasher_state,
-            resolved_digest: Word::default(),
             addr: current_addr,
             in_basic_block: true,
             group_count: basic_block_ctx.group_count_in_block,
@@ -437,11 +432,9 @@ impl<'a> CoreTraceGenerationTracer<'a> {
 
     /// Fills a trace row for the start of a DYNCALL operation.
     ///
-    /// The decoder hasher trace columns are populated with the callee hash, as well as the stack
-    /// helper registers (specifically their state after shifting the stack left). We need to store
-    /// those in the decoder trace so that the block stack table can access them (since in the next
-    /// row, we start a new context, and hence the stack registers are reset to their default
-    /// values).
+    /// The decoder stores the requested key and resolved implementation in its two hasher words.
+    /// The caller's post-pop overflow pointer overlays group_count, since the next row resets the
+    /// stack registers when it enters the callee context.
     pub fn fill_dyncall_start_trace_row(
         &mut self,
         system: &SystemState,
@@ -449,19 +442,14 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         callee_hash: Word,
         ctx_info: ExecutionContextInfo,
     ) -> Result<(), ExecutionError> {
-        let second_hasher_state: Word = [
-            Felt::from_u32(ctx_info.parent_stack_depth),
-            ctx_info.parent_next_overflow_addr,
-            ZERO,
-            ZERO,
-        ]
-        .into();
-
-        let decoder_row = DecoderRow::new_control_flow(
+        let mut decoder_row = DecoderRow::new_control_flow(
             opcodes::DYNCALL,
-            (callee_hash, second_hasher_state),
+            (callee_hash, Word::default()),
             self.decoder_state.parent_addr,
         );
+        // h4..h7 hold the resolved implementation. Save only the overflow link here;
+        // the caller's post-pop depth is derived from the current stack columns.
+        decoder_row.group_count = ctx_info.parent_next_overflow_addr;
         self.fill_trace_row(system, stack, decoder_row)
     }
 
@@ -631,7 +619,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                     "invocation trace row differs from authenticated keyed event",
                 ));
             }
-            decoder_row.resolved_digest = event.use_record.implementation_root().into_word();
+            decoder_row.hasher_state.1 = event.use_record.implementation_root().into_word();
         } else if let Some(event) = self.keyed_event {
             if decoder_row.opcode != opcodes::END
                 || event.kind != KeyedEventKind::RootEnd
@@ -695,7 +683,6 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         decoder.hasher_state[5] = second_hash[1];
         decoder.hasher_state[6] = second_hash[2];
         decoder.hasher_state[7] = second_hash[3];
-        decoder.resolved_digest = decoder_row.resolved_digest.into_elements();
 
         // Remaining decoder trace columns (identical for all control flow operations)
         decoder.op_index = decoder_row.op_index;

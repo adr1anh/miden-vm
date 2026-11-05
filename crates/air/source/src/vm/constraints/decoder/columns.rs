@@ -1,9 +1,8 @@
 use crate::vm::trace::decoder::{
-    NUM_HASHER_COLUMNS, NUM_OP_BITS, NUM_OP_BITS_EXTRA_COLS, NUM_RESOLVED_DIGEST_COLUMNS,
-    NUM_USER_OP_HELPERS,
+    NUM_HASHER_COLUMNS, NUM_OP_BITS, NUM_OP_BITS_EXTRA_COLS, NUM_USER_OP_HELPERS,
 };
 
-/// Decoder columns in the main execution trace (27 columns).
+/// Decoder columns in the main execution trace (23 columns).
 #[repr(C)]
 #[derive(Debug, Clone, Default)]
 pub struct DecoderCols<T> {
@@ -15,7 +14,7 @@ pub struct DecoderCols<T> {
     pub hasher_state: [T; NUM_HASHER_COLUMNS],
     /// In-span flag (1 inside a basic block).
     pub in_span: T,
-    /// Remaining operation group count.
+    /// Remaining operation group count, or DYNCALL's saved post-pop overflow pointer.
     pub group_count: T,
     /// Position within operation group (0-8).
     pub op_index: T,
@@ -25,11 +24,25 @@ pub struct DecoderCols<T> {
     pub batch_size_code: T,
     /// Degree-reduction extra columns e0, e1.
     pub extra: [T; NUM_OP_BITS_EXTRA_COLS],
-    /// Authenticated implementation digest on invocation rows; zero on every other row.
-    pub resolved_digest: [T; NUM_RESOLVED_DIGEST_COLUMNS],
 }
 
 impl<T: Copy> DecoderCols<T> {
+    /// Returns the authenticated implementation overlay on an invocation row.
+    /// Other opcodes assign their own meanings to these hasher lanes.
+    pub fn resolved_digest(&self) -> [T; 4] {
+        [
+            self.hasher_state[4],
+            self.hasher_state[5],
+            self.hasher_state[6],
+            self.hasher_state[7],
+        ]
+    }
+
+    /// Returns DYNCALL's saved caller overflow pointer after consuming its address operand.
+    pub fn dyncall_overflow_addr(&self) -> T {
+        self.group_count
+    }
+
     /// Returns the 6 user-op helper registers (hasher_state[2..8]).
     pub fn user_op_helpers(&self) -> [T; NUM_USER_OP_HELPERS] {
         [

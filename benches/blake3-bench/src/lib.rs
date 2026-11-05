@@ -1,4 +1,6 @@
 use std::{
+    collections::BTreeMap,
+    fmt::Write as _,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -7,10 +9,10 @@ use std::{
 use miden_core_lib::CoreLibrary;
 use miden_utils_testing::librarytree::{self, FixtureEnvironment, assemble_fixture_program};
 use miden_vm::{
-    Assembler, CodePackage, DefaultHost, ExecutionOptions, ExecutionOutput, ExecutionProof,
-    ExecutionWitness, FastProcessor, HashFunction, Prover, StackInputs, StackOutputs, Verifier,
-    VmTrace,
-    advice::AdviceInputs,
+    Assembler, CanonicalLabel, CodePackage, DefaultHost, ExecutionOptions, ExecutionOutput,
+    ExecutionProof, ExecutionWitness, FastProcessor, HashFunction, Prover, StackInputs,
+    StackOutputs, Verifier, VmTrace,
+    advice::{AdviceInputs, AdviceStack},
     assembly::{
         DefaultSourceManager, Path as LibraryPath,
         ast::{Module, ModuleKind},
@@ -50,6 +52,91 @@ pub struct Blake3Fixture {
 }
 
 impl Blake3Fixture {
+    /// Loads the historical qualification workload with eight preserving output assertions.
+    ///
+    /// Expected outputs come from the independent native `blake3` crate, after checking its
+    /// standard empty-message vector. Fixture construction and oracle work happen before timing.
+    /// The assertions and seed match the archived 2026-11-05 comparison at 1, 8 and 32 hashes.
+    pub fn load_checked_chain(repo_root: &Path, iterations: u32) -> (Self, [u64; 8]) {
+        assert!(matches!(iterations, 1 | 8 | 32), "qualification supports 1, 8 or 32 hashes");
+        assert_eq!(
+            blake3::hash(b"").to_hex().as_str(),
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        );
+        let mut state = [0xff; 32];
+        for _ in 0..iterations {
+            state = *blake3::hash(&state).as_bytes();
+        }
+        let expected = core::array::from_fn(|index| {
+            u64::from(u32::from_le_bytes(state[index * 4..index * 4 + 4].try_into().unwrap()))
+        });
+
+        let program_path = repo_root.join(PROGRAM_RELATIVE_PATH);
+        let input_file = InputFile::read(&None, &program_path).expect("read Blake3 fixture inputs");
+        assert_eq!(input_file.operand_stack, vec!["4294967295"; 8], "oracle seed changed");
+        let source = std::fs::read_to_string(&program_path).expect("read Blake3 fixture source");
+        assert_eq!(source.matches("exec.blake3::hash").count(), 1, "hash-call site changed");
+        let marker = "    exec.sys::truncate_stack";
+        assert_eq!(source.matches(marker).count(), 1, "output-assertion insertion point changed");
+        let mut assertions =
+            "    # Independently checked output; identical assertion count in every case.\n"
+                .to_owned();
+        for (index, value) in expected.iter().enumerate() {
+            writeln!(assertions, "    dup.{index} push.{value} assert_eq").unwrap();
+        }
+        let source = source.replace(marker, &(assertions + marker));
+
+        let core_lib = CoreLibrary::default();
+        let mut assembler = Assembler::default();
+        assembler
+            .link_package(core_lib.code_package().clone(), miden_vm::assembly::Linkage::Dynamic)
+            .expect("load core library");
+        let (code, environment) =
+            assemble_fixture_program(assembler, "program", source.as_str(), &[core_lib.naming()]);
+        // Check the complete owner-supplied inventory before any measured execution. This is
+        // independent of the environment's shape, traversal order and authenticated openings.
+        let mut expected_bindings = BTreeMap::new();
+        for symbols in [code.symbols(), core_lib.naming()] {
+            for (&key, &implementation) in symbols.callables().selected_implementations() {
+                let binding = symbols.callables().binding(key).expect("selected canonical binding");
+                assert_eq!(binding.key(), key, "canonical ProcedureKey changed");
+                let leaf = binding.path().components().last().expect("canonical procedure label");
+                let label = CanonicalLabel::text(leaf).expect("canonical label").commitment();
+                let expected = (binding.parent_namespace(), label, implementation);
+                if let Some(previous) = expected_bindings.insert(key, expected) {
+                    assert_eq!(previous, expected, "conflicting owner-selected binding");
+                }
+            }
+        }
+        assert_eq!(
+            expected_bindings.len(),
+            1_015,
+            "review a changed Blake3 qualification inventory"
+        );
+        let bindings = environment.validated_environment().bindings();
+        assert_eq!(bindings.len(), expected_bindings.len(), "complete binding inventory changed");
+        for binding in bindings {
+            let expected = expected_bindings.get(&binding.key()).expect("unexpected ProcedureKey");
+            assert_eq!(binding.namespace(), expected.0, "binding namespace changed");
+            assert_eq!(binding.label(), expected.1, "canonical procedure label changed");
+            assert_eq!(
+                binding.implementation(),
+                expected.2,
+                "selected implementation root changed"
+            );
+        }
+        let fixture = Self {
+            code,
+            environment,
+            stack_inputs: input_file.parse_stack_inputs().expect("parse Blake3 fixture inputs"),
+            advice_inputs: AdviceInputs::default().with_stack(
+                AdviceStack::try_from_values([u64::from(iterations)])
+                    .expect("bounded Blake3 iteration count"),
+            ),
+        };
+        (fixture, expected)
+    }
+
     pub fn load_from_repo(repo_root: &Path) -> Self {
         let program_path = repo_root.join(PROGRAM_RELATIVE_PATH);
         let input_file = InputFile::read(&None, &program_path)

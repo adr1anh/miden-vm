@@ -1,0 +1,74 @@
+{
+  "complete_environment_bindings": 1015,
+  "entry_key": "ProcedureKey(Word([1549498966311122705, 7083006862817472189, 7108978572461729375, 2771171437024650349]))",
+  "environment_root": "EnvironmentRoot(Word([8566159021329207627, 4581348117700227633, 3601328034259257175, 3048155647818809596]))",
+  "expected_top_eight_limbs": [
+    1626354843,
+    2867904763,
+    3796955409,
+    4292745573,
+    3061264993,
+    4176500230,
+    651324981,
+    3321169173
+  ],
+  "independent_oracle": "native blake3 crate with checked standard empty-message vector",
+  "iterations": 1,
+  "measurements": {
+    "proof_hash": "eidos",
+    "samples": [
+      {
+        "conjectured_security_bits": 96,
+        "execute_ms": 4.222236,
+        "proof_bytes": 160573,
+        "prove_ms": 1208.095487,
+        "verify_ms": 0.9160470000000001,
+        "witness_ms": 3.8739410000000003,
+        "witness_plus_prove_ms": 1211.969428
+      },
+      {
+        "conjectured_security_bits": 96,
+        "execute_ms": 4.208194,
+        "proof_bytes": 160573,
+        "prove_ms": 1207.0757729999998,
+        "verify_ms": 0.910214,
+        "witness_ms": 3.930276,
+        "witness_plus_prove_ms": 1211.0060489999998
+      },
+      {
+        "conjectured_security_bits": 96,
+        "execute_ms": 4.2155689999999995,
+        "proof_bytes": 160573,
+        "prove_ms": 1207.942153,
+        "verify_ms": 0.8940480000000001,
+        "witness_ms": 3.911108,
+        "witness_plus_prove_ms": 1211.853261
+      },
+      {
+        "conjectured_security_bits": 96,
+        "execute_ms": 4.178275999999999,
+        "proof_bytes": 160573,
+        "prove_ms": 1207.3722739999998,
+        "verify_ms": 0.893381,
+        "witness_ms": 3.9093160000000005,
+        "witness_plus_prove_ms": 1211.2815899999998
+      },
+      {
+        "conjectured_security_bits": 96,
+        "execute_ms": 4.2944439999999995,
+        "proof_bytes": 160573,
+        "prove_ms": 1206.318018,
+        "verify_ms": 0.891297,
+        "witness_ms": 3.91815,
+        "witness_plus_prove_ms": 1210.236168
+      }
+    ],
+    "scope": "uninstrumented_fresh_execution_witness_prove_full_and_verify_per_sample",
+    "warmup_proofs": 1
+  },
+  "mode": "proof",
+  "preserving_output_assertions": 8,
+  "rayon_threads": 1,
+  "schema": "librarytree_blake3_qualification_v1",
+  "workload": "blake3_1to1"
+}

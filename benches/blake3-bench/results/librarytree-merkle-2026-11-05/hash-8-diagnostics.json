@@ -1,0 +1,87 @@
+{
+  "complete_environment_bindings": 1015,
+  "entry_key": "ProcedureKey(Word([1549498966311122705, 7083006862817472189, 7108978572461729375, 2771171437024650349]))",
+  "environment_root": "EnvironmentRoot(Word([7191356549024889101, 5778310095486998216, 229005004450000450, 1001861698846777763]))",
+  "expected_top_eight_limbs": [
+    2494986452,
+    1796056235,
+    3694555920,
+    2371846503,
+    1444344044,
+    2154000798,
+    3674946055,
+    178126157
+  ],
+  "independent_oracle": "native blake3 crate with checked standard empty-message vector",
+  "iterations": 8,
+  "measurements": {
+    "session": {
+      "cached_keys": 10,
+      "committed_requests_including_root_end": 250,
+      "guest_cycles": 53949,
+      "ledger": {
+        "compression_requests_before_eidos_interning": 175,
+        "encoded_bytes": 7854,
+        "logical_library_rows_before_prefix_padding": 238,
+        "occurrences": 119,
+        "selected_edges": 118,
+        "total_list_children": 0
+      },
+      "opening_source": {
+        "callbacks_per_key": {
+          "ProcedureKey(Word([1549498966311122705, 7083006862817472189, 7108978572461729375, 2771171437024650349]))": 1,
+          "ProcedureKey(Word([2392476982744872136, 6158721663560877208, 4776478898102229139, 1386697334702448612]))": 1,
+          "ProcedureKey(Word([2445838074191490304, 2788214920696800807, 8566560630546785260, 1117103682170088073]))": 1,
+          "ProcedureKey(Word([2480024636388662943, 1366112165389500972, 6189439989394210941, 8680665333954231999]))": 1,
+          "ProcedureKey(Word([2492010239626261495, 6510052854183230333, 691412048920866479, 7098714615816694635]))": 1,
+          "ProcedureKey(Word([2724713719007879122, 5362134042327773359, 3938068799340205426, 7598868496782659502]))": 1,
+          "ProcedureKey(Word([3748501763455695848, 4377237377394366375, 8585708224177390996, 7126751690618001156]))": 1,
+          "ProcedureKey(Word([3855064180339691, 9034436880847142180, 4337717559777474218, 8469796880841811855]))": 1,
+          "ProcedureKey(Word([4470113037109017713, 7898587542901716049, 3369225098341357818, 2824938956677860525]))": 1,
+          "ProcedureKey(Word([531521436653939507, 2466242999356182161, 42492244201819294, 7065370477254506953]))": 1
+        },
+        "total_callbacks": 10,
+        "unique_requested_keys": 10
+      },
+      "scope": "separate_fresh_completed_public_step_session_no_trace_or_proof"
+    },
+    "trace": {
+      "and8_rows": 65536,
+      "chiplets_rows": 7386,
+      "core_rows": 53950,
+      "distinct_eidos_blocks": 225,
+      "eidos_compression_rows": 7200,
+      "execs": 249,
+      "guest_cycles": 53949,
+      "library_prefix_rows": 240,
+      "opening_source": {
+        "callbacks_per_key": {
+          "ProcedureKey(Word([1549498966311122705, 7083006862817472189, 7108978572461729375, 2771171437024650349]))": 1,
+          "ProcedureKey(Word([2392476982744872136, 6158721663560877208, 4776478898102229139, 1386697334702448612]))": 1,
+          "ProcedureKey(Word([2445838074191490304, 2788214920696800807, 8566560630546785260, 1117103682170088073]))": 1,
+          "ProcedureKey(Word([2480024636388662943, 1366112165389500972, 6189439989394210941, 8680665333954231999]))": 1,
+          "ProcedureKey(Word([2492010239626261495, 6510052854183230333, 691412048920866479, 7098714615816694635]))": 1,
+          "ProcedureKey(Word([2724713719007879122, 5362134042327773359, 3938068799340205426, 7598868496782659502]))": 1,
+          "ProcedureKey(Word([3748501763455695848, 4377237377394366375, 8585708224177390996, 7126751690618001156]))": 1,
+          "ProcedureKey(Word([3855064180339691, 9034436880847142180, 4337717559777474218, 8469796880841811855]))": 1,
+          "ProcedureKey(Word([4470113037109017713, 7898587542901716049, 3369225098341357818, 2824938956677860525]))": 1,
+          "ProcedureKey(Word([531521436653939507, 2466242999356182161, 42492244201819294, 7065370477254506953]))": 1
+        },
+        "total_callbacks": 10,
+        "unique_requested_keys": 10
+      },
+      "padded_heights_core_chiplets_eidos_and8": [
+        65536,
+        8192,
+        8192,
+        65536
+      ],
+      "scope": "separate_fresh_execute_for_proving_and_trace_no_proof"
+    }
+  },
+  "mode": "diagnostics",
+  "preserving_output_assertions": 8,
+  "rayon_threads": 1,
+  "schema": "librarytree_blake3_qualification_v1",
+  "workload": "blake3_1to1"
+}

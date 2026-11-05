@@ -1166,19 +1166,18 @@ fn decoder_dyncall_at_min_stack_depth_records_post_drop_ctx_info() {
         .find(|&i| main.get_op_code(i) == dyncall_opcode)
         .expect("DYNCALL row not found in trace");
 
-    // second_hasher_state[0] = caller stack depth        → decoder_hasher_state_element(4)
-    // second_hasher_state[1] = caller overflow address   → decoder_hasher_state_element(5)
-    //
+    assert_eq!(main.decoder_hasher_state_second_half(row), *implementation.as_word());
+
     // DYNCALL consumes the memory address at the top of the stack. At the minimum represented
     // depth, that pop is clamped at MIN_STACK_DEPTH (16) and the empty overflow table leaves no
     // previous overflow address to record, so the caller overflow address must be ZERO.
     assert_eq!(
-        main.decoder_hasher_state_element(4, row),
+        main.dyncall_caller_stack_depth(row),
         Felt::new_unchecked(MIN_STACK_DEPTH as u64),
         "the caller stack depth should equal MIN_STACK_DEPTH"
     );
     assert_eq!(
-        main.decoder_hasher_state_element(5, row),
+        main.core_row(row).decoder.dyncall_overflow_addr(),
         ZERO,
         "the caller overflow address should be ZERO when stack is at MIN_STACK_DEPTH"
     );
@@ -1250,8 +1249,9 @@ fn decoder_dyncall_with_multiple_overflow_entries_records_correct_overflow_addr(
         .find(|&i| main.get_op_code(i) == dyncall_opcode)
         .expect("DYNCALL row not found in trace");
 
-    let recorded_depth = main.decoder_hasher_state_element(4, dyncall_row);
-    let recorded_overflow_addr = main.decoder_hasher_state_element(5, dyncall_row);
+    assert_eq!(main.decoder_hasher_state_second_half(dyncall_row), *implementation.as_word());
+    let recorded_depth = main.dyncall_caller_stack_depth(dyncall_row);
+    let recorded_overflow_addr = main.core_row(dyncall_row).decoder.dyncall_overflow_addr();
 
     // At DYNCALL time depth=18 (>MIN_STACK_DEPTH), so post-drop depth = 17.
     assert_eq!(
@@ -1281,7 +1281,7 @@ fn decoder_dyncall_with_multiple_overflow_entries_records_correct_overflow_addr(
          T2 (top overflow clock = {t2}) would indicate the buggy path"
     );
 
-    // The lookup must bind h5 as the predecessor of the row consumed by DYNCALL.
+    // The lookup must bind the saved pointer as the predecessor of the row consumed by DYNCALL.
     assert_eq!(main.parent_overflow_address(dyncall_row), t2);
     let next = RowIndex::from(usize::from(dyncall_row) + 1);
     assert_eq!(main.stack_element(15, next), ZERO);

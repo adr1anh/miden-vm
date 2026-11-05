@@ -95,10 +95,8 @@ pub struct ExecutionContextInfo {
     /// Hash of the function which initiated execution of the block's parent. If the parent is a
     /// root context, this will be set to [ZERO; 4].
     pub parent_fn_hash: Word,
-    /// Operand-stack depth to restore in the caller. DYNCALL records the depth after consuming its
-    /// address operand; CALL and SYSCALL record the current depth directly.
-    pub parent_stack_depth: u32,
-    /// Address of the caller's top overflow row at the same restoration point.
+    /// Address of the caller's top overflow row after consuming DYNCALL's address operand,
+    /// or at the current stack position for CALL and SYSCALL.
     pub parent_next_overflow_addr: Felt,
 }
 
@@ -106,13 +104,11 @@ impl ExecutionContextInfo {
     pub fn new(
         parent_ctx: ContextId,
         parent_fn_hash: Word,
-        parent_stack_depth: u32,
         parent_next_overflow_addr: Felt,
     ) -> Self {
         Self {
             parent_fn_hash,
             parent_ctx,
-            parent_stack_depth,
             parent_next_overflow_addr,
         }
     }

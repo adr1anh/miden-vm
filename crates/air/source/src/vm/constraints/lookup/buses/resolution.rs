@@ -1,75 +1,43 @@
-//! Unit Core demands for authenticated callable bindings.
+//! Core messages for authenticated callable bindings.
 //!
-//! One exclusive group keeps the three opcode-disjoint branches in a single reciprocal.
-//! Literal tags keep syscall selection out of the denominator. The largest gate has degree
-//! five and each payload is linear, giving `(V, U) = (5, 6)` and recurrence degree seven.
+//! Resolve demands share the opcode-exclusive block-stack column. Each invocation batches its
+//! demand with its frame push; each END batches a root-weighted demand with its frame pop.
 
 use core::array;
 
 use miden_core::field::PrimeCharacteristicRing;
-use miden_stark::lookup::{Deg, LookupColumn, LookupGroup};
 
-use crate::vm::constraints::lookup::{
-    main_air::{MainBusContext, MainLookupBuilder},
-    messages::LibraryResolveMsg,
-};
+use crate::vm::constraints::{decoder::columns::DecoderCols, lookup::messages::LibraryResolveMsg};
 
-pub(in crate::vm::constraints::lookup) const MAX_INTERACTIONS_PER_ROW: usize = 1;
-
-pub(in crate::vm::constraints::lookup) fn emit_resolution<LB>(
-    builder: &mut LB,
-    ctx: &MainBusContext<LB>,
-) where
-    LB: MainLookupBuilder,
+/// Invocation messages use a literal syscall tag to keep their denominators linear.
+pub(super) fn invocation_message<E, V>(
+    decoder: &DecoderCols<V>,
+    requires_syscall: E,
+) -> LibraryResolveMsg<E>
+where
+    V: Copy + Into<E>,
 {
-    let dec = &ctx.local.decoder;
-    let flags = &ctx.op_flags;
-    let ordinary = flags.exec() + flags.call() + flags.dyn_op() + flags.dyncall();
-    let root: LB::Expr = dec.end_block_flags().is_root_end.into();
+    LibraryResolveMsg {
+        requires_syscall,
+        key: array::from_fn(|i| decoder.hasher_state[i].into()),
+        implementation: decoder.resolved_digest().map(Into::into),
+    }
+}
 
-    builder.next_column(
-        |col| {
-            col.group(
-                "core_resolution",
-                |group| {
-                    // There is no cache selector: every invocation contributes one demand.
-                    group.remove(
-                        "ordinary_invocation",
-                        ordinary,
-                        || LibraryResolveMsg {
-                            requires_syscall: LB::Expr::ZERO,
-                            key: array::from_fn(|i| dec.hasher_state[i].into()),
-                            implementation: dec.resolved_digest.map(Into::into),
-                        },
-                        Deg { v: 5, u: 6 },
-                    );
-                    group.remove(
-                        "syscall_invocation",
-                        flags.syscall(),
-                        || LibraryResolveMsg {
-                            requires_syscall: LB::Expr::ONE,
-                            key: array::from_fn(|i| dec.hasher_state[i].into()),
-                            implementation: dec.resolved_digest.map(Into::into),
-                        },
-                        Deg { v: 4, u: 5 },
-                    );
-                    // A root CALL restores entry's next principal before this completion.
-                    group.remove(
-                        "root_completion",
-                        flags.end() * root,
-                        || LibraryResolveMsg {
-                            requires_syscall: LB::Expr::ZERO,
-                            key: ctx.next.system.fn_hash.map(Into::into),
-                            implementation: array::from_fn(|i| dec.hasher_state[i].into()),
-                        },
-                        Deg { v: 5, u: 6 },
-                    );
-                },
-                Deg { v: 5, u: 6 },
-            );
-        },
-        Deg { v: 5, u: 6 },
-    );
+/// A root CALL restores the entry principal before authenticating the completed digest.
+pub(super) fn root_completion_message<E, V>(
+    decoder: &DecoderCols<V>,
+    next_principal: [V; 4],
+) -> LibraryResolveMsg<E>
+where
+    E: PrimeCharacteristicRing,
+    V: Copy + Into<E>,
+{
+    LibraryResolveMsg {
+        requires_syscall: E::ZERO,
+        key: next_principal.map(Into::into),
+        implementation: array::from_fn(|i| decoder.hasher_state[i].into()),
+    }
 }
 
 #[cfg(test)]
@@ -118,7 +86,7 @@ mod tests {
     fn invocation(opcode: u8) -> CoreCols<Felt> {
         let mut local = row(opcode);
         local.decoder.hasher_state[..4].copy_from_slice(&word(101));
-        local.decoder.resolved_digest = word(201);
+        local.decoder.hasher_state[4..8].copy_from_slice(&word(201));
         local
     }
 
@@ -126,7 +94,7 @@ mod tests {
         let values = rows.iter().flat_map(|row| row.as_slice().iter().copied()).collect();
         let trace = RowMajorMatrix::new(values, NUM_CORE_COLS);
         let result = build_lookup_fractions(&MainLookupAir, &trace, None, &[], &challenges());
-        assert_eq!(result.shape(), &[4, 7, 4, 3, 1]);
+        assert_eq!(result.shape(), &[4, 7, 4, 3]);
         for counts in result.counts().as_chunks::<{ MAIN_COLUMN_SHAPE.len() }>().0 {
             assert!(counts.iter().zip(MAIN_COLUMN_SHAPE).all(|(actual, max)| *actual <= max));
         }
@@ -137,6 +105,12 @@ mod tests {
         let index = row * MAIN_COLUMN_SHAPE.len() + column;
         let offset = fractions.counts()[..index].iter().sum::<usize>();
         &fractions.fractions()[offset..offset + fractions.counts()[index]]
+    }
+
+    // These fixtures contain invocation, END, and HALT rows. Their shared first column emits
+    // the frame interaction first and the optional Resolve demand second.
+    fn resolution_at(fractions: &LookupFractions<Felt, QuadFelt>, row: usize) -> &[Fraction] {
+        at(fractions, row, 0).get(1..).unwrap_or(&[])
     }
 
     fn encode<M: LookupMessage<Felt, QuadFelt>>(message: M) -> QuadFelt {
@@ -171,22 +145,25 @@ mod tests {
             let rows = [invocation(opcode), row(opcodes::HALT)];
             let actual = fractions(&rows);
             let denominator = resolve(tag, word(101), word(201));
-            assert_eq!(at(&actual, 0, 4), &[(-Felt::ONE, denominator)], "opcode {opcode}");
-            assert!(at(&actual, 1, 4).is_empty());
+            assert_eq!(resolution_at(&actual, 0), &[(-Felt::ONE, denominator)], "opcode {opcode}");
+            assert!(resolution_at(&actual, 1).is_empty());
             let supply = denominator.inverse();
-            assert_eq!(supply + sum(at(&actual, 0, 4)), QuadFelt::ZERO);
+            assert_eq!(supply + sum(resolution_at(&actual, 0)), QuadFelt::ZERO);
 
             // Keep the authenticated response fixed while mutating the requesting row.
             for lane in 0..4 {
                 let mut wrong_key = rows.clone();
                 wrong_key[0].decoder.hasher_state[lane] += Felt::ONE;
-                assert_ne!(supply + sum(at(&fractions(&wrong_key), 0, 4)), QuadFelt::ZERO);
+                assert_ne!(supply + sum(resolution_at(&fractions(&wrong_key), 0)), QuadFelt::ZERO);
                 let mut wrong_digest = rows.clone();
-                wrong_digest[0].decoder.resolved_digest[lane] += Felt::ONE;
-                assert_ne!(supply + sum(at(&fractions(&wrong_digest), 0, 4)), QuadFelt::ZERO);
+                wrong_digest[0].decoder.hasher_state[4 + lane] += Felt::ONE;
+                assert_ne!(
+                    supply + sum(resolution_at(&fractions(&wrong_digest), 0)),
+                    QuadFelt::ZERO
+                );
             }
             let wrong_mode_supply = resolve(Felt::ONE - tag, word(101), word(201)).inverse();
-            assert_ne!(wrong_mode_supply + sum(at(&actual, 0, 4)), QuadFelt::ZERO);
+            assert_ne!(wrong_mode_supply + sum(resolution_at(&actual, 0)), QuadFelt::ZERO);
         }
     }
 
@@ -196,7 +173,7 @@ mod tests {
         let rows = [invocation(opcodes::EXEC), invocation(opcodes::EXEC), row(opcodes::HALT)];
         let actual = fractions(&rows);
         let denominator = resolve(Felt::ZERO, word(101), word(201));
-        let demand = [at(&actual, 0, 4), at(&actual, 1, 4)].concat();
+        let demand = [resolution_at(&actual, 0), resolution_at(&actual, 1)].concat();
         assert_eq!(demand, vec![(-Felt::ONE, denominator); 2]);
         let authenticated_supply = denominator.inverse() * Felt::from_u8(2);
         assert_eq!(authenticated_supply + sum(&demand), QuadFelt::ZERO);
@@ -206,21 +183,110 @@ mod tests {
     }
 
     #[test]
+    fn dyncall_batches_resolution_with_the_derived_post_pop_caller_frame() {
+        for depth in [16_u32, 17, 20] {
+            let mut invoke = invocation(opcodes::DYNCALL);
+            invoke.decoder.addr = Felt::from_u32(11);
+            invoke.decoder.group_count = if depth > 17 { Felt::from_u32(71) } else { Felt::ZERO };
+            invoke.system.ctx = Felt::from_u32(31);
+            invoke.system.fn_hash = word(301);
+            invoke.stack.b0 = Felt::from_u32(depth);
+            invoke.stack.h0 = if depth == 16 {
+                Felt::ZERO
+            } else {
+                Felt::from_u32(depth - 16).inverse()
+            };
+            let mut next = row(opcodes::SPAN);
+            next.decoder.addr = Felt::from_u32(17);
+            let frame = encode(BlockStackMsg::CallerFrame {
+                block_id: next.decoder.addr,
+                parent_id: invoke.decoder.addr,
+                caller_ctx: invoke.system.ctx,
+                caller_stack_depth: Felt::from_u32(depth - u32::from(depth > 16)),
+                caller_overflow_addr: invoke.decoder.group_count,
+                caller_fn_hash: invoke.system.fn_hash,
+            });
+            let binding = resolve(Felt::ZERO, word(101), word(201));
+            let rows = [invoke, next];
+            let actual = fractions(&rows);
+            assert_eq!(at(&actual, 0, 0), &[(Felt::ONE, frame), (-Felt::ONE, binding)]);
+            assert_eq!(sum(at(&actual, 0, 0)), frame.inverse() - binding.inverse());
+
+            // The saved pointer and derived depth both belong to the caller frame, while
+            // changing either must leave the independently authenticated binding unchanged.
+            let mut wrong = rows.clone();
+            wrong[0].decoder.group_count += Felt::ONE;
+            let changed = fractions(&wrong);
+            assert_ne!(at(&changed, 0, 0)[0].1, frame);
+            assert_eq!(resolution_at(&changed, 0), &[(-Felt::ONE, binding)]);
+            if depth > 16 {
+                let mut wrong = rows;
+                wrong[0].stack.b0 += Felt::ONE;
+                wrong[0].stack.h0 = Felt::from_u32(depth + 1 - 16).inverse();
+                assert_ne!(at(&fractions(&wrong), 0, 0)[0].1, frame);
+                assert_eq!(resolution_at(&fractions(&wrong), 0), &[(-Felt::ONE, binding)]);
+            }
+        }
+    }
+
+    #[test]
+    fn both_end_subtypes_batch_exactly_the_root_weighted_resolution_demand() {
+        for caller_frame in [false, true] {
+            for root in [false, true] {
+                let mut end = row(opcodes::END);
+                end.decoder.addr = Felt::from_u32(17);
+                end.decoder.hasher_state[..4].copy_from_slice(&word(401));
+                end.decoder.hasher_state[6] = Felt::from_bool(caller_frame);
+                end.decoder.hasher_state[7] = Felt::from_bool(root);
+                let mut next = row(if root { opcodes::HALT } else { opcodes::JOIN });
+                next.decoder.addr = Felt::from_u32(11);
+                next.system.fn_hash = word(601);
+                let frame = if caller_frame {
+                    encode(BlockStackMsg::CallerFrame {
+                        block_id: end.decoder.addr,
+                        parent_id: next.decoder.addr,
+                        caller_ctx: next.system.ctx,
+                        caller_stack_depth: next.stack.b0,
+                        caller_overflow_addr: next.stack.b1,
+                        caller_fn_hash: next.system.fn_hash,
+                    })
+                } else {
+                    encode(BlockStackMsg::Continuation {
+                        block_id: end.decoder.addr,
+                        parent_id: next.decoder.addr,
+                        is_loop: Felt::ZERO,
+                    })
+                };
+                let binding = resolve(Felt::ZERO, word(601), word(401));
+                let actual = fractions(&[end, next]);
+                let mut expected = vec![(-Felt::ONE, frame)];
+                if root {
+                    expected.push((-Felt::ONE, binding));
+                }
+                assert_eq!(at(&actual, 0, 0), expected);
+                assert_eq!(
+                    sum(at(&actual, 0, 0)),
+                    -frame.inverse() - binding.inverse() * Felt::from_bool(root),
+                );
+            }
+        }
+    }
+
+    #[test]
     fn root_completion_uses_restored_next_principal_and_actual_completed_digest() {
         let mut end = row(opcodes::END);
         end.system.fn_hash = word(301);
         end.decoder.hasher_state[..4].copy_from_slice(&word(401));
         end.decoder.hasher_state[6] = Felt::ONE; // The root itself can be a CALL.
         end.decoder.hasher_state[7] = Felt::ONE;
-        end.decoder.resolved_digest = word(501); // Never root-completion authority.
         let mut halt = row(opcodes::HALT);
         halt.system.fn_hash = word(601);
         let rows = [end, halt];
         let actual = fractions(&rows);
         let expected = resolve(Felt::ZERO, word(601), word(401));
-        assert_eq!(at(&actual, 0, 4), &[(-Felt::ONE, expected)]);
+        assert_eq!(resolution_at(&actual, 0), &[(-Felt::ONE, expected)]);
         assert!(at(&actual, 0, 1).is_empty(), "root has no BlockHash removal or seed");
-        assert_eq!(at(&actual, 0, 0).len(), 1, "root still pops its caller frame");
+        assert_eq!(at(&actual, 0, 0).len(), 2, "root pops its frame and resolves completion");
         assert_eq!(at(&actual, 0, 2).len(), 1, "root still authenticates its hasher return");
         assert_ne!(expected, resolve(Felt::ZERO, word(301), word(401)));
         assert_ne!(expected, resolve(Felt::ZERO, word(601), word(501)));
@@ -228,10 +294,16 @@ mod tests {
         for lane in 0..4 {
             let mut wrong = rows.clone();
             wrong[1].system.fn_hash[lane] += Felt::ONE;
-            assert_ne!(expected.inverse() + sum(at(&fractions(&wrong), 0, 4)), QuadFelt::ZERO);
+            assert_ne!(
+                expected.inverse() + sum(resolution_at(&fractions(&wrong), 0)),
+                QuadFelt::ZERO
+            );
             let mut wrong = rows.clone();
             wrong[0].decoder.hasher_state[lane] += Felt::ONE;
-            assert_ne!(expected.inverse() + sum(at(&fractions(&wrong), 0, 4)), QuadFelt::ZERO);
+            assert_ne!(
+                expected.inverse() + sum(resolution_at(&fractions(&wrong), 0)),
+                QuadFelt::ZERO
+            );
         }
     }
 
@@ -248,18 +320,18 @@ mod tests {
         // Its frequency is one; neither the demand count nor its payload derives this supply.
         let supply = [(Felt::ONE, resolve(Felt::ZERO, word(601), word(401)))];
         let correct = fractions(&[end.clone(), halt.clone()]);
-        assert_eq!(sum(&supply) + sum(at(&correct, 0, 4)), QuadFelt::ZERO);
+        assert_eq!(sum(&supply) + sum(resolution_at(&correct, 0)), QuadFelt::ZERO);
 
         let mut omitted_end = end.clone();
         omitted_end.decoder.hasher_state[7] = Felt::ZERO;
         let omitted = fractions(&[omitted_end, halt.clone()]);
-        assert!(at(&omitted, 0, 4).is_empty());
-        assert_ne!(sum(&supply) + sum(at(&omitted, 0, 4)), QuadFelt::ZERO);
+        assert!(resolution_at(&omitted, 0).is_empty());
+        assert_ne!(sum(&supply) + sum(resolution_at(&omitted, 0)), QuadFelt::ZERO);
 
         // Exercise two actual root-branch emissions, each with the same fixed K and D.
         // Decoder root-bit/next-HALT constraints independently reject the extra root marker.
         let doubled = fractions(&[end.clone(), end, halt]);
-        let demands = [at(&doubled, 0, 4), at(&doubled, 1, 4)].concat();
+        let demands = [resolution_at(&doubled, 0), resolution_at(&doubled, 1)].concat();
         assert_eq!(demands.len(), 2);
         assert_ne!(sum(&supply) + sum(&demands), QuadFelt::ZERO);
     }
@@ -307,7 +379,10 @@ mod tests {
         let block_hash_events = [at(&actual, 0, 1), at(&actual, 2, 1), at(&actual, 3, 1)].concat();
         assert_eq!(block_hash_events.len(), 2, "the root wrapper has no BlockHash removal");
         assert_eq!(sum(&block_hash_events), QuadFelt::ZERO);
-        assert_eq!(at(&actual, 3, 4), &[(-Felt::ONE, resolve(Felt::ZERO, word(401), word(301)))]);
+        assert_eq!(
+            resolution_at(&actual, 3),
+            &[(-Felt::ONE, resolve(Felt::ZERO, word(401), word(301)))]
+        );
 
         let mut wrong_child = rows;
         wrong_child[2].decoder.hasher_state[..4].copy_from_slice(&word(101));
@@ -320,7 +395,7 @@ mod tests {
     fn immediate_hashes_commit_key_and_zero_second_word() {
         for opcode in [opcodes::EXEC, opcodes::CALL, opcodes::SYSCALL] {
             let mut local = invocation(opcode);
-            // Even malformed helper cells cannot turn the preimage into a D commitment.
+            // The overlaid implementation word must not enter the invocation-node hash preimage.
             local.decoder.hasher_state[4..].copy_from_slice(&word(701));
             let mut next = row(opcodes::SPAN);
             next.decoder.addr = Felt::from_u8(17);
@@ -369,7 +444,7 @@ mod tests {
             parent_id: Felt::from_u8(11),
             is_loop: Felt::ZERO,
         });
-        assert_eq!(at(&actual, 0, 0), &[(Felt::ONE, continuation)]);
+        assert_eq!(&at(&actual, 0, 0)[..1], &[(Felt::ONE, continuation)]);
 
         let mut end = row(opcodes::END);
         end.decoder.addr = Felt::from_u8(17);

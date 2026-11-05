@@ -1,10 +1,9 @@
 //! Regression test: a DYNCALL's caller-frame END must not be relabelled as a continuation END.
 //!
-//! DYNCALL records its saved caller frame into decoder cells rather than the real columns:
-//! `block_stack_and_range_logcap.rs` builds a caller-frame addition with
-//! `caller_stack_depth = h4` and `caller_overflow_addr = h5` (CALL/SYSCALL use the real `b0`/`b1`).
+//! DYNCALL derives its saved caller depth from `b0 - overflow()` and records its post-pop overflow
+//! pointer in the decoder's group-count overlay (CALL/SYSCALL use the real `b0`/`b1`).
 //! At the root, `caller_ctx = 0` and `caller_overflow_addr = 0`, while `caller_fn_hash` is the
-//! independently selected K_entry. Clearing saved depth no longer creates the historical
+//! independently selected K_entry. Forging a restored depth no longer creates the historical
 //! zero-principal payload collision. These compound rejection controls preserve the current
 //! nonzero-principal baseline; they do not attribute rejection to a single protection. Carrying
 //! a callee principal through the final row also violates the independent K_entry boundary.
@@ -19,7 +18,7 @@
 use alloc::{format, vec, vec::Vec};
 
 use miden_air_definitions::vm::trace::RowIndex;
-use miden_core::{Felt, operations::opcodes, utils::RowMajorMatrix};
+use miden_core::{Felt, field::Field, operations::opcodes, utils::RowMajorMatrix};
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 
 use crate::repro_harness::{ReproTrace, core_row_mut};
@@ -30,6 +29,7 @@ struct Fixture {
     trace: ReproTrace,
     height: usize,
     dyncall_row: usize,
+    invocation_state: [Felt; 8],
     dyncall_end: usize,
     /// The callee's context and digest, honestly restored to root at `dyncall_end + 1`.
     callee_ctx: Felt,
@@ -97,9 +97,9 @@ fn build_fixture() -> Fixture {
     assert_ne!(entry, [Felt::ZERO; 4]);
     assert_eq!(main.fn_hash(RowIndex::from(dyncall_row)), entry);
     assert_eq!(
-        main.decoder_hasher_state_element(4, RowIndex::from(dyncall_row)),
+        main.dyncall_caller_stack_depth(RowIndex::from(dyncall_row)),
         Felt::new_unchecked(16),
-        "h4 must honestly hold the caller depth 16"
+        "the derived post-pop caller depth must be 16"
     );
 
     // Callee context and digest, honestly restored to root right after the caller-frame END.
@@ -114,10 +114,21 @@ fn build_fixture() -> Fixture {
         trace: ReproTrace::new(&trace),
         height,
         dyncall_row,
+        invocation_state: main.decoder_hasher_state(RowIndex::from(dyncall_row)),
         dyncall_end,
         callee_ctx,
         callee_fn_hash,
     }
+}
+
+fn assert_invocation_unchanged(f: &Fixture, core: &mut RowMajorMatrix<Felt>) {
+    assert_eq!(core_row_mut(core, f.dyncall_row).decoder.hasher_state, f.invocation_state);
+}
+
+fn forge_first_restored_depth(f: &Fixture, core: &mut RowMajorMatrix<Felt>) {
+    let restored = core_row_mut(core, f.dyncall_end + 1);
+    restored.stack.b0 = Felt::new_unchecked(99);
+    restored.stack.h0 = (restored.stack.b0 - Felt::new_unchecked(16)).inverse();
 }
 
 /// Carries the callee's `ctx`/`fn_hash` forward from `dyncall_end` through the tail of the
@@ -141,29 +152,28 @@ fn honest_trace_verifies() {
     f.trace.assert_native_and_recursive_accept(proof);
 }
 
-/// Zero the DYNCALL's saved depth, relabel its caller-frame END as a continuation END, and carry
-/// the callee context forward. This compound mutation checks the complete repaired path; it does
-/// not attribute rejection to either protection in isolation.
+/// Forge the restored caller depth, relabel its END as a continuation END, and carry the callee
+/// context forward. The authenticated invocation stays fixed. This compound mutation does not
+/// attribute rejection to either the saved-frame relation or the entry boundary in isolation.
 #[test]
 fn relabelled_dyncall_end_is_rejected() {
     let f = build_fixture();
     let mut core = f.trace.core.clone();
 
-    core_row_mut(&mut core, f.dyncall_row).decoder.hasher_state[4] = Felt::ZERO;
+    forge_first_restored_depth(&f, &mut core);
     core_row_mut(&mut core, f.dyncall_end).decoder.hasher_state[6] = Felt::ZERO;
     carry_callee_context_forward(&f, &mut core);
 
+    assert_invocation_unchanged(&f, &mut core);
     let result = f.trace.prove_and_verify_allowing_lookup_rejection(core);
     assert!(
         result.is_err(),
         "the proof pipeline must reject a relabelled DYNCALL END: {result:?}"
     );
-    // The mutation violates the direct `h4 = b0 - overflow()` binding and saved-frame rules.
-    // This combined rejection does not isolate either rule or the independent entry boundary.
 }
 
-/// Control: relabel the END and carry the context forward, but leave `h4 = 16`. The DYNCALL
-/// addition remains a caller-frame entry, so the continuation removal matches no addition.
+/// Control: relabel the END and carry the context forward, but leave all stack state honest. The
+/// DYNCALL addition remains a caller-frame entry, so the continuation removal matches no addition.
 /// Carrying the callee context forward satisfies continuation preservation but also changes the
 /// final principal. Block-stack rejection and the K_entry boundary are independent here.
 #[test]
@@ -171,36 +181,33 @@ fn relabel_without_degenerating_the_addition_is_rejected() {
     let f = build_fixture();
     let mut core = f.trace.core.clone();
 
-    // h4 left at its honest 16.
     core_row_mut(&mut core, f.dyncall_end).decoder.hasher_state[6] = Felt::ZERO;
     carry_callee_context_forward(&f, &mut core);
 
+    assert_invocation_unchanged(&f, &mut core);
     let result = f.trace.prove_and_verify_allowing_lookup_rejection(core);
     assert!(
         result.is_err(),
-        "with h4 = 16, relabelling the caller-frame END and carrying the callee context forward \
+        "with the saved frame honest, relabelling its END and carrying the callee context forward \
          must be rejected by the block-stack relation: {result:?}"
     );
 }
 
-/// Control: degenerate the addition and carry the context forward, but leave the caller-frame flag
-/// set on the END. This is rejected independently by the direct `h4` binding and by the
-/// caller-frame relation, whose removal no longer matches the state DYNCALL recorded. It is a
-/// combined regression control, not an attribution test for either mechanism alone.
+/// Control: forge the restored depth with the caller-frame END and invocation left honest.
+/// The frame removal must disagree with the independently derived saved depth.
 #[test]
-fn degenerate_addition_without_relabelling_is_rejected() {
+fn forged_restored_depth_without_relabelling_is_rejected() {
     let f = build_fixture();
     let mut core = f.trace.core.clone();
 
-    core_row_mut(&mut core, f.dyncall_row).decoder.hasher_state[4] = Felt::ZERO;
+    forge_first_restored_depth(&f, &mut core);
     // The CALL/DYNCALL caller-frame flag is left at one on the END.
-    carry_callee_context_forward(&f, &mut core);
 
+    assert_invocation_unchanged(&f, &mut core);
     let result = f.trace.prove_and_verify_allowing_lookup_rejection(core);
     assert!(
         result.is_err(),
-        "degenerating h4 while leaving the caller-frame END honest must be rejected by the direct \
-         h4 binding and the mismatched caller-frame payload: {result:?}"
+        "a forged restored depth must disagree with the saved caller-frame payload: {result:?}"
     );
 }
 
@@ -308,14 +315,14 @@ fn build_continuation_fixture() -> ContinuationFixture {
         // with no overflow. The mutation below leaves every decoder and stack cell untouched.
         assert_eq!(main.stack_depth(RowIndex::from(dyncall)), Felt::new_unchecked(17));
         assert_eq!(
-            main.decoder_hasher_state_element(4, RowIndex::from(dyncall)),
+            main.dyncall_caller_stack_depth(RowIndex::from(dyncall)),
             Felt::new_unchecked(16),
-            "h4 must keep the honest post-pop depth"
+            "the derived post-pop depth must stay honest"
         );
         assert_eq!(
-            main.decoder_hasher_state_element(5, RowIndex::from(dyncall)),
+            main.dyncall_caller_overflow_addr(RowIndex::from(dyncall)),
             Felt::ZERO,
-            "h5 must keep the honest post-pop overflow pointer"
+            "the group-count overlay must keep the honest post-pop overflow pointer"
         );
         assert_eq!(
             main.decoder_hasher_state_element(6, RowIndex::from(caller_frame_end)),

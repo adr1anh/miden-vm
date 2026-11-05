@@ -12,12 +12,14 @@ use rstest::rstest;
 use super::super::{build_trace_from_fixture, trace_binding, trace_named_program};
 use crate::{RowIndex, test_utils::fixture_code};
 
-/// Complete Lists increase the real Library prefix without adding Controller work. Every case
-/// retains the same one-row SPAN operation, its seven Controller padding rows and global PAD.
+/// Balanced Merkle collection paths increase the real Library prefix without adding Controller
+/// work. Every case retains the same one-row SPAN operation, its seven Controller padding rows
+/// and global PAD. The 64-binding collection has six Merkle openings plus Env and Mast pairs,
+/// so its 16 active rows and mandatory PAD pair require a 24-row aligned Library prefix.
 #[rstest]
 #[case(0, 8, 17)]
 #[case(4, 16, 25)]
-#[case(12, 24, 33)]
+#[case(63, 24, 33)]
 fn controller_counter_is_independent_of_authenticated_library_prefix(
     #[case] additional_bindings: usize,
     #[case] expected_prefix: usize,

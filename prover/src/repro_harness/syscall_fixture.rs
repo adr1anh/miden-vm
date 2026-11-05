@@ -143,7 +143,7 @@ pub(super) fn build_nonroot_syscall_fixture() -> (ReproTrace, ReproTrace) {
         root_key.into_word().into_elements()
     );
     assert_eq!(
-        core_row(&honest.core, syscall).decoder.resolved_digest,
+        core_row(&honest.core, syscall).decoder.resolved_digest(),
         implementation.into_word().into_elements()
     );
     assert_eq!(core_row(&honest.core, split).decoder.hasher_state[..4], child_sys_digest);

@@ -94,7 +94,7 @@ fn assert_single_mast_prefix(
     for index in 0..main.core_height() {
         let row = RowIndex::from(index);
         let core = main.core_row(row);
-        assert_eq!(core.decoder.resolved_digest, [ZERO; 4]);
+        assert_eq!(main.decoder_resolved_digest(row).into_elements(), [ZERO; 4]);
         assert_eq!(core.system.clk, Felt::new_unchecked(index as u64));
         assert_eq!(core.system.fn_hash, entry);
         if main.is_root_end(row) == ONE {

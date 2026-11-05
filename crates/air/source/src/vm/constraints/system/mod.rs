@@ -423,7 +423,7 @@ mod tests {
             local.system.ctx = Felt::from_u8(7);
             local.system.fn_hash = principal;
             local.decoder.hasher_state[..4].copy_from_slice(&key);
-            local.decoder.resolved_digest = implementation;
+            local.decoder.hasher_state[4..8].copy_from_slice(&implementation);
             let mut next = generate_test_row(opcodes::JOIN.into());
             next.system.clk = Felt::ONE;
             let establishes_principal = matches!(opcode, opcodes::CALL | opcodes::DYNCALL);
