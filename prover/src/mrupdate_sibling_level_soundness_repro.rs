@@ -13,9 +13,14 @@
 //! each update now returns the other tree's root, so a self-update changes the public outputs.
 
 use alloc::vec::Vec;
+use core::{
+    borrow::{Borrow, BorrowMut},
+    mem::{size_of, swap},
+};
 
-use miden_air_definitions::vm::trace::chiplets::hasher::{
-    DIGEST_LEN, MR_UPDATE_NEW, NUM_SELECTORS, STATE_WIDTH,
+use miden_air_definitions::vm::{
+    ControllerCols,
+    trace::chiplets::{NUM_CONTROLLER_SELECTORS, hasher::MR_UPDATE_NEW},
 };
 use miden_core::{
     Felt, Word,
@@ -30,12 +35,9 @@ use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 
 use crate::repro_harness::{ReproTrace, core_row_mut};
 
-/// The controller overlay starts after `s_ctrl`, the first chiplets column.
-const CONTROLLER_OFFSET: usize = 1;
-
-/// The controller payload `state[12] || row_data[4]` follows the three row-kind selectors.
-const PAYLOAD_OFFSET: usize = CONTROLLER_OFFSET + NUM_SELECTORS;
-const PAYLOAD_WIDTH: usize = STATE_WIDTH + DIGEST_LEN;
+/// The controller overlay follows the packed `[S_lib, C]` role selectors.
+const CONTROLLER_OFFSET: usize = NUM_CONTROLLER_SELECTORS;
+const CONTROLLER_END: usize = CONTROLLER_OFFSET + size_of::<ControllerCols<u8>>();
 
 /// Ops that may carry a live forged result through the tail of the program.
 const OPS_WITHOUT_STACK_EFFECT: [u8; 4] =
@@ -183,16 +185,25 @@ fn forge_chiplets(fixture: &Fixture) -> RowMajorMatrix<Felt> {
     let new_path_rows: Vec<usize> = (0..chiplets.height())
         .filter(|&row| {
             let cells = &chiplets.values[row * width..(row + 1) * width];
-            cells[0] == Felt::ONE
-                && cells[CONTROLLER_OFFSET..CONTROLLER_OFFSET + NUM_SELECTORS] == MR_UPDATE_NEW
+            if cells[..CONTROLLER_OFFSET] != [Felt::ZERO, Felt::ONE] {
+                return false;
+            }
+            let controller: &ControllerCols<Felt> =
+                cells[CONTROLLER_OFFSET..CONTROLLER_END].borrow();
+            [controller.s0, controller.s1, controller.s2] == MR_UPDATE_NEW
         })
         .collect();
     assert_eq!(new_path_rows.len(), 4, "two updates at depth 2 have four new-path rows");
     for level in 0..2 {
         let (first, second) = (new_path_rows[level], new_path_rows[2 + level]);
-        for column in PAYLOAD_OFFSET..PAYLOAD_OFFSET + PAYLOAD_WIDTH {
-            chiplets.values.swap(first * width + column, second * width + column);
-        }
+        let (before_second, from_second) = chiplets.values.split_at_mut(second * width);
+        let first: &mut ControllerCols<Felt> = before_second
+            [first * width + CONTROLLER_OFFSET..first * width + CONTROLLER_END]
+            .borrow_mut();
+        let second: &mut ControllerCols<Felt> =
+            from_second[CONTROLLER_OFFSET..CONTROLLER_END].borrow_mut();
+        swap(&mut first.state, &mut second.state);
+        swap(&mut first.row_data, &mut second.row_data);
     }
     chiplets
 }

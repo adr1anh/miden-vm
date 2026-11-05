@@ -23,9 +23,15 @@
 //! The fix gates both on the same precise caller-frame restoration selector already used for
 //! stack depth `b0` and the overflow pointer `b1` in stack/overflow.rs.
 //!
-//! Each forgery below is paired with a control applying the same mutation across an ordinary
-//! transition. The controls failed before the fix as well, so they are what pins each
-//! rejection to the END transition specifically rather than to the harness.
+//! The ordinary-transition controls and honest baselines check the regression harness. These
+//! rejection tests alone do not establish necessity of an individual END rule: in particular,
+//! changes carried through the final principal also violate the independent K_entry boundary.
+//! The alias-principal and nested-call context cases preserve that boundary. Their separate
+//! private evaluator comparisons change only the targeted preservation rule. Each historical
+//! coarse-END selector accepts its continuation witness while current native and MASM verifiers
+//! reject that same artifact; ordinary-transition controls still reject under each comparison.
+//! The context comparison keeps principal preservation, and the principal comparison keeps context
+//! preservation. Neither attributes the separate compound DYNCALL controls.
 
 use alloc::{vec, vec::Vec};
 
@@ -35,10 +41,12 @@ use miden_core::{
     mast::{BasicBlockNodeBuilder, MastForest},
     operations::{Operation, opcodes},
     program::Program,
+    proof::{ExecutionProof, PrecompileStatus},
 };
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
+use miden_verifier::Verifier;
 
-use crate::repro_harness::{ReproTrace, core_row_mut};
+use crate::repro_harness::{CoreMode, ReproTrace, core_row_mut};
 
 // HARNESS
 // ================================================================================================
@@ -56,13 +64,6 @@ fn set_fn_hash(trace: &mut ReproTrace, rows: impl Iterator<Item = usize>, fn_has
 }
 
 const FORGED_CTX: Felt = Felt::new_unchecked(7);
-const FORGED_FN_HASH: [Felt; 4] = [
-    Felt::new_unchecked(11),
-    Felt::new_unchecked(22),
-    Felt::new_unchecked(33),
-    Felt::new_unchecked(44),
-];
-
 // SINGLE BASIC BLOCK: THE MINIMAL GAP
 // ================================================================================================
 
@@ -123,9 +124,11 @@ fn build_basic_harness() -> (ReproTrace, BasicRows) {
         .expect("the program must contain a NOOP");
     assert!(noop < continuation_end);
 
-    // The honest trace runs entirely in the root context with a zero function hash.
+    // Root context and principal are separate: the principal is the independently selected key.
     assert_eq!(main.ctx(RowIndex::from(continuation_end)), Felt::ZERO);
-    assert_eq!(main.fn_hash(RowIndex::from(continuation_end)), [Felt::ZERO; 4]);
+    let entry = trace.execution_descriptor().entry_key().into_word().into_elements();
+    assert_ne!(entry, [Felt::ZERO; 4]);
+    assert_eq!(main.fn_hash(RowIndex::from(continuation_end)), entry);
 
     let repro = ReproTrace::new(&trace);
     (repro, BasicRows { continuation_end, noop, height })
@@ -136,7 +139,10 @@ fn build_basic_harness() -> (ReproTrace, BasicRows) {
 #[test]
 fn honest_basic_block_trace_verifies() {
     let (repro, _) = build_basic_harness();
-    assert!(repro.prove_and_verify_current().is_ok(), "the honest trace must verify");
+    let claim = repro.claim();
+    let proof = repro.prove_current().expect("honest proof construction must complete");
+    let proof = ExecutionProof::new(proof, PrecompileStatus::Empty);
+    assert!(Verifier::new().verify(&claim, &proof).is_ok(), "the honest trace must verify");
 }
 
 /// `ctx` jumps from 0 to 7 across the continuation END and is preserved (as the default-flag
@@ -169,31 +175,18 @@ fn forged_context_at_ordinary_row_is_rejected() {
     );
 }
 
-/// `fn_hash` feeds the CALLER operation (`stack/ops.rs`), which copies it onto the top four
-/// stack slots -- so a forged digest becomes a forged public output.
+/// Exchange equal-D callee aliases after nested continuation ENDs. The unchanged entry boundary
+/// and balanced resolution demand counts cannot substitute for preserving the callee principal.
+/// The same witness is accepted only by the isolated historical coarse-END principal evaluator.
 #[test]
 fn forged_fn_hash_at_continuation_end_is_rejected() {
-    let (mut repro, rows) = build_basic_harness();
-    set_fn_hash(&mut repro, (rows.continuation_end + 1)..rows.height, FORGED_FN_HASH);
-
-    let result = repro.prove_and_verify_current();
-    assert!(
-        result.is_err(),
-        "the verifier must reject a function-digest change across a continuation END: {result:?}"
-    );
+    check_alias_principal_exchange(true);
 }
 
-/// Control for the above.
+/// Control: exchange the same aliases across ordinary callee transitions.
 #[test]
 fn forged_fn_hash_at_ordinary_row_is_rejected() {
-    let (mut repro, rows) = build_basic_harness();
-    set_fn_hash(&mut repro, (rows.noop + 1)..rows.height, FORGED_FN_HASH);
-
-    let result = repro.prove_and_verify_current();
-    assert!(
-        result.is_err(),
-        "the verifier must reject a function-digest change on an ordinary transition: {result:?}"
-    );
+    check_alias_principal_exchange(false);
 }
 
 // INSIDE A CALL: THE ISOLATION-RELEVANT CASE
@@ -207,6 +200,105 @@ struct CallRows {
     nested_continuation_end: usize,
     /// The END of the CALL block itself: it restores a CALL/DYNCALL caller frame.
     call_end: usize,
+}
+
+fn check_alias_principal_exchange(after_continuation: bool) {
+    let body = "push.1 if.true push.7 drop else push.8 drop end push.9 drop";
+    let source =
+        alloc::format!("proc left {body} end proc right {body} end begin call.left call.right end");
+    let fixture = crate::named_fixture::named_source(&source);
+    let keys = [fixture.key("left"), fixture.key("right")];
+    assert_ne!(keys[0], keys[1]);
+    let implementations = keys.map(|key| {
+        fixture.naming.callables().selected_implementation(key).expect("selected alias")
+    });
+    assert_eq!(implementations[0], implementations[1], "the aliases must select equal D");
+    let mut host = DefaultHost::default().with_environment_source(fixture.environment.source());
+    let (trace, precompile) = FastProcessor::new(StackInputs::default())
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
+        .execute_and_build_trace_sync(
+            &fixture.program,
+            fixture.environment.execution(),
+            &mut host,
+            &miden_vm_stark::memory::default_budget(),
+        )
+        .unwrap();
+    assert!(precompile.is_none());
+    let main = trace.main_trace();
+    let height = main.core_height();
+    let opcode = |row| main.get_op_code(RowIndex::from(row));
+    let calls = (0..height)
+        .filter(|&row| opcode(row) == Felt::from_u8(opcodes::CALL))
+        .collect::<Vec<_>>();
+    assert_eq!(calls.len(), 2);
+    let principals = keys.map(|key| key.into_word().into_elements());
+    let entry = trace.execution_descriptor().entry_key().into_word().into_elements();
+    let rows: [CallRows; 2] = core::array::from_fn(|index| {
+        let call = calls[index];
+        let call_end = ((call + 1)..height)
+            .find(|&row| {
+                opcode(row) == Felt::from_u8(opcodes::END)
+                    && main.restores_caller_frame_flag(RowIndex::from(row)) == Felt::ONE
+            })
+            .expect("caller-frame END");
+        let nested_continuation_end = ((call + 1)..call_end)
+            .find(|&row| {
+                opcode(row) == Felt::from_u8(opcodes::END)
+                    && main.restores_caller_frame_flag(RowIndex::from(row)) == Felt::ZERO
+            })
+            .expect("nested continuation END");
+        let ordinary_in_callee = ((call + 1)..nested_continuation_end)
+            .find(|&row| opcode(row) != Felt::from_u8(opcodes::END))
+            .expect("ordinary callee transition");
+        assert_eq!(main.fn_hash(RowIndex::from(call + 1)), principals[index]);
+        assert_eq!(main.fn_hash(RowIndex::from(call_end)), principals[index]);
+        assert_eq!(main.fn_hash(RowIndex::from(call_end + 1)), entry);
+        assert!(nested_continuation_end + 1 < call_end);
+        CallRows {
+            ordinary_in_callee,
+            nested_continuation_end,
+            call_end,
+        }
+    });
+    let mut repro = ReproTrace::new(&trace);
+    let honest = repro
+        .prove_comparison(CoreMode::Standard)
+        .expect("the unchanged wrapper must construct the honest alias proof");
+    assert!(
+        honest.verification.is_ok(),
+        "the unchanged evaluator must accept: {:?}",
+        honest.verification
+    );
+    repro.assert_native_and_recursive_accept(honest.proof);
+
+    // Both aliases already have authenticated openings. Invocation and root-completion demands
+    // remain unchanged; only the callee principal tails change in the Core matrix.
+    for index in 0..2 {
+        let start = if after_continuation {
+            rows[index].nested_continuation_end
+        } else {
+            rows[index].ordinary_in_callee
+        };
+        set_fn_hash(&mut repro, (start + 1)..=rows[index].call_end, principals[1 - index]);
+    }
+    assert_eq!(core_row_mut(&mut repro.core, 0).system.fn_hash, entry);
+    assert_eq!(core_row_mut(&mut repro.core, height - 1).system.fn_hash, entry);
+    let comparison = repro
+        .prove_comparison(CoreMode::Alternate)
+        .expect("balanced alias demands must reach actual comparison proof construction");
+    assert_eq!(
+        comparison.verification.is_ok(),
+        after_continuation,
+        "the historical selector must accept only the continuation witness: {:?}",
+        comparison.verification
+    );
+    // Verify this very artifact with the current native and MASM evaluators. The captured
+    // descriptor, claim, configuration/pins and every witness matrix are identical.
+    repro.assert_native_and_recursive_air_rejection(comparison.proof);
 }
 
 /// Builds a trace for `begin call.inner end`, where `inner` contains a nested block -- so the
@@ -308,20 +400,13 @@ fn honest_call_program_trace_verifies() {
 ///
 /// `call` resets `ctx` to `clk + 1` on entry, and the block-stack bus pins `ctx` back to the
 /// caller's value only on the END *of the call*. Between those two points the only thing
-/// holding `ctx` at the callee value is the default-flag preservation constraint, which goes
-/// vacuous at every nested continuation END. Memory requests read `ctx` straight from this column
+/// holding `ctx` at the callee value is the default-flag preservation constraint. The historical
+/// coarse-END selector made it vacuous at nested continuation ENDs. This fixture isolates that
+/// context column; memory requests read `ctx` straight from it
 /// (`chiplet_requests.rs`), so a callee tail running at `ctx = 0` addresses caller memory.
 #[test]
 fn callee_reentering_caller_context_at_nested_continuation_end_is_rejected() {
-    let (mut repro, rows) = build_call_harness();
-    set_ctx(&mut repro, (rows.nested_continuation_end + 1)..=rows.call_end, Felt::ZERO);
-
-    let result = repro.prove_and_verify_current();
-    assert!(
-        result.is_err(),
-        "the verifier must reject a callee re-entering the caller's context at a nested \
-         continuation END (memory-isolation break): {result:?}"
-    );
+    check_call_context_comparison(true);
 }
 
 /// Control for the above: dropping into the caller's context one transition earlier -- across
@@ -329,12 +414,39 @@ fn callee_reentering_caller_context_at_nested_continuation_end_is_rejected() {
 /// the acceptance to the END transition specifically, not to `ctx` being loose inside calls.
 #[test]
 fn callee_reentering_caller_context_at_ordinary_row_is_rejected() {
-    let (mut repro, rows) = build_call_harness();
-    set_ctx(&mut repro, (rows.ordinary_in_callee + 1)..=rows.call_end, Felt::ZERO);
+    check_call_context_comparison(false);
+}
 
-    let result = repro.prove_and_verify_current();
+fn check_call_context_comparison(after_continuation: bool) {
+    let (mut repro, rows) = build_call_harness();
+    let expected_claim = repro.claim();
+    let honest = repro
+        .prove_comparison(CoreMode::Standard)
+        .expect("honest call context proof construction must complete");
     assert!(
-        result.is_err(),
-        "the verifier must reject a context change on an ordinary callee transition: {result:?}"
+        honest.verification.is_ok(),
+        "the unchanged evaluator must accept: {:?}",
+        honest.verification
     );
+    repro.assert_native_and_recursive_accept(honest.proof);
+
+    let start = if after_continuation {
+        rows.nested_continuation_end
+    } else {
+        rows.ordinary_in_callee
+    };
+    // Only Core ctx changes: the caller-frame END restores the original root context. All
+    // principal columns, other AIR matrices and the independently expected claim remain fixed.
+    set_ctx(&mut repro, (start + 1)..=rows.call_end, Felt::ZERO);
+    assert_eq!(repro.claim(), expected_claim);
+    let comparison = repro
+        .prove_comparison(CoreMode::CoarseContext)
+        .expect("the changed context witness must finish comparison proof construction");
+    assert_eq!(
+        comparison.verification.is_ok(),
+        after_continuation,
+        "only the continuation context witness may pass the historical selector: {:?}",
+        comparison.verification
+    );
+    repro.assert_native_and_recursive_air_rejection(comparison.proof);
 }

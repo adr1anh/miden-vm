@@ -12,6 +12,8 @@ use miden_assembly::{
     debuginfo::DefaultSourceManager,
     diagnostics::{IntoDiagnostic, reporting::PrintDiagnostic},
 };
+use miden_core::{Felt, Word, advice::AdviceMap, chiplets::hasher};
+use miden_mast_package::Package;
 
 mod naming_sidecar;
 // CONSTANTS
@@ -64,6 +66,44 @@ fn markdown_file_name(ns: &miden_assembly_syntax::Path) -> String {
     }
     buf.push_str(".md");
     buf
+}
+
+/// Commits the package's actual static advice plus this relation's canonical ACE stream.
+/// The stream remains request-delivered; it is never injected into ordinary core-package loads.
+fn verifier_metadata(
+    package: &Package,
+    name: &str,
+    relation: Word,
+    circuit_digest: Word,
+    instructions: Vec<Felt>,
+) -> Result<naming_sidecar::VerifierMetadata, Report> {
+    for (index, expected) in relation.iter().enumerate() {
+        let path = format!("::miden::core::sys::{name}::parameters::RELATION_DIGEST_{index}");
+        let value = package
+            .manifest
+            .get_export(path.as_str())
+            .and_then(|export| export.as_constant())
+            .ok_or_else(|| {
+                Report::msg(format!("missing owned verifier relation constant {path}"))
+            })?;
+        let ast::ConstantValue::Int(value) = &value.value else {
+            return Err(Report::msg(format!(
+                "verifier relation constant {path} is not an integer"
+            )));
+        };
+        if value.inner().as_int() != expected.as_canonical_u64() {
+            return Err(Report::msg(format!("owned verifier relation constant {path} is stale")));
+        }
+    }
+    if hasher::hash_elements(&instructions) != circuit_digest {
+        return Err(Report::msg(format!("the {name} canonical ACE stream does not match its pin")));
+    }
+    let mut resources = package.mast_forest().advice_map().clone();
+    let circuit = AdviceMap::from_iter([(circuit_digest, instructions)]);
+    resources.merge(&circuit).map_err(|_| {
+        Report::msg(format!("the {name} ACE resource conflicts with package advice"))
+    })?;
+    Ok(naming_sidecar::VerifierMetadata::new(relation, &resources))
 }
 
 // LIBCORE DOCUMENTATION
@@ -245,9 +285,31 @@ fn main() -> Result<(), Report> {
         .assemble_with_naming(miden_assembly::ProjectTargetSelector::Library, "release")?;
 
     core.package.check_naming(&core.naming).into_diagnostic()?;
+    let vm_metadata = verifier_metadata(
+        &core.package,
+        "vm",
+        Word::new(miden_air::vm::config::RELATION_DIGEST),
+        Word::new(miden_air::vm::config::ACE_CIRCUIT_DIGEST),
+        miden_air::vm::ace::ACE_INSTRUCTIONS
+            .iter()
+            .copied()
+            .map(Felt::new_unchecked)
+            .collect(),
+    )?;
+    let pvm_circuit = miden_air::precompiles::protocol::recursive_circuit();
+    let pvm_metadata = verifier_metadata(
+        &core.package,
+        "pvm",
+        Word::new(miden_air::precompiles::PVM_RELATION_DIGEST.map(Felt::new_unchecked)),
+        pvm_circuit.commitment,
+        pvm_circuit.instructions,
+    )?;
     core.package.write_masp_file(build_dir.join(PKG_OUT_DIR)).into_diagnostic()?;
-    fs::write(build_dir.join("core_naming.rs"), naming_sidecar::render(&core.naming)?)
-        .into_diagnostic()?;
+    fs::write(
+        build_dir.join("core_naming.rs"),
+        naming_sidecar::render(&core.naming, &vm_metadata, &pvm_metadata)?,
+    )
+    .into_diagnostic()?;
 
     // Generate documentation
     if env::var("MIDEN_BUILD_LIB_DOCS").is_ok() {

@@ -184,7 +184,7 @@ mod tests {
 
         assert_eq!(descriptor.entry_key(), entry);
         assert_eq!(descriptor.environment_root(), environment);
-        assert_eq!(core::mem::size_of::<ExecutionDescriptor>(), 2 * core::mem::size_of::<Word>());
+        assert_eq!(size_of::<ExecutionDescriptor>(), 2 * size_of::<Word>());
         assert_ne!(Namespace::initial().into_word(), Word::empty());
     }
 

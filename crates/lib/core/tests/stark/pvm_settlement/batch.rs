@@ -21,7 +21,10 @@ use miden_utils_testing::librarytree::fixture_from_product as from_product;
 use miden_verifier::Verifier;
 use miden_vm_stark::recursive::RecursiveVerifierInputs;
 
-use super::{PvmSettlementHost, prove_ecdsa_execution};
+use super::{
+    PvmSettlementHost, mount_settlement_verifier, prove_ecdsa_execution,
+    verifier_identity_constants,
+};
 use crate::{
     naming::NamedProgram,
     support::ecdsa::{generator_public_key_fixture, valid_fixture},
@@ -49,8 +52,12 @@ async fn batch_settles_deferred_obligations_with_one_pvm_proof() {
     // Keep D1 and D2 in order. The host waits for the MASM request before proving
     // D = digest(AND(D1, D2)) from their portable witnesses.
     let expected_root = fold_deferred_root(roots[0], roots[1]);
-    let mut host = PvmSettlementHost::new(&core_lib, vec![first_witness, second_witness]);
-    host.inner = host.inner.with_environment_source(program.environment.source());
+    let mut host = PvmSettlementHost::new(
+        &core_lib,
+        &program,
+        &advice_inputs,
+        vec![first_witness, second_witness],
+    );
 
     // Execution awaits the PVM proof, then MASM verifies it against the combined root.
     let witness = FastProcessor::new_with_options(
@@ -105,12 +112,14 @@ fn assemble_batch(core_lib: &CoreLibrary) -> NamedProgram {
             exec.run_batch_example
         end
     "#;
-    let batch = Parse::parse(
-        include_str!("batch.masm"),
-        assembler.warnings_as_errors(),
-        assembler.source_manager(),
-    )
-    .expect("failed to parse the batch verifier");
+    let batch_source = include_str!("batch.masm").replacen(
+        "namespace batch",
+        &format!("namespace batch\n{}", verifier_identity_constants(core_lib)),
+        1,
+    );
+    let batch =
+        Parse::parse(batch_source, assembler.warnings_as_errors(), assembler.source_manager())
+            .expect("failed to parse the batch verifier");
     let root = Parse::parse(source, assembler.warnings_as_errors(), assembler.source_manager())
         .expect("failed to parse the batcher");
     let mut fixture = FixtureNamespace::assembly_tests();
@@ -123,7 +132,7 @@ fn assemble_batch(core_lib: &CoreLibrary) -> NamedProgram {
     let product = assembler
         .assemble_executable_modules("batch_precompile_settlement".into(), root, [])
         .expect("failed to assemble the batcher");
-    from_product(product, &[core_lib.naming()])
+    mount_settlement_verifier(core_lib, from_product(product, &[core_lib.naming()]))
 }
 
 /// Put the claims and proofs where the MASM batcher can read them.
@@ -143,13 +152,10 @@ fn batch_inputs(
     let stack_inputs = StackInputs::new(&inputs).unwrap();
     let mut advice =
         AdviceInputs::default().with_map([(batch_commitment, claim_elements.to_vec())]);
+    let expected_vm = core_lib.vm_recursive_verifier_profile().unwrap().identity();
     for (proof, claim) in executions {
-        let package = RecursiveVerifierInputs::for_request(
-            core_lib.vm_recursive_verifier_root(),
-            proof,
-            claim,
-        )
-        .expect("failed to prepare an MVM proof for MASM");
+        let package = RecursiveVerifierInputs::for_request(expected_vm, proof, claim)
+            .expect("failed to prepare an MVM proof for MASM");
         advice.extend(package.into_parts().0);
     }
     assert!(advice.stack().is_empty(), "proof data must be fetched through the advice map");

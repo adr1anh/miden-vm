@@ -4,7 +4,11 @@ use alloc::vec::Vec;
 use core::{alloc::Layout, cmp::Ordering};
 
 use super::{EnvironmentRoot, ImplementationRoot, Namespace, ProcedureKey, domain};
-use crate::{Felt, WORD_SIZE, Word, chiplets::hasher};
+use crate::{
+    Felt, WORD_SIZE, Word,
+    chiplets::hasher,
+    serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
+};
 
 /// A required environment fragment under its exact inherited namespace.
 ///
@@ -64,6 +68,15 @@ impl VerifierConfigurationCommitment {
 pub struct VerifierIdentity(Word);
 
 impl VerifierIdentity {
+    /// Wraps an externally supplied identity without deriving or authorizing it.
+    ///
+    /// This permits an owner to supply an expected identity and transports to preserve declared
+    /// metadata. Neither wrapping nor decoding establishes relation/configuration provenance,
+    /// compatibility, or permission to execute; the consumer must apply its own admission checks.
+    pub const fn new(word: Word) -> Self {
+        Self(word)
+    }
+
     /// Derives the identity under the registered v1 Eidos FeltSequence domain.
     ///
     /// The configuration describes the verifier's dependencies and resources without embedding
@@ -100,6 +113,22 @@ impl VerifierIdentity {
     /// Returns the underlying word by value.
     pub const fn into_word(self) -> Word {
         self.0
+    }
+}
+
+impl Serializable for VerifierIdentity {
+    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+        self.0.write_into(target);
+    }
+}
+
+impl Deserializable for VerifierIdentity {
+    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+        Word::read_from(source).map(Self::new)
+    }
+
+    fn min_serialized_size() -> usize {
+        Word::min_serialized_size()
     }
 }
 

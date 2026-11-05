@@ -1,14 +1,18 @@
 use std::fmt::Write;
 
 use miden_assembly::{Report, diagnostics::IntoDiagnostic};
-use miden_core::program::CanonicalLabel;
+use miden_core::{Word, advice::AdviceMap, program::CanonicalLabel};
 use miden_mast_package::{CallableProcedurePath, NamespacePlan, PackageNaming};
 
 /// Emits the compiler's complete owned inventory for the embedded package.
 ///
 /// The generated code reconstructs owned values, then the loader checks them against the exact
 /// Package9 transport. This does not decode or admit arbitrary package naming under a profile.
-pub fn render(naming: &PackageNaming) -> Result<String, Report> {
+pub fn render(
+    naming: &PackageNaming,
+    vm: &VerifierMetadata,
+    pvm: &VerifierMetadata,
+) -> Result<String, Report> {
     let mut output = String::from(
         r#"// Generated from the core compiler's owned naming inventory.
 use miden_core::{Word, program::{CanonicalLabel, ImplementationRoot, ProcedureKey}};
@@ -86,7 +90,42 @@ pub(super) fn reconstruct() -> PackageNaming {
 }
 "#,
     );
+    write_verifier_metadata(&mut output, "vm", vm);
+    write_verifier_metadata(&mut output, "pvm", pvm);
     Ok(output)
+}
+
+/// Trusted producer metadata for a relation's exact required static advice subset.
+pub struct VerifierMetadata {
+    relation: Word,
+    inventory: Word,
+    resources: Vec<(Word, usize)>,
+}
+
+impl VerifierMetadata {
+    pub fn new(relation: Word, resources: &AdviceMap) -> Self {
+        Self {
+            relation,
+            inventory: resources.commitment(),
+            resources: resources.iter().map(|(key, values)| (*key, values.len())).collect(),
+        }
+    }
+}
+
+fn write_verifier_metadata(output: &mut String, name: &str, metadata: &VerifierMetadata) {
+    // Only commitments, keys and lengths enter the native sidecar. The package retains its
+    // original advice, and proof producers continue to deliver the canonical ACE streams.
+    writeln!(
+        output,
+        "\npub(super) fn {name}_verifier_metadata() -> (Word, Word, &'static [([u8; 32], usize)]) {{"
+    )
+    .unwrap();
+    writeln!(output, "    (word(&{:?}),", metadata.relation.as_bytes()).unwrap();
+    writeln!(output, "     word(&{:?}), &[", metadata.inventory.as_bytes()).unwrap();
+    for (key, length) in &metadata.resources {
+        writeln!(output, "        ({:?}, {length}),", key.as_bytes()).unwrap();
+    }
+    output.push_str("    ])\n}\n");
 }
 
 fn write_home(output: &mut String, home: &NamespacePlan) -> Result<(), Report> {

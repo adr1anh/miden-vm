@@ -8,6 +8,9 @@ pub mod constraints_regen;
 pub mod dsa;
 pub mod ecdh;
 pub mod handlers;
+mod verifier;
+
+pub use verifier::{CoreVerifierProfile, CoreVerifierProfileError};
 
 extern crate alloc;
 
@@ -47,15 +50,16 @@ use crate::handlers::{
 };
 
 /// Event emitted by `sys::pvm::request_proof` to request an asynchronously supplied PVM proof
-/// package. The PVM verifier root is at stack positions 1 through 4 and the deferred root is at
-/// positions 5 through 8.
+/// package. The caller's expected PVM verifier identity is at stack positions 1 through 4 and the
+/// deferred root is at positions 5 through 8.
 ///
-/// Emitting the event does not authenticate the root. The calling program must establish it before
-/// making the request and must verify the returned PVM proof against the unchanged value.
+/// Emitting the event does not authorize the identity or authenticate the deferred root. The owner
+/// selects the identity and its exact environment/resources before execution; the calling program
+/// must establish the deferred root and verify the returned PVM proof against that unchanged value.
 ///
 /// The core library does not register a default handler. Hosts that support on-demand settlement
 /// should handle this event and return advice-map and Merkle-store mutations containing a package
-/// keyed by `proof_request_key(pvm_verifier_root, deferred_root)`. The procedure fetches that
+/// keyed by `proof_request_key(expected_verifier, deferred_root)`. The procedure fetches that
 /// package after the handler returns.
 pub const PVM_PROOF_REQUEST_EVENT_NAME: EventName =
     EventName::new("miden::core::sys::pvm::request_proof");
@@ -145,11 +149,31 @@ impl CoreLibrary {
         &self.naming
     }
 
+    /// Constructs the exact embedded VM verifier's dependencies and derived identity.
+    ///
+    /// Derivation does not authorize an outer environment or its supplied resources. The caller
+    /// must independently select its expected identity and authorize the actual execution supply.
+    pub fn vm_recursive_verifier_profile(
+        &self,
+    ) -> Result<CoreVerifierProfile, CoreVerifierProfileError> {
+        CoreVerifierProfile::new(self, false)
+    }
+
+    /// Constructs the exact embedded PVM verifier's dependencies and derived identity.
+    ///
+    /// Like the VM profile, this describes required mounts and resources without granting them
+    /// authority. The canonical ACE stream remains part of the per-request advice supply.
+    pub fn pvm_recursive_verifier_profile(
+        &self,
+    ) -> Result<CoreVerifierProfile, CoreVerifierProfileError> {
+        CoreVerifierProfile::new(self, true)
+    }
+
     /// Returns the selected MAST implementation root of `sys::vm::verify_proof`.
     ///
-    /// The existing recursive advice builder uses this implementation root. The `procref`
-    /// instruction returns the callable key, which is a different value; retaining core naming
-    /// does not establish compatibility between those recursive proof-request paths.
+    /// This implementation-inspection value is distinct from both the `procref` callable key and
+    /// the typed identity returned by [`Self::vm_recursive_verifier_profile`]. Proof requests use
+    /// the caller's expected typed identity, not this implementation root.
     pub fn vm_recursive_verifier_root(&self) -> Word {
         self.package
             .get_procedure_root_by_path("::miden::core::sys::vm::verify_proof")
@@ -158,8 +182,9 @@ impl CoreLibrary {
 
     /// Returns the selected MAST implementation root of `sys::pvm::verify_proof`.
     ///
-    /// The existing PVM advice builder uses this implementation root. The `procref` instruction
-    /// returns the callable key, so the proof-request paths still require their own migration.
+    /// This implementation-inspection value is distinct from both the `procref` callable key and
+    /// the typed identity returned by [`Self::pvm_recursive_verifier_profile`]. Proof requests use
+    /// the caller's expected typed identity, not this implementation root.
     pub fn pvm_recursive_verifier_root(&self) -> Word {
         self.package
             .get_procedure_root_by_path("::miden::core::sys::pvm::verify_proof")
@@ -684,17 +709,17 @@ mod tests {
     }
 
     #[test]
-    fn proof_compatibility_roots_match_the_embedded_core_library() {
+    fn proof_compatibility_identities_match_the_embedded_core_library() {
         let core_lib = CoreLibrary::default();
         let compatibility = Verifier::proof_compatibility();
 
         assert_eq!(
-            compatibility.vm_verifier_roots().last(),
-            Some(&core_lib.vm_recursive_verifier_root()),
+            compatibility.vm_verifier_identities().last(),
+            Some(&core_lib.vm_recursive_verifier_profile().unwrap().identity()),
         );
         assert_eq!(
-            compatibility.pvm_verifier_roots().last(),
-            Some(&core_lib.pvm_recursive_verifier_root()),
+            compatibility.pvm_verifier_identities().last(),
+            Some(&core_lib.pvm_recursive_verifier_profile().unwrap().identity()),
         );
     }
 }

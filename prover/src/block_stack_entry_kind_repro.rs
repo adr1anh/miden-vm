@@ -1,23 +1,29 @@
 //! Regression tests for the block-stack entry-kind tag.
 //!
-//! A non-loop continuation and a caller frame with zero saved state share every payload slot
-//! except the tag. Without it, an ordinary block's END could select caller-frame restoration and
-//! bypass preservation of `ctx`, `fn_hash`, `b0`, and `b1`. Inside a CALL, this could carry the
-//! callee's state into the root context without a SYSCALL or kernel-ROM check.
+//! A continuation and a caller frame with zero saved state differ by the entry-kind tag.
+//! The combined mutation forges caller restoration at a continuation END and supplies a zeroed
+//! callee row; the real CALL END then restores the following authenticated root state. First and
+//! final principals and the independently expected claim remain unchanged.
 //!
-//! The forged witness relabels a continuation END as a caller-frame END and carries callee state
-//! forward. The tag prevents the substitution, while decoder constraints make the END entry-kind
-//! flags boolean and mutually exclusive.
+//! A private comparison changes only the tag term in the first LogUp recurrence and recenters
+//! its auxiliary accumulator. The constructed artifact verifies under that comparison, while
+//! current native and MASM verifiers reject the same artifact. Structural, polynomial-coefficient
+//! and degree guards identify the narrow change. Honest artifacts verify in both consumers; an
+//! unrelated final-clock defect still rejects under the comparison.
 //!
-//! In the upstream Poseidon2 fixture, removing only the tag from `BlockStackMsg::encode` and
-//! regenerating the evaluator made this forged witness verify at 96-bit security. The honest trace
-//! and both single-half controls were unaffected.
+//! The two single-half mutations remain rejection-pipeline controls and may stop at lookup
+//! construction. Their rejection alone does not establish isolated-rule necessity.
 
 use miden_air_definitions::vm::trace::RowIndex;
-use miden_core::{Felt, field::Field, operations::opcodes, utils::RowMajorMatrix};
+use miden_core::{
+    Felt,
+    field::Field,
+    operations::opcodes,
+    utils::{Matrix, RowMajorMatrix},
+};
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 
-use crate::repro_harness::{ReproTrace, core_row_mut};
+use crate::repro_harness::{CoreMode, ReproTrace, core_row_mut};
 
 struct Fixture {
     trace: ReproTrace,
@@ -118,23 +124,47 @@ fn honest_trace_verifies() {
 /// authenticated entry kind prevents the removal from matching the SPAN's continuation addition.
 #[test]
 fn forged_caller_frame_flag_on_continuation_end_is_rejected() {
-    let f = build_fixture();
+    let mut f = build_fixture();
+    let honest = f
+        .trace
+        .prove_comparison(CoreMode::Standard)
+        .expect("honest caller-frame proof construction must complete");
+    assert!(honest.verification.is_ok());
+    f.trace.assert_native_and_recursive_accept(honest.proof);
+    let claim = f.trace.claim();
     let mut core = f.trace.core.clone();
-
-    // Forge the CALL/DYNCALL caller-frame flag on a continuation END.
+    let first = core_row_mut(&mut core, 0).system.fn_hash;
+    let last = core.height() - 1;
+    let final_principal = core_row_mut(&mut core, last).system.fn_hash;
+    assert_ne!(first, [Felt::ZERO; 4], "the expected entry principal must be nonzero");
+    assert_eq!(final_principal, first);
     core_row_mut(&mut core, f.continuation_end_row).decoder.hasher_state[6] = Felt::ONE;
     zero_caller_frame_payload(&f, &mut core);
-
-    let result = f.trace.prove_and_verify_allowing_lookup_rejection(core);
+    assert_eq!(core_row_mut(&mut core, 0).system.fn_hash, first);
+    assert_eq!(core_row_mut(&mut core, last).system.fn_hash, final_principal);
+    f.trace.core = core;
+    assert_eq!(f.trace.claim(), claim);
+    let comparison = f
+        .trace
+        .prove_comparison(CoreMode::TaglessFrames)
+        .expect("the tag comparison must complete proof construction");
     assert!(
-        result.is_err(),
-        "the proof pipeline must reject a caller-frame flag forged on a continuation END: the entry \
-         kind tag prevents a zero-payload caller-frame removal from matching the pending \
-         continuation addition: {result:?}"
+        comparison.verification.is_ok(),
+        "only the entry-kind tag may reject the witness: {:?}",
+        comparison.verification
     );
+    f.trace.assert_native_and_recursive_air_rejection(comparison.proof);
+
+    // An unrelated final-HALT clock defect must remain visible after the tag-only comparison.
+    core_row_mut(&mut f.trace.core, last).system.clk += Felt::ONE;
+    let control = f
+        .trace
+        .prove_comparison(CoreMode::TaglessFrames)
+        .expect("the unrelated control must also complete proof construction");
+    assert!(control.verification.is_err());
 }
 
-/// Control isolating the mechanism: the identical payload zeroing without forging a caller-frame
+/// Control: the identical payload zeroing without forging a caller-frame
 /// flag must be rejected, because then the preservation constraints are still live.
 #[test]
 fn zeroed_payload_without_forged_caller_frame_flag_is_rejected() {
@@ -152,7 +182,7 @@ fn zeroed_payload_without_forged_caller_frame_flag_is_rejected() {
     );
 }
 
-/// Control isolating the bus: forging the caller-frame flag while leaving the payload at its
+/// Control: forging the caller-frame flag while leaving the payload at its
 /// honest non-zero values must be rejected, because the caller-frame removal matches no addition.
 #[test]
 fn forged_caller_frame_flag_without_zeroed_payload_is_rejected() {

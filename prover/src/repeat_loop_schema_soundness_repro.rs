@@ -2,7 +2,7 @@
 
 use alloc::{vec, vec::Vec};
 use core::borrow::{Borrow, BorrowMut};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use miden_air::vm::MidenAir;
 use miden_air_definitions::vm::{
@@ -10,8 +10,12 @@ use miden_air_definitions::vm::{
     logup::{BlockHashMsg, BusId, MIDEN_MAX_MESSAGE_WIDTH},
     trace::{
         MIN_TRACE_LEN, RowIndex,
-        chiplets::hasher::{HASH_ABSORB, LINEAR_HASH, PADDING},
-        eidos_compression::{NUM_EIDOS_COMPRESSION_COLS, retag_felt_trace_block_cycle_id},
+        chiplets::hasher::{HASH_ABSORB, LINEAR_HASH, PADDING, STATE_WIDTH},
+        eidos_compression::{
+            EIDOS_COMPRESSION_CYCLE_LEN, F_COMPRESSION_CYCLE_ID_COL,
+            F_COMPRESSION_MULTIPLICITY_COL, FOOTER_START, NUM_EIDOS_COMPRESSION_COLS, TraceMode,
+            generate_felt_trace_block, retag_felt_trace_block_cycle_id,
+        },
     },
 };
 use miden_core::{
@@ -96,57 +100,165 @@ fn copy_chiplet_row(
     row.chip_clk = clock;
 }
 
-/// Rebuilds the compression witnesses for fixtures containing only linear hash requests.
-fn compression_witness(
-    chiplets: &RowMajorMatrix<Felt>,
-) -> (RowMajorMatrix<Felt>, RowMajorMatrix<Felt>) {
-    let requests = (0..chiplets.height()).filter_map(|index| {
-        let row = chiplet_row(chiplets, index);
-        if row.chiplet_selectors()[0] == Felt::ZERO {
-            return None;
-        }
-        let controller = row.controller();
-        let selectors = [controller.s0, controller.s1, controller.s2];
-        if selectors == PADDING {
-            return None;
-        }
-        assert!(selectors == LINEAR_HASH || selectors == HASH_ABSORB);
-        Some((controller.state, 1))
-    });
-    let (mut compression, mut and8) = build_external_eidos_compression_traces(requests);
-    if compression.height() < MIN_TRACE_LEN {
-        // The external builder permits one 32-row cycle; VM traces require at least 64 rows.
-        let (mut padding, padding_counts) = build_external_eidos_compression_traces([]);
-        retag_felt_trace_block_cycle_id(
-            padding.values.as_chunks_mut::<NUM_EIDOS_COMPRESSION_COLS>().0,
-            1,
-        );
-        compression.values.extend(padding.values);
-        assert_eq!(compression.height(), MIN_TRACE_LEN);
-        for (count, padding_count) in and8.values.iter_mut().zip(padding_counts.values) {
-            *count += padding_count;
-        }
-    }
-    (compression, and8)
+/// Compares a generated packed compression cycle independently of its physical ID.
+fn same_compression(block: &[Felt], generated: &[Felt]) -> bool {
+    assert_eq!(block.len(), generated.len());
+    block.iter().zip(generated).enumerate().all(|(index, (actual, expected))| {
+        let col = index % NUM_EIDOS_COMPRESSION_COLS;
+        col == F_COMPRESSION_CYCLE_ID_COL || actual == expected
+    })
 }
 
-/// Preserves non-hasher byte-table demand while replacing all controller compression requests.
+/// Regenerates the footer CV corrections as well as the provider frequency, including zero.
+fn compression_cycle(state: [u64; STATE_WIDTH], multiplicity: u64) -> Vec<Felt> {
+    let block = core::array::from_fn(|i| (state[i / 2] >> (32 * (i % 2))) as u32);
+    let cv = core::array::from_fn(|i| (state[8 + i / 2] >> (32 * (i % 2))) as u32);
+    generate_felt_trace_block(block, cv, TraceMode::CompressionWithMultiplicity { multiplicity })
+        .rows
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+fn replace_byte_counts(and8: &mut RowMajorMatrix<Felt>, old: &[Felt], new: &[Felt]) {
+    assert_eq!(and8.values.len(), old.len());
+    assert_eq!(and8.values.len(), new.len());
+    for ((count, old), new) in and8.values.iter_mut().zip(old).zip(new) {
+        assert!(count.as_canonical_u64() >= old.as_canonical_u64());
+        *count = *count - *old + *new;
+    }
+}
+
+/// Changes only Controller request demand in the captured shared Library/Controller witness.
 fn rebuild_hash_witnesses(
     trace: &VmTrace,
     chiplets: &RowMajorMatrix<Felt>,
 ) -> (RowMajorMatrix<Felt>, RowMajorMatrix<Felt>) {
-    let (_, honest_chiplets, honest_compression, mut and8) =
-        trace.main_trace().clone_air_matrices();
-    let (rebuilt, old_counts) = compression_witness(&honest_chiplets);
-    assert!(
-        rebuilt.values == honest_compression.values,
-        "honest compression witness must match"
-    );
-    let (compression, new_counts) = compression_witness(chiplets);
-    for ((count, old), new) in and8.values.iter_mut().zip(old_counts.values).zip(new_counts.values)
-    {
-        assert!(count.as_canonical_u64() >= old.as_canonical_u64());
-        *count = *count - old + new;
+    let (_, honest_chiplets, mut compression, mut and8) = trace.main_trace().clone_air_matrices();
+    let mut deltas = BTreeMap::<[u64; STATE_WIDTH], i64>::new();
+    for (matrix, sign) in [(&honest_chiplets, -1), (chiplets, 1)] {
+        for index in 0..matrix.height() {
+            let row = chiplet_row(matrix, index);
+            if row.chiplet_selectors()[..2] != [Felt::ZERO, Felt::ONE] {
+                continue;
+            }
+            let controller = row.controller();
+            let selectors = [controller.s0, controller.s1, controller.s2];
+            if selectors == PADDING {
+                continue;
+            }
+            assert!(selectors == LINEAR_HASH || selectors == HASH_ABSORB);
+            let state = controller.state.map(|value| value.as_canonical_u64());
+            *deltas.entry(state).or_default() += sign;
+        }
+    }
+    deltas.retain(|_, delta| *delta != 0);
+    if deltas.is_empty() {
+        // An unchanged Controller multiset preserves the complete honest witness byte-for-byte.
+        return (compression, and8);
+    }
+
+    let block_cells = EIDOS_COMPRESSION_CYCLE_LEN * NUM_EIDOS_COMPRESSION_COLS;
+    assert_eq!(compression.values.len() % block_cells, 0);
+    let mut reusable = Vec::new();
+    let mut additions = Vec::new();
+    for (state, delta) in deltas {
+        let (mut generated, counts) =
+            build_external_eidos_compression_traces([(state.map(Felt::new_unchecked), 1)]);
+        assert_eq!(generated.height(), EIDOS_COMPRESSION_CYCLE_LEN);
+        assert_eq!(and8.values.len(), counts.values.len());
+        let mut matching =
+            compression.values.chunks_exact(block_cells).enumerate().filter(|(_, block)| {
+                let multiplicity = block
+                    [FOOTER_START * NUM_EIDOS_COMPRESSION_COLS + F_COMPRESSION_MULTIPLICITY_COL]
+                    .as_canonical_u64();
+                multiplicity != 0
+                    && same_compression(block, &compression_cycle(state, multiplicity))
+            });
+        let cycle = matching.next().map(|(cycle, _)| cycle);
+        assert!(matching.next().is_none(), "packed request must have one interned cycle");
+        if let Some(cycle) = cycle {
+            let captured = &mut compression.values[cycle * block_cells..(cycle + 1) * block_cells];
+            let old = captured
+                [FOOTER_START * NUM_EIDOS_COMPRESSION_COLS + F_COMPRESSION_MULTIPLICITY_COL]
+                .as_canonical_u64();
+            let new = if delta < 0 {
+                old.checked_sub(delta.unsigned_abs()).expect("Controller demand must exist")
+            } else {
+                old.checked_add(delta as u64).unwrap()
+            };
+            generated.values = compression_cycle(state, old);
+            retag_felt_trace_block_cycle_id(
+                generated.values.as_chunks_mut::<NUM_EIDOS_COMPRESSION_COLS>().0,
+                cycle as u64,
+            );
+            assert_eq!(&*captured, generated.values.as_slice(), "captured cycle must match");
+            generated.values = compression_cycle(state, new);
+            retag_felt_trace_block_cycle_id(
+                generated.values.as_chunks_mut::<NUM_EIDOS_COMPRESSION_COLS>().0,
+                cycle as u64,
+            );
+            captured.copy_from_slice(&generated.values);
+            if new == 0 {
+                // Mode-zero real cycles may have zero demand. Retaining one also retains its byte
+                // lookups; reuse it preferentially if this mutation introduces another state.
+                reusable.push((cycle, Some(counts)));
+            }
+        } else {
+            assert!(delta > 0, "retired Controller request must have a captured provider");
+            generated.values = compression_cycle(state, delta as u64);
+            additions.push((generated, counts));
+        }
+    }
+    if additions.is_empty() {
+        return (compression, and8);
+    }
+
+    let (mut padding, padding_counts) = build_external_eidos_compression_traces([]);
+    assert_eq!(padding.height(), EIDOS_COMPRESSION_CYCLE_LEN);
+    assert_eq!(and8.values.len(), padding_counts.values.len());
+    for (cycle, block) in compression.values.chunks_exact(block_cells).enumerate() {
+        if block[FOOTER_START * NUM_EIDOS_COMPRESSION_COLS + F_COMPRESSION_MULTIPLICITY_COL]
+            == Felt::ZERO
+            && same_compression(block, &padding.values)
+            && reusable.iter().all(|(retired, _)| *retired != cycle)
+        {
+            reusable.push((cycle, None));
+        }
+    }
+    let mut reusable = reusable.into_iter();
+    for (mut generated, counts) in additions {
+        let replacement = reusable.next();
+        let cycle = replacement
+            .as_ref()
+            .map_or(compression.height() / EIDOS_COMPRESSION_CYCLE_LEN, |(cycle, _)| *cycle);
+        retag_felt_trace_block_cycle_id(
+            generated.values.as_chunks_mut::<NUM_EIDOS_COMPRESSION_COLS>().0,
+            cycle as u64,
+        );
+        if let Some((_, old_counts)) = replacement {
+            compression.values[cycle * block_cells..(cycle + 1) * block_cells]
+                .copy_from_slice(&generated.values);
+            let old_counts = old_counts.as_ref().unwrap_or(&padding_counts);
+            replace_byte_counts(&mut and8, &old_counts.values, &counts.values);
+        } else {
+            compression.values.extend(generated.values);
+            for (count, added) in and8.values.iter_mut().zip(counts.values) {
+                *count += added;
+            }
+        }
+    }
+    let height = compression.height().next_power_of_two().max(MIN_TRACE_LEN);
+    while compression.height() < height {
+        let cycle = compression.height() / EIDOS_COMPRESSION_CYCLE_LEN;
+        retag_felt_trace_block_cycle_id(
+            padding.values.as_chunks_mut::<NUM_EIDOS_COMPRESSION_COLS>().0,
+            cycle as u64,
+        );
+        compression.values.extend_from_slice(&padding.values);
+        for (count, added) in and8.values.iter_mut().zip(&padding_counts.values) {
+            *count += *added;
+        }
     }
     (compression, and8)
 }
@@ -250,6 +362,10 @@ fn honest_repeated_loop_verifies() {
         }),
         "fixture must execute REPEAT"
     );
+    let (_, chiplets, compression, and8) = trace.main_trace().clone_air_matrices();
+    let (rebuilt, rebuilt_counts) = rebuild_hash_witnesses(&trace, &chiplets);
+    assert_eq!(rebuilt.values, compression.values, "unchanged compression witness");
+    assert_eq!(rebuilt_counts.values, and8.values, "unchanged byte-table demand");
     assert!(ReproTrace::new(&trace).prove_and_verify_current().unwrap().is_complete());
 }
 
@@ -321,7 +437,7 @@ fn loop_skip_body_with_retired_hasher_rows_is_rejected() {
         .find(|&row| {
             let row = chiplet_row(&chiplets, row);
             let controller = row.controller();
-            row.chiplet_selectors()[0] == Felt::ONE
+            row.chiplet_selectors()[..2] == [Felt::ZERO, Felt::ONE]
                 && [controller.s0, controller.s1, controller.s2] == PADDING
         })
         .unwrap();

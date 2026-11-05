@@ -150,11 +150,12 @@ end
 #!
 #! The claim preimage is fetched from the advice map under the caller-provided claim commitment,
 #! authenticated, and stored in verifier-owned memory. The proof is consumed from the advice
-#! stack; request keys name this procedure's MAST root
-#! (`CoreLibrary::vm_recursive_verifier_root` on the operator side). A consumer that fetches the
-#! proof by content derives the identical root in-VM via `procref` of this procedure, computes
-#! `proof_request_key(verifier_root, claim_commitment)` with `sys::build_proof_request_key`, and
-#! moves the registered proof package onto the advice stack before calling it.
+#! stack. A consumer that fetches the proof by content supplies its expected verifier identity,
+#! committing to the relation, entry key, and exact configuration. It computes
+#! `proof_request_key(expected_verifier, claim_commitment)` with `sys::build_proof_request_key`
+#! and moves the registered proof package onto the advice stack before calling this procedure.
+#! An implementation root or `procref` procedure key alone is not that identity. The caller must
+#! authorize the expected identity and its configuration independently of the proof response.
 #!
 #! The four proof parameters are loaded from advice, structurally validated, and bound into the
 #! Fiat-Shamir transcript. The maximum trace height is likewise transcript-bound. The remaining

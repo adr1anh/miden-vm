@@ -260,7 +260,7 @@ Build the library with its supplied opaque ID, explicit home, declarations and r
 
 Read exactly40 advice Felts with bounded staging/no overread; hash five complete eight-Felt blocks under the new claim frame/domain. Stage Core36/Chiplets4/three external terms; remove kernel-list materialization while retaining security/deferred results and all24 proof permutations. Regenerate evaluators/ACE/layouts/constants/docs/setup/relation roots; bind verifier entry and helper/resource/mount configuration under the fixed-N0 relation, rather than D alone; remove the independent N_kernel configuration field. Replace old `procref == verifier root` APIs/docs with typed identities/request v2.
 
-**Acceptance:** native/MASM/recursive claims match; adjacent scratch cannot affect hash; old/missing/excess advice fails; malicious child/rebound entry/helper/root, non-root syscall suppliers and omitted deferred obligation reject. Captured degrees/shape/security counts match generated assets and rebuilt identity. **Checks:** `make regenerate-constraints`; `make check-constraints`; generated capture/drift/ACE tests; `cargo test -p miden-core-lib --test core-lib stark`; `cargo test -p miden-core-lib --lib proof_compatibility_roots_match_the_embedded_core_library`; `make check-pvm-proof-fixture`. Regenerate generated MASM docs with `MIDEN_BUILD_LIB_DOCS=1 cargo build -p miden-core-lib` when changed, following repository CI. Regenerate PVM constants/root only if its emitted code/relation changed.
+**Acceptance:** native/MASM/recursive claims match; adjacent scratch cannot affect hash; old/missing/excess advice fails; malicious child/rebound entry/helper/root, non-root syscall suppliers and omitted deferred obligation reject. Captured degrees/shape/security counts match generated assets and rebuilt identity. **Checks:** `make regenerate-constraints`; `make check-constraints`; generated capture/drift/ACE tests; `cargo test -p miden-core-lib --test core-lib stark`; `cargo test -p miden-core-lib --lib proof_compatibility_identities_match_the_embedded_core_library`; `make check-pvm-proof-fixture`. Regenerate generated MASM docs with `MIDEN_BUILD_LIB_DOCS=1 cargo build -p miden-core-lib` when changed, following repository CI. Regenerate PVM constants/root only if its emitted code/relation changed.
 
 ### PR 15 Public API, CLI and consumer closure
 
@@ -271,6 +271,32 @@ Read exactly40 advice Felts with bounded staging/no overread; hash five complete
 Replace root-only verification flags and implicit Program/kernel reconstruction with explicit versioned expected descriptor/claim inputs. Share run/prove/verify validation; separate environment preimages from code bundles and report K_entry/R_E/D distinctly and explain fixed-N0 syscall eligibility. Migrate remaining root consumers; report Library authentication metrics instead of kernel-ROM counts. Preserve atomic output, security estimator and precompile preparation/resource guards introduced since the design baseline.
 
 **Acceptance:** run/prove/verify round trips across supported transcript hashes, stopped witnesses and deferred/complete proof paths; changed expected descriptor fields/legacy flags/artifacts fail explicitly; allocation/budget checks precede execution; optional code hints cannot override bindings. **Checks:** `make test-vm test=cli::`; focused `prove_verify::`/`flow_control::` filters in the existing `miden-cli` integration test binary; compile supported public and no_std surfaces. Run the final commands in PR 16 before declaring release readiness.
+
+#### Deferred API cleanup card
+
+**Kanban state:** planned under PR15, after PR14 qualification and before PR15a/16. This card is the durable record of the user's API review; preserve active PR14 work and schedule the cleanup in PR15.
+
+**User-approved direction:**
+
+| Current API | Cleanup direction |
+| --- | --- |
+| `ExecutionDescriptor` | `ExecutionTarget`: expected entry key and environment root |
+| `Program`, legacy `ProgramInfo` | Retire; host owns loaded package code, and execution takes the expected target |
+| `ExecutionEnvironment` | Keep the target separate; move its opening/ledger/session limits into `ExecutionOptions`, grouped as resolution limits |
+| `NamespacePlan` | `NamespacePath` |
+| `CallableBinding` | `ProcedureName`: canonical namespace/path deriving K; reserve binding terminology for K-to-D relations |
+| `PackageNaming` | `PackageSymbols` |
+| `LibraryImport` | `LibraryRef`, with explicit `latest(base, id)` / `revision(base, id, revision)` helpers |
+| `Pinned(revision)` | `Revision(revision)`; exact code-hash pins remain a separate concept |
+| `admit_naming` | `validate_symbols`, retaining explicit profile/context/codec limits |
+
+Keep `ProcedureKey`, `EnvironmentRoot` and `ExecutionClaim`. Keep package code and checked symbols together so ordinary linking does not require separately pairing package and naming. Rust names do not change canonical Latest/Pinned labels, encodings or hashes. Source version, runtime revision and selected implementation remain distinct under D5.
+
+**User-approved execution shape, 4 November 2026:** load package code through the host and call `execute_sync(target, &mut host)`. Retire `Program` and legacy `ProgramInfo`, remove their conversions, and add no replacement forest-plus-entry wrapper. Keep package code, checked symbols, advice and source metadata together. Preserve exact source occurrences, private entry metadata and internal step/resume state. The caller supplies the expected entry key/environment root; host-loaded code and lookup evidence do not supply authority.
+
+**Proposed; settle before the affected cleanup:** `EnvironmentSource` is the latest suggestion for the untrusted lookup-evidence trait; neither that spelling nor `LookupProofProvider` is selected.
+
+**Acceptance:** migrate affected assembler/package/project, host/processor, prove/verify, CLI, examples, docs and supported no_std callers consistently. The caller still supplies expected K_entry/R_E; untrusted code/evidence never supplies authority or fallback. Preserve D3/D5/D6/D8, fixed-N0 syscalls, canonical codecs, every explicit resource budget, replay/source identity and all existing PR15/security/final gates. Retain negative binding/evidence tests and run/prove/verify coverage; do not mark a rename as implementation or acceptance evidence. PR15a remains AIR/Chiplets cleanup, not a duplicate API card.
 
 ## Stage 5 AIR cleanup, qualification and release evidence
 
@@ -497,9 +523,9 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 09 Assembly/packages | implemented-awaiting-validation | Final review `0ec317994`; CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | implemented-awaiting-validation | Native `82e671c01`; assembly `e151d65c5`; instances `116a2d736`; supply `049d9ea68`; prior SHAs below; base `0ec317994` | Independent reviews; project90, assembly598/six existing skips, supply379/one existing skip and native3 pass; mast-package/both registries/project/assembly all-target strict Clippy, native-target Clippy and four shared no_std checks pass | Inherited public-statement/proof/recursive/security and final qualification remain; selected publication-profile behavior is not claimed |
 | 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
-| 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Fifteen request K/D failures at PR14; three cost gates closed at PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
-| 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Full PR14 typed identity/request/compatibility closure and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
-| 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
+| 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Request K/D failures closed by PR14; cost gates closed by PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
+| 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
+| 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
@@ -3083,3 +3109,218 @@ All source is committed and signatures verify. PR13 remains implemented-awaiting
 global D-indexed diagnostic variants and inherited debug/security/counterfactual/guest/fuzz/performance/
 final gates stay open. PR14 owns the fifteen request identity failures and final verifier/configuration
 compatibility qualification. No M1/general-goal completion, PR or push.
+
+
+### PR14 opening checkpoint, 4 November 2026
+
+Revalidated branch `adr1anh/librarytree-14-recursive-verifier`, HEAD/base
+`52e914a9a007b37fdedeec93c74dc19439366e88`. PR13's final description is committed;
+PR14 source remains uncommitted. Requestv2 selects exactly C[4]||V[4] under domain0x01000202,
+with owner-supplied typed VerifierIdentity rather than D/procref K. Direct verifier stacks stay
+unchanged; outer consumers supply V without embedding it in the committed core fragment.
+Production configuration uses existing config3, the actual complete core fragment at fixed N0,
+and package static advice plus the relation's ACE subset. Derivation alone grants no authority.
+
+Bounded agents own core/native/MASM source, production profile review, actual-fragment fixture
+support and separate consumer groups. Root centralizes guarded checks using the existing shared
+cache after source/API alignment; no PR14 compilation or test result is claimed. Strict PVM advice
+snapshot capture, qualified compatibility identities, remaining consumers and PR14 acceptance
+remain pending. Old compatibility constants/whitelists are untouched. All inherited security,
+counterfactual, debug, guest, fuzz, performance and final gates remain; no PR/push or goal closure.
+
+
+### PR14 typed requests and configured consumers, 4 November 2026
+
+`cb779ece7` migrates native request packaging to typed identity/request2 and canonical identity
+transport. `2468fe2be` mounts complete reachable fragments, preserves physical opening slots/cache
+identity and rejects openings exceeding unchanged aggregate budgets. `ff5596f90` derives exact
+embedded relation/entry/mount/resource profiles and aligns MASM request/event ABIs/generated docs.
+`42c876e8d` replaces D defaults with freshly derived typed identities; no legacy whitelist/fallback.
+`c6f56d808`/`9ec10c04c` migrate core/settlement/CLI/benchmark consumers and add bounded claim,
+rebound-child and aux4-omission controls. Pure test lint fixes are `aa70a93c0`. All signatures verify.
+
+Independent bounded reviews and guarded checks pass: 111 units, 29 consumer controls and 133
+remaining recursive cases, disjoint273 total. Their union includes the full core-lib stark scope,
+all five formerly failing CLI recursive cases, actual asynchronous/batch settlement, preserved
+caller state, its proof-order/security/cost oracles, typed compatibility parity and strict complete
+PVM advice snapshot. Final ten-crate all-target strict custom Clippy passes. Freshly rebuilt VM/PVM
+generators write/check without code drift; generated MASM docs are refreshed. Logs:
+`.scratch/librarytree/pr14-{unit-checks,consumer-checks,remaining-recursive-checks,clippy-final,generator-build,vm-generation,pvm-generation}.log`.
+
+PR14 stays in progress: actual invalid non-root-syscall child qualification is distinct from the
+passing rebound-R_E control and existing processor/local AIR rejection. Inherited valid-principal
+counterfactuals, fresh capture/public/no_std/final gates remain. The deterministic PVM fixture
+requires a sequential, non-concurrent build; its fresh check remains pending for that dedicated
+build. This source slice reused the concurrent test cache. No gate is waived or M1/general-goal completion
+claimed. No PR/push; context changes remain separate.
+
+
+### PR14 retained-proof principal checkpoint, 4 November 2026
+
+`0a3f97a8e` adds test-only artifact/result plumbing and correct nonzero K_entry baselines. The
+principal cases use authenticated equal-D aliases, preserve first/final entry principal and every
+non-Core matrix, and require actual proof construction before Native StarkVerificationError and
+MASM's exact ACE circuit-nonzero rejection. Honest artifacts verify in both consumers. The core
+library dependency is dev-only; production evaluation/authority is unchanged. Independent review,
+ten retained controls plus two final comparison cases and five-crate all-target strict custom Clippy
+pass. Logs: `pr14-principal-{balanced-checks,native-masm-checks,native-masm-final}.log` and
+`pr14-prover-repro-clippy-final.log` under `.scratch/librarytree/`. Earlier unbalanced root-principal
+cases stopped at lookup construction; that outcome is not credited as native verifier evidence.
+
+The exact release/sequential `pvm-proof-fixture --check` passes with277756 unchanged bytes;
+`pr14-sequential-pvm-fixture.log` records the guarded release/sequential check. A disconnected
+build was confirmed stopped before retry. /tmp quota blocked sandbox launch; workspace TMPDIR and
+scoped exec escalation preserved shared sources. Quarantining only the interrupted precompile test
+incremental unit fixed its linker error. No build cache reset or shared temporary-source deletion.
+
+Isolated evaluator necessity and actual non-root-syscall recursive qualification remain open,
+alongside all inherited capture/public/no_std/guest/fuzz/performance/final gates. PR14/M1/general goal
+are not complete; no PR/push. Context changes remain separate from implementation.
+
+
+### PR14 isolated continuation-principal qualification, 4 November 2026
+
+`3f6593ea9` adds private cfg(test,std) evaluator/proof plumbing. Structural captures prove the
+comparison changes only four principal-preservation assertions; concrete full-field checks identify
+the equations and per-assertion degree checks stay within production. All other constraints, lookup
+construction, four matrices, expected claim, configuration, transcript and preprocessing pin remain
+fixed. The coarse-END principal selector accepts the continuation witness; current native and MASM
+verifiers reject that same artifact with StarkVerificationError and exact ACE circuit-nonzero. The
+ordinary-transition control still rejects under the comparison evaluator; honest wrapper artifacts
+verify in both production consumers. Three focused tests and five-crate all-target strict custom
+Clippy pass; independent source reviews and the signed commit verify. Logs:
+`.scratch/librarytree/pr14-principal-comparison.log` and `pr14-principal-comparison-clippy.log`.
+The first compile identified callback annotations, corrected before these passing checks.
+
+This closes the continuation-principal attribution gate only. Other inherited context/block-stack
+qualification remains distinct. The actual non-root-syscall fixture is separately in flight: it
+keeps both root/child SYS branches in one committed entry and preserves the expected descriptor,
+with exact compression/count deltas and an aggregate lookup-balance guard. No proof acceptance or
+rejection result is claimed for that unregistered fixture.
+
+The fresh bounded capture/drift/ACE/config run passed20/21; the remaining snapshot still described
+pre-cutover dimensions/digests. `8bd316dbe` changes only its five values to the independently
+computed and already production-pinned current circuit:790 inputs,7676 gates,7920 stream Felts.
+The exact failed test then passes, including its relation-pin equality after the snapshot. Thus
+20 unchanged checks plus the corrected1 qualify the21 selected active checks; no fresh whole21
+rerun is claimed. Logs: `pr14-fresh-capture.log` and `pr14-fresh-capture-final.log`. Canonical ACE,
+all24 proof orders, scalar/packed value/class/order/degree drift and production pins pass; runtime
+relation/constants/generated code are unchanged. Existing unchanged geometry/security scopes were
+not repeated merely for a larger fresh-check total.
+
+Public/no_std/guest/fuzz/performance/final gates, PR14/M1 and the general goal remain open. The
+separate `bb33b37e3` PR15 API cleanup card is preserved; no PR/push or branch change.
+
+
+### PR14 fixed-N0 supplier and portability checkpoint, 4 November 2026
+
+`1151e9ebe` qualifies the actual non-root SYS supplier under one expected descriptor/claim. Both
+root/child SYS branches are already committed; private advice selects the alternate. The fixture
+retains both openings, replaces exactly one Controller/compression request with its AND8 delta,
+and checks aggregate lookup deltas across all four AIRs. The private comparison removes only the
+four supplier-local namespace equations, guarded structurally, semantically and per-assertion degree.
+It accepts the forged witness; current native and MASM reject that very artifact with STARK and
+exact ACE circuit-nonzero errors. Honest root SYS passes both; an unrelated last-HALT clock defect
+still rejects under the comparison. All five focused cases, including the affected principal
+controls, pass; final five-crate all-target strict custom Clippy and independent reviews pass.
+The signed commit verifies. Logs: `pr14-nonroot-syscall-{checks,clippy}.log` under scratch.
+Production admission/evaluation/configuration remains unchanged; no unsafe feature or bypass.
+
+Public portability checks pass with accurately separated graphs. The five production roots
+core/core-lib/vm-stark/precompiles-stark/verifier compile with defaults disabled and both STARK
+prover features retained; the normal graph has no std for these roots or shared stark. Host build
+dependencies are separate under resolver3. `pr14-public-no-std.log` and
+`pr14-no-std-feature-graph.log` record that scope. A separate helper defaults-off check passes in
+`pr14-public-helper-no-defaults.log`; test-utils -> processor/testing -> AIR testing re-enables
+core/stark std there, so it is not credited as whole-graph no_std. PVM recursive packaging is
+explicitly std-only and covered by the prior standard consumer scope; no bare-metal/cross-target
+claim is made. No redundant unchanged identity/geometry/security reruns.
+
+Next: isolate the inherited nested-call context rule (Core emission5) without weakening principal
+preservation. Its unregistered policy is prepared; no result is claimed. Current context4 cases
+require actual proof construction/native rejection, but lack necessity/MASM comparison. DYNCALL's
+three controls remain explicitly compound/rejection-only; the stale zero-principal collision story
+does not create a fresh isolated-tag gate. Guest/fuzz/performance/final and inherited gates, PR14/M1
+and the general goal remain open. No PR/push; context and implementation commits stay separate.
+
+
+### PR14 isolated context qualification, 4 November 2026
+
+`aae409c8e` isolates only Core context-preservation emission5 with the historical coarse-END
+selector; principal preservation remains current. The nested-call witness restores its original
+caller context and keeps all principal columns, non-Core matrices and expected claim fixed. The
+isolated evaluator accepts the continuation witness; the same artifact gets current native STARK
+and exact MASM ACE circuit-nonzero rejection. Its ordinary-transition control still rejects.
+Structural/full-field/per-assertion degree guards identify the single change. Shared slice mapping
+and retained-artifact assertion helpers preserve the already qualified principal/N0 policies.
+All eight affected tests, final five-crate all-target strict custom Clippy and independent source
+review pass; signature verifies. Logs: `pr14-context-comparison-{checks,clippy}.log`. Production
+code/pins are unchanged, so prior production no_std/consumer/capture evidence is retained.
+
+The inherited context-necessity gate is closed. DYNCALL stays compound/rejection-only; no fresh
+isolated-tag claim is inferred from the stale collision prerequisite. A bounded audit found an
+actual migration defect in the existing loop regression helper: it interprets S_lib=1 as Controller
+instead of requiring [S_lib,C]=[0,1], and a Controller-only rebuild would lose Library compression.
+Three of seven loop tests call that helper before their rejection assertions; the padding search
+also needs the role predicate. Repair must preserve captured Library/nonhasher demand and declared
+lookup-delta oracles. No numeric-address, donor-prefix or principal bug has been established, so
+o speculative offset changes are authorized by this finding. The root-END replacement case is
+compound and changes independent hash/Resolve demands; do not promote it to isolated necessity.
+No loop runtime result is claimed yet. PR14/M1/general goal and remaining guest/fuzz/performance/
+final qualification remain open; no PR/push or branch change.
+
+
+### PR14 packed fixture and remaining prover checkpoint, 4 November 2026
+
+`9e4c7baec` repairs the loop helper's Controller role and preserves shared Library compression and
+nonhasher byte demand through request-count deltas. Full cycles are regenerated at their actual
+multiplicity, including zero: the footer's CV correction depends on that metadata, so changing
+only its frequency cell was insufficient. Exact captured-cycle checks, honest byte equality and
+all three declared lookup-delta oracles remain. `cf55ea5c7` migrates MRUPDATE row selection and
+its original sixteen-cell mutation to typed packed Controller fields; the four-row assertion and
+rejection stage remain unchanged. All nine loop/MRUPDATE tests, final five-crate all-target strict
+custom Clippy and independent reviews pass. Both signed commits verify. Logs:
+`pr14-packed-fixture-{final,clippy}.log`; initial/diagnostic loop failures remain separate reference
+logs. No production relation/public-claim/offset change or relaxed rejection oracle.
+
+The cached prover binary ran26 disjoint remaining cases with no Cargo/compilation:25 passed and
+one MRUPDATE setup predicate failed, now corrected by the passing two-case scope above. Together
+with latest8, loop7 and the eight unique previously retained controls, all49 prover lib-test cases
+have passing scoped evidence; no fresh whole49 run is claimed. `pr14-remaining-prover-checks.log`
+records that cached native run. Some negatives deliberately permit a recognized unbalanced-lookup
+construction failure; this coverage does not turn them into proof-stage or isolated-rule evidence.
+
+Before closing inherited tag-isolation attribution, distinguish the block-stack tag fixture from
+the separate DYNCALL collision story: its forged continuation END reads a zeroed next callee row,
+then the real CALL END restores the following authenticated nonzero root principal. Nonzero
+K_entry alone does not prove an independent blocker. A bounded read-only audit is checking the
+remaining constraints and private lookup-comparison route; no fresh tag-only necessity result is
+claimed. Keep DYNCALL compound/rejection-only. PR14/M1/general goal and guest/fuzz/performance/final
+qualification remain open. No PR/push or branch change; context stays separately committed.
+
+
+### PR14 tag qualification and branch closeout, 4 November 2026
+
+Signed source `739b716b1` qualifies the block-stack frame tag with an explicitly nonzero, unchanged
+entry/final principal and fixed expected claim. The private comparison changes only the frame-tag
+contribution in extension emission265; structural guards, independent polynomial projection and
+per-assertion degree checks retain the production relation elsewhere. Its balanced forged witness
+constructs a proof accepted by the comparison; that same artifact fails current native STARK and
+MASM verification with the exact ACE circuit-nonzero error. Honest execution passes both, and an
+unrelated clock control still rejects under the comparison. Ten affected checks and two final
+strengthened reruns pass, as does final five-crate all-target strict custom Clippy. Logs:
+`pr14-tag-comparison-{checks,final,clippy}.log` under scratch. No production API, relation or pin
+changed in this private regression slice.
+
+Independent closeout review found no remaining PR14-specific gate. All50 prover lib cases now
+have passing scoped evidence; no fresh whole50 run is claimed. Preserve the earlier cached26
+result as25 passes plus one setup failure repaired by the passing MRUPDATE scope, and capture
+as20 passes plus the corrected single test, not a fresh whole21 run. Some inherited negatives
+allow recognized lookup-construction rejection; DYNCALL remains compound. Earlier production
+consumer273, generated assets/docs, actual five-root no_std graph and unchanged sequential PVM
+fixture evidence retain their stated scope.
+
+PR14 is implemented-awaiting-validation. Final branch review belongs in PR_DESCRIPTION.md before
+the linear transition to PR15. PR15 follows the approved host-owned code/API card; the general
+goal and M1 remain active. Guest/fuzz/performance/final and inherited qualification remain open,
+with PR15a still preceding PR16. No GitHub PR, push or publication is authorized.

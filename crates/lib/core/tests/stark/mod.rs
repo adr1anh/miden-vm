@@ -8,14 +8,15 @@ use miden_assembly::{
 use miden_core::{
     Felt, WORD_SIZE, Word,
     field::{BasedVectorSpace, Field, PrimeCharacteristicRing, QuadFelt},
-    program::{ExecutionClaim, KernelDescriptor, NUM_CLAIM_ELEMENTS, Namespace},
+    program::{ExecutionClaim, KernelDescriptor, NUM_CLAIM_ELEMENTS, Namespace, VerifierIdentity},
     proof::HashFunction,
 };
+use miden_core_lib::{CoreLibrary, CoreVerifierProfile, CoreVerifierProfileError};
 use miden_mast_package::{Package, TargetType};
 use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor};
 use miden_stark::{Preprocessed, StarkConfig, air::Statement};
 use miden_utils_testing::{
-    AdviceInputs, Prover,
+    AdviceInputs, Prover, Test,
     recursive_verifier::{VerifierData, generate_advice_inputs},
     stack_inputs_from_ints,
 };
@@ -29,6 +30,7 @@ mod ace_circuit;
 mod ace_read_check;
 mod batch_query_gen;
 mod isolation;
+mod librarytree_claim;
 mod proof_order_maps;
 mod pvm_aux_trace;
 mod pvm_deep_queries;
@@ -155,6 +157,30 @@ fn stark_verifier_e2f4_with_deferred_root() {
     run_recursive_verifier(&data);
 }
 
+/// The deferred obligation is proof-bound aux4, even when the public claim is unchanged.
+#[test]
+fn stark_verifier_e2f4_rejects_omitted_deferred_root() {
+    let mut data =
+        generate_recursive_verifier_data(EXAMPLE_LOG_DEFERRED, log_deferred_stack_inputs(), None);
+    assert!(
+        data.proof_stream[4..8].iter().any(|&value| value != 0),
+        "the honest fixture must carry a nonzero deferred obligation"
+    );
+    run_recursive_verifier(&data);
+
+    // Keep the proof, authenticated claim, query rows, and resources intact; erase only aux4.
+    data.proof_stream[4..8].fill(0);
+    let source = vm_verify_proof_program();
+    let test = configure_vm_verifier(build_test!(
+        source.as_str(),
+        &data.initial_stack(),
+        data.advice_stack(),
+        data.store.clone(),
+        data.advice_map.clone()
+    ));
+    expect_assert_error_message!(test);
+}
+
 #[test]
 fn stark_verifier_e2f4_with_kernel_flipped_order() {
     let inputs = fib_stack_inputs();
@@ -188,7 +214,11 @@ fn stark_verifier_e2f4_rejects_missing_ace_circuit_stream() {
     let circuit_key = recursive_circuit_key();
     data.advice_map.retain(|(key, _)| *key != circuit_key);
 
-    assert_recursive_verifier_rejects(data, "missing ACE circuit stream should fail");
+    assert_recursive_verifier_rejects_with_resource_check(
+        data,
+        "missing ACE circuit stream should fail",
+        true,
+    );
 }
 
 #[test]
@@ -198,7 +228,11 @@ fn stark_verifier_e2f4_rejects_corrupted_ace_circuit_stream() {
     let stream = advice_map_value_mut(&mut data, circuit_key);
     stream[0] += Felt::ONE;
 
-    assert_recursive_verifier_rejects(data, "corrupted ACE circuit stream should fail");
+    assert_recursive_verifier_rejects_with_resource_check(
+        data,
+        "corrupted ACE circuit stream should fail",
+        true,
+    );
 }
 
 /// A forged per-AIR log height must be rejected.
@@ -333,6 +367,7 @@ fn verifier_rejects_a_non_identity_order_when_scatter_destinations_are_swapped()
         control_data.store,
         control_data.advice_map
     );
+    let control = configure_vm_verifier(control);
     control
         .execute_for_output()
         .expect("the paired control with correct scatter destinations must accept the proof");
@@ -345,12 +380,21 @@ fn verifier_rejects_a_non_identity_order_when_scatter_destinations_are_swapped()
         data.store,
         data.advice_map
     );
+    let test = configure_vm_verifier(test);
     test.execute().expect_err(
         "verifier must reject a non-identity proof order when two scatter destinations are swapped",
     );
 }
 
 fn assert_recursive_verifier_rejects(data: VerifierData, message: &str) {
+    assert_recursive_verifier_rejects_with_resource_check(data, message, false);
+}
+
+fn assert_recursive_verifier_rejects_with_resource_check(
+    data: VerifierData,
+    message: &str,
+    resource_rejection: bool,
+) {
     let source = vm_verify_proof_program();
     let test = build_test!(
         source.as_str(),
@@ -359,6 +403,12 @@ fn assert_recursive_verifier_rejects(data: VerifierData, message: &str) {
         data.store.clone(),
         data.advice_map
     );
+    let profile = CoreLibrary::default().vm_recursive_verifier_profile().unwrap();
+    let test = if resource_rejection {
+        configure_recursive_verifier_rejection(test, &profile)
+    } else {
+        configure_recursive_verifier(test, &profile)
+    };
 
     assert!(test.execute_for_output().is_err(), "{message}");
 }
@@ -672,16 +722,63 @@ pub fn generate_recursive_verifier_data(
         stack_outputs,
     );
 
-    generate_advice_inputs(vm_verify_proof_root(), &proof, &claim).unwrap()
+    generate_advice_inputs(vm_verify_proof_identity(), &proof, &claim).unwrap()
 }
 
-/// Returns the MAST root used to identify `sys::vm::verify_proof` in proof-request keys.
-///
-/// Operators obtain it through `CoreLibrary::vm_recursive_verifier_root`. Consumers obtain the
-/// same value in MASM with `procref.vm::verify_proof`; the root belongs to the procedure itself and
-/// does not depend on the program that calls it.
-fn vm_verify_proof_root() -> Word {
-    miden_core_lib::CoreLibrary::default().vm_recursive_verifier_root()
+/// The fixture owner selects the expected relation/entry/configuration identity independently of
+/// the proof. Outer consumers push this value; the committed core fragment never contains it.
+pub(crate) fn vm_verify_proof_identity() -> VerifierIdentity {
+    CoreLibrary::default().vm_recursive_verifier_profile().unwrap().identity()
+}
+
+/// Select the exact core mount and authorize the actual outer environment and effective advice.
+pub(crate) fn configure_recursive_verifier(test: Test, profile: &CoreVerifierProfile) -> Test {
+    let test = test.with_environment_fragment(profile.shared_fragment());
+    authorize_recursive_verifier_test(&test, profile)
+        .expect("the caller-selected verifier environment and resources must authorize");
+    test
+}
+
+fn configure_vm_verifier(test: Test) -> Test {
+    let profile = CoreLibrary::default().vm_recursive_verifier_profile().unwrap();
+    configure_recursive_verifier(test, &profile)
+}
+
+/// Retain the guest's resource-authentication rejection oracle after checking native admission.
+fn configure_recursive_verifier_rejection(test: Test, profile: &CoreVerifierProfile) -> Test {
+    let test = test.with_environment_fragment(profile.shared_fragment());
+    assert!(matches!(
+        authorize_recursive_verifier_test(&test, profile),
+        Err(CoreVerifierProfileError::MissingResource { .. }
+            | CoreVerifierProfileError::ResourceLengthMismatch { .. }
+            | CoreVerifierProfileError::ResourceInventoryMismatch)
+    ));
+    test
+}
+
+fn authorize_recursive_verifier_test(
+    test: &Test,
+    profile: &CoreVerifierProfile,
+) -> Result<(), CoreVerifierProfileError> {
+    let fixture = test.fixture_environment().expect("the caller environment must assemble");
+    let environment = fixture.validated_environment();
+    let mut effective_advice = test.advice_inputs.map().clone();
+    for package in &test.libraries {
+        effective_advice
+            .merge(package.mast_forest().advice_map())
+            .expect("selected package and request advice must not conflict");
+    }
+    profile.authorize(environment.root(), environment, &effective_advice, environment.visits())
+}
+
+#[test]
+fn configured_recursive_verifier_requires_the_actual_core_mount() {
+    let profile = CoreLibrary::default().vm_recursive_verifier_profile().unwrap();
+    let test = build_test!(vm_verify_proof_program(), &[]);
+    assert!(matches!(
+        authorize_recursive_verifier_test(&test, &profile),
+        Err(CoreVerifierProfileError::MissingCoreMount)
+    ));
 }
 
 /// Test helper that copies `count` felts (a multiple of 4) from advice into memory at `dst`.
@@ -701,10 +798,11 @@ pub(crate) const COPY_ADVICE_TO_MEM: &str = "
 
 /// Builds the consumer program: stage the claim from the consumer's own inputs, derive its
 /// commitment, fetch the proof package registered under
-/// `proof_request_key(verifier_root, claim_commitment)`, verify it, compute its security level, and
-/// enforce the consumer's threshold. `vm::verify_proof` contains neither the estimator nor the
+/// `proof_request_key(verifier_identity, claim_commitment)`, verify it, compute its security level,
+/// and enforce the consumer's threshold. `vm::verify_proof` contains neither the estimator nor the
 /// policy.
 fn request_consumer_source(bound: &str, target: u32) -> String {
+    let verifier_identity = crate::helpers::masm_push_word(vm_verify_proof_identity().as_word());
     format!(
         "
         use miden::core::sys
@@ -722,10 +820,9 @@ fn request_consumer_source(bound: &str, target: u32) -> String {
             push.{CONSUMER_CLAIM_PTR} exec.claim::claim_commitment
             # => [CLAIM_COMMITMENT]
 
-            # 2) Fetch the registered proof package by content: request keys name
-            #    vm::verify_proof's root, derived in-VM via procref.
+            # 2) Fetch the registered proof package under the owner-selected verifier identity.
             dupw
-            procref.vm::verify_proof exec.sys::build_proof_request_key
+            {verifier_identity} exec.sys::build_proof_request_key
             adv.push_mapval dropw
             # => [CLAIM_COMMITMENT]
 
@@ -757,7 +854,7 @@ fn request_flow_binds_proof_to_claim() {
     let source = request_consumer_source("conjectured", 96);
     let entry = |proof_stream: &[u64]| -> (Word, Vec<Felt>) {
         let felts: Vec<Felt> = proof_stream.iter().map(|&v| Felt::new_unchecked(v)).collect();
-        (proof_request_key(vm_verify_proof_root(), intended.claim_commitment), felts)
+        (proof_request_key(vm_verify_proof_identity(), intended.claim_commitment), felts)
     };
 
     // Control: the intended proof, registered under its key, verifies.
@@ -774,9 +871,32 @@ fn request_flow_binds_proof_to_claim() {
             intended.store.clone(),
             advice_map.clone()
         );
+        let ok = configure_vm_verifier(ok);
         ok.execute_for_output()
             .expect("the matching proof must satisfy either security policy");
     }
+
+    // A host-supplied identity cannot replace the owner's expected identity. Even the same proof
+    // and claim registered for the PVM configuration must not satisfy this VM request.
+    let other_identity =
+        CoreLibrary::default().pvm_recursive_verifier_profile().unwrap().identity();
+    assert_ne!(other_identity, vm_verify_proof_identity());
+    let mut wrong_identity_advice = intended.advice_map.clone();
+    wrong_identity_advice.push((
+        proof_request_key(other_identity, intended.claim_commitment),
+        intended.proof_stream.iter().copied().map(Felt::new_unchecked).collect(),
+    ));
+    let wrong_identity = configure_vm_verifier(build_test!(
+        source.as_str(),
+        &[],
+        &intended.claim_advice,
+        intended.store.clone(),
+        wrong_identity_advice
+    ));
+    assert!(
+        wrong_identity.execute_for_output().is_err(),
+        "a request registered for another verifier identity must not satisfy the owner's request"
+    );
 
     // Substitution: a different claim's proof under the same key fails against the consumer's
     // claim — the advice provider cannot pass off another proof. The intended claim's own
@@ -789,18 +909,91 @@ fn request_flow_binds_proof_to_claim() {
     advice_map.extend(intended.advice_map.iter().cloned());
     advice_map.push((k, v));
     let bad = build_test!(source.as_str(), &[], &intended.claim_advice, other.store, advice_map);
+    let bad = configure_vm_verifier(bad);
     assert!(
         bad.execute_for_output().is_err(),
         "a proof for a different claim must be rejected by verification"
     );
 }
 
+/// A real retained-helper rebind changes R_E while preserving the entry key and public i/o.
+/// Both child proofs verify under their own claims; registering the rebound child's intact proof
+/// for the intended child's request must then fail inside the guest verifier.
+#[test]
+fn request_flow_rejects_a_rebound_child_environment() {
+    use miden_core::program::proof_request_key;
+
+    let intended = generate_recursive_verifier_data(
+        "proc helper push.7 drop end begin exec.helper end",
+        vec![],
+        None,
+    );
+    let rebound = generate_recursive_verifier_data(
+        "proc helper push.8 drop end begin exec.helper end",
+        vec![],
+        None,
+    );
+    assert_eq!(&intended.claim_advice[..4], &rebound.claim_advice[..4], "entry key changed");
+    assert_eq!(
+        &intended.claim_advice[8..NUM_CLAIM_ELEMENTS],
+        &rebound.claim_advice[8..NUM_CLAIM_ELEMENTS],
+        "the retained helper change must preserve public inputs and outputs"
+    );
+    assert_ne!(
+        &intended.claim_advice[4..8],
+        &rebound.claim_advice[4..8],
+        "the retained helper implementation must change the environment root"
+    );
+    assert_ne!(intended.claim_commitment, rebound.claim_commitment);
+
+    let source = request_consumer_source("conjectured", 96);
+    let verifier_identity = vm_verify_proof_identity();
+    let entry = |claim_commitment: Word, proof_stream: &[u64]| {
+        (
+            proof_request_key(verifier_identity, claim_commitment),
+            proof_stream.iter().copied().map(Felt::new_unchecked).collect::<Vec<_>>(),
+        )
+    };
+
+    // Both authenticated claim preimages, query sets, and Merkle witnesses remain available.
+    let mut store = intended.store.clone();
+    store.extend(rebound.store.inner_nodes());
+    let mut advice_map = intended.advice_map.clone();
+    advice_map.extend(rebound.advice_map.iter().cloned());
+    for child in [&intended, &rebound] {
+        let mut own_claim_advice = advice_map.clone();
+        own_claim_advice.push(entry(child.claim_commitment, &child.proof_stream));
+        let baseline = configure_vm_verifier(build_test!(
+            source.as_str(),
+            &[],
+            &child.claim_advice,
+            store.clone(),
+            own_claim_advice
+        ));
+        baseline
+            .execute_for_output()
+            .expect("each child's proof must verify under its own claim");
+    }
+
+    // Fetch B's unchanged proof under A's owner-selected V/C request. A's own authenticated
+    // preimage remains in the map, so neither a missing request nor missing claim is the oracle.
+    advice_map.push(entry(intended.claim_commitment, &rebound.proof_stream));
+    let substituted = configure_vm_verifier(build_test!(
+        source.as_str(),
+        &[],
+        &intended.claim_advice,
+        store,
+        advice_map
+    ));
+    expect_assert_error_message!(substituted);
+}
+
 /// Two independently proven executions of one program (distinct stack i/o) verified inside a
 /// single consumer program — each proof is registered
-/// under `proof_request_key(verifier_root, claim_commitment)` and fetched by content, independent
-/// of its position in the advice. The consumer stages each claim from its own inputs and derives
-/// the commitment that names the claim and addresses its proof entry, so passing requires the
-/// in-VM claim-commitment and request-key derivations to match their native
+/// under `proof_request_key(verifier_identity, claim_commitment)` and fetched by content,
+/// independent of its position in the advice. The consumer stages each claim from its own inputs
+/// and derives the commitment that names the claim and addresses its proof entry, so passing
+/// requires the in-VM claim-commitment and request-key derivations to match their native
 /// mirrors (a mismatch is a missing advice-map key).
 #[test]
 fn stark_verifier_e2f4_request_multi_proof() {
@@ -815,7 +1008,7 @@ fn stark_verifier_e2f4_request_multi_proof() {
     // One advice provider for both proofs: the tape carries the claims from which the consumer
     // derives the commitments. Claim preimages, proof streams, and query rows are
     // content-addressed in the advice map.
-    let verifier_root = vm_verify_proof_root();
+    let verifier_identity = vm_verify_proof_identity();
     let mut tape = Vec::new();
     let mut store = MerkleStore::new();
     let mut advice_map = Vec::new();
@@ -824,9 +1017,10 @@ fn stark_verifier_e2f4_request_multi_proof() {
         store.extend(tx.store.inner_nodes());
         advice_map.extend(tx.advice_map.iter().cloned());
         let stream: Vec<Felt> = tx.proof_stream.iter().map(|&v| Felt::new_unchecked(v)).collect();
-        advice_map.push((proof_request_key(verifier_root, tx.claim_commitment), stream));
+        advice_map.push((proof_request_key(verifier_identity, tx.claim_commitment), stream));
     }
 
+    let verifier_identity = crate::helpers::masm_push_word(verifier_identity.as_word());
     let source = format!(
         "
         use miden::core::sys
@@ -843,7 +1037,7 @@ fn stark_verifier_e2f4_request_multi_proof() {
             push.{NUM_CLAIM_ELEMENTS} push.{CONSUMER_CLAIM_PTR} exec.copy_advice_to_mem
             push.{CONSUMER_CLAIM_PTR} exec.claim::claim_commitment # => [CLAIM_COMMITMENT]
             dupw
-            procref.vm::verify_proof exec.sys::build_proof_request_key
+            {verifier_identity} exec.sys::build_proof_request_key
             adv.push_mapval dropw                        # => [CLAIM_COMMITMENT]
             exec.vm::verify_proof                        # => [security_descriptor(12), D]
             exec.security::compute_conjectured_security_level # => [level, D]
@@ -860,6 +1054,7 @@ fn stark_verifier_e2f4_request_multi_proof() {
     );
 
     let test = build_test!(source.as_str(), &[], &tape, store, advice_map);
+    let test = configure_vm_verifier(test);
     test.execute_for_output().expect("both content-addressed proofs must verify");
 }
 
@@ -896,6 +1091,7 @@ fn run_recursive_verifier(data: &VerifierData) -> Vec<usize> {
         data.advice_map.clone()
     )
     .with_trace_handler(VERIFIER_RETURN, verifier_stack.clone());
+    let test = configure_vm_verifier(test);
     let order = ace_read_check::execute_and_check(&test, &data.proof_stream, &data.claim_advice);
 
     // Pin the full common descriptor and deferred root so any value or ordering drift is caught
@@ -963,6 +1159,7 @@ fn each_security_parameter_is_transcript_bound() {
             data.store.clone(),
             data.advice_map.clone()
         );
+        let test = configure_vm_verifier(test);
         expect_assert_error_message!(test);
     }
 }
@@ -1002,6 +1199,7 @@ fn legacy_kernel_sidecars_have_no_authority() {
             data.store.clone(),
             data.advice_map.clone()
         );
+        let test = configure_vm_verifier(test);
         test.execute_for_output().unwrap_or_else(|error| {
             panic!("{case} legacy kernel sidecar must be ignored as unrelated advice: {error}")
         });
@@ -1065,6 +1263,7 @@ fn mutated_expected_environment_root_is_rejected() {
         data.store.clone(),
         data.advice_map.clone()
     );
+    let test = configure_vm_verifier(test);
     test.execute_for_output()
         .expect_err("the original proof must reject a changed caller-authorized environment root");
 }
@@ -1087,6 +1286,7 @@ fn tampered_claim_preimage_is_rejected(#[case] offset: usize) {
         data.store.clone(),
         data.advice_map.clone()
     );
+    let test = configure_vm_verifier(test);
     expect_assert_error_code_from_msg!(test, "claim preimage commitment does not match");
 }
 
@@ -1108,6 +1308,7 @@ fn malformed_claim_preimage_length_is_rejected(#[case] len: usize) {
         data.store.clone(),
         data.advice_map.clone()
     );
+    let test = configure_vm_verifier(test);
     expect_assert_error_code_from_msg!(test, "claim preimage has a non-canonical length");
 }
 

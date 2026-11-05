@@ -2,7 +2,9 @@
 //!
 //! This module parses an Eidos PVM proof into the exact stack, Merkle-store, and advice-map
 //! inputs consumed by `miden::core::sys::pvm::verify_proof`. The caller supplies the deferred claim
-//! on the operand stack; its root is the PVM statement.
+//! on the operand stack; its root is the PVM statement. Request addressing uses the caller's
+//! independently selected verifier identity. Advice construction does not authorize that identity's
+//! configuration or verify the proof.
 
 mod ace;
 mod ace_constants;
@@ -27,6 +29,7 @@ use miden_core::{
     advice::AdviceInputs,
     deferred::{DeferredClaim, MAX_PRECOMPILE_ROOTS},
     field::QuadFelt,
+    program::VerifierIdentity,
     proof::{
         HashFunction, MAX_STARK_PROOF_BYTES, PrecompileProof, StarkProof as SerializedStarkProof,
     },
@@ -64,7 +67,10 @@ pub struct PvmRecursiveVerifierInputs {
 }
 
 impl PvmRecursiveVerifierInputs {
-    /// Builds a proof package addressed by the verifier and claim commitments.
+    /// Builds a proof package addressed by the expected verifier identity and claim commitment.
+    ///
+    /// The consumer supplies `expected_verifier` independently of the proof. Packaging does not
+    /// authorize its configuration or verify the proof.
     ///
     /// Uses [`PrecompileProof::aggregate_root`] as the proof's claim. The MASM caller must compute
     /// the expected root from the deferred work it needs to settle and pass that root to
@@ -74,7 +80,7 @@ impl PvmRecursiveVerifierInputs {
     ///
     /// Returns an error if the proof cannot be converted into verifier advice.
     pub fn for_request(
-        verifier_root: Word,
+        expected_verifier: VerifierIdentity,
         proof: &PrecompileProof,
     ) -> Result<Self, PvmRecursiveVerifierInputsError> {
         if proof.roots.len() > MAX_PRECOMPILE_ROOTS {
@@ -87,7 +93,7 @@ impl PvmRecursiveVerifierInputs {
             .ok_or(PvmRecursiveVerifierInputsError::UnsupportedRootCount { roots: 0 })?;
         let claim = DeferredClaim::new(root);
         let advice = build_verifier_advice(&proof.proof, claim)?;
-        Ok(Self::package(verifier_root, claim, advice))
+        Ok(Self::package(expected_verifier, claim, advice))
     }
 
     /// Returns the packaged verifier advice.
@@ -105,9 +111,13 @@ impl PvmRecursiveVerifierInputs {
         (self.advice, self.claim_commitment)
     }
 
-    fn package(verifier_root: Word, claim: DeferredClaim, advice: AdviceInputs) -> Self {
+    fn package(
+        expected_verifier: VerifierIdentity,
+        claim: DeferredClaim,
+        advice: AdviceInputs,
+    ) -> Self {
         let claim_commitment = claim.commitment();
-        let advice = package_for_request(verifier_root, claim_commitment, advice);
+        let advice = package_for_request(expected_verifier, claim_commitment, advice);
         Self { advice, claim_commitment }
     }
 }
@@ -263,9 +273,37 @@ fn build_merkle_data(
 
 #[cfg(test)]
 mod tests {
-    use miden_core::program::proof_request_key;
+    use miden_core::program::{
+        ImplementationRoot, ProcedureKey, VerifierConfiguration, proof_request_key,
+    };
+    use miden_crypto::hash::eidos::{DomainTag, Eidos, EidosFrame};
 
     use super::*;
+
+    /// A synthetic identity selected by this fixture's owner, independently of any proof.
+    fn expected_verifier() -> VerifierIdentity {
+        let configuration = VerifierConfiguration::new(
+            ImplementationRoot::new(Word::new([21, 22, 23, 24].map(Felt::new_unchecked))),
+            vec![],
+            Word::new([31, 32, 33, 34].map(Felt::new_unchecked)),
+        )
+        .unwrap();
+        VerifierIdentity::derive(
+            Word::new([41, 42, 43, 44].map(Felt::new_unchecked)),
+            ProcedureKey::new(Word::new([51, 52, 53, 54].map(Felt::new_unchecked))),
+            configuration.commitment().unwrap(),
+        )
+    }
+
+    /// The retired v1 address used an implementation root instead of a verifier identity.
+    fn retired_request_key(claim_commitment: Word) -> Word {
+        let mut payload = [Felt::ZERO; 8];
+        payload[..4].copy_from_slice(claim_commitment.as_slice());
+        payload[4..]
+            .copy_from_slice(Word::new([21, 22, 23, 24].map(Felt::new_unchecked)).as_slice());
+        let frame = EidosFrame::new(DomainTag::from_u32(0x0100_0201).unwrap(), [8, 0, 0]);
+        Eidos::compress(frame.initial_chaining_word(), payload)
+    }
 
     #[test]
     fn recursive_inputs_reject_non_eidos_proofs_before_parsing() {
@@ -274,7 +312,7 @@ mod tests {
             roots: vec![Word::default()],
         };
         assert!(matches!(
-            PvmRecursiveVerifierInputs::for_request(Word::default(), &proof),
+            PvmRecursiveVerifierInputs::for_request(expected_verifier(), &proof),
             Err(PvmRecursiveVerifierInputsError::UnsupportedHashFunction),
         ));
     }
@@ -287,7 +325,7 @@ mod tests {
             roots: vec![Word::default()],
         };
         assert!(matches!(
-            PvmRecursiveVerifierInputs::for_request(Word::default(), &proof),
+            PvmRecursiveVerifierInputs::for_request(expected_verifier(), &proof),
             Err(PvmRecursiveVerifierInputsError::ProofTooLarge {
                 size: actual,
                 max: MAX_STARK_PROOF_BYTES,
@@ -302,7 +340,7 @@ mod tests {
             let root_count = roots.len();
             let proof = PrecompileProof { proof: serialized(), roots };
             assert!(matches!(
-                PvmRecursiveVerifierInputs::for_request(Word::default(), &proof),
+                PvmRecursiveVerifierInputs::for_request(expected_verifier(), &proof),
                 Err(PvmRecursiveVerifierInputsError::UnsupportedRootCount { roots })
                     if roots == root_count,
             ));
@@ -314,7 +352,7 @@ mod tests {
         let proof_stream: Vec<_> = [1, 2, 3, 4].map(Felt::new_unchecked).into();
         let deferred_root = Word::from([11u64, 12, 13, 14].map(Felt::new_unchecked));
         let claim = DeferredClaim::new(deferred_root);
-        let verifier_root = Word::from([21u64, 22, 23, 24].map(Felt::new_unchecked));
+        let expected_verifier = expected_verifier();
         let existing = (
             Word::from([31u64, 32, 33, 34].map(Felt::new_unchecked)),
             vec![Felt::new_unchecked(7)],
@@ -322,9 +360,13 @@ mod tests {
         let advice = AdviceInputs::default()
             .with_stack(proof_stream.clone().into())
             .with_map([existing.clone()]);
-        let package = PvmRecursiveVerifierInputs::package(verifier_root, claim, advice);
+        let package = PvmRecursiveVerifierInputs::package(expected_verifier, claim, advice);
 
         assert!(package.advice().stack().is_empty());
+        assert_eq!(package.advice().map().len(), 2, "register only the v2 request address");
+        assert!(package.advice().map().get(&retired_request_key(claim.commitment())).is_none());
+        assert!(package.advice().map().get(&claim.commitment()).is_none());
+        assert!(package.advice().map().get(expected_verifier.as_word()).is_none());
         assert_eq!(
             package.advice().map().get(&existing.0).map(AsRef::as_ref),
             Some(existing.1.as_slice())
@@ -333,16 +375,16 @@ mod tests {
             package
                 .advice()
                 .map()
-                .get(&proof_request_key(verifier_root, claim.commitment()))
+                .get(&proof_request_key(expected_verifier, claim.commitment()))
                 .map(AsRef::as_ref),
             Some(proof_stream.as_slice()),
         );
         assert_eq!(package.claim_commitment(), claim.commitment());
     }
 
-    /// Pins the complete packaged advice produced before extracting the shared writers.
+    /// Pins the complete packaged advice, including the v2 verifier-identity request address.
     #[test]
-    fn packaged_advice_matches_pre_extraction_bytes() {
+    fn packaged_advice_matches_v2_request_snapshot() {
         use miden_core::serde::Serializable;
         use miden_crypto::hash::blake::Blake3_256;
 
@@ -359,11 +401,7 @@ mod tests {
             ),
             roots: vec![Word::new(root)],
         };
-        let inputs = PvmRecursiveVerifierInputs::for_request(
-            Word::new([21, 22, 23, 24].map(Felt::new_unchecked)),
-            &proof,
-        )
-        .unwrap();
+        let inputs = PvmRecursiveVerifierInputs::for_request(expected_verifier(), &proof).unwrap();
         assert!(inputs.advice().stack().is_empty());
         // Preserve every store entry while making HashMap iteration order irrelevant.
         let mut nodes: Vec<_> = inputs
@@ -380,10 +418,10 @@ mod tests {
         assert_eq!(
             digest,
             [
-                139, 45, 187, 139, 12, 172, 206, 60, 31, 209, 8, 11, 2, 174, 37, 210, 52, 87, 62,
-                29, 229, 194, 198, 135, 40, 104, 209, 62, 202, 64, 217, 43
+                199, 53, 253, 209, 159, 5, 111, 29, 247, 12, 77, 38, 74, 122, 244, 171, 131, 79,
+                235, 103, 50, 235, 216, 51, 182, 115, 78, 175, 215, 197, 254, 230
             ],
-            "shared advice writers must preserve the pre-extraction PVM encoding",
+            "the complete PVM package must match the qualified v2 request snapshot",
         );
     }
 }

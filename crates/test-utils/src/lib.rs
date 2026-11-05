@@ -135,6 +135,7 @@ struct CompileCacheKey {
     kernel_source: Option<SourceCacheKey>,
     add_modules: Vec<(String, String)>,
     library_artifacts: Vec<Word>,
+    environment_fragments: Vec<miden_core::program::EnvironmentRoot>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -273,6 +274,7 @@ pub struct Test {
     pub in_tracing_mode: bool,
     pub libraries: Vec<Arc<Package>>,
     library_naming: Vec<(usize, Arc<miden_mast_package::PackageNaming>)>,
+    environment_fragments: Vec<Arc<miden_core::program::ValidatedEnvironment>>,
     pub handlers: Vec<(EventName, Arc<dyn EventHandler>)>,
     pub trace_handlers: Vec<(EventName, Arc<dyn TraceHandler>)>,
     pub add_modules: Vec<(Arc<Path>, String)>,
@@ -313,6 +315,7 @@ impl Test {
             in_tracing_mode,
             libraries: Vec::default(),
             library_naming: Vec::new(),
+            environment_fragments: Vec::new(),
             handlers: Vec::new(),
             trace_handlers: Vec::new(),
             add_modules: Vec::default(),
@@ -373,6 +376,16 @@ impl Test {
         self.library_naming.retain(|(slot, _)| *slot < index);
         self.library_naming.push((index, naming));
         self.libraries.push(package);
+        self
+    }
+
+    /// Mounts an explicitly selected complete environment fragment at the initial namespace.
+    /// Fragment order and repeated roots are retained in the fixture and compile-cache identity.
+    pub fn with_environment_fragment(
+        mut self,
+        fragment: Arc<miden_core::program::ValidatedEnvironment>,
+    ) -> Self {
+        self.environment_fragments.push(fragment);
         self
     }
 
@@ -677,11 +690,12 @@ impl Test {
         let entry = local_naming
             .entry_key()
             .ok_or_else(|| Report::msg("compiled test has no explicit entry key"))?;
-        let environment = librarytree::FixtureEnvironment::new(
+        let environment = librarytree::FixtureEnvironment::new_with_fragments(
             entry,
             core::iter::once(&local_naming)
                 .chain(kernel_naming.iter())
                 .chain(import_naming.iter()),
+            &self.environment_fragments,
         )?;
         let result = PreparedTest {
             compiled: (program, kernel_lib, debug_info),
@@ -1027,6 +1041,11 @@ impl Test {
                 // substitute for either admission or exact package/naming correspondence.
                 .map(|library| library.commitment())
                 .collect(),
+            environment_fragments: self
+                .environment_fragments
+                .iter()
+                .map(|fragment| fragment.root())
+                .collect(),
         }
     }
 }
@@ -1139,6 +1158,72 @@ mod tests {
 
         let (output, _) = test.execute_for_output().expect("native foreign import execution");
         crate::assert_eq!(stack_outputs_as_int_vec(&output.stack)[0], 29);
+    }
+
+    #[test]
+    fn explicit_environment_fragments_separate_cached_environments_and_roots() {
+        use miden_core::program::{EnvNode, EnvironmentBuildLimits, EnvironmentBuilder};
+
+        let fragment = |value| {
+            let mut builder = EnvironmentBuilder::new(EnvironmentBuildLimits {
+                max_submitted_nodes: 1,
+                max_visits: 1,
+                max_depth: 0,
+                max_list_children: 0,
+                max_encoded_bytes: 1024,
+                max_bindings: 0,
+                max_storage_bytes: 4096,
+            });
+            let root = builder
+                .insert(EnvNode::Data {
+                    kind: 7,
+                    label: CanonicalLabel::text("explicit-test-fragment").unwrap().commitment(),
+                    value: Word::new([Felt::from_u32(value); 4]),
+                })
+                .unwrap();
+            Arc::new(builder.finish(root).unwrap())
+        };
+        let first = fragment(1);
+        let second = fragment(2);
+        let mut test = Test::new("fragment_cache", "begin nop end", false);
+        let empty_key = test.compile_cache_key();
+        let empty_root = test.fixture_environment().unwrap().validated_environment().root();
+
+        test = test.with_environment_fragment(first.clone());
+        crate::assert_ne!(test.compile_cache_key(), empty_key);
+        let first_key = test.compile_cache_key();
+        let first_root = test.fixture_environment().unwrap().validated_environment().root();
+        crate::assert_ne!(first_root, empty_root);
+        crate::assert_eq!(
+            test.fixture_environment().unwrap().validated_environment().root(),
+            first_root,
+            "an identical explicit selection may reuse its prepared environment"
+        );
+
+        test.environment_fragments = vec![second.clone()];
+        crate::assert_ne!(test.compile_cache_key(), first_key);
+        crate::assert_ne!(
+            test.fixture_environment().unwrap().validated_environment().root(),
+            first_root
+        );
+        test.environment_fragments = vec![first.clone(), second.clone()];
+        let ordered_key = test.compile_cache_key();
+        let ordered_root = test.fixture_environment().unwrap().validated_environment().root();
+        test.environment_fragments = vec![second, first.clone()];
+        crate::assert_ne!(test.compile_cache_key(), ordered_key);
+        crate::assert_ne!(
+            test.fixture_environment().unwrap().validated_environment().root(),
+            ordered_root
+        );
+        test.environment_fragments = vec![first.clone()];
+        let single_key = test.compile_cache_key();
+        test.environment_fragments.push(first);
+        crate::assert_ne!(test.compile_cache_key(), single_key);
+        crate::assert_ne!(
+            test.fixture_environment().unwrap().validated_environment().root(),
+            first_root,
+            "repeated Data-only roots remain distinct ordered List occurrences"
+        );
     }
 
     #[test]

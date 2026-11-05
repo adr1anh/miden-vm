@@ -14,14 +14,16 @@
 //!   aux finals -> quotient commit -> deep alpha -> OOD evals ->
 //!   DEEP PoW witness -> FRI rounds -> FRI remainder -> query PoW witness
 //!
-//! [`RecursiveVerifierInputs::for_request`] stores this stream in the advice map under the verifier
-//! and claim commitments. The consumer fetches it before calling `vm::verify_proof`. The consumer
-//! also supplies the claim commitment; the advice map stores its 40-felt preimage under that
-//! commitment, and `vm::verify_proof` authenticates the preimage before using it. Query rows,
+//! [`RecursiveVerifierInputs::for_request`] stores this stream in the advice map under the
+//! consumer's expected verifier identity and claim commitment. The consumer selects that identity
+//! independently of the proof and fetches the stream before calling `vm::verify_proof`. The
+//! consumer also supplies the claim commitment; the advice map stores its 40-felt preimage under
+//! that commitment, and `vm::verify_proof` authenticates the preimage before using it. Query rows,
 //! the Merkle store, and the ACE circuit are content-addressed too.
 //!
-//! Advice construction uses the canonical native claim and does not verify the supplied proof.
-//! The MASM consumer must implement the matching claim domain and public-input relation.
+//! Advice construction uses the canonical native claim. It does not authorize the expected
+//! verifier's configuration or verify the supplied proof. The MASM consumer must implement the
+//! matching claim domain and public-input relation.
 
 use alloc::string::{String, ToString};
 
@@ -31,7 +33,7 @@ use miden_core::{
     Felt, Word,
     advice::AdviceInputs,
     field::QuadFelt,
-    program::ExecutionClaim,
+    program::{ExecutionClaim, VerifierIdentity},
     proof::{ExecutionProof, HashFunction, MAX_STARK_PROOF_BYTES},
 };
 use miden_serde_utils::deserialize_schema_exact;
@@ -72,7 +74,10 @@ pub struct RecursiveVerifierInputs {
 }
 
 impl RecursiveVerifierInputs {
-    /// Builds a proof package addressed by the verifier and claim commitments.
+    /// Builds a proof package addressed by the expected verifier identity and claim commitment.
+    ///
+    /// The consumer supplies `expected_verifier` independently of the proof. Packaging does not
+    /// authorize its configuration or verify the proof.
     ///
     /// The VM component must be an Eidos proof because the recursive verifier supports only
     /// Eidos STARKs.
@@ -81,11 +86,11 @@ impl RecursiveVerifierInputs {
     ///
     /// Returns an error if the proof cannot be converted into verifier advice.
     pub fn for_request(
-        verifier_root: Word,
+        expected_verifier: VerifierIdentity,
         proof: &ExecutionProof,
         claim: &ExecutionClaim,
     ) -> Result<Self, RecursiveVerifierInputsError> {
-        Ok(build_verifier_inputs(proof, claim)?.into_request_package(verifier_root))
+        Ok(build_verifier_inputs(proof, claim)?.into_request_package(expected_verifier))
     }
 
     /// Returns the VM advice inputs.
@@ -104,9 +109,9 @@ impl RecursiveVerifierInputs {
     }
 
     /// Moves the proof stream into the advice map under
-    /// `proof_request_key(verifier_root, claim_commitment)`, leaving the advice stack empty.
-    fn into_request_package(mut self, verifier_root: Word) -> Self {
-        self.advice = package_for_request(verifier_root, self.claim_commitment, self.advice);
+    /// `proof_request_key(expected_verifier, claim_commitment)`, leaving the advice stack empty.
+    fn into_request_package(mut self, expected_verifier: VerifierIdentity) -> Self {
+        self.advice = package_for_request(expected_verifier, self.claim_commitment, self.advice);
         self
     }
 }
@@ -315,15 +320,41 @@ mod tests {
         crypto::merkle::{InnerNodeInfo, MerkleStore},
         field::{BasedVectorSpace, QuotientMap},
         program::{
-            EnvironmentRoot, ExecutionDescriptor, ProcedureKey, StackInputs, StackOutputs,
-            proof_request_key,
+            EnvironmentRoot, ExecutionDescriptor, ImplementationRoot, ProcedureKey, StackInputs,
+            StackOutputs, VerifierConfiguration, proof_request_key,
         },
         proof::{PrecompileStatus, StarkProof as CoreStarkProof, VmProof},
         serde::{Deserializable, Serializable},
     };
+    use miden_crypto::hash::eidos::{DomainTag, Eidos, EidosFrame};
     use miden_stark::{Preprocessed, lmcs::proof::BatchProofView};
 
     use super::*;
+
+    /// A synthetic identity selected by this fixture's owner, independently of any proof.
+    fn expected_verifier() -> VerifierIdentity {
+        let configuration = VerifierConfiguration::new(
+            ImplementationRoot::new(Word::new([21, 22, 23, 24].map(Felt::new_unchecked))),
+            vec![],
+            Word::new([31, 32, 33, 34].map(Felt::new_unchecked)),
+        )
+        .unwrap();
+        VerifierIdentity::derive(
+            Word::new([41, 42, 43, 44].map(Felt::new_unchecked)),
+            ProcedureKey::new(Word::new([51, 52, 53, 54].map(Felt::new_unchecked))),
+            configuration.commitment().unwrap(),
+        )
+    }
+
+    /// The retired v1 address used an implementation root instead of a verifier identity.
+    fn retired_request_key(claim_commitment: Word) -> Word {
+        let mut payload = [Felt::ZERO; 8];
+        payload[..4].copy_from_slice(claim_commitment.as_slice());
+        payload[4..]
+            .copy_from_slice(Word::new([21, 22, 23, 24].map(Felt::new_unchecked)).as_slice());
+        let frame = EidosFrame::new(DomainTag::from_u32(0x0100_0201).unwrap(), [8, 0, 0]);
+        Eidos::compress(frame.initial_chaining_word(), payload)
+    }
 
     fn claim() -> ExecutionClaim {
         ExecutionClaim::new(
@@ -524,9 +555,10 @@ mod tests {
         assert_eq!(inputs.advice().map(), expected_advice.map());
         assert_eq!(inputs.advice().store(), expected_advice.store());
 
-        let verifier_root = Word::new([101, 102, 103, 104].map(Felt::new_unchecked));
-        let package = RecursiveVerifierInputs::for_request(verifier_root, &proof, &claim).unwrap();
-        assert_eq!(package, inputs.clone().into_request_package(verifier_root));
+        let expected_verifier = expected_verifier();
+        let package =
+            RecursiveVerifierInputs::for_request(expected_verifier, &proof, &claim).unwrap();
+        assert_eq!(package, inputs.clone().into_request_package(expected_verifier));
         let proof_stream = inputs.advice().stack().iter().copied().collect::<Vec<_>>();
         assert!(package.advice().stack().is_empty());
         assert_eq!(package.claim_commitment(), claim.commitment());
@@ -536,7 +568,7 @@ mod tests {
             package
                 .advice()
                 .map()
-                .get(&proof_request_key(verifier_root, claim.commitment()))
+                .get(&proof_request_key(expected_verifier, claim.commitment()))
                 .unwrap()
                 .as_ref(),
             proof_stream,
@@ -558,7 +590,7 @@ mod tests {
         );
         let claim = claim();
 
-        let err = RecursiveVerifierInputs::for_request(Word::default(), &proof, &claim)
+        let err = RecursiveVerifierInputs::for_request(expected_verifier(), &proof, &claim)
             .expect_err("a Blake3 proof must be rejected");
         assert!(matches!(
             err,
@@ -601,13 +633,13 @@ mod tests {
     }
 
     /// Request packaging is a pure repackaging: the proof stream moves — unchanged and in
-    /// order — into the advice map under `proof_request_key(verifier_root, claim_commitment)`, and
-    /// everything else is untouched.
+    /// order — into the advice map under `proof_request_key(expected_verifier, claim_commitment)`,
+    /// and everything else is untouched.
     #[test]
     fn request_package_uses_proof_request_key() {
         let proof_stream: Vec<Felt> = (1..=8u64).map(Felt::new_unchecked).collect();
         let claim_commitment = Word::from([11u64, 12, 13, 14].map(Felt::new_unchecked));
-        let verifier_root = Word::from([21u64, 22, 23, 24].map(Felt::new_unchecked));
+        let expected_verifier = expected_verifier();
         let query_entry = (
             Word::from([31u64, 32, 33, 34].map(Felt::new_unchecked)),
             vec![Felt::new_unchecked(7)],
@@ -625,18 +657,21 @@ mod tests {
             .with_merkle_store(store.clone());
         let inputs = RecursiveVerifierInputs { advice, claim_commitment };
 
-        let package = inputs.into_request_package(verifier_root);
+        let package = inputs.into_request_package(expected_verifier);
 
         assert!(package.advice().stack().is_empty(), "the proof must leave the advice stack");
         assert_eq!(package.claim_commitment(), claim_commitment);
         assert_eq!(package.advice().store(), &store);
         assert_eq!(package.advice().map().len(), 2, "existing entries stay, proof entry added");
         assert_eq!(package.advice().map().get(&query_entry.0).unwrap().as_ref(), query_entry.1);
+        assert!(package.advice().map().get(&retired_request_key(claim_commitment)).is_none());
+        assert!(package.advice().map().get(&claim_commitment).is_none());
+        assert!(package.advice().map().get(expected_verifier.as_word()).is_none());
         assert_eq!(
             package
                 .advice()
                 .map()
-                .get(&proof_request_key(verifier_root, claim_commitment))
+                .get(&proof_request_key(expected_verifier, claim_commitment))
                 .unwrap()
                 .as_ref(),
             proof_stream

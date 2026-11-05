@@ -11,7 +11,7 @@ use miden_core::{
     advice::{AdviceInputs, AdviceStack},
     crypto::merkle::{MerklePath, MerkleStore, PartialMerkleTree},
     field::QuadFelt,
-    program::proof_request_key,
+    program::{VerifierIdentity, proof_request_key},
 };
 use miden_crypto::field::BasedVectorSpace;
 
@@ -116,13 +116,17 @@ where
     Ok((store, advice_map))
 }
 
-/// Moves the proof stream into the advice map under the verifier and claim's request key.
+/// Moves the proof stream into the advice map under the expected verifier identity and claim's
+/// request key.
+///
+/// The consumer selects `expected_verifier` independently of the proof. Packaging only encodes
+/// advice; it does not authorize the identity's configuration or verify the proof.
 pub fn package_for_request(
-    verifier_root: Word,
+    expected_verifier: VerifierIdentity,
     claim_commitment: Word,
     advice: AdviceInputs,
 ) -> AdviceInputs {
-    let key = proof_request_key(verifier_root, claim_commitment);
+    let key = proof_request_key(expected_verifier, claim_commitment);
     let (proof_stream, mut map, store) = advice.into_parts();
     map.insert(key, proof_stream.into_elements());
     AdviceInputs::new(AdviceStack::default(), map, store)

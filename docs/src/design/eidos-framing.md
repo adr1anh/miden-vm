@@ -367,9 +367,8 @@ The declarations in `core::program::domain` are normative and are the source for
 
 | Local ID | Version | Rust domain            | Encoding       |
 |---------:|--------:|------------------------|----------------|
-| `0x0000` | 1       | `KERNEL_COMMITMENT`    | `FeltSequence` |
-| `0x0001` | 1       | `EXECUTION_CLAIM`      | `FeltSequence` |
-| `0x0002` | 1       | `PROOF_REQUEST`        | `FeltSequence` |
+| `0x0001` | 2       | `EXECUTION_CLAIM`      | `FeltSequence` |
+| `0x0002` | 2       | `PROOF_REQUEST`        | `FeltSequence` |
 | `0x0003` | 1       | `DEFERRED_AND`         | `Custom`       |
 | `0x0004` | 1       | `DEFERRED_CHUNKS`      | `Custom`       |
 | `0x0005` | 1       | `STARK_TRANSCRIPT`     | `Transcript`   |
@@ -378,6 +377,25 @@ The declarations in `core::program::domain` are normative and are the source for
 | `0x0008` | 1       | `CURVE_PRECOMPILE`     | `Custom`       |
 | `0x0009` | 1       | `PVM_UINT_PIN_CLAIM`   | `Custom`       |
 | `0x000a` | 2       | `FALCON_PRODUCT_CHECK` | `FeltSequence` |
+| `0x000b` | 1       | `SHA512_PRECOMPILE`    | `Custom`       |
+| `0x000c` | 1       | `SHA256_PRECOMPILE`    | `Custom`       |
+| `0x0100` | 1       | `ENV_LABEL`           | `FeltSequence` |
+| `0x0101` | 1       | `ENV_NAMESPACE`       | `FeltSequence` |
+| `0x0102` | 1       | `ENV_PROCEDURE`       | `FeltSequence` |
+| `0x0103` | 1       | `ENV_INITIAL_NAMESPACE` | `FeltSequence` |
+| `0x0104` | 1       | `ENV_ENVIRONMENT`     | `FeltSequence` |
+| `0x0105` | 1       | `ENV_MAST`            | `FeltSequence` |
+| `0x0106` | 1       | `ENV_DATA`            | `FeltSequence` |
+| `0x0107` | 1       | `ENV_MERKLE`          | `FeltSequence` |
+| `0x0108` | 1       | `ENV_LIST`            | `FeltSequence` |
+| `0x0109` | 1       | `EXEC_VERIFIER_IDENTITY` | `FeltSequence` |
+| `0x010a` | 3       | `EXEC_VERIFIER_CONFIG` | `FeltSequence` |
+
+The retired kernel-commitment local ID `0x0000`, execution-claim v1, proof-request v1 and
+configurable-kernel verifier-configuration v2 remain reserved. Request v2 hashes exactly
+`claim_commitment[4] || expected_verifier_identity[4]` in one FeltSequence block; the expected
+identity commits to the relation, entry key and exact configuration. Neither an implementation
+root nor a `procref` key alone supplies that identity or authorizes the execution environment.
 
 Numeric assignments are consensus-visible. Changing a numbered construction's encoding, parameter
 schema, or schedule requires a new version. A delegated construction may evolve the payload grammar

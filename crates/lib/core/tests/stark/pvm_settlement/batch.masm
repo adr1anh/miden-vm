@@ -1,5 +1,8 @@
 namespace batch
 
+# batch.rs supplies VM_VERIFIER_IDENTITY and PVM_VERIFIER_IDENTITY as outer-program constants
+# from the fixture owner's selected profiles, before this module is assembled.
+
 use miden::core::crypto::hashes::eidos
 use miden::core::mem
 use miden::core::stark::security
@@ -20,7 +23,7 @@ const DEFERRED_AND_DOMAIN = 0x01000301
 #! Outputs: [DEFERRED_ROOT, ...]
 proc verify_mvm_proof(claim_commitment: word) -> word
     # The request key selects a proof by verifier and claim, matching the Rust input adapter.
-    dupw procref.vm::verify_proof exec.sys::build_proof_request_key
+    dupw push.VM_VERIFIER_IDENTITY exec.sys::build_proof_request_key
     adv.push_mapval dropw
     exec.vm::verify_proof
     exec.security::compute_conjectured_security_level
@@ -53,8 +56,8 @@ proc append_deferred_root(deferred_root: word, batch_root: word) -> word
 end
 
 #! Verifies a batch of MVM proofs and settles their deferred work with one PVM proof.
-#! CLAIMS_COMMITMENT hashes the ordered list of claim commitments. Each claim identifies a program,
-#! kernel, inputs, and outputs. The runtime count must be even and in 2..=MAX_CLAIMS.
+#! CLAIMS_COMMITMENT hashes the ordered list of claim commitments. Each claim identifies an entry
+#! key, environment root, inputs, and outputs. The runtime count must be even and in 2..=MAX_CLAIMS.
 #!
 #! claims_ptr must point to a word-aligned buffer with room for num_claims words.
 #!
@@ -107,7 +110,7 @@ pub proc verify_batch(claims_ptr: ptr<word>, num_claims: u32, claims_commitment:
     else
         # 3. Ask the host for one PVM proof of our combined root. This event can suspend
         # execution while the host obtains the proof. The root stays on the stack.
-        exec.pvm::request_proof
+        push.PVM_VERIFIER_IDENTITY exec.pvm::request_proof
 
         # 4. Verify the returned proof against that root and enforce the security requirement.
         exec.pvm::verify_proof
