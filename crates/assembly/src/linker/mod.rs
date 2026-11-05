@@ -44,6 +44,8 @@ mod module;
 pub mod namespaces;
 mod resolver;
 mod rewrites;
+#[cfg(test)]
+mod source_mount_tests;
 mod symbols;
 
 use alloc::{
@@ -69,6 +71,7 @@ use miden_assembly_syntax::{
 };
 use miden_core::{Word, advice::AdviceMap};
 use miden_mast_package::{CallableProcedurePath, Package as MastPackage, PackageNaming};
+use miden_project::PackageSourceMount;
 use smallvec::{SmallVec, smallvec};
 
 pub use self::{
@@ -144,6 +147,8 @@ pub enum LinkStatus {
 pub struct Linker {
     /// The set of libraries to link against.
     libraries: BTreeMap<Word, LinkLibrary>,
+    /// Every independent source route, separate from the artifact inventory and aggregate linkage.
+    library_routes: BTreeSet<(Word, Option<PackageSourceMount>)>,
     /// The statically linked libraries to pass to MAST forest construction.
     ///
     /// Like `libraries`, this is keyed by the name-aware v2 dependency commitment, retaining
@@ -176,6 +181,7 @@ impl Linker {
     pub fn new(source_manager: Arc<dyn SourceManager>) -> Self {
         Self {
             libraries: Default::default(),
+            library_routes: Default::default(),
             static_libraries: Default::default(),
             modules: Default::default(),
             callgraph: Default::default(),
@@ -189,35 +195,90 @@ impl Linker {
 
     /// Registers `library` and all of its modules with the linker, according to its linkage
     pub fn link_library(&mut self, library: LinkLibrary) -> Result<(), LinkerError> {
+        self.link_library_route(library, None)
+    }
+
+    /// Registers a package at an explicit source prefix without changing its callable bindings.
+    ///
+    /// Every module and exported item must fall beneath the mount's package base. Kernel packages
+    /// must be attached separately with [`Self::link_with_kernel`]; a source route grants no kernel
+    /// attachment or syscall authority.
+    pub fn link_library_at(
+        &mut self,
+        library: LinkLibrary,
+        mount: PackageSourceMount,
+    ) -> Result<(), LinkerError> {
+        if matches!(
+            library.package.kind,
+            miden_project::TargetType::Kernel | miden_project::TargetType::Executable
+        ) {
+            return Err(LinkerError::InvalidPackageModuleSurface {
+                package: library.package.name.to_string(),
+                reason:
+                    "explicit source mounts require a library package; attach kernels separately"
+                        .into(),
+            });
+        }
+        self.link_library_route(library, Some(mount))
+    }
+
+    fn link_library_route(
+        &mut self,
+        library: LinkLibrary,
+        mount: Option<PackageSourceMount>,
+    ) -> Result<(), LinkerError> {
         library.package.check_naming(library.naming()).map_err(|err| {
             LinkerError::InvalidPackageModuleSurface {
                 package: library.package.name.to_string(),
                 reason: err.to_string(),
             }
         })?;
-        let module_descriptors = library.module_descriptors().map_err(|err| {
+        let mut module_descriptors = library.module_descriptors().map_err(|err| {
             LinkerError::InvalidPackageModuleSurface {
                 package: library.package.name.to_string(),
                 reason: err.to_string(),
             }
         })?;
         let commitment = library.commitment();
-        if let Some(previous) = self.libraries.get_mut(&commitment) {
-            // The exact same dependency may be supplied with either linkage. Prefer static.
-            if matches!(library.linkage, Linkage::Static) {
-                previous.linkage = Linkage::Static;
-                self.static_libraries.entry(commitment).or_insert(library);
+        let mut bindings = Self::library_export_bindings(&library);
+        let mut package_paths = BTreeMap::new();
+        if let Some(mount) = &mount {
+            let project = |path: &Path| {
+                mount.project(path).map_err(|err| LinkerError::InvalidPackageModuleSurface {
+                    package: library.package.name.to_string(),
+                    reason: err.to_string(),
+                })
+            };
+            // Validate non-procedure exports too, even though only procedure bindings are
+            // projected.
+            for export in library.package.manifest.exports() {
+                project(&export.path())?;
             }
-            return Ok(());
+            for descriptor in &mut module_descriptors {
+                let original = Arc::<Path>::from(descriptor.path());
+                let projected = project(descriptor.path())?;
+                package_paths.insert(projected.clone(), original);
+                descriptor.set_path(projected);
+            }
+            bindings = bindings
+                .into_iter()
+                .map(|(path, binding)| Ok((project(&path)?, binding)))
+                .collect::<Result<_, LinkerError>>()?;
         }
-
-        let bindings = Self::library_export_bindings(&library);
         let modules = self.preflight_library_modules(module_descriptors, &bindings)?;
-        self.insert_library_modules(modules, &bindings);
+        // All route, surface and capacity checks precede every state or linkage mutation.
+        self.insert_library_modules(modules, &bindings, &package_paths);
+        self.library_routes.insert((commitment, mount));
         if matches!(library.linkage, Linkage::Static) {
             self.static_libraries.insert(commitment, library.clone());
         }
-        self.libraries.insert(commitment, library);
+        if let Some(previous) = self.libraries.get_mut(&commitment) {
+            if matches!(library.linkage, Linkage::Static) {
+                previous.linkage = Linkage::Static;
+            }
+        } else {
+            self.libraries.insert(commitment, library);
+        }
         Ok(())
     }
 
@@ -311,11 +372,16 @@ impl Linker {
         &mut self,
         modules: Vec<ModuleDescriptor>,
         bindings: &BTreeMap<Arc<Path>, CallableBinding>,
+        package_paths: &BTreeMap<Arc<Path>, Arc<Path>>,
     ) {
         for descriptor in modules {
+            let package_path = package_paths.get(descriptor.path()).cloned();
             let index = self
                 .link_assembled_module(descriptor)
                 .expect("module conflicts and capacity were checked before insertion");
+            if let Some(path) = package_path {
+                self.modules[index.as_usize()].set_package_path(path);
+            }
             let module = &self[index];
             for symbol in module.symbols().filter(|symbol| symbol.is_procedure()) {
                 let path = module.path().join(symbol.name());
@@ -595,7 +661,7 @@ impl Linker {
             module_descriptors.iter().any(|module| module.path().is_kernel_path());
         let bindings = Self::library_export_bindings(&library);
         let modules = self.preflight_library_modules(module_descriptors, &bindings)?;
-        self.insert_library_modules(modules, &bindings);
+        self.insert_library_modules(modules, &bindings, &BTreeMap::new());
         let kernel_index = if has_kernel_source_alias {
             self.find_module_index(Path::kernel_path())
         } else {
@@ -893,6 +959,16 @@ impl Linker {
     /// Get an iterator over the external libraries the linker has linked against
     pub fn libraries(&self) -> impl Iterator<Item = &LinkLibrary> {
         self.libraries.values()
+    }
+
+    /// Returns the admitted artifact/source routes in deterministic order.
+    #[cfg(any(feature = "std", test))]
+    pub(crate) fn library_routes(
+        &self,
+    ) -> impl Iterator<Item = (Word, Option<&PackageSourceMount>)> {
+        self.library_routes
+            .iter()
+            .map(|(commitment, mount)| (*commitment, mount.as_ref()))
     }
 
     /// Returns the exact name-aware package input which supplied a compiled procedure.

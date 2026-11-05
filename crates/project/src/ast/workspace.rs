@@ -102,6 +102,8 @@ impl SetSourceId for WorkspaceFile {
 
 impl Validate for WorkspaceFile {
     fn validate(&self, source: Arc<SourceFile>) -> Result<(), Report> {
+        self.workspace.config.resolve_library_catalog()?;
+
         // Validate that none of the package detail fields try to inherit from a workspace
         if let Some(span) = self.workspace.package.version.as_ref().and_then(|v| {
             if matches!(v.inner(), MaybeInherit::Inherit) {

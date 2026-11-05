@@ -312,6 +312,42 @@ mod tests {
     }
 
     #[test]
+    fn cache_preserves_every_same_name_exact_dependency_requirement() {
+        let first = miden_core::Word::from([1_u32, 2, 3, 4]);
+        let second = miden_core::Word::from([5_u32, 6, 7, 8]);
+        let package = build_package(
+            "pkg",
+            "1.0.0",
+            [
+                ("dep", "1.0.0", TargetType::Library, first),
+                ("dep", "2.0.0", TargetType::Library, first),
+                ("dep", "1.0.0", TargetType::Library, second),
+                ("dep", "1.0.0", TargetType::AccountComponent, first),
+            ],
+        );
+        let expected = package
+            .manifest
+            .dependencies()
+            .map(|dependency| {
+                (
+                    dependency.name.clone(),
+                    VersionRequirement::Exact(Version::new(
+                        dependency.version.clone(),
+                        dependency.digest,
+                    )),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut registry = InMemoryPackageRegistry::default();
+        let version = registry.cache_package(package.clone()).unwrap();
+        let record = registry.get_by_version(&package.name, &version).unwrap();
+
+        assert_eq!(record.dependencies(), &expected);
+        let loaded = registry.load_package(&package.name, &version).unwrap();
+        assert_eq!(loaded.manifest, package.manifest);
+    }
+
+    #[test]
     fn cache_rejects_different_artifact_for_existing_exact_version() {
         let mut registry = InMemoryPackageRegistry::default();
         let package = build_package("pkg", "1.0.0", []);

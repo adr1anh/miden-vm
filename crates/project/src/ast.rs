@@ -27,11 +27,13 @@ use alloc::{
 use serde::{Deserialize, Serialize};
 
 pub use self::{
-    dependency::DependencySpec,
-    dependency_binding::{DependencyBindingSpec, HomeLabelSpec},
+    dependency::{DependencySpec, SourceMountSpec},
+    dependency_binding::{
+        DependencyBindingSpec, ExpectedCallableSpec, HomeLabelSpec, LibraryIdSpec,
+    },
     package::{PackageConfig, PackageDetail, PackageTable, ProjectFile},
     profile::Profile,
-    target::{BinTarget, LibTarget},
+    target::{BinTarget, LibTarget, SourceNamingSpec},
     workspace::WorkspaceFile,
 };
 use crate::{Diagnostic, Label, RelatedError, Report, SourceFile, SourceSpan, miette};

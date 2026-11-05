@@ -11,7 +11,7 @@ mod resolver;
 mod version;
 mod version_requirement;
 
-use alloc::{collections::BTreeMap, string::String, sync::Arc};
+use alloc::{collections::BTreeMap, string::String, sync::Arc, vec::Vec};
 use core::fmt;
 
 use miden_assembly_syntax::Report;
@@ -36,8 +36,12 @@ pub use self::{
     version_requirement::VersionRequirement,
 };
 
-/// A type alias for an ordered map of package requirements.
-pub type PackageRequirements = BTreeMap<PackageId, VersionRequirement>;
+/// An ordered collection of package requirements.
+///
+/// Every record is retained, including repeated names. Instance-aware consumers can resolve these
+/// requirements independently; consumers which select one version per name must satisfy all of
+/// that name's requirements together.
+pub type PackageRequirements = Vec<(PackageId, VersionRequirement)>;
 
 /// Metadata tracked for a specific canonical package version.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,7 +52,50 @@ pub struct PackageRecord {
     /// An optional description of this package
     description: Option<Arc<str>>,
     /// The required dependencies of this package
+    #[cfg_attr(feature = "serde", serde(deserialize_with = "deserialize_requirements"))]
     dependencies: PackageRequirements,
+}
+
+#[cfg(feature = "serde")]
+fn deserialize_requirements<'de, D>(deserializer: D) -> Result<PackageRequirements, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Existing map indices remain readable. Collect each entry directly into the sequence so
+    // even a legacy map deserializer which permits repeated keys cannot silently overwrite them.
+    struct Requirements;
+
+    impl<'de> serde::de::Visitor<'de> for Requirements {
+        type Value = PackageRequirements;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a sequence of dependency records or a legacy dependency map")
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut requirements = Vec::new();
+            while let Some(record) = sequence.next_element()? {
+                requirements.push(record);
+            }
+            Ok(requirements)
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let mut requirements = Vec::new();
+            while let Some(record) = map.next_entry()? {
+                requirements.push(record);
+            }
+            Ok(requirements)
+        }
+    }
+
+    deserializer.deserialize_any(Requirements)
 }
 
 impl PackageRecord {

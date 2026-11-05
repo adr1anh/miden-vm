@@ -613,8 +613,8 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-depa = { path = "../depa.masp", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
-depb = { path = "../depb.masp", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+depa = { path = "../depa.masp", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "depa", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "depa", "leaf"] }, { visible-path = ["deps", "depa", "marker"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "depa", "marker"] }] }
+depb = { path = "../depb.masp", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "depb", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "depb", "leaf"] }, { visible-path = ["deps", "depb", "marker"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "depb", "marker"] }] }
 "#,
     );
     write_file(
@@ -826,7 +826,7 @@ path = "lib.masm"
 namespace = "deps::pathdep"
 
 [dependencies]
-runtime = { version = "=1.0.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+runtime = { version = "=1.0.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "runtime", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "runtime", "leaf"] }] }
 "#,
     );
     write_file(
@@ -879,8 +879,8 @@ path = "lib.masm"
 [dependencies]
 pathdep = {{ path = "../pathdep", linkage = "static", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
 gitdep = {{ git = "{}", branch = "main", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
-regdep = {{ version = "=1.0.0", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
-predep = {{ path = "../predep.masp", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
+regdep = {{ version = "=1.0.0", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }}, expected-callables = [{{ visible-path = ["deps", "regdep", "leaf"], home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}], canonical-path = ["deps", "regdep", "leaf"] }}] }}
+predep = {{ path = "../predep.masp", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }}, expected-callables = [{{ visible-path = ["deps", "predep", "leaf"], home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}], canonical-path = ["deps", "predep", "leaf"] }}] }}
 "#,
             gitdep_repo.display()
         ),
@@ -970,7 +970,7 @@ path = "lib.masm"
 namespace = "deps::pathdep"
 
 [dependencies]
-predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "predep", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "predep", "leaf"] }] }
 "#,
     );
     write_file(
@@ -1058,7 +1058,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "predep", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "predep", "leaf"] }] }
 "#,
     );
     write_file(
@@ -1122,7 +1122,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "predep", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "predep", "leaf"] }] }
 "#,
     );
     write_file(
@@ -1175,7 +1175,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "predep", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "predep", "leaf"] }] }
 "#,
     );
     write_file(
@@ -1228,7 +1228,7 @@ path = "lib.masm"
 namespace = "deps::pathdep"
 
 [dependencies]
-shared = { version = "^1.0.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+shared = { version = "^1.0.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "shared", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "shared", "leaf"] }] }
 "#,
     );
     write_file(
@@ -1255,7 +1255,7 @@ path = "lib.masm"
 namespace = "deps::gitdep"
 
 [dependencies]
-shared = { version = "=1.2.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+shared = { version = "=1.2.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "shared", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "shared", "leaf"] }] }
 "#,
     );
     write_file(
@@ -1364,7 +1364,7 @@ path = "lib.masm"
 namespace = "deps::pathdep"
 
 [dependencies]
-shared = {{ version = "{shared_digest}", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
+shared = {{ version = "{shared_digest}", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }}, expected-callables = [{{ visible-path = ["deps", "shared", "leaf"], home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}], canonical-path = ["deps", "shared", "leaf"] }}] }}
 "#
         ),
     );
@@ -1393,7 +1393,7 @@ path = "lib.masm"
 namespace = "deps::gitdep"
 
 [dependencies]
-shared = {{ version = "1.0.0#{shared_digest}", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
+shared = {{ version = "1.0.0#{shared_digest}", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }}, expected-callables = [{{ visible-path = ["deps", "shared", "leaf"], home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}], canonical-path = ["deps", "shared", "leaf"] }}] }}
 "#
         ),
     );
@@ -1476,12 +1476,27 @@ end
 }
 
 #[test]
-fn runtime_dependency_conflict_requires_matching_digest() {
+fn same_name_runtime_dependencies_retain_distinct_exact_supply_records() {
     let tempdir = TempDir::new().unwrap();
     let mut context = TestContext::new();
 
-    let runtime_a_digest = hash_string_to_word("runtime-a");
-    let runtime_b_digest = hash_string_to_word("runtime-b");
+    let runtime_a = Arc::<MastPackage>::from(context.assemble_library_package_with_export(
+        "runtime",
+        "1.0.0",
+        "deps::runtime_a::leaf",
+        [],
+    ));
+    let runtime_b = Arc::<MastPackage>::from(context.assemble_library_package_with_export(
+        "runtime",
+        "2.0.0",
+        "deps::runtime_b::leaf",
+        [],
+    ));
+    let runtime_a_digest = runtime_a.dependency_commitment();
+    let runtime_b_digest = runtime_b.dependency_commitment();
+    assert_ne!(runtime_a_digest, runtime_b_digest);
+    context.registry_mut().add_package(runtime_a.clone());
+    context.registry_mut().add_package(runtime_b.clone());
 
     let depa = context.assemble_library_package_with_export(
         "depa",
@@ -1496,7 +1511,7 @@ fn runtime_dependency_conflict_requires_matching_digest() {
         "depb",
         "1.0.0",
         "deps::depb::leaf",
-        [("runtime", "1.0.0", TargetType::Library, runtime_b_digest)],
+        [("runtime", "2.0.0", TargetType::Library, runtime_b_digest)],
     );
     let depb_path = tempdir.path().join("depb.masp");
     depb.write_to_file(&depb_path).unwrap();
@@ -1513,8 +1528,8 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-depa = { path = "../depa.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
-depb = { path = "../depb.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+depa = { path = "../depa.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "depa", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "depa", "leaf"] }] }
+depb = { path = "../depb.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "depb", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "depb", "leaf"] }] }
 "#,
     );
     write_file(
@@ -1526,12 +1541,18 @@ end
 "#,
     );
 
-    let error = context
+    let package = context
         .assemble_library_package(&root_manifest, None)
-        .expect_err("runtime dependency digest conflicts should fail");
-    let error = error.to_string();
-    assert!(error.contains("dependency resolution failed"));
-    assert!(error.contains("there is no version of runtime"));
+        .expect("distinct exact runtime supplies may share a package name");
+    let runtime_dependencies = package
+        .manifest
+        .dependencies()
+        .filter(|dependency| &dependency.name == "runtime")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(runtime_dependencies.len(), 2);
+    assert!(runtime_dependencies.contains(&runtime_a.to_dependency()));
+    assert!(runtime_dependencies.contains(&runtime_b.to_dependency()));
 }
 
 #[test]
@@ -1560,7 +1581,7 @@ path = "lib.masm"
 namespace = "deps::mid"
 
 [dependencies]
-runtime = { version = "=1.0.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+runtime = { version = "=1.0.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["deps", "runtime", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["deps", "runtime", "leaf"] }] }
 "#,
     );
     write_file(
@@ -3056,12 +3077,20 @@ fn executable_code_conversion_does_not_require_embedded_kernel_code() {
     );
 }
 
+// Graph-selection attacks need a fixed, caller-owned public surface so admission expectations
+// remain independent of the serialized artifact which the tests mutate.
+fn graph_selection_package(name: &str, version: &str, export: &str) -> Box<MastPackage> {
+    let mut package =
+        debug_bearing_static_package(name, export, "graph-selection", "fixture", None);
+    package.version = version.parse().unwrap();
+    Box::new(package)
+}
+
 #[test]
 fn preassembled_dependency_must_match_graph_selected_artifact() {
     let tempdir = TempDir::new().unwrap();
     let dep_package_path = tempdir.path().join("dep.masp");
-    let dep_v1 =
-        MastPackage::generate("dep".into(), "1.0.0".parse().unwrap(), TargetType::Library, []);
+    let dep_v1 = graph_selection_package("dep", "1.0.0", "dep::foo");
     dep_v1.write_to_file(&dep_package_path).unwrap();
 
     let root_dir = tempdir.path().join("root");
@@ -3076,7 +3105,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["dep", "foo"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["dep", "foo"] }] }
 "#,
     );
     write_file(
@@ -3089,8 +3118,7 @@ end
 
     let mut context = TestContext::new();
     let mut project_assembler = context.project_assembler_for_path(&root_manifest).unwrap();
-    let dep_v2 =
-        MastPackage::generate("dep".into(), "1.0.1".parse().unwrap(), TargetType::Library, []);
+    let dep_v2 = graph_selection_package("dep", "1.0.1", "dep::foo");
     dep_v2.write_to_file(&dep_package_path).unwrap();
 
     let error = project_assembler
@@ -3149,7 +3177,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+dep = { path = "../dep.masp", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["dep", "leaf"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["dep", "leaf"] }] }
 "#,
     );
     write_file(
@@ -3176,18 +3204,10 @@ end
 #[test]
 fn preassembled_dependency_must_match_graph_selected_runtime_dependencies() {
     let tempdir = TempDir::new().unwrap();
-    let runtime_v1 = Arc::<MastPackage>::from(MastPackage::generate(
-        "runtime".into(),
-        "1.0.0".parse().unwrap(),
-        TargetType::Library,
-        [],
-    ));
-    let runtime_v2 = Arc::<MastPackage>::from(MastPackage::generate(
-        "runtime".into(),
-        "1.0.1".parse().unwrap(),
-        TargetType::Library,
-        [],
-    ));
+    let runtime_v1 =
+        Arc::<MastPackage>::from(graph_selection_package("runtime", "1.0.0", "dep::foo"));
+    let runtime_v2 =
+        Arc::<MastPackage>::from(graph_selection_package("runtime", "1.0.1", "dep::foo"));
     let dep_package_path = tempdir.path().join("dep.masp");
     let exports = runtime_v1.manifest.exports().cloned().collect::<Vec<_>>();
     let naming = fixture_naming(
@@ -3225,7 +3245,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["dep", "foo"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["dep", "foo"] }] }
 "#,
     );
     write_file(
@@ -3265,12 +3285,7 @@ end
 #[test]
 fn preassembled_dependency_must_match_graph_selected_dependency_kinds() {
     let tempdir = TempDir::new().unwrap();
-    let runtime = Arc::<MastPackage>::from(MastPackage::generate(
-        "runtime".into(),
-        "1.0.0".parse().unwrap(),
-        TargetType::Library,
-        [],
-    ));
+    let runtime = Arc::<MastPackage>::from(graph_selection_package("runtime", "1.0.0", "dep::foo"));
     let dep_package_path = tempdir.path().join("dep.masp");
     let exports = runtime.manifest.exports().cloned().collect::<Vec<_>>();
     let naming = fixture_naming(
@@ -3308,7 +3323,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["dep", "foo"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["dep", "foo"] }] }
 "#,
     );
     write_file(
@@ -3348,12 +3363,7 @@ end
 #[test]
 fn preassembled_package_must_match_graph_selected_target_kind() {
     let tempdir = TempDir::new().unwrap();
-    let runtime = Arc::<MastPackage>::from(MastPackage::generate(
-        "runtime".into(),
-        "1.0.0".parse().unwrap(),
-        TargetType::Library,
-        [],
-    ));
+    let runtime = Arc::<MastPackage>::from(graph_selection_package("runtime", "1.0.0", "dep::foo"));
     let dep_package_path = tempdir.path().join("dep.masp");
     let exports = runtime.manifest.exports().cloned().collect::<Vec<_>>();
     let home = FixtureNamespace::assembly_tests().namespace_plan().clone();
@@ -3387,7 +3397,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] }, expected-callables = [{ visible-path = ["dep", "foo"], home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }], canonical-path = ["dep", "foo"] }] }
 "#,
     );
     write_file(
@@ -3549,7 +3559,7 @@ name = "main"
 path = "main.masm"
 
 [dependencies]
-mid = {{ path = "{}", linkage = "static", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
+mid = {{ path = "{}", linkage = "static", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }}, expected-callables = [{{ visible-path = ["deps", "mid", "call_kernel"], home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}], canonical-path = ["deps", "mid", "call_kernel"] }}] }}
 "#,
             dependency_package_path.display()
         ),
@@ -3801,7 +3811,7 @@ fn manually_provided_sources_skip_package_post_processors() {
     )
     .unwrap();
 
-    let root_id = project_assembler.dependency_graph.root().clone();
+    let root_id = *project_assembler.dependency_graph.root();
     let mut cache = BTreeMap::new();
     let resolved = match project_assembler
         .assemble_source_package(
@@ -3814,7 +3824,7 @@ fn manually_provided_sources_skip_package_post_processors() {
             Some(ProjectSourceInputs { root, support }),
             None,
             &mut cache,
-            None,
+            DependencyNamingRequest::default(),
         )
         .expect("assembly from manual sources should succeed")
     {
@@ -3977,11 +3987,11 @@ fn source_cache_selects_current_naming_before_reuse_and_rejects_changed_home() {
     });
     let project = assembler.project.clone();
     let target = project.library_target().unwrap().inner().clone();
-    let id = assembler.dependency_graph.root().clone();
+    let id = *assembler.dependency_graph.root();
     let mut cache = BTreeMap::new();
     let mut assemble = |assembler: &mut ProjectAssembler<'_, TestRegistry>| {
         assembler.assemble_source_package(
-            id.clone(),
+            id,
             project.clone(),
             &target,
             "dev",
@@ -3990,7 +4000,7 @@ fn source_cache_selects_current_naming_before_reuse_and_rejects_changed_home() {
             None,
             None,
             &mut cache,
-            None,
+            DependencyNamingRequest::default(),
         )
     };
     let first = match assemble(&mut assembler).unwrap() {
@@ -4034,11 +4044,11 @@ fn memory_cache_rejects_root_post_processing_when_used_as_dependency() {
     });
     let project = assembler.project.clone();
     let target = project.library_target().unwrap().inner().clone();
-    let id = assembler.dependency_graph.root().clone();
+    let id = *assembler.dependency_graph.root();
     let mut cache = BTreeMap::new();
     let outcome = assembler
         .assemble_source_package(
-            id.clone(),
+            id,
             project.clone(),
             &target,
             "dev",
@@ -4047,7 +4057,7 @@ fn memory_cache_rejects_root_post_processing_when_used_as_dependency() {
             None,
             None,
             &mut cache,
-            None,
+            DependencyNamingRequest::default(),
         )
         .unwrap();
     assert!(matches!(outcome, ControlFlow::Continue(_)));
@@ -4063,7 +4073,7 @@ fn memory_cache_rejects_root_post_processing_when_used_as_dependency() {
             None,
             None,
             &mut cache,
-            None,
+            DependencyNamingRequest::default(),
         )
         .err()
         .expect(
@@ -4084,11 +4094,11 @@ fn manual_ast_without_source_file_or_provider_never_reuses_another_body() {
     let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
     let project = assembler.project.clone();
     let target = project.library_target().unwrap().inner().clone();
-    let id = assembler.dependency_graph.root().clone();
+    let id = *assembler.dependency_graph.root();
     let mut cache = BTreeMap::new();
     let mut assemble = |root| match assembler
         .assemble_source_package(
-            id.clone(),
+            id,
             project.clone(),
             &target,
             "dev",
@@ -4097,7 +4107,7 @@ fn manual_ast_without_source_file_or_provider_never_reuses_another_body() {
             Some(ProjectSourceInputs { root, support: vec![] }),
             None,
             &mut cache,
-            None,
+            DependencyNamingRequest::default(),
         )
         .unwrap()
     {
@@ -4126,11 +4136,11 @@ fn manual_dependency_ast_cannot_reuse_matching_file_provenance_for_another_body(
     let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
     let project = assembler.project.clone();
     let target = project.library_target().unwrap().inner().clone();
-    let id = assembler.dependency_graph.root().clone();
+    let id = *assembler.dependency_graph.root();
     let mut cache = BTreeMap::new();
     let mut assemble = |root| {
         assembler.assemble_source_package(
-            id.clone(),
+            id,
             project.clone(),
             &target,
             "dev",
@@ -4145,14 +4155,76 @@ fn manual_dependency_ast_cannot_reuse_matching_file_provenance_for_another_body(
                 support: vec![],
             }),
             &mut cache,
-            None,
+            DependencyNamingRequest::default(),
         )
     };
     let first = assemble(first_root).unwrap();
     assert!(matches!(first, ControlFlow::Continue(_)));
     // Identical supplied source provenance cannot identify an AST mutated after parsing.
-    let error = assemble(second_root).err().expect("a changed manual body must compile and encounter the immutable semantic-version collision, never return the memoized first body");
-    assert!(error.to_string().contains("already registered"));
+    let error = assemble(second_root).err().expect(
+        "a changed manual body must compile and reject a different artifact in the same instance",
+    );
+    assert!(error.to_string().contains("different artifact"));
+    assert!(error.to_string().contains("bump the semantic version"));
+}
+
+#[test]
+fn manual_dependency_ast_rejects_changed_source_provenance_for_the_same_body() {
+    let temp = TempDir::new().unwrap();
+    let manifest = cache_test_project(temp.path(), "nonexistent.custom");
+    let mut context = TestContext::new();
+    let source = "namespace cachetest\npub proc run push.1 end";
+    let first_root = context.parse_module(source).unwrap();
+    let identical_root = context.parse_module(source).unwrap();
+    let changed_provenance_root = context.parse_module(source).unwrap();
+    let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+    let project = assembler.project.clone();
+    let target = project.library_target().unwrap().inner().clone();
+    let id = *assembler.dependency_graph.root();
+    let mut cache = BTreeMap::new();
+    let mut assemble = |root, content: &str| {
+        assembler.assemble_source_package(
+            id,
+            project.clone(),
+            &target,
+            "dev",
+            InterruptedTargetRole::Dependency,
+            None,
+            Some(ProjectSourceInputs { root, support: vec![] }),
+            Some(ProjectSourceProvenanceInputs {
+                root: SourceFileProvenance {
+                    path: temp.path().join("nonexistent.custom").into_boxed_path(),
+                    content: content.into(),
+                },
+                support: vec![],
+            }),
+            &mut cache,
+            DependencyNamingRequest::default(),
+        )
+    };
+    let first = match assemble(first_root, source).unwrap() {
+        ControlFlow::Continue(package) => package,
+        _ => panic!("manual AST unexpectedly interrupted"),
+    };
+    let identical = match assemble(identical_root, source).unwrap() {
+        ControlFlow::Continue(package) => package,
+        _ => panic!("manual AST unexpectedly interrupted"),
+    };
+    assert!(
+        !Arc::ptr_eq(&first.package, &identical.package),
+        "manual ASTs must compile even when supplied provenance matches"
+    );
+    assert_eq!(first.package.dependency_commitment(), identical.package.dependency_commitment());
+    assert_eq!(first.naming, identical.naming);
+    assert!(PackageBuildProvenance::from_package(&first.package).unwrap().is_some());
+
+    // The same parsed body and naming cannot make changed file provenance interchangeable.
+    let changed_source = format!("# provenance changed\n{source}");
+    let error = assemble(changed_provenance_root, &changed_source)
+        .err()
+        .expect("changed provenance must reject after compiling the same manual body");
+    assert!(error.to_string().contains("different source provenance"));
+    assert!(error.to_string().contains("bump the semantic version"));
 }
 
 #[test]
@@ -4252,7 +4324,7 @@ fn standard_dependency_bindings_match_compiled_homes_and_reject_changed_requests
         assert!(
             error
                 .to_string()
-                .contains("namespace inputs differ from its requested dependency home"),
+                .contains("namespace inputs differ from its requested source home"),
             "{error}"
         );
     }

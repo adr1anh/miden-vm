@@ -9,10 +9,12 @@ extern crate std;
 #[cfg(feature = "serde")]
 pub mod ast;
 mod dependencies;
+mod library_catalog;
 mod library_import;
 mod linkage;
 mod package;
 mod profile;
+mod source_mount;
 mod target;
 #[cfg(all(test, feature = "std", feature = "serde"))]
 mod tests;
@@ -39,11 +41,13 @@ pub use toml::Value;
 
 pub use self::{
     dependencies::*,
-    library_import::{LibraryImport, LibrarySelection},
+    library_catalog::LibraryCatalog,
+    library_import::{ExpectedVisibleCallables, LibraryImport, LibrarySelection},
     linkage::Linkage,
     package::Package,
     profile::Profile,
-    target::Target,
+    source_mount::PackageSourceMount,
+    target::{SourceNaming, SourceNamingConvention, Target},
     workspace::Workspace,
 };
 

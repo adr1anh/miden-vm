@@ -494,9 +494,9 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Fresh normal/parallel/streamed fixture evidence and 32 reviewed snapshots are at PR09; 24 unit checks stop at the legacy public-statement adapter. Full production forged matrices/Range+And8 closure, claim12, generated/MASM/recursive/security/qualification remain |
 | 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; fresh processor/parallel/decoder/lookup migration evidence is at PR09, including 24 public-statement failures. Full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate now compiles and runs: 1,866 pass/24 legacy-public-statement failures/one existing ignore; 49 integrations and 69 concurrent replay tests pass. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
-| 09 Assembly/packages | in-progress | Latest CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
-| 10 Projects/imports | planned | — | — | Depends on 04,09; generic dependency-instance/home/code-supply model under superseding D3 |
-| 11 ABI/resources | planned | — | — | Explicit unresolved ABI/resource gates |
+| 09 Assembly/packages | implemented-awaiting-validation | Final review `0ec317994`; CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
+| 10 Projects/imports | implemented-awaiting-validation | Native `82e671c01`; assembly `e151d65c5`; instances `116a2d736`; supply `049d9ea68`; prior SHAs below; base `0ec317994` | Independent reviews; project90, assembly598/six existing skips, supply379/one existing skip and native3 pass; mast-package/both registries/project/assembly all-target strict Clippy, native-target Clippy and four shared no_std checks pass | Inherited public-statement/proof/recursive/security and final qualification remain; selected publication-profile behavior is not claimed |
+| 11 ABI/resources | planned | — | — | Exact immutable resource lengths and preserved calling/advice conventions; optional profiles deferred |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
 | 13 Core library | planned | — | — | Depends on 09–12 and supported ABI |
 | 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
@@ -2846,3 +2846,127 @@ Production CLI legacy verification, PR12 statements, PR14 proof identities and p
 remain open. Independent reviews and source signatures verified; documentation follows separately.
 Root centralized guarded checks; agents ran no builds. No skips added, proof constants refreshed,
 pushes or GitHub PRs. PR09/M1/overall completion is not claimed.
+
+
+PR09 branch audit at `a97397cf1` found no additional PR09-owned source blocker; final review scope is committed separately as `0ec317994`. PR09 remains implemented-awaiting-validation for its preserved downstream gates. PR10 starts at that exact local stack base; the first owned slice is independent artifact callable expectations and opt-in source declaration naming. No branch/publication or validation claim changes the overall goal or M1.
+
+
+### PR10 independent artifact expectations and explicit source naming, 3 November 2026
+
+`61bb29a3d` adds caller-owned ExpectedVisibleCallables, independent dependency/manifest/graph-edge
+propagation, exact visible-path/full-binding comparison and workspace overrides including explicit
+empty maps. Semantic components and complete typed homes preserve reexports and private/mixed
+inventories; external TypedId serialization still requires its owning writer. No admission or body
+selection follows from this structural expectation.
+
+`a60981e41` adds explicitly invoked NamespaceInputs::with_default_callable_paths, requiring a chosen
+home, preserving Bound/local overrides, enumerating concrete private/entry procedures and skipping
+aliases. Cohort duplicates and kernel modules reject; D8 placement remains explicit. Ordinary test
+fixtures reuse its path lowering.
+
+`a6b4e3f25` checks current source expectations on fresh/memory/registered candidates before reuse or
+promotion. All source-project artifact dependencies, including Custom selections, require independent
+public maps; comparison follows current profile admission and exact package naming checks. Default-home metadata remains
+separate. DependencyNamingRequest groups those independent caller inputs. Existing attack fixtures
+now state owner-declared maps; deterministic public surfaces replace four random attack constructors
+without changing their mutations/rejection assertions. Four integration regressions exercise mixed
+homes/reexports/private keys, Latest/Pinned body and linkage matrices, malformed expectations/profile
+failures before promotion and real memory/registered reuse. They distinguish selected D from body
+availability by checking concrete versus External nodes, while preserving K and real EXEC.
+
+Central AC/heavy-guarded checks: `make test-project EXTRA=--locked NEXTEST_PROFILE=ci` passes56;
+`make test-assembly EXTRA=--locked NEXTEST_PROFILE=ci` passes556/six existing skips, including62
+project tests and both packaging tests. Both crates pass `cargo clippy --locked -p <crate>
+--all-targets -- -D warnings` (assembly additionally `--features testing`) and `cargo check --locked
+-p <crate> --no-default-features`. Source signatures and independent reviews pass. Configured targets,
+readable catalogs, aliases/instances/routing/cache multiplicity, authorized execution and all prior
+PR12/PR14/final qualification remain open; this is not PR10/M1/goal completion. No PRs or pushes.
+
+
+### PR10 configured targets and shared kernel naming, 3 November 2026
+
+`70cf38d0d` adds explicit target naming convention/binding configuration, validated kind matching,
+fallible executable extraction, exact roundtrip/provenance and unchanged omission behavior. Binding
+selection remains opaque/default-home metadata, separate from public ownership and profiles.
+
+`d78288727` shares production kernel-root export lowering with fixtures. Root public/public-submodule
+exports retain unique canonical names; private helpers stay beneath Env; aliases preserve defining K.
+Compatible overrides, empty explicit homes and inherited AST/private/unused bindings survive; real
+parent placement, duplicates and collisions are checked. A reviewed fixture regression is covered:
+sidecar-only inherited metadata enriches a cloned base while cohort defaults retain prior conflict
+semantics. No relocation, syscall export list, configurable kernel namespace or runtime change.
+
+`86a8dc4ce` uses an explicit provider or configured convention, selecting parent dependency home
+before target fallback and checking the result before reuse. Actual fresh/memory/registered naming
+also must match the selected source home, closing a reviewed cache boundary gap. Independently
+allowed, self-consistent forged cache packages retain source provenance/public bindings but change
+default metadata; both reuse paths reject them. Five integration tests cover configured library/entry/
+required-library, complete foreign overrides, parent Latest/Pinned/custom selection across linkage,
+root/public-submodule/private kernel placement and missing configuration.
+
+Central guarded standard gates pass: project63; assembly575/six existing skips, including both
+packaging tests. Both crates pass all-target strict Clippy (assembly with testing) and no-default-
+features checks. Runtime gates preceded the accessor-only portability fix; strict Clippy/no_std followed it.
+Kernel production uses its private linker field so no_std needs no std-only accessor.
+Independent review and source signatures pass. Readable catalogs, source mounts/aliases/instances,
+route-sensitive caches/runtime supply and every existing PR12/PR14/M1/security/final gate remain.
+No PR10 or goal completion, added skips, PRs or pushes.
+
+
+### PR10 readable catalogs and explicit assembly source mounts, 3 November 2026
+
+`3573f5612` defines normalized, component-aware PackageSourceMount. `1019a35d7` resolves explicit
+catalog references through caller-supplied opaque Word maps before effective typed configuration
+returns, across standard/custom/ancestor/expected/target positions. Bare strings stay literal IDs;
+missing selected names, conflicting maps and invalid catalog entries reject. Inactive workspace
+records retain ordinary override semantics; all table entries validate even unused. Normalized
+writers emit literals. This supplies no identity derivation, publication/profile or R_E authority.
+
+`1c3cd85cb` adds explicit assembly mount APIs and atomic descriptor/export-key projection, retaining
+canonical bindings, private/inner/reexport keys, exact artifacts and original debug linkage paths.
+Every known/new artifact route is preflighted before mutation/linkage upgrade; an artifact can have
+multiple routes. Private compiler-cache v2 includes normalized route assignments. Semantic quote
+normalization was reviewed/fixed, retaining literal root-text components. Nine assembly regressions
+cover equal-D/distinct pinned K, repeated artifacts, alias/cache order, root/submodules, atomic
+failure/capacity, kernel separation, mixed homes and both dynamic reexport debug import paths.
+
+`1f9600d7b` adds two real project catalog regressions, including six Latest/Pinned configurations,
+member-readable renaming, independently supplied IDs/full bindings, actual EXEC K, equal callee D,
+rename-stable caller D and construction rejection before lowering/cache promotion.
+
+Central AC/heavy-guarded standard project gate passes72; standard assembly gate passes586/six
+existing skips, including both packaging cases. Both crates pass all-target strict Clippy (assembly
+with testing) and no-default-features checks. Independent review/source signatures pass. Project
+edge mount configuration, alias/package distinction, graph instances, local cache/runtime supply
+multiplicity and all previous PR12/PR14/M1/security/final gates remain. No PR10/goal completion,
+new skips, publication, PRs or pushes.
+
+
+### PR10 exact supply metadata checkpoint, 3 November 2026
+
+`049d9ea68` retains distinct same-name exact package requirements; complete duplicates still
+reject. Registry records/persistence use sequences, accept legacy maps without overwriting repeated
+entries, and intersect repeated constraints in the legacy unscoped resolver. Checked kernel
+metadata remains separate from ordinary same-name supplies. Central AC/heavy-guarded tests for
+mast-package and both registries pass379/one existing skip; all-target strict Clippy passes for
+those three crates. Signature verified. Graph/config/local source candidates and native project
+invocation remain in-flight; this checkpoint does not close PR10 or any inherited gate.
+
+
+### PR10 project instances and native invocation checkpoint, 3 November 2026
+
+`116a2d736` separates aliases/package provenance, propagates explicit source mounts and resolves
+graph-local instances/full exact supplies. Symmetric binding-context discovery preserves ordinary
+shared constraints; repeated ambiguous states reject with alias guidance, including acyclic diamond
+and three-name regressions. `e151d65c5` integrates mounts, instance/target caches, framed private
+closure provenance, stable full runtime records and owned available code+naming pools without
+overwriting another explicitly bound canonical publication. Manual AST recompilation, same-instance
+body/provenance changes, profile/public expectations and forged-home rejection remain checked.
+
+`82e671c01` verifies native bundled/external equivalence, distinct pinned K with equal D and both
+owner-key requests, retained private/reexport/Latest keys and conflicting fixture selections.
+Central guarded checks pass project90, assembly596 unit plus2 packaging/six existing skips,
+supply379/one existing skip, native3; mast-package, both registries, project and assembly pass all-target strict Clippy,
+the native target passes focused strict Clippy, and four shared crates pass no_std. Independent
+reviews and signatures pass. PR10 is implemented-awaiting-validation; inherited PR12/PR14/M1 and
+all security/final qualification gates remain open. No PRs or pushes.

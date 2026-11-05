@@ -7,7 +7,7 @@ use super::{
     parsing::{MaybeInherit, SetSourceId, Validate},
     *,
 };
-use crate::{Map, MetadataSet, RelatedLabel, SemVer, SourceId, Span, Uri};
+use crate::{LibraryCatalog, Map, MetadataSet, RelatedLabel, SemVer, SourceId, Span, Uri, Word};
 
 /// Represents the contents of the `[package]` table
 #[derive(Debug, Clone)]
@@ -174,6 +174,12 @@ impl SetSourceId for PackageDetail {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 pub struct PackageConfig {
+    /// Optional exact readable-name mappings to caller-supplied Word identity literals.
+    #[cfg_attr(
+        feature = "serde",
+        serde(rename = "library-catalog", default, skip_serializing_if = "Map::is_empty")
+    )]
+    pub library_catalog: Map<String, String>,
     /// The set of dependencies required by this package/workspace
     #[cfg_attr(
         feature = "serde",
@@ -191,9 +197,23 @@ pub struct PackageConfig {
 
 impl SetSourceId for PackageConfig {
     fn set_source_id(&mut self, source_id: SourceId) {
-        let Self { dependencies, lints } = self;
+        let Self { library_catalog: _, dependencies, lints } = self;
         dependencies.set_source_id(source_id);
         lints.set_source_id(source_id);
+    }
+}
+
+impl PackageConfig {
+    /// Validates every supplied catalog entry without deriving identities from its name.
+    pub fn resolve_library_catalog(&self) -> Result<LibraryCatalog, Report> {
+        let mut catalog = LibraryCatalog::default();
+        for (name, literal) in &self.library_catalog {
+            let identity = Word::try_from(literal.as_str()).map_err(|error| {
+                Report::msg(format!("invalid library catalog identity for '{name}': {error}"))
+            })?;
+            catalog.insert(name.clone(), identity)?;
+        }
+        Ok(catalog)
     }
 }
 
@@ -341,6 +361,30 @@ impl ProjectFile {
         source: Arc<SourceFile>,
         workspace: Option<&WorkspaceFile>,
     ) -> Result<Vec<crate::Dependency>, Report> {
+        let catalog = self.resolve_library_catalog(workspace)?;
+        self.extract_dependencies_with_catalog(source, workspace, &catalog)
+    }
+
+    /// Composes workspace/member maps without allowing a member to shadow an identity.
+    pub fn resolve_library_catalog(
+        &self,
+        workspace: Option<&WorkspaceFile>,
+    ) -> Result<LibraryCatalog, Report> {
+        let mut catalog = workspace
+            .map(|workspace| workspace.workspace.config.resolve_library_catalog())
+            .transpose()?
+            .unwrap_or_default();
+        catalog.merge(&self.config.resolve_library_catalog()?)?;
+        Ok(catalog)
+    }
+
+    /// Extracts effective dependencies with an already composed readable catalog.
+    pub fn extract_dependencies_with_catalog(
+        &self,
+        source: Arc<SourceFile>,
+        workspace: Option<&WorkspaceFile>,
+        catalog: &LibraryCatalog,
+    ) -> Result<Vec<crate::Dependency>, Report> {
         use crate::{Dependency, DependencyVersionScheme};
 
         let mut dependencies = Vec::with_capacity(self.config.dependencies.len());
@@ -367,11 +411,35 @@ impl ProjectFile {
                             let binding = dependency.binding.as_ref().or(dep.binding.as_ref())
                                 .ok_or_else(|| Report::msg(format!(
                                     "dependency '{}' requires an explicit Latest/Pinned binding or custom home", dependency.name)))?
-                                .resolve()?;
-                            dependencies.push(
-                                Dependency::new(dep.name.clone(), version, linkage)
-                                    .with_binding(binding),
-                            );
+                                .resolve_with_catalog(catalog)?;
+                            let expected = dependency
+                                .expected_callables
+                                .as_deref()
+                                .or(dep.expected_callables.as_deref())
+                                .map(|specs| {
+                                    ExpectedCallableSpec::resolve_all_with_catalog(specs, catalog)
+                                })
+                                .transpose()?;
+                            let package = dependency.package.as_deref().or(dep.package.as_deref());
+                            let source_mount = dependency
+                                .source_mount
+                                .as_deref()
+                                .or(dep.source_mount.as_deref())
+                                .map(|mount| mount.resolve())
+                                .transpose()?;
+                            let mut resolved =
+                                Dependency::new(dependency.name.clone(), version, linkage)
+                                    .with_binding(binding);
+                            if let Some(package) = package {
+                                resolved = resolved.with_package(package.clone());
+                            }
+                            if let Some(expected) = expected {
+                                resolved = resolved.with_expected_callables(expected);
+                            }
+                            if let Some(mount) = source_mount {
+                                resolved = resolved.with_source_mount(mount);
+                            }
+                            dependencies.push(resolved);
                         },
                         None => {
                             return Err(ProjectFileError::InvalidPackageDependency {
@@ -393,12 +461,24 @@ impl ProjectFile {
                 }
             } else {
                 let linkage = dependency.linkage.as_deref().copied().unwrap_or_default();
-                dependencies.push(Dependency::new(
+                let mut resolved = Dependency::new(
                     dependency.name.clone(),
                     DependencyVersionScheme::try_from(dependency.as_ref())?,
                     linkage,
                 ).with_binding(dependency.binding.as_ref().ok_or_else(|| Report::msg(format!(
-                    "dependency '{}' requires an explicit Latest/Pinned binding or custom home", dependency.name)))?.resolve()?));
+                    "dependency '{}' requires an explicit Latest/Pinned binding or custom home", dependency.name)))?.resolve_with_catalog(catalog)?);
+                if let Some(package) = dependency.package.as_deref() {
+                    resolved = resolved.with_package(package.clone());
+                }
+                if let Some(mount) = dependency.source_mount.as_deref() {
+                    resolved = resolved.with_source_mount(mount.resolve()?);
+                }
+                if let Some(specs) = dependency.expected_callables.as_deref() {
+                    resolved = resolved.with_expected_callables(
+                        ExpectedCallableSpec::resolve_all_with_catalog(specs, catalog)?,
+                    );
+                }
+                dependencies.push(resolved);
             }
         }
 
@@ -406,6 +486,15 @@ impl ProjectFile {
     }
 
     pub fn extract_library_target(&self) -> Result<Option<Span<crate::Target>>, Report> {
+        let catalog = self.config.resolve_library_catalog()?;
+        self.extract_library_target_with_catalog(&catalog)
+    }
+
+    /// Extracts a library target after resolving its configured names with the effective catalog.
+    pub fn extract_library_target_with_catalog(
+        &self,
+        catalog: &LibraryCatalog,
+    ) -> Result<Option<Span<crate::Target>>, Report> {
         use miden_assembly_syntax::Path as MasmPath;
 
         use crate::TargetType;
@@ -425,6 +514,7 @@ impl ProjectFile {
                     name,
                     namespace,
                     path: Span::new(span, Uri::new("mod.masm")),
+                    naming: None,
                 },
             )));
         }
@@ -457,11 +547,25 @@ impl ProjectFile {
                 name,
                 namespace,
                 path: lib.path.clone(),
+                naming: lib
+                    .naming
+                    .as_ref()
+                    .map(|naming| naming.resolve_with_catalog(kind, catalog))
+                    .transpose()?,
             },
         )))
     }
 
-    pub fn extract_executable_targets(&self) -> Vec<Span<crate::Target>> {
+    pub fn extract_executable_targets(&self) -> Result<Vec<Span<crate::Target>>, Report> {
+        let catalog = self.config.resolve_library_catalog()?;
+        self.extract_executable_targets_with_catalog(&catalog)
+    }
+
+    /// Extracts executable targets using the effective readable catalog for every home.
+    pub fn extract_executable_targets_with_catalog(
+        &self,
+        catalog: &LibraryCatalog,
+    ) -> Result<Vec<Span<crate::Target>>, Report> {
         use miden_assembly_syntax::Path as MasmPath;
 
         use crate::TargetType;
@@ -481,11 +585,16 @@ impl ProjectFile {
                     name,
                     namespace,
                     path: target.path.clone(),
+                    naming: target
+                        .naming
+                        .as_ref()
+                        .map(|naming| naming.resolve_with_catalog(TargetType::Executable, catalog))
+                        .transpose()?,
                 },
             ));
         }
 
-        bins
+        Ok(bins)
     }
 }
 
@@ -531,6 +640,8 @@ impl Validate for ProjectFile {
                 label: Label::new(self.package.name.span(), err.to_string()),
             })
         })?;
+
+        self.config.resolve_library_catalog()?;
 
         // 2. All build targets must have unique paths (if present) and names (and namespaces must
         //    be valid)

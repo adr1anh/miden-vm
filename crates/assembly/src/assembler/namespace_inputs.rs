@@ -1,17 +1,23 @@
-#[cfg(any(feature = "std", test))]
-use alloc::vec::Vec;
 use alloc::{
+    boxed::Box,
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
+    string::ToString,
     sync::Arc,
+    vec::Vec,
 };
 
-use miden_assembly_syntax::diagnostics::{IntoDiagnostic, Report};
+use miden_assembly_syntax::{
+    PathComponent,
+    ast::{Item, Module},
+    diagnostics::{IntoDiagnostic, Report},
+};
+use miden_core::program::Namespace;
 #[cfg(any(feature = "std", test))]
 use miden_core::{Word, chiplets::hasher};
 use miden_mast_package::{CallableProcedurePath, NamespacePlan};
 
 use super::Assembler;
-use crate::{CallableBinding, Path};
+use crate::{CallableBinding, Path, linker::SymbolResolutionContext};
 
 /// Raw namespace configuration for one assembly target, independent of code supply.
 ///
@@ -115,6 +121,271 @@ impl NamespaceInputs {
         self.with_callable_input(declaration, CallableInput::Bound(binding))
     }
 
+    /// Names concrete source procedures by their semantic defining paths under the caller home.
+    ///
+    /// This is an explicit opt-in convention requiring an already supplied [`NamespacePlan`].
+    /// Private helpers and executable entrypoints receive names; aliases and re-exports retain
+    /// their defining procedures' bindings. Only the absolute source-root component is omitted
+    /// from canonical paths. Existing local-path overrides and complete bindings are preserved.
+    /// Source paths and the caller home make no publication or public-ownership claim.
+    ///
+    /// Duplicate modules or concrete declarations within the supplied cohort are rejected.
+    /// Kernel modules require separate explicit placement of root exports and private helpers;
+    /// this ordinary source convention cannot select their syscall-authorized bindings.
+    pub fn with_default_callable_paths<'a>(
+        mut self,
+        modules: impl IntoIterator<Item = &'a Module>,
+    ) -> Result<Self, Report> {
+        self.require_namespace_plan()?;
+        let mut seen_modules = BTreeSet::new();
+        let mut seen_declarations = BTreeSet::new();
+        for module in modules {
+            if module.is_in_kernel() {
+                return Err(Report::msg(
+                    "kernel source requires explicit root-export and private-helper placement",
+                ));
+            }
+            if !seen_modules.insert(module.path()) {
+                return Err(Report::msg(format!(
+                    "duplicate source module in callable naming cohort: '{}'",
+                    module.path()
+                )));
+            }
+            for item in module.items() {
+                if !matches!(item, Item::Procedure(_)) {
+                    continue;
+                }
+                let declaration: Arc<Path> = module.path().join(item.name()).into();
+                if !seen_declarations.insert(declaration.clone()) {
+                    return Err(Report::msg(format!(
+                        "duplicate source callable declaration: '{declaration}'"
+                    )));
+                }
+                if let Entry::Vacant(entry) = self.declarations.entry(declaration) {
+                    let canonical = Self::default_callable_path(entry.key())?;
+                    entry.insert(CallableInput::LocalPath(canonical));
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    /// Names a kernel source cohort with public executable exports in the fixed root namespace.
+    ///
+    /// The first module is the root; public submodule edges and public item re-exports determine
+    /// its public surface. Concrete exported definitions default to their defining leaf labels at
+    /// root, while private definitions keep their full semantic paths under the explicitly chosen
+    /// caller home. That home may itself be empty when the resulting helper parent is a child
+    /// namespace. Compatible explicit local paths and complete bindings are preserved.
+    ///
+    /// Item aliases resolve through `base` and retain the actual defining binding. An imported
+    /// callable must already have explicit canonical metadata, and a public imported binding must
+    /// already be at root. This convention never relocates an imported callable or gives an alias
+    /// a second key. Existing bindings of inherited source definitions, including private helpers,
+    /// are retained independently of this cohort's caller home. This convention does not change
+    /// runtime syscall authorization or perform home admission.
+    ///
+    /// Duplicate cohort modules/declarations, incompatible overrides, and canonical collisions
+    /// with other definitions or imported bindings are rejected before defaults are returned.
+    pub fn with_kernel_root_exports(
+        mut self,
+        base: &Assembler,
+        modules: &[&Module],
+    ) -> Result<Self, Report> {
+        let caller = self.require_namespace_plan()?.clone();
+        let Some(root) = modules.first() else {
+            return Err(Report::msg("kernel callable naming requires a root module"));
+        };
+        let mut cohort = BTreeMap::new();
+        let mut concrete = BTreeMap::new();
+        for module in modules {
+            let path = absolute_callable_path(module.path())?;
+            if cohort.insert(path, *module).is_some() {
+                return Err(Report::msg(format!(
+                    "duplicate source module in callable naming cohort: '{}'",
+                    module.path()
+                )));
+            }
+            for procedure in module.procedures() {
+                let declaration = absolute_callable_path(&module.path().join(procedure.name()))?;
+                if concrete.insert(declaration.clone(), procedure.name()).is_some() {
+                    return Err(Report::msg(format!(
+                        "duplicate source callable declaration: '{declaration}'"
+                    )));
+                }
+            }
+        }
+
+        let mut public_modules = BTreeSet::new();
+        let mut pending = vec![absolute_callable_path(root.path())?];
+        while let Some(path) = pending.pop() {
+            if !public_modules.insert(path.clone()) {
+                continue;
+            }
+            if let Some(module) = cohort.get(&path) {
+                for child in
+                    module.submodules().iter().filter(|child| child.visibility.is_exported())
+                {
+                    pending.push(absolute_callable_path(&module.path().join(&child.name))?);
+                }
+            }
+        }
+        let mut exports = BTreeSet::new();
+        for module in modules {
+            if public_modules.contains(&absolute_callable_path(module.path())?) {
+                for procedure in module.procedures().filter(|proc| proc.visibility().is_exported())
+                {
+                    exports.insert(absolute_callable_path(&module.path().join(procedure.name()))?);
+                }
+            }
+        }
+
+        let resolved = self.resolved_bindings()?;
+        let base_bindings = if base.namespace_plan().is_some() {
+            base.namespace_inputs().resolved_bindings()?
+        } else {
+            base.namespace_inputs()
+                .declarations
+                .iter()
+                .filter_map(|(declaration, input)| match input {
+                    CallableInput::Bound(binding) => Some((declaration.clone(), binding.clone())),
+                    CallableInput::LocalPath(_) => None,
+                })
+                .collect()
+        };
+        let mut inherited_bindings = BTreeMap::new();
+        if modules.iter().any(|module| {
+            public_modules.contains(module.path())
+                && module.imports().any(|import| import.visibility().is_exported())
+        }) {
+            // Preserve the linker's visibility, import validity, and alias-cycle diagnostics.
+            let mut linker = base.linker.clone();
+            linker.link_modules(modules.iter().map(|module| Box::new((**module).clone())))?;
+            for module in linker.modules() {
+                if !public_modules.contains(module.path()) {
+                    continue;
+                }
+                for import in module.imports().filter(|import| import.visibility().is_exported()) {
+                    let context = SymbolResolutionContext {
+                        span: import.span(),
+                        module: module.id(),
+                        kind: None,
+                    };
+                    let path = module.path().join(import.local_name());
+                    if let Some(gid) = linker.resolve_path(&context, &path)?.into_global_id()
+                        && linker[gid].is_procedure()
+                    {
+                        let declaration = absolute_callable_path(
+                            &linker[gid.module].path().join(linker[gid].name()),
+                        )?;
+                        exports.insert(declaration.clone());
+                        if concrete.contains_key(&declaration) {
+                            continue;
+                        }
+                        let actual = linker[gid]
+                            .callable_binding()
+                            .or_else(|| base_bindings.get(&declaration))
+                            .ok_or_else(|| Report::msg(format!(
+                                "missing canonical callable binding for imported kernel export '{declaration}'"
+                            )))?;
+                        if resolved.get(&declaration).is_some_and(|binding| binding != actual) {
+                            return Err(Report::msg(format!(
+                                "conflicting callable metadata for imported kernel export '{declaration}'"
+                            )));
+                        }
+                        validate_kernel_binding(&declaration, actual, true)?;
+                        inherited_bindings.insert(declaration, actual.clone());
+                    }
+                }
+            }
+        }
+
+        // Required package inventories also reserve bindings which have no source descriptor.
+        // Multiple imported aliases may refer to the same key; a new concrete definition may not.
+        let mut reserved = BTreeSet::new();
+        for module in base.linker.modules() {
+            for symbol in module.symbols().filter(|symbol| symbol.is_procedure()) {
+                let declaration = absolute_callable_path(&module.path().join(symbol.name()))?;
+                if let Some(binding) =
+                    symbol.callable_binding().or_else(|| base_bindings.get(&declaration))
+                {
+                    if resolved.get(&declaration).is_some_and(|requested| requested != binding) {
+                        return Err(Report::msg(format!(
+                            "conflicting callable metadata for imported kernel declaration '{declaration}'"
+                        )));
+                    }
+                    reserved.insert(binding.key());
+                    if !module.is_mast() {
+                        inherited_bindings.insert(declaration, binding.clone());
+                    }
+                }
+            }
+        }
+        for library in base.linker.libraries() {
+            reserved.extend(library.naming().callables().bindings().map(|(&key, _)| key));
+        }
+        if let Some(naming) = base.linker.kernel_naming() {
+            reserved.extend(naming.callables().bindings().map(|(&key, _)| key));
+        }
+        for (declaration, binding) in resolved.iter().chain(inherited_bindings.iter()) {
+            if !concrete.contains_key(declaration) {
+                reserved.insert(binding.key());
+            }
+        }
+
+        let mut defaults = Vec::new();
+        for (declaration, name) in concrete {
+            let exported = exports.contains(&declaration);
+            let binding = if let Some(binding) = resolved.get(&declaration) {
+                binding.clone()
+            } else if exported {
+                let canonical =
+                    CallableProcedurePath::from_semantic_components(vec![name.to_string()])
+                        .into_diagnostic()?;
+                CallableBinding::new(NamespacePlan::new(vec![]), canonical).into_diagnostic()?
+            } else {
+                CallableBinding::new(caller.clone(), Self::default_callable_path(&declaration)?)
+                    .into_diagnostic()?
+            };
+            validate_kernel_binding(&declaration, &binding, exported)?;
+            if !reserved.insert(binding.key()) {
+                return Err(Report::msg(format!(
+                    "kernel callable naming has conflicting canonical bindings for '{declaration}'"
+                )));
+            }
+            let input = if exported {
+                CallableInput::Bound(binding)
+            } else {
+                CallableInput::LocalPath(binding.path().clone())
+            };
+            defaults.push((declaration, input));
+        }
+        for (declaration, input) in defaults {
+            self.declarations.entry(declaration).or_insert(input);
+        }
+        // An inherited AST symbol may still be unbound until the final compilation. Retain its
+        // exact selected binding, including private helpers, across replacement of base inputs.
+        // These are foreign to this cohort: changing its caller home must never rebase them.
+        for (declaration, binding) in inherited_bindings {
+            self.declarations.insert(declaration, CallableInput::Bound(binding));
+        }
+        Ok(self)
+    }
+
+    /// Shared defining-path lowering for production opt-in and explicit source fixtures.
+    pub(crate) fn default_callable_path(
+        declaration: &Path,
+    ) -> Result<CallableProcedurePath, Report> {
+        let mut components = Vec::new();
+        for component in declaration.components() {
+            let component = component.into_diagnostic()?;
+            if !matches!(component, PathComponent::Root) {
+                components.push(component.as_str().to_string());
+            }
+        }
+        CallableProcedurePath::from_semantic_components(components).into_diagnostic()
+    }
+
     fn with_callable_input(
         mut self,
         declaration: Arc<Path>,
@@ -136,6 +407,30 @@ impl NamespaceInputs {
 
     pub(super) fn into_namespace_plan(self) -> Option<NamespacePlan> {
         self.namespace_plan
+    }
+}
+
+fn absolute_callable_path(path: &Path) -> Result<Arc<Path>, Report> {
+    let path = path.to_absolute().into_diagnostic()?;
+    Ok(Arc::from(path.as_ref()))
+}
+
+fn validate_kernel_binding(
+    declaration: &Path,
+    binding: &CallableBinding,
+    exported: bool,
+) -> Result<(), Report> {
+    let at_root = binding.parent_namespace() == Namespace::initial();
+    if exported && !at_root {
+        Err(Report::msg(format!(
+            "kernel export '{declaration}' must be in the fixed root syscall namespace"
+        )))
+    } else if !exported && at_root {
+        Err(Report::msg(format!(
+            "retained kernel helper '{declaration}' must be beneath a child Env namespace"
+        )))
+    } else {
+        Ok(())
     }
 }
 
@@ -182,7 +477,7 @@ impl Assembler {
         }) {
             return Ok(None);
         }
-        let mut bytes = b"miden.assembly.project-inputs.v1".to_vec();
+        let mut bytes = b"miden.assembly.project-inputs.v2".to_vec();
         bytes.extend_from_slice(&self.namespace_inputs.cache_commitment()?.as_bytes());
         append_cache_bytes(&mut bytes, profile_name.as_bytes())?;
         bytes.extend_from_slice(&[
@@ -204,6 +499,19 @@ impl Assembler {
                 miden_project::Linkage::Static => 0,
                 miden_project::Linkage::Dynamic => 1,
             });
+        }
+        let routes = self.linker.library_routes().collect::<Vec<_>>();
+        append_cache_len(&mut bytes, routes.len())?;
+        for (commitment, mount) in routes {
+            bytes.extend_from_slice(&commitment.as_bytes());
+            match mount {
+                Some(mount) => {
+                    bytes.push(1);
+                    append_cache_bytes(&mut bytes, mount.package_base().as_str().as_bytes())?;
+                    append_cache_bytes(&mut bytes, mount.source_base().as_str().as_bytes())?;
+                },
+                None => bytes.push(0),
+            }
         }
         match self.linker.kernel_package() {
             Some(kernel) => {

@@ -11,8 +11,10 @@ use tempfile::TempDir;
 
 use crate::{
     DependencyBinding, DependencyVersionScheme, LibraryImport, LibrarySelection, Linkage, Project,
-    TargetType, Word, Workspace,
+    SourceNamingConvention, TargetType, Word, Workspace,
 };
+
+mod catalog_tests;
 
 struct TestContext {
     pub source_manager: Arc<dyn SourceManager>,
@@ -497,6 +499,94 @@ fn project_dependencies_require_explicit_runtime_selection() {
 }
 
 #[test]
+fn source_target_naming_roundtrip_preserves_explicit_conventions_and_bindings() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    let id = "0x0100000000000000020000000000000003000000000000000400000000000000";
+    for (kind, convention) in [
+        ("library", SourceNamingConvention::DefiningPaths),
+        ("kernel", SourceNamingConvention::KernelRootExports),
+    ] {
+        for binding in [
+            "selection = 'custom', home = [{text = 'root-home'}, {revision = 2}]".into(),
+            format!("selection = 'latest', base = [{{text = 'tenant'}}], library-id = '{id}'"),
+            format!("selection = 'pinned', base = [], library-id = '{id}', revision = 7"),
+        ] {
+            fs::write(
+                &manifest,
+                format!(
+                    "[package]\nname = 'app'\nversion = '1.0.0'\n\
+                     [lib]\nkind = '{kind}'\npath = 'mod.masm'\n\
+                     naming = {{convention = '{}', binding = {{{binding}}}}}\n\
+                     [[bin]]\nname = 'main'\npath = 'main.masm'\n\
+                     naming = {{convention = 'defining-paths', binding = {{selection = 'custom', home = []}}}}\n",
+                    convention.as_str()
+                ),
+            )
+            .unwrap();
+            let context = TestContext::default();
+            let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+            let library = package.library_target().unwrap();
+            let naming = library.naming.as_ref().unwrap();
+            assert_eq!(naming.convention(), convention);
+            let expected: toml::Table =
+                toml::from_str(&format!("binding = {{{binding}}}")).unwrap();
+            let expected: crate::ast::DependencyBindingSpec =
+                expected["binding"].clone().try_into().unwrap();
+            assert_eq!(naming.binding(), &expected.resolve().unwrap());
+            let bin_naming = package.executable_targets()[0].naming.as_ref().unwrap();
+            assert_eq!(bin_naming.convention(), SourceNamingConvention::DefiningPaths);
+            assert!(bin_naming.binding().namespace_plan().home().is_empty());
+
+            let written = package.to_toml().unwrap();
+            // The AST writer and reader must retain both independently selected target records.
+            let ast: crate::ast::ProjectFile = toml::from_str(&written).unwrap();
+            assert_eq!(ast.lib.as_ref().unwrap().naming.as_ref().unwrap().convention, convention);
+            assert!(ast.bins[0].naming.is_some());
+            fs::write(&manifest, written).unwrap();
+            let restored = Project::load(&manifest, &context.source_manager).unwrap().package();
+            assert_eq!(restored.library_target().unwrap().naming, library.naming);
+            assert_eq!(
+                restored.executable_targets()[0].naming,
+                package.executable_targets()[0].naming
+            );
+        }
+    }
+}
+
+#[test]
+fn source_target_naming_rejects_conventions_for_the_wrong_target_kind() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    for target in [
+        "[lib]\nkind = 'kernel'\npath = 'mod.masm'\nnaming = {convention = 'defining-paths', binding = {selection = 'custom', home = []}}",
+        "[lib]\npath = 'mod.masm'\nnaming = {convention = 'kernel-root-exports', binding = {selection = 'custom', home = []}}",
+        "[[bin]]\npath = 'main.masm'\nnaming = {convention = 'kernel-root-exports', binding = {selection = 'custom', home = []}}",
+    ] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n{target}\n"))
+            .unwrap();
+        let context = TestContext::default();
+        let error = Project::load(&manifest, &context.source_manager).unwrap_err();
+        assert!(error.to_string().contains("is invalid for target kind"), "{error}");
+    }
+}
+
+#[test]
+fn omitted_source_target_naming_remains_unconfigured_for_default_and_explicit_targets() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    for targets in ["", "[lib]\npath = 'mod.masm'\n[[bin]]\npath = 'main.masm'\n"] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n{targets}"))
+            .unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert!(package.library_target().unwrap().naming.is_none());
+        assert!(package.executable_targets().iter().all(|target| target.naming.is_none()));
+        assert!(!package.to_toml().unwrap().contains("naming"));
+    }
+}
+
+#[test]
 fn project_selection_roundtrip_keeps_source_version_linkage_and_runtime_naming_separate() {
     let temp = TempDir::new().unwrap();
     let manifest = temp.path().join("miden-project.toml");
@@ -553,4 +643,235 @@ fn workspace_binding_inheritance_is_explicit_and_member_override_wins() {
             ])
         );
     }
+}
+
+#[test]
+fn expected_callables_roundtrip_independently_from_source_supply_and_default_home() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    let records = "[{visible-path = ['api::module', 'alias'], home = [{text = 'foreign-owner'}], canonical-path = ['defining', 'run']}, {visible-path = ['api', 'helper'], home = [{text = 'other-owner'}, {revision = 3}], canonical-path = ['helper']}]";
+    for scheme in [
+        "version = '=2.0.0'",
+        "path = '../dep', version = '=2.0.0'",
+        "git = 'https://example.invalid/dep', branch = 'main', version = '=2.0.0'",
+    ] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\ndep = {{{scheme}, linkage = 'static', binding = {{selection = 'custom', home = [{{text = 'source-default'}}]}}, expected-callables = {records}}}\n")).unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        let dependency = &package.dependencies()[0];
+        let expected = dependency.expected_callables().unwrap();
+        assert_eq!(expected.mappings().len(), 2);
+        let alias = miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
+            "api::module".into(),
+            "alias".into(),
+        ])
+        .unwrap();
+        let binding = expected.mappings().get(&alias).unwrap();
+        assert_eq!(binding.path().components(), &["defining", "run"]);
+        assert_eq!(
+            binding.namespace_plan().home(),
+            &[miden_core::program::CanonicalLabel::text("foreign-owner").unwrap()]
+        );
+        assert_ne!(binding.namespace_plan(), &dependency.binding().unwrap().namespace_plan());
+        fs::write(&manifest, package.to_toml().unwrap()).unwrap();
+        let restored = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert_eq!(restored.dependencies(), package.dependencies());
+    }
+}
+
+#[test]
+fn workspace_expected_callables_inherit_and_override_separately_from_default_home() {
+    let temp = TempDir::new().unwrap();
+    let app = temp.path().join("app");
+    fs::create_dir(&app).unwrap();
+    fs::write(temp.path().join("miden-project.toml"), "[workspace]\nmembers = ['app']\n[workspace.dependencies]\ndep = {version = '1.0', binding = {selection = 'custom', home = [{text = 'workspace-default'}]}, expected-callables = [{visible-path = ['api', 'alias'], home = [{text = 'workspace-defining'}], canonical-path = ['origin', 'run']}] }\n").unwrap();
+    let manifest = app.join("miden-project.toml");
+    for (extra, default_home, defining_home) in [
+        ("", "workspace-default", Some("workspace-defining")),
+        (
+            ", binding = {selection = 'custom', home = [{text = 'member-default'}]}",
+            "member-default",
+            Some("workspace-defining"),
+        ),
+        (
+            ", expected-callables = [{visible-path = ['api', 'alias'], home = [{text = 'member-defining'}], canonical-path = ['origin', 'run']}]",
+            "workspace-default",
+            Some("member-defining"),
+        ),
+        (", expected-callables = []", "workspace-default", None),
+    ] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\ndep = {{workspace = true{extra}}}\n")).unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        let dependency = &package.dependencies()[0];
+        assert_eq!(
+            dependency.binding().unwrap().namespace_plan().home(),
+            &[miden_core::program::CanonicalLabel::text(default_home).unwrap()]
+        );
+        let expected = dependency.expected_callables().unwrap();
+        if let Some(home) = defining_home {
+            assert_eq!(expected.mappings().len(), 1);
+            assert_eq!(
+                expected.mappings().values().next().unwrap().namespace_plan().home(),
+                &[miden_core::program::CanonicalLabel::text(home).unwrap()]
+            );
+        } else {
+            assert!(
+                expected.mappings().is_empty(),
+                "an explicit empty list overrides inherited expectations"
+            );
+        }
+        fs::write(&manifest, package.to_toml().unwrap()).unwrap();
+        let restored = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert_eq!(restored.dependencies()[0].expected_callables(), Some(expected));
+        assert_eq!(restored.dependencies()[0].binding(), dependency.binding());
+    }
+}
+
+#[test]
+fn project_expected_callables_reject_duplicate_paths_and_do_not_supply_a_default_home() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    let record = "{visible-path = ['api', 'alias'], home = [], canonical-path = ['origin', 'run']}";
+    for (extra, expected_error) in [
+        (
+            format!(
+                ", binding = {{selection = 'custom', home = []}}, expected-callables = [{record}, {record}]"
+            ),
+            "duplicate expected visible callable path",
+        ),
+        (
+            format!(", expected-callables = [{record}]"),
+            "requires an explicit Latest/Pinned binding or custom home",
+        ),
+    ] {
+        fs::write(&manifest, format!("[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\ndep = {{version = '1.0'{extra}}}\n")).unwrap();
+        let context = TestContext::default();
+        let error = Project::load(&manifest, &context.source_manager).unwrap_err();
+        assert!(error.to_string().contains(expected_error), "{error}");
+    }
+}
+
+#[test]
+fn dependency_alias_package_and_mount_roundtrip_independently_of_callable_naming() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    let id = "0x0100000000000000020000000000000003000000000000000400000000000000";
+    for (scheme, selector) in [
+        ("version = '=2.0.0'", format!("'{id}'")),
+        ("path = '../lib', version = '=2.0.0'", "{catalog = 'math'}".into()),
+        (
+            "git = 'https://example.invalid/lib', rev = 'abc123'",
+            "{catalog = 'math'}".into(),
+        ),
+    ] {
+        fs::write(&manifest, format!(
+            "[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[library-catalog]\nmath = '{id}'\n[dependencies]\nleft = {{{scheme}, package = 'same-package', linkage = 'static', binding = {{selection = 'pinned', base = [], library-id = {selector}, revision = 7}}, source-mount = {{package-base = '::\"lib\"', source-base = '::\"left\"'}}, expected-callables = [{{visible-path = ['lib', 'run'], home = [{{text = 'original-owner'}}], canonical-path = ['private', 'run']}}]}}\n"
+        )).unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        let dependency = &package.dependencies()[0];
+        assert_eq!(dependency.alias().as_ref(), "left");
+        assert_eq!(dependency.package(), "same-package");
+        assert!(dependency.is_aliased());
+        assert_eq!(dependency.source_mount().unwrap().package_base().as_str(), "::lib");
+        assert_eq!(dependency.source_mount().unwrap().source_base().as_str(), "::left");
+        let expected = dependency.expected_callables().unwrap().mappings();
+        assert_eq!(expected.keys().next().unwrap().components(), &["lib", "run"]);
+        assert_eq!(expected.values().next().unwrap().path().components(), &["private", "run"]);
+        let written = package.to_toml().unwrap();
+        assert!(written.contains("package = \"same-package\""));
+        assert!(written.contains("package-base = \"::lib\""));
+        assert!(written.contains("source-base = \"::left\""));
+        assert!(!written.contains("catalog ="));
+        fs::write(&manifest, written).unwrap();
+        let restored = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert_eq!(restored.dependencies(), package.dependencies());
+    }
+}
+
+#[test]
+fn dependency_alias_and_mount_omission_preserve_package_resolution_defaults() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    fs::write(&manifest, "[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\nlib = {version = '1.0', binding = {selection = 'custom', home = []}}\n").unwrap();
+    let context = TestContext::default();
+    let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+    let dependency = &package.dependencies()[0];
+    assert_eq!(dependency.alias().as_ref(), "lib");
+    assert_eq!(dependency.package(), "lib");
+    assert!(!dependency.is_aliased());
+    assert!(dependency.source_mount().is_none());
+    let written = package.to_toml().unwrap();
+    assert!(!written.contains("package ="));
+    assert!(!written.contains("source-mount"));
+}
+
+#[test]
+fn workspace_package_and_source_mount_inherit_and_override_independently() {
+    let temp = TempDir::new().unwrap();
+    let app = temp.path().join("app");
+    fs::create_dir(&app).unwrap();
+    let workspace_manifest = temp.path().join("miden-project.toml");
+    let manifest = app.join("miden-project.toml");
+    for (workspace_mount, extra, expected_package, expected_route) in [
+        ("::workspace", "", "origin", "::workspace"),
+        ("::workspace", ", package = 'other'", "other", "::workspace"),
+        ("::workspace", ", package = 'left'", "left", "::workspace"),
+        (
+            "relative-invalid",
+            ", source-mount = {package-base = '::lib', source-base = '::member'}",
+            "origin",
+            "::member",
+        ),
+    ] {
+        fs::write(&workspace_manifest, format!(
+            "[workspace]\nmembers = ['app']\n[workspace.dependencies]\nleft = {{package = 'origin', version = '=1.0.0', binding = {{selection = 'custom', home = [{{text = 'workspace-home'}}]}}, source-mount = {{package-base = '::lib', source-base = '{workspace_mount}'}}}}\n"
+        )).unwrap();
+        fs::write(&manifest, format!(
+            "[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\nleft = {{workspace = true{extra}}}\n"
+        )).unwrap();
+        let context = TestContext::default();
+        let package = Project::load(&manifest, &context.source_manager).unwrap().package();
+        let dependency = &package.dependencies()[0];
+        assert_eq!(dependency.alias().as_ref(), "left");
+        assert_eq!(dependency.package(), expected_package);
+        assert_eq!(dependency.required_version().to_string(), "=1.0.0");
+        assert_eq!(dependency.source_mount().unwrap().source_base().as_str(), expected_route);
+        assert_eq!(
+            dependency.binding().unwrap().namespace_plan().home(),
+            &[miden_core::program::CanonicalLabel::text("workspace-home").unwrap(),]
+        );
+        fs::write(&manifest, package.to_toml().unwrap()).unwrap();
+        let restored = Project::load(&manifest, &context.source_manager).unwrap().package();
+        assert_eq!(restored.dependencies(), package.dependencies());
+    }
+}
+
+#[test]
+fn selected_source_mount_requires_explicit_valid_bases_and_cannot_supply_a_binding() {
+    let temp = TempDir::new().unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    for mount in [
+        "{package-base = 'lib', source-base = '::left'}",
+        "{package-base = '::lib', source-base = 'left'}",
+        "{package-base = '::lib'}",
+        "{source-base = '::left'}",
+        "{package-base = '::lib::::bad', source-base = '::left'}",
+        "{package-base = '::lib', source-base = '::left', package = 'guessed'}",
+    ] {
+        fs::write(&manifest, format!(
+            "[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\nleft = {{package = 'lib', version = '1.0', binding = {{selection = 'custom', home = []}}, source-mount = {mount}}}\n"
+        )).unwrap();
+        let context = TestContext::default();
+        assert!(Project::load(&manifest, &context.source_manager).is_err(), "{mount}");
+    }
+    fs::write(&manifest, "[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\nleft = {package = 'lib', version = '1.0', source-mount = {package-base = '::lib', source-base = '::left'}}\n").unwrap();
+    let context = TestContext::default();
+    let error = Project::load(&manifest, &context.source_manager).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires an explicit Latest/Pinned binding or custom home")
+    );
 }

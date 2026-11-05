@@ -291,32 +291,20 @@ impl AssemblyProduct {
         if package.is_program()
             && let Some(kernel_package) = kernel_package
         {
-            package.sections.push(linked_kernel_package_section(kernel_package.as_ref()));
-            if let Some(kernel_dep) =
-                package.manifest.dependencies().find(|dep| dep.id() == &kernel_package.name)
-            {
-                if kernel_dep.digest != kernel_package.dependency_commitment()
-                    || kernel_dep.kind != kernel_package.kind
-                    || kernel_dep.version() != &kernel_package.version
-                {
+            let exact_kernel = kernel_package.to_dependency();
+            if let Some(kernel_dep) = package.kernel_runtime_dependency()? {
+                if kernel_dep != &exact_kernel {
                     return Err(Report::msg(format!(
                         "unable to register kernel dependency: '{}' already exists as a dependency, but with different metadata than the actual kernel package",
                         kernel_package.name
                     )));
                 }
             } else {
-                package
-                    .manifest
-                    .add_dependency(Dependency {
-                        name: kernel_package.name.clone(),
-                        kind: kernel_package.kind,
-                        version: kernel_package.version.clone(),
-                        digest: kernel_package.dependency_commitment(),
-                    })
-                    .map_err(|err| {
-                        Report::msg(format!("unable to register kernel dependency: {err}"))
-                    })?;
+                package.manifest.add_dependency(exact_kernel).map_err(|err| {
+                    Report::msg(format!("unable to register kernel dependency: {err}"))
+                })?;
             }
+            package.sections.push(linked_kernel_package_section(kernel_package.as_ref()));
         }
 
         // Section: debug info
@@ -348,7 +336,79 @@ mod tests {
     };
 
     use super::*;
-    use crate::testing::{FixtureNamespace, TestContext};
+    use crate::testing::{FixtureNamespace, TestContext, source_file};
+
+    fn kernel_fixture(context: &TestContext) -> Arc<Package> {
+        let module =
+            context.parse_kernel(source_file!(context, "pub proc boot push.1 end")).unwrap();
+        let base = Assembler::new(context.source_manager());
+        let mut names = FixtureNamespace::assembly_tests();
+        names.add_kernel_modules(&base, &[&module]).unwrap();
+        names
+            .configure(base, [&*module])
+            .unwrap()
+            .assemble_library_modules("kernel".into(), module, [], TargetType::Kernel)
+            .unwrap()
+            .into_artifact(false)
+            .unwrap()
+            .into()
+    }
+
+    fn executable_product(context: &TestContext) -> AssemblyProduct {
+        let module = context.parse_module("begin push.42 end").unwrap();
+        let mut names = FixtureNamespace::assembly_tests();
+        names.add_module(&module).unwrap();
+        names
+            .configure(Assembler::new(context.source_manager()), [&*module])
+            .unwrap()
+            .assemble_executable_modules("app".into(), module, [])
+            .unwrap()
+    }
+
+    #[test]
+    fn kernel_attachment_preserves_same_name_ordinary_supply() {
+        let context = TestContext::default();
+        let kernel = kernel_fixture(&context);
+        let exact_kernel = kernel.to_dependency();
+        let mut ordinary_supply = exact_kernel.clone();
+        ordinary_supply.kind = TargetType::Library;
+        ordinary_supply.digest = miden_core::Word::from([1_u32, 2, 3, 4]);
+
+        for requirements in [
+            vec![ordinary_supply.clone()],
+            vec![ordinary_supply.clone(), exact_kernel.clone()],
+        ] {
+            let mut product = executable_product(&context);
+            product.kernel_package = Some(kernel.clone());
+            product.extend_dependencies(requirements).unwrap();
+            let artifact = product.into_artifact(false).unwrap();
+            let dependencies = artifact.manifest.dependencies().cloned().collect::<Vec<_>>();
+
+            assert_eq!(dependencies, vec![ordinary_supply.clone(), exact_kernel.clone()]);
+            assert_eq!(artifact.kernel_runtime_dependency().unwrap(), Some(&exact_kernel));
+            let embedded = artifact.try_embedded_kernel_package().unwrap().unwrap();
+            assert_eq!(embedded.dependency_commitment(), kernel.dependency_commitment());
+        }
+    }
+
+    #[test]
+    fn kernel_attachment_rejects_conflicting_or_multiple_kernel_supplies() {
+        let context = TestContext::default();
+        let kernel = kernel_fixture(&context);
+        let exact_kernel = kernel.to_dependency();
+        let mut conflicting_kernel = exact_kernel.clone();
+        conflicting_kernel.version = miden_mast_package::Version::new(2, 0, 0);
+
+        for requirements in [
+            vec![conflicting_kernel.clone()],
+            vec![exact_kernel.clone(), conflicting_kernel.clone()],
+        ] {
+            let mut product = executable_product(&context);
+            product.kernel_package = Some(kernel.clone());
+            product.extend_dependencies(requirements).unwrap();
+            assert!(product.into_artifact(false).is_err());
+        }
+    }
 
     struct ExactFixtureHome;
 

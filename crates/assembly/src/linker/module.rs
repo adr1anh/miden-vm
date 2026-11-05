@@ -42,6 +42,8 @@ pub struct LinkModule {
     source: ModuleSource,
     /// The fully-qualified path used to refer to this module, e.g. `::std::math::u64`
     path: Arc<Path>,
+    /// Original package linkage path used to find imported debug metadata before source routing.
+    package_path: Arc<Path>,
     /// The set of symbols defined in this module.
     ///
     /// For modules loaded from MAST, only exported symbols will be available here.
@@ -70,6 +72,7 @@ impl LinkModule {
             kind,
             status: Cell::new(status),
             source,
+            package_path: path.clone(),
             path,
             symbols: Vec::default(),
             imports: Vec::default(),
@@ -86,6 +89,11 @@ impl LinkModule {
     pub fn with_symbols(mut self, symbols: Vec<Symbol>) -> Self {
         self.symbols = symbols;
         self
+    }
+
+    /// Retains the package's original linkage path independently of its mounted lookup path.
+    pub(super) fn set_package_path(&mut self, path: Arc<Path>) {
+        self.package_path = path;
     }
 
     /// Load the imports declared by this module.
@@ -169,6 +177,11 @@ impl LinkModule {
     #[inline(always)]
     pub fn path(&self) -> &Arc<Path> {
         &self.path
+    }
+
+    /// Returns the original package module path used by its persisted debug metadata.
+    pub(crate) fn package_path(&self) -> &Arc<Path> {
+        &self.package_path
     }
 
     /// Get a reference to the optional advice map data of this module.

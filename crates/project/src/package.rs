@@ -354,11 +354,13 @@ impl Package {
 
         // Extract project dependencies, using the workspace to resolve workspace-relative
         // dependencies
-        let dependencies = package_ast.extract_dependencies(source.clone(), workspace)?;
+        let catalog = package_ast.resolve_library_catalog(workspace)?;
+        let dependencies =
+            package_ast.extract_dependencies_with_catalog(source.clone(), workspace, &catalog)?;
 
         // Extract the build targets for this project
-        let lib = package_ast.extract_library_target()?;
-        let bins = package_ast.extract_executable_targets();
+        let lib = package_ast.extract_library_target_with_catalog(&catalog)?;
+        let bins = package_ast.extract_executable_targets_with_catalog(&catalog)?;
 
         let mut lints = workspace.map(|ws| ws.workspace.config.lints.clone()).unwrap_or_default();
         lints.extend(package_ast.config.lints.clone());
@@ -406,6 +408,7 @@ impl Package {
                 },
             },
             config: ast::PackageConfig {
+                library_catalog: Map::default(),
                 dependencies: self
                     .dependencies()
                     .iter()
@@ -415,7 +418,14 @@ impl Package {
                             dep.name()
                         )))?;
                         let binding = Some(Span::unknown(ast::DependencyBindingSpec::try_from(binding)?));
+                        let expected_callables = dep.expected_callables().map(|expected| {
+                            expected.mappings().iter().map(ast::ExpectedCallableSpec::try_from)
+                                .collect::<Result<Vec<_>, _>>().map(Span::unknown)
+                        }).transpose()?;
                         let name = Span::unknown(dep.name().clone());
+                        let package = dep.explicit_package()
+                            .map(|package| Span::unknown(package.clone().into_inner()));
+                        let source_mount = dep.source_mount().map(|mount| Span::unknown(mount.into()));
                         let linkage = if matches!(dep.linkage(), Linkage::Dynamic) {
                             None
                         } else {
@@ -424,6 +434,8 @@ impl Package {
                         let spec = match dep.scheme() {
                             DependencyVersionScheme::Workspace { .. } => ast::DependencySpec {
                                 name: name.clone(),
+                                package: package.clone(),
+                                source_mount: source_mount.clone(),
                                 version_or_digest: None,
                                 workspace: true,
                                 path: None,
@@ -431,11 +443,14 @@ impl Package {
                                 branch: None,
                                 rev: None,
                                 binding: binding.clone(),
+                                expected_callables: expected_callables.clone(),
                                 linkage,
                             },
                             DependencyVersionScheme::WorkspacePath { path, version } => {
                                 ast::DependencySpec {
                                     name: name.clone(),
+                                    package: package.clone(),
+                                    source_mount: source_mount.clone(),
                                     version_or_digest: version.clone(),
                                     workspace: false,
                                     path: Some(path.clone()),
@@ -443,11 +458,14 @@ impl Package {
                                     branch: None,
                                     rev: None,
                                     binding: binding.clone(),
+                                    expected_callables: expected_callables.clone(),
                                     linkage,
                                 }
                             },
                             DependencyVersionScheme::Registry(req) => ast::DependencySpec {
                                 name: name.clone(),
+                                package: package.clone(),
+                                source_mount: source_mount.clone(),
                                 version_or_digest: Some(req.clone()),
                                 workspace: false,
                                 path: None,
@@ -455,11 +473,14 @@ impl Package {
                                 branch: None,
                                 rev: None,
                                 binding: binding.clone(),
+                                expected_callables: expected_callables.clone(),
                                 linkage,
                             },
                             DependencyVersionScheme::Path { path, version } => {
                                 ast::DependencySpec {
                                     name: name.clone(),
+                                    package: package.clone(),
+                                    source_mount: source_mount.clone(),
                                     version_or_digest: version.clone(),
                                     workspace: false,
                                     path: Some(path.clone()),
@@ -467,6 +488,7 @@ impl Package {
                                     branch: None,
                                     rev: None,
                                     binding: binding.clone(),
+                                    expected_callables: expected_callables.clone(),
                                     linkage,
                                 }
                             },
@@ -481,6 +503,8 @@ impl Package {
                                 };
                                 ast::DependencySpec {
                                     name: name.clone(),
+                                    package: package.clone(),
+                                    source_mount: source_mount.clone(),
                                     version_or_digest: version.as_ref().map(|spanned| {
                                         VersionRequirement::from(spanned.inner().clone())
                                     }),
@@ -490,6 +514,7 @@ impl Package {
                                     branch,
                                     rev,
                                     binding: binding.clone(),
+                                    expected_callables: expected_callables.clone(),
                                     linkage,
                                 }
                             },
@@ -500,27 +525,45 @@ impl Package {
                     .collect::<Result<_, _>>()?,
                 lints: self.lints.clone(),
             },
-            lib: self.lib.as_ref().map(|lib| {
-                Span::unknown(ast::LibTarget {
-                    kind: if matches!(lib.ty, TargetType::Library) {
-                        None
-                    } else {
-                        Some(Span::unknown(lib.ty))
-                    },
-                    namespace: Some(lib.namespace.as_ref().map(|path| path.as_str().into())),
-                    path: lib.path.clone(),
+            lib: self
+                .lib
+                .as_ref()
+                .map(|lib| -> Result<_, Report> {
+                    lib.validate_naming()?;
+                    Ok(Span::unknown(ast::LibTarget {
+                        kind: if matches!(lib.ty, TargetType::Library) {
+                            None
+                        } else {
+                            Some(Span::unknown(lib.ty))
+                        },
+                        namespace: Some(lib.namespace.as_ref().map(|path| path.as_str().into())),
+                        path: lib.path.clone(),
+                        naming: lib
+                            .naming
+                            .as_ref()
+                            .map(ast::SourceNamingSpec::try_from)
+                            .transpose()?
+                            .map(Span::unknown),
+                    }))
                 })
-            }),
+                .transpose()?,
             bins: self
                 .bins
                 .iter()
-                .map(|bin| {
-                    Span::unknown(ast::BinTarget {
+                .map(|bin| -> Result<_, Report> {
+                    bin.validate_naming()?;
+                    Ok(Span::unknown(ast::BinTarget {
                         name: Some(bin.name.clone()),
                         path: bin.path.clone(),
-                    })
+                        naming: bin
+                            .naming
+                            .as_ref()
+                            .map(ast::SourceNamingSpec::try_from)
+                            .transpose()?
+                            .map(Span::unknown),
+                    }))
                 })
-                .collect(),
+                .collect::<Result<_, _>>()?,
             profiles: self
                 .profiles()
                 .iter()

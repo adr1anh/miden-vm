@@ -5,9 +5,12 @@ use crate::{Linkage, SourceId, Span, Uri, VersionRequirement};
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct DependencySpec {
-    /// The name of the dependency package
+    /// The source alias given by the dependency table key.
     #[cfg_attr(feature = "serde", serde(default, skip))]
     pub name: Span<Arc<str>>,
+    /// Requested package name; omission uses the source alias.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub package: Option<Span<Arc<str>>>,
     /// The version requirement specified for this dependency
     #[cfg_attr(
         feature = "serde",
@@ -44,9 +47,49 @@ pub struct DependencySpec {
     /// Explicit default-home selection; independent of source version and linkage.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub binding: Option<Span<super::DependencyBindingSpec>>,
+    /// Independently expected exact visible paths and complete defining callable bindings.
+    #[cfg_attr(
+        feature = "serde",
+        serde(rename = "expected-callables", default, skip_serializing_if = "Option::is_none")
+    )]
+    pub expected_callables: Option<Span<Vec<super::ExpectedCallableSpec>>>,
+    /// Explicit package/source prefixes, independent of runtime naming and artifact expectations.
+    #[cfg_attr(
+        feature = "serde",
+        serde(rename = "source-mount", default, skip_serializing_if = "Option::is_none")
+    )]
+    pub source_mount: Option<Span<SourceMountSpec>>,
     /// If present, specifies the desired linkage for this dependency during assembly
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub linkage: Option<Span<Linkage>>,
+}
+
+/// Explicit source lookup projection. Both absolute bases must be supplied by configuration.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case", deny_unknown_fields))]
+pub struct SourceMountSpec {
+    pub package_base: String,
+    pub source_base: String,
+}
+
+impl SourceMountSpec {
+    /// Validates and normalizes the selected route without inferring either base from a name.
+    pub fn resolve(&self) -> Result<crate::PackageSourceMount, Report> {
+        crate::PackageSourceMount::new(
+            miden_assembly_syntax::Path::new(&self.package_base),
+            miden_assembly_syntax::Path::new(&self.source_base),
+        )
+    }
+}
+
+impl From<&crate::PackageSourceMount> for SourceMountSpec {
+    fn from(mount: &crate::PackageSourceMount) -> Self {
+        Self {
+            package_base: mount.package_base().as_str().into(),
+            source_base: mount.source_base().as_str().into(),
+        }
+    }
 }
 
 #[inline(always)]
@@ -84,8 +127,18 @@ impl DependencySpec {
 impl SetSourceId for DependencySpec {
     fn set_source_id(&mut self, source_id: SourceId) {
         self.name.set_source_id(source_id);
+        if let Some(package) = &mut self.package {
+            package.set_source_id(source_id);
+        }
+        if let Some(mount) = &mut self.source_mount {
+            Span::set_source_id(mount, source_id);
+        }
         if let Some(binding) = &mut self.binding {
             binding.set_source_id(source_id);
+        }
+        if let Some(expected) = &mut self.expected_callables {
+            // Records contain owned semantic values; only the enclosing list carries a span.
+            Span::set_source_id(expected, source_id);
         }
         if let Some(version_or_digest) = self.version_or_digest.as_mut() {
             version_or_digest.set_source_id(source_id);
@@ -130,6 +183,8 @@ mod serialization {
     struct DependencySpecTable {
         #[serde(default, skip)]
         name: Span<Arc<str>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package: Option<Span<Arc<str>>>,
         #[serde(rename = "version", alias = "digest", skip_serializing_if = "Option::is_none")]
         version_or_digest: Option<crate::VersionRequirement>,
         #[serde(default, skip_serializing_if = "super::does_not_inherit_from_workspace")]
@@ -146,12 +201,17 @@ mod serialization {
         linkage: Option<Span<crate::Linkage>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         binding: Option<Span<super::super::DependencyBindingSpec>>,
+        #[serde(rename = "expected-callables", default, skip_serializing_if = "Option::is_none")]
+        expected_callables: Option<Span<alloc::vec::Vec<super::super::ExpectedCallableSpec>>>,
+        #[serde(rename = "source-mount", default, skip_serializing_if = "Option::is_none")]
+        source_mount: Option<Span<super::SourceMountSpec>>,
     }
 
     impl From<DependencySpecTable> for DependencySpec {
         fn from(table: DependencySpecTable) -> Self {
             Self {
                 name: table.name,
+                package: table.package,
                 version_or_digest: table.version_or_digest,
                 workspace: table.workspace,
                 path: table.path,
@@ -160,6 +220,8 @@ mod serialization {
                 rev: table.rev,
                 linkage: table.linkage,
                 binding: table.binding,
+                expected_callables: table.expected_callables,
+                source_mount: table.source_mount,
             }
         }
     }
@@ -175,6 +237,7 @@ mod serialization {
                     crate::VersionRequirement::deserialize(value.into_deserializer()).map(
                         |version_or_digest| Self {
                             name: Span::default(),
+                            package: None,
                             version_or_digest: Some(version_or_digest),
                             workspace: false,
                             path: None,
@@ -183,6 +246,8 @@ mod serialization {
                             rev: None,
                             linkage: None,
                             binding: None,
+                            expected_callables: None,
+                            source_mount: None,
                         },
                     )
                 })

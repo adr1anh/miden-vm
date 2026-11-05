@@ -6,7 +6,11 @@ use miden_core::serde::{
 
 use crate::{PackageId, TargetType, Version, Word};
 
-/// A package dependency
+/// An exact package code-supply requirement.
+///
+/// A name alone does not identify a requirement: package kind, semantic version, and dependency
+/// commitment distinguish supplies which may coexist under the same name. These records describe
+/// code supply, not authorization of a callable binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(proptest_derive::Arbitrary))]
 #[cfg_attr(
@@ -21,8 +25,7 @@ pub struct Dependency {
     /// The semantic version of the dependency.
     #[cfg_attr(any(test, feature = "arbitrary"), proptest(value = "Version::new(0, 0, 0)"))]
     pub version: Version,
-    /// The digest of the dependency.
-    /// Serves as an ultimate source of truth for identifying the dependency.
+    /// The dependency commitment of the required package.
     #[cfg_attr(any(test, feature = "arbitrary"), proptest(value = "Word::default()"))]
     pub digest: Word,
 }

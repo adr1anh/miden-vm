@@ -2736,6 +2736,31 @@ mod tests {
     }
 
     #[test]
+    fn embedded_kernel_package_rejects_distinct_same_name_kernel_dependencies() {
+        let kernel = build_kernel_package("kernel");
+        let mut another_version = kernel.clone();
+        another_version.version = Version::new(2, 0, 0);
+        let package = build_package(
+            "app",
+            TargetType::Library,
+            "app::entry",
+            vec![kernel_dependency(&kernel), kernel_dependency(&another_version)],
+            vec![Section::new(SectionId::KERNEL, kernel.to_bytes())],
+        );
+
+        for decoded in [
+            Package::read_from_bytes(&package.to_bytes()),
+            Package::read_from_bytes_trusted(&package.to_bytes()),
+        ] {
+            let decoded = decoded.expect("distinct exact supply records are structurally valid");
+            let error = decoded
+                .try_embedded_kernel_package()
+                .expect_err("code attachment still requires one exact compatible kernel");
+            assert!(error.to_string().contains("declares multiple kernel runtime dependencies"));
+        }
+    }
+
+    #[test]
     fn untrusted_embedded_kernel_decode_preserves_validated_nested_debug_info() {
         let kernel =
             build_debug_package("kernel", TargetType::Kernel, "kernel::boot", "kernel_ctx");
