@@ -8,18 +8,22 @@ use miden_utils_testing::{build_expected_hash, expect_exec_error_matches};
 use rstest::rstest;
 
 fn assert_hash_input_error(source: &str, message: &str) {
-    let (program, ..) = build_test!(source, &[]).compile().unwrap();
+    let test = build_test!(source, &[]);
+    let (program, ..) = test.compile().unwrap();
+    let environment = test.fixture_environment().unwrap();
     let mut host = DefaultHost::default()
+        .with_environment_source(environment.source())
         .with_library(&miden_core_lib::CoreLibrary::default())
         .unwrap();
     // A missing range check must fail the test without running an unbounded absorption loop.
     let options =
         ExecutionOptions::new(Some(2_048), 64, ExecutionOptions::DEFAULT_CORE_TRACE_FRAGMENT_SIZE)
-            .unwrap();
+            .unwrap()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits());
     let error = FastProcessor::new(StackInputs::default())
         .with_options(options)
         .unwrap()
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program, environment.execution(), &mut host)
         .unwrap_err();
     match error {
         ExecutionError::OperationError {

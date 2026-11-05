@@ -5,6 +5,7 @@
 //! resolution of inherited properties, the AST is translated to a simpler structure that does not
 //! need to represent the complexity of the on-disk format.
 mod dependency;
+mod dependency_binding;
 mod package;
 pub(crate) mod parsing;
 mod profile;
@@ -27,6 +28,7 @@ use serde::{Deserialize, Serialize};
 
 pub use self::{
     dependency::DependencySpec,
+    dependency_binding::{DependencyBindingSpec, HomeLabelSpec},
     package::{PackageConfig, PackageDetail, PackageTable, ProjectFile},
     profile::Profile,
     target::{BinTarget, LibTarget},

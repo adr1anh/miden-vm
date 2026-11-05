@@ -3,14 +3,18 @@
 
 use std::sync::Arc;
 
-use miden_assembly::{Assembler, DefaultSourceManager};
 use miden_event_handler_abi::ABI_VERSION;
-use miden_mast_package::{EventHandlerManifestEntry, EventHandlerSection, Package};
+use miden_mast_package::{EventHandlerManifestEntry, EventHandlerSection, Package, PackageNaming};
 use miden_processor::{
     DefaultHost, FastProcessor, StackInputs,
     serde::{Deserializable, Serializable},
 };
+use miden_utils_testing::librarytree::FixtureEnvironment;
 use miden_wasm_event_handlers::{WasmHandlerLimits, host_library_from_package};
+
+mod common;
+
+use common::named_package;
 
 /// A handler that reads the first stack input, doubles it, and pushes the result to the advice
 /// stack.
@@ -35,11 +39,8 @@ begin
 end"#;
 
 /// Assembles the `double` program and attaches the `double` handler module to its package.
-fn assemble_package_with_handlers() -> Package {
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let package = Assembler::new(source_manager)
-        .assemble_program("wasm_handler_e2e", PROGRAM)
-        .expect("program assembles");
+fn assemble_package_with_handlers() -> (Package, PackageNaming, FixtureEnvironment) {
+    let (package, naming, environment) = named_package("wasm_handler_e2e", PROGRAM);
 
     let section = EventHandlerSection {
         abi_version: ABI_VERSION,
@@ -49,24 +50,29 @@ fn assemble_package_with_handlers() -> Package {
             "double",
         )],
     };
-    (*package).with_event_handlers(&section).expect("section attaches")
+    let package = (*package).with_event_handlers(&section).expect("section attaches");
+    (package, naming, environment)
 }
 
 #[test]
 fn program_verifies_advice_from_a_packaged_wasm_handler() {
-    let package = assemble_package_with_handlers();
+    let (package, naming, environment) = assemble_package_with_handlers();
 
     // Full wire roundtrip: the handlers travel inside the .masp bytes.
     let decoded = Arc::new(Package::read_from_bytes(&package.to_bytes()).expect("package decodes"));
+    assert_eq!(
+        decoded.event_handlers().expect("roundtrip section decodes"),
+        package.event_handlers().expect("source section decodes"),
+    );
 
     let library = host_library_from_package(&decoded, WasmHandlerLimits::default())
         .expect("handlers load from the package");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
 
-    let program = decoded.unwrap_program();
+    let program = decoded.try_into_program(&naming).expect("roundtrip retains exact naming");
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program, environment.execution(), &mut host)
         .expect("the handler's advice satisfies the in-VM check");
 }
 
@@ -85,11 +91,9 @@ const READ_MEM_WAT: &str = r#"(module
 
 #[test]
 fn packaged_handler_reads_vm_memory() {
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let package = Assembler::new(source_manager)
-        .assemble_program(
-            "wasm_handler_mem_read",
-            r#"
+    let (package, naming, environment) = named_package(
+        "wasm_handler_mem_read",
+        r#"
             begin
                 push.42 mem_store.100
                 push.43 mem_store.101
@@ -97,8 +101,7 @@ fn packaged_handler_reads_vm_memory() {
                 adv_push push.42 assert_eq
                 adv_push push.43 assert_eq
             end"#,
-        )
-        .expect("program assembles");
+    );
 
     let section = EventHandlerSection {
         abi_version: ABI_VERSION,
@@ -109,15 +112,15 @@ fn packaged_handler_reads_vm_memory() {
         )],
     };
     let package = (*package).with_event_handlers(&section).expect("section attaches");
-    let program = package.unwrap_program();
+    let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
     let library = host_library_from_package(&Arc::new(package), WasmHandlerLimits::default())
         .expect("handlers load from the package");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
 
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program, environment.execution(), &mut host)
         .expect("the batch memory read matches what the program wrote");
 }
 
@@ -188,11 +191,9 @@ fn rust_guest_fixture_end_to_end() {
         ]
     );
 
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let package = Assembler::new(source_manager)
-        .assemble_program(
-            "rust_guest_e2e",
-            r#"
+    let (package, naming, environment) = named_package(
+        "rust_guest_e2e",
+        r#"
             begin
                 push.5
                 emit.event("test::wasm::add_hundred")
@@ -201,18 +202,22 @@ fn rust_guest_fixture_end_to_end() {
                 assert_eq
                 drop
             end"#,
-        )
-        .expect("program assembles");
+    );
     let package = (*package).with_event_handlers(&section).expect("section attaches");
     let decoded = Arc::new(Package::read_from_bytes(&package.to_bytes()).expect("package decodes"));
+    assert_eq!(
+        decoded.event_handlers().expect("roundtrip section decodes"),
+        package.event_handlers().expect("source section decodes"),
+    );
 
     let library = host_library_from_package(&decoded, WasmHandlerLimits::default())
         .expect("handlers load from the package");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
 
+    let program = decoded.try_into_program(&naming).expect("roundtrip retains exact naming");
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&decoded.unwrap_program(), &mut host)
+        .execute_sync(&program, environment.execution(), &mut host)
         .expect("the Rust handler's advice satisfies the in-VM check");
 }
 
@@ -253,20 +258,17 @@ fn rust_guest_merges_words() {
         end"#
     );
 
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let package = Assembler::new(source_manager)
-        .assemble_program("rust_guest_merge", source)
-        .expect("program assembles");
+    let (package, naming, environment) = named_package("rust_guest_merge", &source);
     let package = (*package).with_event_handlers(&section).expect("section attaches");
-    let program = package.unwrap_program();
+    let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
     let library = host_library_from_package(&Arc::new(package), WasmHandlerLimits::default())
         .expect("handlers load from the package");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
 
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program, environment.execution(), &mut host)
         .expect("the handler's digest matches the natively computed merge");
 }
 
@@ -277,26 +279,23 @@ fn rust_guest_panic_reaches_the_host() {
         miden_wasm_event_handlers::section_from_module(wasm, WasmHandlerLimits::default())
             .expect("manifest embedded");
 
-    let source_manager = Arc::new(DefaultSourceManager::default());
-    let package = Assembler::new(source_manager)
-        .assemble_program(
-            "rust_guest_panic",
-            r#"
+    let (package, naming, environment) = named_package(
+        "rust_guest_panic",
+        r#"
             begin
                 emit.event("test::wasm::always_panics")
             end"#,
-        )
-        .expect("program assembles");
+    );
     let package = (*package).with_event_handlers(&section).expect("section attaches");
-    let program = package.unwrap_program();
+    let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
     let library = host_library_from_package(&Arc::new(package), WasmHandlerLimits::default())
         .expect("handlers load from the package");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("handlers register");
 
     let err = FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program, environment.execution(), &mut host)
         .expect_err("the handler panics");
 
     // The guest's message sits in the error source chain, below the processor's event context.
@@ -353,13 +352,13 @@ fn rust_guest_imports_stay_inside_the_abi() {
 
 #[test]
 fn program_fails_without_the_packaged_handlers() {
-    let package = assemble_package_with_handlers();
-    let program = package.unwrap_program();
+    let (package, naming, environment) = assemble_package_with_handlers();
+    let program = package.try_into_program(&naming).expect("exact local naming selects code");
 
     // A host that ignores the package's handlers cannot serve the event.
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let err = FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program, environment.execution(), &mut host)
         .expect_err("the event has no handler");
     assert!(err.to_string().contains("event"), "unexpected error: {err}");
 }

@@ -3,10 +3,16 @@
 //! Each snippet is run as a `repeat.K` loop, measured through the real trace builder, and
 //! converted into per-iteration row costs. Calibration happens on every bench run.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
-use miden_processor::{DefaultHost, FastProcessor, StackInputs, trace::build_trace};
-use miden_vm::Assembler;
+use miden_processor::{
+    DefaultHost, ExecutionOptions, FastProcessor, StackInputs, trace::build_trace,
+};
+use miden_utils_testing::librarytree::{trace_limits, try_fixture_from_product};
+use miden_vm::{
+    Assembler,
+    assembly::{DefaultSourceManager, Parse, testing::FixtureNamespace},
+};
 
 use crate::{
     snapshot::{TraceBreakdown, TraceShape, TraceTotals},
@@ -21,15 +27,32 @@ pub const CALIBRATION_ITERS: u64 = 1000;
 /// Assemble and execute `source`, returning the shape of the resulting execution trace. Wraps
 /// assembler + fast processor + trace builder.
 pub fn measure_program(source: &str) -> Result<TraceShape, MeasurementError> {
-    let program = Assembler::default()
-        .assemble_program("program", source)
-        .map_err(|e| MeasurementError::Assembly(format!("{e}")))?
-        .unwrap_program();
+    let source_manager = Arc::new(DefaultSourceManager::default());
+    let assembler = Assembler::new(source_manager.clone());
+    let module = Parse::parse(source, assembler.warnings_as_errors(), assembler.source_manager())
+        .map_err(|e| MeasurementError::Assembly(format!("{e}")))?;
+    // This is an explicit local fixture policy, independent of publication admission.
+    let mut namespace = FixtureNamespace::assembly_tests();
+    namespace
+        .add_module(&module)
+        .map_err(|e| MeasurementError::Assembly(format!("{e}")))?;
+    let assembler = namespace
+        .configure(assembler, [module.as_ref()])
+        .map_err(|e| MeasurementError::Assembly(format!("{e}")))?;
+    let product = assembler
+        .assemble_executable_modules("program".into(), module, [])
+        .map_err(|e| MeasurementError::Assembly(format!("{e}")))?;
+    let fixture = try_fixture_from_product(product, &[])
+        .map_err(|error| MeasurementError::Assembly(error.to_string()))?;
 
-    let mut host = DefaultHost::default();
-    let processor = FastProcessor::new(StackInputs::default());
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.environment.source());
+    let processor = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+        .map_err(|e| MeasurementError::Execution(format!("{e}")))?;
     let witness = processor
-        .execute_for_proving_sync(&program, &mut host)
+        .execute_for_proving_sync(&fixture.program, fixture.environment.execution(), &mut host)
         .map_err(|e| MeasurementError::Execution(format!("{e}")))?;
     let (vm_witness, _) = witness.into_parts();
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget())

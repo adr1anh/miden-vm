@@ -23,7 +23,7 @@
 use alloc::vec;
 
 use miden_air_definitions::vm::trace::RowIndex;
-use miden_core::{Felt, Word, operations::opcodes, program::StackOutputs};
+use miden_core::{Felt, operations::opcodes, program::StackOutputs};
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 
 use crate::repro_harness::{ReproTrace, core_row_mut};
@@ -41,7 +41,7 @@ struct Fixture {
 
 /// Builds a trace whose DYNCALL executes at depth exactly 16 with an empty overflow table.
 ///
-/// The pointer to the callee digest is supplied as a stack *input* rather than pushed, so the
+/// The pointer to the callee key is supplied as a stack *input* rather than pushed, so the
 /// depth at the DYNCALL row is 16 and `overflow() = (b0 - 16) * h0` vanishes.
 fn build_fixture() -> Fixture {
     // `foo` must not shift the stack, so the forged bottom slot stays at position 15.
@@ -56,33 +56,32 @@ fn build_fixture() -> Fixture {
             dyncall
         end
     ";
-    let program = miden_assembly::Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
-    // `call.foo` keeps `foo` in the forest as its own MAST node (a bare `dyncall` reference
-    // is dynamic, so `foo` would otherwise be eliminated as dead code) and gives us its digest.
-    let root = program.hash();
-    let foo_digest: Word = program
-        .mast_forest()
-        .procedure_digests()
-        .find(|d| *d != root)
-        .expect("foo must survive as its own procedure");
+    let fixture = crate::named_fixture::named_source(source);
+    let foo_key = fixture.key("foo").into_word();
+    let program = fixture.program;
+    let environment = fixture.environment;
+    // `call.foo` retains the target code; its canonical key comes from the exact source naming.
 
-    // Stack (top first): [d0, d1, d2, d3, addr, 0...]. `mem_storew_le.40` writes the top word
-    // (the digest) to memory without popping, then `movup.4` lifts `addr` to the top. Both are
-    // depth-preserving, so DYNCALL executes at depth 16 and the overflow table stays empty.
+    // Stack (top first): [k0, k1, k2, k3, addr, 0...]. `mem_storew_le.40` writes the top word
+    // (the canonical key) to memory without popping, then `movup.4` lifts `addr` to the top. Both
+    // are depth-preserving, so DYNCALL executes at depth 16 and the overflow table stays empty.
     let mut stack_values = vec![Felt::ZERO; 16];
-    for (i, limb) in foo_digest.as_elements().iter().enumerate() {
+    for (i, limb) in foo_key.as_elements().iter().enumerate() {
         stack_values[i] = *limb;
     }
     stack_values[4] = Felt::new_unchecked(ADDR);
     let stack_inputs = StackInputs::new(&stack_values).unwrap();
 
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(stack_inputs)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
         .execute_and_build_trace_sync(
             &program,
+            environment.execution(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

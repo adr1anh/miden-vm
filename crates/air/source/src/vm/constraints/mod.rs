@@ -60,9 +60,8 @@ pub fn enforce_chiplets<AB>(
     local: &ChipletCols<AB::Var>,
     next: &ChipletCols<AB::Var>,
     selectors: &ChipletSelectors<AB::Expr>,
-    kernel: &[AB::Expr; 4],
 ) where
     AB: MidenAirBuilder,
 {
-    chiplets::enforce_main(builder, local, next, selectors, kernel);
+    chiplets::enforce_main(builder, local, next, selectors);
 }

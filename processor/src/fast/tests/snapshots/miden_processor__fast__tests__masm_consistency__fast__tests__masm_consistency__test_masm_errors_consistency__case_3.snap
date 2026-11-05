@@ -2,25 +2,25 @@
 source: processor/src/fast/tests/masm_consistency.rs
 expression: fast_err
 ---
-ProcedureNotFound {
-    label: SourceSpan {
-        source_id: SourceId(
-            4294967295,
+EnvironmentWitnessUnavailable {
+    root: EnvironmentRoot(
+        Word(
+            [
+                3827059180959145777,
+                2553317815736594919,
+                1590335708567063054,
+                72345114034814200,
+            ],
         ),
-        start: ByteIndex(
-            0,
+    ),
+    key: ProcedureKey(
+        Word(
+            [
+                0,
+                0,
+                0,
+                0,
+            ],
         ),
-        end: ByteIndex(
-            0,
-        ),
-    },
-    source_file: None,
-    root_digest: Word(
-        [
-            0,
-            0,
-            0,
-            0,
-        ],
     ),
 }

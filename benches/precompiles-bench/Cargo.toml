@@ -15,6 +15,7 @@ workspace = true
 miden-core = { workspace = true }
 miden-core-lib = { workspace = true }
 miden-crypto = { workspace = true }
+miden-utils-testing = { workspace = true }
 miden-vm = { path = "../../miden-vm", features = ["internal", "concurrent"] }
 p256 = { features = ["ecdsa"], workspace = true }
 rand_chacha = { workspace = true }

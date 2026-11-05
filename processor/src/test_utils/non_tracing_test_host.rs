@@ -3,7 +3,8 @@ use alloc::{sync::Arc, vec::Vec};
 use miden_debug_types::{DefaultSourceManager, Location, SourceFile, SourceManager, SourceSpan};
 
 use crate::{
-    BaseHost, LoadedMastForest, ProcessorState, SyncHost, Word, advice::AdviceMutation,
+    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    LoadedMastForest, ProcessorState, ResolutionWitness, SyncHost, Word, advice::AdviceMutation,
     event::EventError,
 };
 
@@ -21,6 +22,7 @@ pub struct NonTracingTestHost {
     /// Regular host event IDs received via [`SyncHost::on_event`], in emission order.
     pub events: Vec<u64>,
     source_manager: Arc<DefaultSourceManager>,
+    environment_source: Option<super::EnvironmentSource>,
 }
 
 #[cfg(test)]
@@ -29,7 +31,14 @@ impl NonTracingTestHost {
         Self {
             events: Vec::new(),
             source_manager: Arc::new(DefaultSourceManager::default()),
+            environment_source: None,
         }
+    }
+
+    /// Attaches a source of untrusted environment witnesses for explicit execution requests.
+    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentWitnessSource>) -> Self {
+        self.environment_source = Some(super::EnvironmentSource(source));
+        self
     }
 }
 
@@ -54,6 +63,16 @@ impl BaseHost for NonTracingTestHost {
 
 #[cfg(test)]
 impl SyncHost for NonTracingTestHost {
+    fn get_environment_witness(
+        &mut self,
+        request: EnvironmentWitnessRequest,
+    ) -> Result<Option<ResolutionWitness>, EnvironmentSourceError> {
+        match &self.environment_source {
+            Some(source) => source.0.get(request),
+            None => Ok(None),
+        }
+    }
+
     fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
         // This host only runs self-contained programs; external MAST forests are not resolved.
         None
@@ -68,10 +87,13 @@ impl SyncHost for NonTracingTestHost {
 
 #[cfg(test)]
 mod tests {
-    use miden_assembly::Assembler;
+    use miden_utils_testing::Test;
 
     use super::NonTracingTestHost;
-    use crate::{AdviceInputs, ExecutionOptions, FastProcessor, Program, StackInputs};
+    use crate::{
+        AdviceInputs, ExecutionOptions, FastProcessor, StackInputs,
+        test_utils::native_fixture_environment,
+    };
 
     /// A host which does not implement `on_trace` should still execute trace events gracefully via
     /// the default no-op implementation, and trace events must not be routed to `on_event`.
@@ -95,18 +117,19 @@ mod tests {
         drop
     end"
         );
-        let program: Program = Assembler::default()
-            .assemble_program("program", &source)
-            .unwrap()
-            .unwrap_program();
-        let mut host = NonTracingTestHost::default();
+        let test = Test::new("non_tracing_host_ignores_trace_events", &source, false);
+        let (program, ..) = test.compile().unwrap();
+        let (environment, source) =
+            native_fixture_environment(&test.fixture_environment().unwrap());
+        let mut host = NonTracingTestHost::default().with_environment_source(source);
+        host.source_manager = test.source_manager;
         FastProcessor::new_with_options(
             StackInputs::default(),
             AdviceInputs::default(),
             ExecutionOptions::default(),
         )
         .expect("failed to construct FastProcessor")
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program, environment, &mut host)
         .unwrap();
 
         assert_eq!(host.events, vec![REGULAR_EVENT_ID_1, REGULAR_EVENT_ID_2]);

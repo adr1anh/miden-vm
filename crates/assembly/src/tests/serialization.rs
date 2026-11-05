@@ -1,7 +1,7 @@
 // PROGRAM SERIALIZATION AND DESERIALIZATION
 // ================================================================================================
-
 use super::*;
+use crate::testing::{FixtureNamespace, FixtureProgram};
 
 #[test]
 fn test_program_serde_simple() {
@@ -13,8 +13,14 @@ fn test_program_serde_simple() {
     end
     ";
 
-    let assembler = Assembler::default();
-    let original_program = assembler.assemble_program("test", source).unwrap().unwrap_program();
+    let context = TestContext::default();
+    let module = context.parse_module(source).unwrap();
+    let mut fixture_namespace = FixtureNamespace::assembly_tests();
+    fixture_namespace.add_module(&module).unwrap();
+    let assembler = fixture_namespace
+        .configure(Assembler::new(context.source_manager()), [&*module])
+        .unwrap();
+    let original_program = assembler.assemble_program("test", module).unwrap().fixture_program();
 
     let mut target = Vec::new();
     original_program.write_into(&mut target);

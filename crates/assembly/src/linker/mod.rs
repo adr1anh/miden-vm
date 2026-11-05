@@ -12,9 +12,10 @@
 //! 3. _Linking_, the most critical phase of compilation. During this phase, the assembler has the
 //!    full compilation graph available to it, and so this is where inter-module symbol references
 //!    are finally able to be resolved (or not, in which case appropriate errors are raised). This
-//!    is the phase where we catch cyclic references, references to undefined symbols, references to
-//!    non-public symbols from other modules, etc. Once all symbols are linked, the assembler is
-//!    free to compile all of the procedures to MAST, and generate a [crate::package::Package].
+//!    is the phase where we catch cyclic source aliases, references to undefined symbols,
+//!    references to non-public symbols from other modules, etc. Once all symbols are linked, the
+//!    assembler is free to compile all of the procedures to MAST, and generate a
+//!    [crate::package::Package].
 //! 4. _Assembly_, the final phase, where all of the linked items provided to the assembler are
 //!    lowered to MAST, or to their final representations in the [crate::package::Package] produced
 //!    as the output of assembly. During this phase, it is expected that the compilation graph has
@@ -23,9 +24,8 @@
 //! This module provides the implementation of the linker and its associated data structures. There
 //! are three primary parts:
 //!
-//! 1. The _call graph_, this is what tracks dependencies between procedures in the compilation
-//!    graph, and is used to ensure that all procedure references can be resolved to a MAST root
-//!    during final assembly.
+//! 1. The _runtime reference graph_ tracks named references between callable procedures for code
+//!    retention. Runtime cycles are valid; these edges are independent of structural MAST order.
 //! 2. The _symbol resolver_, this is what is responsible for computing symbol resolutions using
 //!    context-sensitive details about how a symbol is referenced. This context sensitivity is how
 //!    we are able to provide better diagnostics when invalid references are found. The resolver
@@ -49,7 +49,7 @@ mod symbols;
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
-    string::{String, ToString},
+    string::ToString,
     sync::Arc,
     vec::Vec,
 };
@@ -61,14 +61,14 @@ use core::{
 use miden_assembly_syntax::{
     Report,
     ast::{
-        self, AttributeSet, GlobalItemIndex, InvocationTarget, ItemIndex, Module, ModuleIndex,
-        Path, SymbolResolution, Visibility, types,
+        self, AttributeSet, GlobalItemIndex, InvocationTarget, InvokeKind, ItemIndex, Module,
+        ModuleIndex, Path, SymbolResolution, Visibility, types,
     },
     debuginfo::{SourceManager, SourceSpan, Span, Spanned},
     module::{ItemInfo, ModuleDescriptor},
 };
-use miden_core::{Word, advice::AdviceMap, program::KernelDescriptor};
-use miden_mast_package::Package as MastPackage;
+use miden_core::{Word, advice::AdviceMap};
+use miden_mast_package::{CallableProcedurePath, Package as MastPackage, PackageNaming};
 use smallvec::{SmallVec, smallvec};
 
 pub use self::{
@@ -84,49 +84,17 @@ use self::{
     namespaces::ResolvedImports,
     resolver::*,
 };
+use crate::{CallableBinding, CallableDeclaration};
 
-/// Selects how [`Linker::link`] handles a static cycle in the call graph.
+/// The resolved public modules available for analysis after linking.
 ///
-/// MAST procedures must be built from callees to callers, so a static cycle (recursion that does
-/// not go through a `dynexec`) prevents MAST from being generated. Assembly therefore rejects
-/// static cycles by default (see [`Self::Strict`]). Lint analysis does not need MAST and can
-/// instead skip the cycle and its callers, so it links in [`Self::Analysis`] mode: the resolved
-/// modules and call edges are committed and the cycle is reported as a nonfatal diagnostic.
-#[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
-pub enum LinkMode {
-    /// Reject any static cycle in the call graph, rolling back all pending changes.
-    ///
-    /// This is the default and is required before MAST can be built.
-    #[default]
-    Strict,
-    /// Commit resolved modules and call edges even when a static cycle is found, and report the
-    /// cycle as a nonfatal diagnostic.
-    ///
-    /// Unresolved imports, unresolved calls, and failed rewrites remain fatal errors in this mode;
-    /// only the final cycle check is nonfatal.
-    Analysis,
-}
-
-/// The nonfatal outcome of a [`LinkMode::Analysis`] link.
-///
-/// Unlike [`Linker::link`], analysis linking does not reject a static recursion cycle. Instead it
-/// commits the resolved modules and call edges, and reports the cycle so the caller can skip the
-/// cycle (and every caller that depends on it) and continue analyzing the rest of the project.
+/// Runtime recursion is valid for both assembly and analysis. Unresolved references and invalid
+/// imports remain link errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkAnalysis {
     /// The module indices that comprise the public interface of the assembled artifact,
     /// determined by tracing the modules reachable from the roots via their public submodules.
     pub module_indices: Vec<ModuleIndex>,
-    /// The procedures that participate in a static recursion cycle in the call graph, reported as
-    /// fully-qualified procedure paths (`module::proc`). Empty when the call graph is acyclic.
-    pub cycle: Box<[String]>,
-}
-
-impl LinkAnalysis {
-    /// Returns `true` when the analysis link found a static recursion cycle.
-    pub fn has_cycle(&self) -> bool {
-        !self.cycle.is_empty()
-    }
 }
 
 /// Represents the current status of a symbol in the state of the [Linker]
@@ -169,36 +137,34 @@ pub enum LinkStatus {
 /// The assembler will call [`Self::link`] once it has provided all inputs that it wants to link,
 /// which will, when successful, return the set of module indices corresponding to the modules that
 /// comprise the public interface of the assembled artifact. The assembler then constructs the MAST
-/// starting from the exported procedures of those modules, recursively tracing the call graph
-/// based on whether or not the callee is statically or dynamically linked. In the static linking
-/// case, any procedures referenced in a statically-linked library or module will be included in
-/// the assembled artifact. In the dynamic linking case, referenced procedures are instead
-/// referenced in the assembled artifact only by their MAST root.
+/// starting from public exports and explicitly selected callable roots, tracing named runtime
+/// references to retain available code. Every retained invocation uses the callee's canonical key;
+/// selected body supply is independent of that identity and does not impose a compilation order.
 #[derive(Clone)]
 pub struct Linker {
     /// The set of libraries to link against.
     libraries: BTreeMap<Word, LinkLibrary>,
     /// The statically linked libraries to pass to MAST forest construction.
     ///
-    /// This index is keyed by full MAST forest commitment, not package commitment, so static
-    /// libraries with the same exported procedure roots but different stored advice are
-    /// retained.
+    /// Like `libraries`, this is keyed by the name-aware v2 dependency commitment, retaining
+    /// distinct canonical names, private code, and stored advice.
     static_libraries: BTreeMap<Word, LinkLibrary>,
     /// The global set of items known to the linker
     modules: Vec<LinkModule>,
-    /// The global call graph of calls, not counting those that are performed directly via MAST
-    /// root.
+    /// Named runtime references, including address-taken procedures and recursive groups.
+    /// Literal procedure keys do not reverse-resolve to bodies.
     callgraph: CallGraph,
+    /// Structural expansion dependencies only. Unlike runtime references, these must be acyclic.
+    inline_callgraph: CallGraph,
     /// The set of MAST roots which have procedure definitions in this graph. There can be
     /// multiple procedures bound to the same root due to having identical code.
     procedures_by_mast_root: BTreeMap<Word, SmallVec<[GlobalItemIndex; 1]>>,
-    /// The index of the kernel module in `modules`, if present
+    /// The optional source module used for unqualified kernel procedure lookup.
+    ///
+    /// This is a source alias convention, independent of canonical kernel export placement.
     kernel_index: Option<ModuleIndex>,
     /// The kernel library being linked against.
-    ///
-    /// This is always provided, with an empty kernel being the default.
-    kernel: KernelDescriptor,
-    kernel_package: Option<Arc<MastPackage>>,
+    kernel_library: Option<LinkLibrary>,
     /// The source manager to use when emitting diagnostics.
     source_manager: Arc<dyn SourceManager>,
 }
@@ -213,65 +179,154 @@ impl Linker {
             static_libraries: Default::default(),
             modules: Default::default(),
             callgraph: Default::default(),
+            inline_callgraph: Default::default(),
             procedures_by_mast_root: Default::default(),
             kernel_index: None,
-            kernel: Default::default(),
-            kernel_package: None,
+            kernel_library: None,
             source_manager,
         }
     }
 
     /// Registers `library` and all of its modules with the linker, according to its linkage
     pub fn link_library(&mut self, library: LinkLibrary) -> Result<(), LinkerError> {
-        use alloc::collections::btree_map::Entry;
-
+        library.package.check_naming(library.naming()).map_err(|err| {
+            LinkerError::InvalidPackageModuleSurface {
+                package: library.package.name.to_string(),
+                reason: err.to_string(),
+            }
+        })?;
         let module_descriptors = library.module_descriptors().map_err(|err| {
             LinkerError::InvalidPackageModuleSurface {
                 package: library.package.name.to_string(),
                 reason: err.to_string(),
             }
         })?;
-        let library_interface_digest = library.interface_commitment().map_err(|err| {
-            LinkerError::InvalidPackageModuleSurface {
-                package: library.package.name.to_string(),
-                reason: err.to_string(),
+        let commitment = library.commitment();
+        if let Some(previous) = self.libraries.get_mut(&commitment) {
+            // The exact same dependency may be supplied with either linkage. Prefer static.
+            if matches!(library.linkage, Linkage::Static) {
+                previous.linkage = Linkage::Static;
+                self.static_libraries.entry(commitment).or_insert(library);
             }
-        })?;
-
-        let static_library = matches!(library.linkage, Linkage::Static).then(|| library.clone());
-        let result = match self.libraries.entry(library_interface_digest) {
-            Entry::Vacant(entry) => {
-                let remaining_capacity =
-                    ModuleIndex::MAX_MODULES.saturating_sub(self.modules.len());
-                if module_descriptors.len() > remaining_capacity {
-                    return Err(LinkerError::TooManyModules);
-                }
-
-                entry.insert(library);
-                self.link_assembled_modules(module_descriptors)
-            },
-            Entry::Occupied(mut entry) => {
-                let prev = entry.get_mut();
-
-                // If the same library is linked both dynamically and statically, prefer static
-                // linking always.
-                if matches!(prev.linkage, Linkage::Dynamic) {
-                    prev.linkage = library.linkage;
-                }
-
-                Ok(())
-            },
-        };
-
-        if result.is_ok()
-            && let Some(static_library) = static_library
-        {
-            self.static_libraries
-                .entry(static_library.commitment())
-                .or_insert(static_library);
+            return Ok(());
         }
 
-        result
+        let bindings = Self::library_export_bindings(&library);
+        let modules = self.preflight_library_modules(module_descriptors, &bindings)?;
+        self.insert_library_modules(modules, &bindings);
+        if matches!(library.linkage, Linkage::Static) {
+            self.static_libraries.insert(commitment, library.clone());
+        }
+        self.libraries.insert(commitment, library);
+        Ok(())
+    }
+
+    /// Projects source-visible exports onto their existing canonical declarations. Source paths
+    /// only locate aliases; their spelling never supplies a callable home or canonical name.
+    fn library_export_bindings(library: &LinkLibrary) -> BTreeMap<Arc<Path>, CallableBinding> {
+        library
+            .package
+            .manifest
+            .exports()
+            .filter_map(|export| {
+                let export = export.as_procedure()?;
+                let components = export
+                    .path
+                    .components()
+                    .filter_map(|component| {
+                        let component = component.expect("validated manifest path");
+                        (component != ast::PathComponent::Root).then(|| component.as_str().into())
+                    })
+                    .collect::<Vec<_>>();
+                let path = CallableProcedurePath::from_semantic_components(components)
+                    .expect("validated callable export path");
+                let key = library
+                    .naming()
+                    .callables()
+                    .key_for_visible_path(&path)
+                    .expect("checked naming contains every procedure export");
+                let binding = library
+                    .naming()
+                    .callables()
+                    .binding(key)
+                    .expect("visible callable keys are declared")
+                    .clone();
+                Some((export.path.clone(), binding))
+            })
+            .collect()
+    }
+
+    /// Checks every conflict and the aggregate module capacity before modifying linker state.
+    fn preflight_library_modules(
+        &self,
+        modules: Vec<ModuleDescriptor>,
+        bindings: &BTreeMap<Arc<Path>, CallableBinding>,
+    ) -> Result<Vec<ModuleDescriptor>, LinkerError> {
+        let mut pending = Vec::new();
+        for descriptor in modules {
+            if let Some(existing) = self.find_module(descriptor.path()) {
+                let same_surface = existing.is_mast()
+                    && existing.submodules().eq(descriptor.submodules().iter())
+                    && existing.num_symbols() == descriptor.items().len()
+                    && descriptor.items().all(|(_, item)| {
+                        let Some(symbol) = existing.get(item.name()) else {
+                            return false;
+                        };
+                        let SymbolItem::Compiled(previous) = symbol.item() else {
+                            return false;
+                        };
+                        // Provenance points to the exact package input; it is not source-name
+                        // authority. Advice-only variants may share one identical module surface.
+                        let mut previous = previous.clone();
+                        let mut item = item.clone();
+                        if let ItemInfo::Procedure(info) = &mut previous {
+                            info.source_library_commitment = None;
+                        }
+                        if let ItemInfo::Procedure(info) = &mut item {
+                            info.source_library_commitment = None;
+                        }
+                        previous == item
+                            && (!symbol.is_procedure()
+                                || symbol.callable_binding()
+                                    == bindings
+                                        .get::<Path>(existing.path().join(symbol.name()).as_ref()))
+                    });
+                if !same_surface {
+                    return Err(LinkerError::ConflictingImportedModule {
+                        path: descriptor.path().into(),
+                    });
+                }
+            } else {
+                pending.push(descriptor);
+            }
+        }
+        let remaining_capacity = ModuleIndex::MAX_MODULES.saturating_sub(self.modules.len());
+        if pending.len() > remaining_capacity {
+            return Err(LinkerError::TooManyModules);
+        }
+        Ok(pending)
+    }
+
+    fn insert_library_modules(
+        &mut self,
+        modules: Vec<ModuleDescriptor>,
+        bindings: &BTreeMap<Arc<Path>, CallableBinding>,
+    ) {
+        for descriptor in modules {
+            let index = self
+                .link_assembled_module(descriptor)
+                .expect("module conflicts and capacity were checked before insertion");
+            let module = &self[index];
+            for symbol in module.symbols().filter(|symbol| symbol.is_procedure()) {
+                let path = module.path().join(symbol.name());
+                let binding = bindings
+                    .get::<Path>(path.as_ref())
+                    .expect("checked naming contains every imported procedure");
+                symbol
+                    .bind_callable(binding.clone())
+                    .expect("new imported symbols have no prior binding");
+            }
+        }
     }
 
     /// Registers a set of MAST modules with the linker.
@@ -359,6 +414,59 @@ impl Linker {
         modules.into_iter().map(|mut m| self.link_module(&mut m)).collect()
     }
 
+    /// Registers callable declarations without requiring selected implementation roots or code.
+    ///
+    /// The source module path is only a linkage namespace. Each declaration carries its separately
+    /// supplied canonical home and callable path, which source imports and re-exports cannot
+    /// change.
+    pub fn link_callable_declarations(
+        &mut self,
+        module_path: Arc<Path>,
+        declarations: impl IntoIterator<Item = CallableDeclaration>,
+    ) -> Result<ModuleIndex, Report> {
+        if self.find_module_index(&module_path).is_some() {
+            return Err(LinkerError::DuplicateModule { path: module_path }.into());
+        }
+        let declarations = declarations.into_iter().collect::<Vec<_>>();
+        if declarations.len() > ItemIndex::MAX_ITEMS {
+            return Err(Report::msg("too many callable declarations in module"));
+        }
+        let module_index = self.next_module_id()?;
+        let mut names = BTreeSet::new();
+        let mut symbols = Vec::with_capacity(declarations.len());
+        for declaration in declarations {
+            if !names.insert(declaration.name.as_str().to_string()) {
+                return Err(Report::msg(format!(
+                    "duplicate callable declaration '{}::{}'",
+                    module_path, declaration.name
+                )));
+            }
+            let binding = declaration.binding.clone();
+            let symbol = Symbol::new(
+                declaration.name.clone(),
+                declaration.visibility,
+                LinkStatus::Linked,
+                SymbolItem::CallableDeclaration(declaration),
+            );
+            symbol.bind_callable(binding).expect("new declaration has no previous binding");
+            symbols.push(symbol);
+        }
+        for index in 0..symbols.len() {
+            self.callgraph.get_or_insert_node(module_index + ItemIndex::new(index));
+        }
+        self.modules.push(
+            LinkModule::new(
+                module_index,
+                ast::ModuleKind::Library,
+                LinkStatus::Linked,
+                ModuleSource::Mast,
+                module_path,
+            )
+            .with_symbols(symbols),
+        );
+        Ok(module_index)
+    }
+
     /// Registers an AST module with the linker.
     ///
     /// A module provided to this method is presumed to be dynamically linked, unless specifically
@@ -443,17 +551,16 @@ impl Linker {
 // ------------------------------------------------------------------------------------------------
 /// Kernels
 impl Linker {
-    /// Returns a new [Linker] instantiated from the provided kernel and kernel info module.
-    ///
-    /// Note: it is assumed that kernel and kernel_module are consistent, but this is not checked.
+    /// Returns a new [Linker] using a kernel and its explicitly retained canonical naming.
     pub fn with_kernel(
         source_manager: Arc<dyn SourceManager>,
         kernel_package: Arc<MastPackage>,
+        naming: impl Into<Arc<PackageNaming>>,
     ) -> Result<Self, Report> {
         log::debug!(target: "linker", "instantiating linker with kernel package {}@{}", kernel_package.name, kernel_package.version);
 
         let mut linker = Self::new(source_manager);
-        linker.link_with_kernel(kernel_package)?;
+        linker.link_with_kernel(kernel_package, naming)?;
 
         Ok(linker)
     }
@@ -463,82 +570,60 @@ impl Linker {
     /// This cannot cause any issues with modules already added to the linker (if any), as they
     /// cannot have directly depended on the kernel, or an error would have been raised.
     ///
-    /// This will panic if the kernel is empty, or the provided kernel module info is not valid for
-    /// a kernel.
-    pub fn link_with_kernel(&mut self, kernel_package: Arc<MastPackage>) -> Result<(), Report> {
-        if !kernel_package.is_kernel() {
-            return Err(Report::msg("invalid kernel package: not a kernel"));
-        }
-        let kernel = kernel_package.to_kernel_descriptor()?;
-        if kernel.is_empty() {
-            return Err(Report::msg("invalid kernel package: kernel cannot be empty"));
-        }
-        assert!(self.kernel.is_empty());
-        assert!(self.kernel_package.is_none());
+    /// Naming must come from compilation or explicit selected-profile admission of raw transport.
+    pub fn link_with_kernel(
+        &mut self,
+        kernel_package: Arc<MastPackage>,
+        naming: impl Into<Arc<PackageNaming>>,
+    ) -> Result<(), Report> {
+        let library =
+            LinkLibrary::from_package(kernel_package.clone(), naming).map_err(Report::msg)?;
+        kernel_package.check_kernel_code(library.naming())?;
+        assert!(!self.has_kernel());
 
         log::debug!(target: "linker", "modifying linker with kernel package {}@{}", kernel_package.name, kernel_package.version);
 
-        let mut kernel_index = None;
-        let module_descriptors = kernel_package.try_module_descriptors().map_err(|err| {
+        let module_descriptors = library.module_descriptors().map_err(|err| {
             LinkerError::InvalidPackageModuleSurface {
                 package: kernel_package.name.to_string(),
                 reason: err.to_string(),
             }
         })?;
-        let remaining_capacity = ModuleIndex::MAX_MODULES.saturating_sub(self.modules.len());
-        if module_descriptors.len() > remaining_capacity {
-            return Err(LinkerError::TooManyModules.into());
-        }
-
-        for module_descriptor in module_descriptors {
-            let is_kernel_module = module_descriptor.path().is_kernel_path();
-            let module_index = self.link_assembled_module(module_descriptor)?;
-            if is_kernel_module {
-                kernel_index = Some(module_index);
-            }
-        }
-        assert!(kernel_index.is_some());
-
+        // Source lookup may use only the attached package's own optional kernel alias.
+        // An unrelated existing module named `$kernel` must not become this package's adapter.
+        let has_kernel_source_alias =
+            module_descriptors.iter().any(|module| module.path().is_kernel_path());
+        let bindings = Self::library_export_bindings(&library);
+        let modules = self.preflight_library_modules(module_descriptors, &bindings)?;
+        self.insert_library_modules(modules, &bindings);
+        let kernel_index = if has_kernel_source_alias {
+            self.find_module_index(Path::kernel_path())
+        } else {
+            None
+        };
         self.kernel_index = kernel_index;
-        self.kernel = kernel;
-        self.kernel_package = Some(kernel_package);
+        self.kernel_library = Some(library);
 
         Ok(())
     }
 
-    pub fn kernel(&self) -> &KernelDescriptor {
-        &self.kernel
-    }
-
     pub fn kernel_package(&self) -> Option<Arc<MastPackage>> {
-        self.kernel_package.clone()
+        self.kernel_library.as_ref().map(|library| library.package.clone())
     }
 
-    pub fn has_nonempty_kernel(&self) -> bool {
-        self.kernel_index.is_some() || !self.kernel.is_empty()
+    pub fn kernel_naming(&self) -> Option<Arc<PackageNaming>> {
+        self.kernel_library.as_ref().map(|library| library.naming().clone())
+    }
+
+    /// Returns whether kernel source or a compiled kernel package has been linked.
+    pub fn has_kernel(&self) -> bool {
+        self.kernel_index.is_some() || self.kernel_library.is_some()
     }
 }
 
 // ------------------------------------------------------------------------------------------------
 /// Analysis
 impl Linker {
-    fn cycle_error(&self, cycle: CycleError) -> LinkerError {
-        LinkerError::Cycle { nodes: self.cycle_procedure_paths(cycle) }
-    }
-
-    /// Formats the procedures participating in `cycle` as fully-qualified paths (`module::proc`).
-    fn cycle_procedure_paths(&self, cycle: CycleError) -> Box<[String]> {
-        cycle
-            .into_node_ids()
-            .map(|node| {
-                let module = self[node.module].path();
-                let item = self[node].name();
-                module.join(item).to_string()
-            })
-            .collect::<Vec<String>>()
-            .into_boxed_slice()
-    }
-
     /// Links the modules in `roots` and `support` using the current state of the linker.
     ///
     /// Returns the module indices corresponding to the public interface of the final assembled
@@ -546,9 +631,8 @@ impl Linker {
     /// submodules. Any module in the graph reachable this way is returned as part of the public
     /// interface.
     ///
-    /// This links in [`LinkMode::Strict`]: any static cycle in the call graph is a fatal error. Use
-    /// [`Self::link_analysis`] to keep the resolved graph and report a cycle as a nonfatal
-    /// diagnostic instead.
+    /// Runtime reference cycles are valid: named invocations require canonical identities,
+    /// independently of the availability or compilation order of their bodies.
     pub fn link(
         &mut self,
         roots: impl IntoIterator<Item = Box<Module>>,
@@ -561,7 +645,7 @@ impl Linker {
         let namespaces = NamespaceGraph::build(self)?;
         let imports = namespaces.resolve_imports(self)?;
 
-        self.link_and_rewrite(&namespaces, &imports, LinkMode::Strict)?;
+        self.link_and_rewrite(&namespaces, &imports)?;
 
         let mut reachable = BTreeSet::new();
 
@@ -572,43 +656,15 @@ impl Linker {
         Ok(reachable.into_iter().collect())
     }
 
-    /// Links the modules in `roots` and `support` in [`LinkMode::Analysis`].
+    /// Links the modules in `roots` and `support` for analysis.
     ///
-    /// Unlike [`Self::link`], this does not reject a static recursion cycle. Instead it commits the
-    /// resolved modules and call edges, and returns the cycle as a nonfatal diagnostic so the
-    /// caller can skip the cycle (and every caller that depends on it) and continue analyzing the
-    /// rest of the project.
-    ///
-    /// Unresolved imports, unresolved calls, and failed rewrites remain fatal errors and are
-    /// returned as `Err`.
+    /// This validates the same references as [`Self::link`], including recursive runtime groups.
     pub fn link_analysis(
         &mut self,
         roots: impl IntoIterator<Item = Box<Module>>,
         support: impl IntoIterator<Item = Box<Module>>,
     ) -> Result<LinkAnalysis, LinkerError> {
-        use alloc::collections::BTreeSet;
-
-        let root_indices = self.link_modules(roots)?;
-        let _support_indices = self.link_modules(support)?;
-        let namespaces = NamespaceGraph::build(self)?;
-        let imports = namespaces.resolve_imports(self)?;
-
-        let cycle = self.link_and_rewrite(&namespaces, &imports, LinkMode::Analysis)?;
-
-        let module_indices = {
-            let mut reachable = BTreeSet::new();
-            for root in root_indices {
-                reachable.extend(namespaces.reachable_from_root(root));
-            }
-            reachable.into_iter().collect::<Vec<_>>()
-        };
-
-        let cycle = match cycle {
-            Some(cycle) => self.cycle_procedure_paths(cycle),
-            None => Box::new([]),
-        };
-
-        Ok(LinkAnalysis { module_indices, cycle })
+        self.link(roots, support).map(|module_indices| LinkAnalysis { module_indices })
     }
 
     /// Links `kernel` using the current state of the linker.
@@ -626,6 +682,7 @@ impl Linker {
         self.link_modules(support)?;
         let original_module_len = self.modules.len();
         let original_callgraph = self.callgraph.clone();
+        let original_inline_callgraph = self.inline_callgraph.clone();
         let module_index = self.link_module(&mut kernel)?;
         let original_kernel_index = self.kernel_index;
         let original_module_kinds = self
@@ -649,7 +706,7 @@ impl Linker {
         let result = (|| {
             let namespaces = NamespaceGraph::build(self)?;
             let imports = namespaces.resolve_imports(self)?;
-            self.link_and_rewrite(&namespaces, &imports, LinkMode::Strict)?;
+            self.link_and_rewrite(&namespaces, &imports)?;
 
             Ok(namespaces.reachable_from_root(module_index))
         })();
@@ -659,6 +716,7 @@ impl Linker {
             err => {
                 self.kernel_index = original_kernel_index;
                 self.callgraph = original_callgraph;
+                self.inline_callgraph = original_inline_callgraph;
                 self.modules.truncate(original_module_len);
                 for (module_index, module_kind) in original_module_kinds {
                     self.modules[module_index].set_kind(module_kind);
@@ -690,32 +748,13 @@ impl Linker {
     /// graph, the module becomes immutable/clone-on-write, so as to allow the graph to be
     /// cheaply cloned.
     ///
-    /// The final, and most important, analysis done by this function is the topological sort of
-    /// the global call graph, which contains the inter-procedural dependencies of every procedure
-    /// in the module graph. We use this sort order to do two things:
-    ///
-    /// 1. Verify that there are no static cycles in the graph that would prevent us from being able
-    ///    to hash the generated MAST of the program. NOTE: dynamic cycles, e.g. those induced by
-    ///    `dynexec`, are perfectly fine, we are only interested in preventing cycles that interfere
-    ///    with the ability to generate MAST roots.
-    ///
-    /// 2. Visit the call graph bottom-up, so that we can fully compile a procedure before any of
-    ///    its callers, and thus lower their invocations to MAST references rather than names. As a
-    ///    result, a compiled MAST program is like an immutable snapshot of the entire call graph at
-    ///    the time of compilation. Later, if we choose to recompile a subset of modules (currently
-    ///    we do not have support for this in the assembler API), we can re-analyze/re-compile only
-    ///    those parts of the graph which have actually changed.
-    ///
-    /// NOTE: This will return `Err` if we detect a validation error, an operation not supported by
-    /// the current configuration, or, in [`LinkMode::Strict`], a cycle in the graph. In
-    /// [`LinkMode::Analysis`] a static cycle is not fatal: the resolved modules and call edges are
-    /// committed, and the cycle is returned as a nonfatal diagnostic instead of an error.
+    /// Runtime-reference edges support code retention, not structural expansion. They may contain
+    /// cycles, and do not require callee bodies or implementation roots before callers are lowered.
     fn link_and_rewrite(
         &mut self,
         namespaces: &NamespaceGraph,
         imports: &ResolvedImports,
-        mode: LinkMode,
-    ) -> Result<Option<CycleError>, LinkerError> {
+    ) -> Result<(), LinkerError> {
         log::debug!(
             target: "linker",
             "processing {} unlinked/partially-linked modules, and recomputing module graph",
@@ -728,14 +767,8 @@ impl Linker {
             return Err(LinkerError::Empty);
         }
 
-        // If no changes are being made, report or reject any cycle already committed by analysis
-        // mode.
         if self.modules.iter().all(LinkModule::is_linked) {
-            return match self.callgraph.toposort() {
-                Err(cycle) if mode == LinkMode::Strict => Err(self.cycle_error(cycle)),
-                Err(cycle) => Ok(Some(cycle)),
-                Ok(_) => Ok(None),
-            };
+            return Ok(());
         }
 
         // Obtain a set of resolvers for the pending modules so that we can do name resolution
@@ -748,6 +781,7 @@ impl Linker {
             .map(|(module_index, module)| (module_index, module.clone()))
             .collect::<Vec<_>>();
         let original_callgraph = self.callgraph.clone();
+        let original_inline_callgraph = self.inline_callgraph.clone();
 
         let result = (|| {
             let resolver = SymbolResolver::with_namespaces(self, namespaces, imports);
@@ -778,8 +812,10 @@ impl Linker {
 
                     // Update the linker graph
                     match symbol.item() {
-                        SymbolItem::Compiled(_) | SymbolItem::Type(_) | SymbolItem::Constant(_) => {
-                        },
+                        SymbolItem::CallableDeclaration(_)
+                        | SymbolItem::Compiled(_)
+                        | SymbolItem::Type(_)
+                        | SymbolItem::Constant(_) => {},
                         SymbolItem::Procedure(proc) => {
                             // Add edges to all transitive dependencies of this item due to
                             // calls/symbol refs
@@ -802,7 +838,7 @@ impl Linker {
                                         callee.module.as_usize(),
                                         callee.index.as_usize()
                                     );
-                                    edges.push((gid, callee));
+                                    edges.push((gid, callee, invoke.kind));
                                 }
                             }
                         },
@@ -813,57 +849,30 @@ impl Linker {
             }
 
             let mut callgraph = self.callgraph.clone();
-            // A static cycle may be introduced either by a self-edge (a procedure that calls
-            // itself) or by a longer cycle that is only visible once all edges are in place. We
-            // accumulate every procedure that participates in such a cycle, then let `mode` decide
-            // whether it is fatal.
-            let mut cycle_nodes: BTreeSet<GlobalItemIndex> = BTreeSet::new();
-            for (caller, callee) in edges {
-                match callgraph.add_edge(caller, callee) {
-                    Ok(()) => (),
-                    // A self-edge: the callee _is_ the caller. `add_edge` rejects it without
-                    // recording it, so insert the edge manually to keep the call graph complete
-                    // for analysis, and remember the cycle.
-                    Err(cycle) => {
-                        callgraph.get_or_insert_node(callee);
-                        callgraph.get_or_insert_node(caller).push(callee);
-                        cycle_nodes.extend(cycle.into_node_ids());
-                    },
+            let mut inline_callgraph = self.inline_callgraph.clone();
+            for (caller, callee, kind) in edges {
+                callgraph.add_edge(caller, callee);
+                if kind == InvokeKind::Inline {
+                    inline_callgraph.add_edge(caller, callee);
                 }
             }
+            inline_callgraph.toposort().map_err(|error| self.inline_cycle_error(error))?;
 
-            // Detect any remaining static cycles now that every edge has been recorded.
-            if let Err(cycle) = callgraph.toposort() {
-                cycle_nodes.extend(cycle.into_node_ids());
-            }
-
-            let cycle = if cycle_nodes.is_empty() {
-                None
-            } else {
-                Some(CycleError::new(cycle_nodes))
-            };
-
-            // Strict linking rejects any static cycle before MAST is ever built; analysis mode
-            // keeps the committed graph and returns the cycle as a nonfatal diagnostic.
-            if mode == LinkMode::Strict
-                && let Some(cycle) = cycle
-            {
-                Err(self.cycle_error(cycle))
-            } else {
-                Ok::<_, LinkerError>((linked_modules, callgraph, cycle))
-            }
+            Ok::<_, LinkerError>((linked_modules, callgraph, inline_callgraph))
         })();
 
         match result {
-            Ok((linked_modules, callgraph, cycle)) => {
+            Ok((linked_modules, callgraph, inline_callgraph)) => {
                 self.callgraph = callgraph;
+                self.inline_callgraph = inline_callgraph;
                 for module_index in linked_modules {
                     self.modules[module_index.as_usize()].set_status(LinkStatus::Linked);
                 }
-                Ok(cycle)
+                Ok(())
             },
             Err(err) => {
                 self.callgraph = original_callgraph;
+                self.inline_callgraph = original_inline_callgraph;
                 for (module_index, module) in pending_modules {
                     self.modules[module_index] = module;
                 }
@@ -886,7 +895,7 @@ impl Linker {
         self.libraries.values()
     }
 
-    /// Returns the library whose exported interface supplied a compiled procedure.
+    /// Returns the exact name-aware package input which supplied a compiled procedure.
     pub(crate) fn library_by_commitment(&self, commitment: Word) -> Option<&LinkLibrary> {
         self.libraries.get(&commitment)
     }
@@ -896,12 +905,59 @@ impl Linker {
         self.static_libraries.values()
     }
 
-    /// Compute the topological sort of the callgraph rooted at `caller`
-    pub fn topological_sort_from_root(
+    /// Returns the procedures reachable through named runtime references, in stable index order.
+    ///
+    /// Includes address-taken references and recursive groups. Declaration-only imports are valid
+    /// terminal nodes; callers decide separately which available bodies to materialize.
+    pub fn runtime_reachable_from(
         &self,
-        caller: GlobalItemIndex,
-    ) -> Result<Vec<GlobalItemIndex>, CycleError> {
-        self.callgraph.toposort_caller(caller)
+        roots: impl IntoIterator<Item = GlobalItemIndex>,
+    ) -> Vec<GlobalItemIndex> {
+        self.callgraph.reachable_from(roots)
+    }
+
+    /// Orders selected procedures with structural inline callees before their callers.
+    /// Runtime references do not constrain this ordering, and isolated procedures are retained.
+    pub(crate) fn inline_compilation_order(
+        &self,
+        procedures: &[GlobalItemIndex],
+    ) -> Result<Vec<GlobalItemIndex>, LinkerError> {
+        let selected = procedures.iter().copied().collect::<BTreeSet<_>>();
+        let mut graph = CallGraph::default();
+        for &caller in &selected {
+            graph.get_or_insert_node(caller);
+            for &callee in self.inline_callgraph.out_edges(caller) {
+                if selected.contains(&callee) {
+                    graph.add_edge(callee, caller);
+                }
+            }
+        }
+        graph.toposort().map_err(|error| self.inline_cycle_error(error))
+    }
+
+    fn inline_cycle_error(&self, error: CycleError) -> LinkerError {
+        let gids = error.into_node_ids().collect::<BTreeSet<_>>();
+        let nodes = gids
+            .iter()
+            .map(|gid| self[gid.module].path().join(self[*gid].name()).to_string())
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let span =
+            gids.iter()
+                .find_map(|gid| {
+                    let SymbolItem::Procedure(procedure) = self[*gid].item() else {
+                        return None;
+                    };
+                    procedure.borrow().invoked().find_map(|invoke| {
+                        (invoke.kind == InvokeKind::Inline).then(|| invoke.span())
+                    })
+                })
+                .unwrap_or(SourceSpan::UNKNOWN);
+        LinkerError::InlineCycle {
+            nodes,
+            span,
+            source_file: self.source_manager.get(span.source_id()).ok(),
+        }
     }
 
     /// Returns a procedure index which corresponds to the provided procedure digest.
@@ -945,6 +1001,7 @@ impl Linker {
         gid: GlobalItemIndex,
     ) -> Result<Option<Arc<types::FunctionType>>, LinkerError> {
         match self[gid].item() {
+            SymbolItem::CallableDeclaration(proc) => Ok(proc.signature.clone()),
             SymbolItem::Compiled(ItemInfo::Procedure(proc)) => Ok(proc.signature.clone()),
             SymbolItem::Procedure(proc) => {
                 let proc = proc.borrow();
@@ -1005,6 +1062,7 @@ impl Linker {
     /// Resolves a [GlobalItemIndex] to the known attributes of that procedure
     pub fn resolve_attributes(&self, gid: GlobalItemIndex) -> AttributeSet {
         match self[gid].item() {
+            SymbolItem::CallableDeclaration(proc) => proc.attributes.clone(),
             SymbolItem::Compiled(ItemInfo::Procedure(proc)) => proc.attributes.clone(),
             SymbolItem::Procedure(proc) => {
                 let proc = proc.borrow();
@@ -1117,7 +1175,6 @@ impl Index<GlobalItemIndex> for Linker {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeSet,
         panic::{AssertUnwindSafe, catch_unwind},
         string::String,
         sync::Arc,
@@ -1131,7 +1188,8 @@ mod tests {
         debuginfo::{SourceSpan, Span},
         module::{ItemInfo, TypeInfo},
     };
-    use miden_core::Felt;
+    use miden_core::{Felt, program::CanonicalLabel};
+    use miden_mast_package::{CallableProcedurePath, NamespacePlan};
 
     use super::*;
     use crate::{
@@ -1146,11 +1204,7 @@ mod tests {
         let source_manager = context.source_manager();
         let kernel_source = r#"
                 pub proc a
-                    call.b
-                end
-
-                proc b
-                    call.a
+                    call.::userspace::missing
                 end
                 "#;
 
@@ -1182,11 +1236,12 @@ mod tests {
                     .expect("kernel parsing must succeed"),
                 None,
             )
-            .expect_err("expected cyclic kernel to be rejected");
+            .expect_err("expected unresolved kernel target to be rejected");
 
-        assert!(first_err.to_string().contains("found a cycle in the call graph"));
-        assert!(!linker.has_nonempty_kernel(), "failed kernel link must not leave a kernel set");
+        assert!(matches!(first_err, LinkerError::UndefinedSymbol { .. }));
+        assert!(!linker.has_kernel(), "failed kernel link must not leave a kernel set");
         assert_eq!(linker[userspace_index].kind(), ast::ModuleKind::Library);
+        assert_eq!(linker.modules().len(), 1, "failed kernel module must be removed");
 
         let second_err = linker
             .link_kernel(
@@ -1195,9 +1250,12 @@ mod tests {
                     .expect("kernel parsing must succeed"),
                 None,
             )
-            .expect_err("expected cyclic kernel retry to be rejected");
-        assert!(second_err.to_string().contains("found a cycle in the call graph"));
+            .expect_err("expected unresolved kernel target retry to be rejected");
+        assert!(matches!(&second_err, LinkerError::UndefinedSymbol { .. }));
         assert!(!second_err.to_string().contains("duplicate module"));
+        assert!(!linker.has_kernel(), "retry must also restore the kernel state");
+        assert_eq!(linker[userspace_index].kind(), ast::ModuleKind::Library);
+        assert_eq!(linker.modules().len(), 1);
 
         let syscall_context = SymbolResolutionContext {
             span: SourceSpan::UNKNOWN,
@@ -1210,7 +1268,37 @@ mod tests {
                 &InvocationTarget::Symbol(Ident::new("a").expect("valid identifier")),
             )
             .expect_err("expected syscall without a linked kernel to be rejected");
-        assert!(matches!(err, LinkerError::InvalidSysCallTarget { .. }));
+        assert!(matches!(err, LinkerError::UndefinedSymbol { .. }));
+    }
+
+    #[test]
+    fn mutually_recursive_kernel_calls_link_and_retain_both_procedures() {
+        let context = TestContext::default();
+        let kernel = context
+            .parse_kernel(source_file!(
+                &context,
+                r#"
+                pub proc a
+                    call.b
+                end
+
+                proc b
+                    call.a
+                end
+                "#
+            ))
+            .expect("recursive kernel parsing must succeed");
+        let mut linker = Linker::new(context.source_manager());
+        let modules = linker.link_kernel(kernel, []).expect("runtime kernel recursion must link");
+        let kernel_index = modules[0];
+        let a = proc_gid(&linker, kernel_index, "a");
+        let b = proc_gid(&linker, kernel_index, "b");
+        assert!(linker.has_kernel());
+        assert_eq!(linker.kernel_index, Some(kernel_index));
+        assert_eq!(linker[kernel_index].kind(), ast::ModuleKind::Kernel);
+        assert!(linker[kernel_index].is_linked());
+        assert_eq!(linker.runtime_reachable_from([a]), vec![a, b]);
+        assert_eq!(linker.runtime_reachable_from([b]), vec![a, b]);
     }
 
     #[test]
@@ -1228,10 +1316,24 @@ mod tests {
                 "#
             ))
             .expect("library module should parse");
-        let package: Arc<MastPackage> = Assembler::new(context.source_manager())
-            .assemble_library("lib", module, None::<Box<Module>>)
-            .expect("library should assemble")
-            .into();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(NamespacePlan::new(vec![
+                CanonicalLabel::text("lib-fixture-home").unwrap(),
+            ]))
+            .with_callable_path(
+                Arc::from(Path::new("::lib::foo")),
+                CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "lib".into(),
+                module,
+                [],
+                miden_mast_package::TargetType::Library,
+            )
+            .expect("library should assemble");
+        let naming = product.naming().clone();
+        let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
         let with_advice = Arc::new(package.as_ref().clone().with_advice_map(AdviceMap::from_iter(
             [(Word::from([1_u32, 2, 3, 4]), vec![Felt::from_u32(5)])],
         )));
@@ -1245,14 +1347,332 @@ mod tests {
 
         let mut linker = Linker::new(context.source_manager());
         linker
-            .link_library(LinkLibrary::from_package(package).with_linkage(Linkage::Static))
+            .link_library(
+                LinkLibrary::from_package(package, naming.clone())
+                    .unwrap()
+                    .with_linkage(Linkage::Static),
+            )
             .expect("first library should link");
         linker
-            .link_library(LinkLibrary::from_package(with_advice).with_linkage(Linkage::Static))
+            .link_library(
+                LinkLibrary::from_package(with_advice, naming)
+                    .unwrap()
+                    .with_linkage(Linkage::Static),
+            )
             .expect("same public interface with distinct forest commitment should link");
 
-        assert_eq!(linker.libraries().count(), 1);
+        assert_eq!(linker.libraries().count(), 2);
         assert_eq!(linker.static_libraries().count(), 2);
+    }
+
+    fn named_import_fixture(context: &TestContext, home: &str) -> LinkLibrary {
+        let module = context
+            .parse_module(source_file!(
+                &context,
+                r#"
+            namespace lib
+            pub proc foo push.1 end
+        "#
+            ))
+            .unwrap();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(NamespacePlan::new(vec![
+                CanonicalLabel::text("compilation-home").unwrap(),
+            ]))
+            .with_callable_binding(
+                Arc::from(Path::new("::lib::foo")),
+                CallableBinding::new(
+                    NamespacePlan::new(vec![CanonicalLabel::text(home).unwrap()]),
+                    CallableProcedurePath::from_semantic_components(vec!["definition".into()])
+                        .unwrap(),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "lib".into(),
+                module,
+                [],
+                miden_mast_package::TargetType::Library,
+            )
+            .unwrap();
+        let naming = product.naming().clone();
+        LinkLibrary::from_package(product.into_artifact(false).unwrap().into(), naming).unwrap()
+    }
+
+    #[test]
+    fn imported_source_alias_preserves_canonical_binding_and_exact_naming() {
+        let context = TestContext::default();
+        let library = named_import_fixture(&context, "foreign-home");
+        let expected = library.naming().callables().bindings().next().unwrap().1.clone();
+        let mut linker = Linker::new(context.source_manager());
+        linker.link_library(library.clone()).unwrap();
+        let imported = linker.find_module(Path::new("::lib")).unwrap().get("foo").unwrap();
+        assert_eq!(imported.callable_binding(), Some(&expected));
+        assert_eq!(expected.path().components(), &["definition"]);
+        assert_eq!(linker.libraries().next().unwrap().naming(), library.naming());
+        assert_eq!(library.commitment(), library.package.dependency_commitment());
+
+        let other = named_import_fixture(&context, "other-home");
+        assert!(matches!(
+            LinkLibrary::from_package(library.package.clone(), other.naming().as_ref().clone()),
+            Err(miden_mast_package::ManifestValidationError::MismatchedNamingTransport)
+        ));
+    }
+
+    #[test]
+    fn same_module_path_with_distinct_canonical_names_is_atomic_conflict() {
+        let context = TestContext::default();
+        let first = named_import_fixture(&context, "first-home");
+        let second = named_import_fixture(&context, "second-home").with_linkage(Linkage::Static);
+        assert_eq!(first.interface_commitment().unwrap(), second.interface_commitment().unwrap());
+        assert_eq!(first.mast().commitment(), second.mast().commitment());
+        assert_ne!(first.commitment(), second.commitment());
+        let mut linker = Linker::new(context.source_manager());
+        linker.link_library(first.clone()).unwrap();
+        assert!(matches!(
+            linker.link_library(second.clone()),
+            Err(LinkerError::ConflictingImportedModule { .. })
+        ));
+        assert_eq!(linker.modules().len(), 1);
+        assert_eq!(linker.libraries().count(), 1);
+        assert_eq!(linker.static_libraries().count(), 0);
+        assert!(linker.library_by_commitment(first.commitment()).is_some());
+        assert!(linker.library_by_commitment(second.commitment()).is_none());
+        assert!(matches!(
+            linker.link_library(second),
+            Err(LinkerError::ConflictingImportedModule { .. })
+        ));
+    }
+
+    #[test]
+    fn exact_named_import_prefers_static_linkage_in_either_order() {
+        let context = TestContext::default();
+        let library = named_import_fixture(&context, "canonical-home");
+        for first in [Linkage::Dynamic, Linkage::Static] {
+            let mut linker = Linker::new(context.source_manager());
+            linker.link_library(library.clone().with_linkage(first)).unwrap();
+            linker.link_library(library.clone().with_linkage(Linkage::Static)).unwrap();
+            linker.link_library(library.clone().with_linkage(Linkage::Dynamic)).unwrap();
+            assert_eq!(linker.modules().len(), 1);
+            assert_eq!(linker.libraries().count(), 1);
+            assert_eq!(linker.static_libraries().count(), 1);
+            assert!(matches!(linker.libraries().next().unwrap().linkage, Linkage::Static));
+        }
+    }
+
+    #[test]
+    fn later_imported_module_conflict_does_not_insert_earlier_modules() {
+        let context = TestContext::default();
+        let root = context
+            .parse_module(source_file!(
+                &context,
+                r#"
+            namespace lib
+            pub mod extra
+            pub proc foo push.1 end
+        "#
+            ))
+            .unwrap();
+        let extra = context
+            .parse_module(source_file!(
+                &context,
+                r#"
+            namespace lib::extra
+            pub proc bar push.2 end
+        "#
+            ))
+            .unwrap();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(NamespacePlan::new(vec![
+                CanonicalLabel::text("compilation-home").unwrap(),
+            ]))
+            .with_callable_path(
+                Arc::from(Path::new("::lib::foo")),
+                CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
+            )
+            .unwrap()
+            .with_callable_path(
+                Arc::from(Path::new("::lib::extra::bar")),
+                CallableProcedurePath::from_semantic_components(vec!["bar".into()]).unwrap(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "lib".into(),
+                root,
+                [extra],
+                miden_mast_package::TargetType::Library,
+            )
+            .unwrap();
+        let naming = product.naming().clone();
+        let library =
+            LinkLibrary::from_package(product.into_artifact(false).unwrap().into(), naming)
+                .unwrap()
+                .with_linkage(Linkage::Static);
+        let mut linker = Linker::new(context.source_manager());
+        linker
+            .link_assembled_module(ModuleDescriptor::new(Path::new("::lib::extra").into(), None))
+            .unwrap();
+        assert!(matches!(
+            linker.link_library(library.clone()),
+            Err(LinkerError::ConflictingImportedModule { .. })
+        ));
+        assert!(linker.find_module(Path::new("::lib")).is_none());
+        assert_eq!(linker.modules().len(), 1);
+        assert_eq!(linker.libraries().count(), 0);
+        assert_eq!(linker.static_libraries().count(), 0);
+        assert!(matches!(
+            linker.link_library(library),
+            Err(LinkerError::ConflictingImportedModule { .. })
+        ));
+    }
+
+    #[test]
+    fn imported_kernel_keeps_canonical_exports_and_private_naming_together() {
+        let context = TestContext::default();
+        for source_path in [Path::kernel_path(), Path::new("::arbitrary::source")] {
+            let mut kernel = context
+                .parse_kernel(source_file!(
+                    &context,
+                    r#"
+                pub proc foo exec.helper end
+                proc helper push.1 end
+            "#
+                ))
+                .unwrap();
+            kernel.set_path(source_path);
+            let export = CallableBinding::new(
+                NamespacePlan::new(vec![]),
+                CallableProcedurePath::from_semantic_components(vec!["canonical_export".into()])
+                    .unwrap(),
+            )
+            .unwrap();
+            let product = Assembler::new(context.source_manager())
+                .with_namespace_plan(NamespacePlan::new(vec![
+                    CanonicalLabel::text("private-kernel-home").unwrap(),
+                ]))
+                .with_callable_binding(source_path.join("foo").into(), export.clone())
+                .unwrap()
+                .with_callable_path(
+                    source_path.join("helper").into(),
+                    CallableProcedurePath::from_semantic_components(vec!["helper".into()]).unwrap(),
+                )
+                .unwrap()
+                .assemble_library_modules(
+                    "kernel".into(),
+                    kernel,
+                    [],
+                    miden_mast_package::TargetType::Kernel,
+                )
+                .unwrap();
+            let naming = product.naming().clone();
+            let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
+            let linker =
+                Linker::with_kernel(context.source_manager(), package.clone(), naming.clone())
+                    .unwrap();
+            assert!(linker.has_kernel());
+            assert_eq!(linker.kernel_package().as_ref(), Some(&package));
+            assert_eq!(linker.kernel_naming().unwrap().as_ref(), &naming);
+            let module = linker.find_module(source_path).unwrap();
+            assert_eq!(module.get("foo").unwrap().callable_binding(), Some(&export));
+            assert!(module.get("helper").is_none());
+            assert_eq!(linker.kernel_naming().unwrap().callables().bindings().len(), 2);
+            assert_eq!(linker.kernel_index, source_path.is_kernel_path().then(|| module.id()));
+
+            let mut assembler =
+                Assembler::with_kernel(context.source_manager(), package.clone(), naming.clone())
+                    .unwrap();
+            assert!(assembler.has_kernel());
+            let err = assembler
+                .link_package(package, Linkage::Dynamic, naming)
+                .expect_err("an attached package must prevent another kernel");
+            assert!(err.to_string().contains("duplicate kernels"));
+        }
+    }
+
+    #[test]
+    fn imported_kernel_does_not_borrow_an_unrelated_kernel_source_alias() {
+        let context = TestContext::default();
+        let mut ordinary = context
+            .parse_module(source_file!(
+                &context,
+                "namespace ordinary\n pub proc ordinary push.1 end"
+            ))
+            .unwrap();
+        ordinary.set_path(Path::kernel_path());
+        let ordinary_home =
+            NamespacePlan::new(vec![CanonicalLabel::text("ordinary-fixture-home").unwrap()]);
+        let ordinary_binding = CallableBinding::new(
+            ordinary_home.clone(),
+            CallableProcedurePath::from_semantic_components(vec!["ordinary".into()]).unwrap(),
+        )
+        .unwrap();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(ordinary_home)
+            .with_callable_binding(
+                Arc::from(Path::new("::$kernel::ordinary")),
+                ordinary_binding.clone(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "ordinary".into(),
+                ordinary,
+                [],
+                miden_mast_package::TargetType::Library,
+            )
+            .unwrap();
+        let ordinary_naming = product.naming().clone();
+        let ordinary_library = LinkLibrary::from_package(
+            product.into_artifact(false).unwrap().into(),
+            ordinary_naming,
+        )
+        .unwrap();
+        let mut linker = Linker::new(context.source_manager());
+        linker.link_library(ordinary_library).unwrap();
+        assert!(!linker.has_kernel());
+        assert_eq!(
+            linker
+                .find_module(Path::kernel_path())
+                .unwrap()
+                .get("ordinary")
+                .unwrap()
+                .callable_binding(),
+            Some(&ordinary_binding)
+        );
+
+        let source_path = Path::new("::arbitrary::source");
+        let mut kernel =
+            context.parse_kernel(source_file!(&context, "pub proc foo push.2 end")).unwrap();
+        kernel.set_path(source_path);
+        let export = CallableBinding::new(
+            NamespacePlan::new(vec![]),
+            CallableProcedurePath::from_semantic_components(vec!["canonical_export".into()])
+                .unwrap(),
+        )
+        .unwrap();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .with_callable_binding(source_path.join("foo").into(), export.clone())
+            .unwrap()
+            .assemble_library_modules(
+                "kernel".into(),
+                kernel,
+                [],
+                miden_mast_package::TargetType::Kernel,
+            )
+            .unwrap();
+        let naming = product.naming().clone();
+        let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
+        linker.link_with_kernel(package.clone(), naming.clone()).unwrap();
+
+        assert!(linker.has_kernel());
+        assert_eq!(linker.kernel_package().as_ref(), Some(&package));
+        assert_eq!(linker.kernel_naming().unwrap().as_ref(), &naming);
+        assert_eq!(linker.kernel_index, None);
+        assert_eq!(
+            linker.find_module(source_path).unwrap().get("foo").unwrap().callable_binding(),
+            Some(&export)
+        );
     }
 
     fn linker_at_module_capacity(context: &TestContext) -> Linker {
@@ -1294,11 +1714,27 @@ mod tests {
                 "#
             ))
             .expect("library module should parse");
-        let package: Arc<MastPackage> = Assembler::new(context.source_manager())
-            .assemble_library("overflow", module, None::<Box<Module>>)
-            .expect("library should assemble")
-            .into();
-        let library = LinkLibrary::from_package(package).with_linkage(Linkage::Static);
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(NamespacePlan::new(vec![
+                CanonicalLabel::text("overflow-fixture-home").unwrap(),
+            ]))
+            .with_callable_path(
+                Arc::from(Path::new("::overflow::foo")),
+                CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "overflow".into(),
+                module,
+                [],
+                miden_mast_package::TargetType::Library,
+            )
+            .expect("library should assemble");
+        let naming = product.naming().clone();
+        let package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
+        let library = LinkLibrary::from_package(package, naming)
+            .unwrap()
+            .with_linkage(Linkage::Static);
         let mut linker = linker_at_module_capacity(&context);
 
         assert!(matches!(linker.link_library(library.clone()), Err(LinkerError::TooManyModules)));
@@ -1336,16 +1772,33 @@ mod tests {
                 "#
             ))
             .expect("kernel module should parse");
-        let kernel_package: Arc<MastPackage> = Assembler::new(context.source_manager())
-            .assemble_kernel("kernel", kernel, [helpers])
-            .expect("two-module kernel should assemble")
-            .into();
+        let product = Assembler::new(context.source_manager())
+            .with_namespace_plan(NamespacePlan::new(vec![]))
+            .with_callable_path(
+                Arc::from(Path::new("::$kernel::foo")),
+                CallableProcedurePath::from_semantic_components(vec!["foo".into()]).unwrap(),
+            )
+            .unwrap()
+            .with_callable_path(
+                Arc::from(Path::new("::$kernel::helpers::helper")),
+                CallableProcedurePath::from_semantic_components(vec!["helper".into()]).unwrap(),
+            )
+            .unwrap()
+            .assemble_library_modules(
+                "kernel".into(),
+                kernel,
+                [helpers],
+                miden_mast_package::TargetType::Kernel,
+            )
+            .expect("two-module kernel should assemble");
+        let naming = product.naming().clone();
+        let kernel_package: Arc<MastPackage> = product.into_artifact(false).unwrap().into();
         let mut linker = linker_at_module_capacity(&context);
         linker.modules.pop();
         let modules_before = linker.modules.len();
 
         let err = linker
-            .link_with_kernel(kernel_package.clone())
+            .link_with_kernel(kernel_package.clone(), naming.clone())
             .expect_err("two-module kernel should exceed the single remaining slot");
 
         assert!(err.to_string().contains("too many modules"));
@@ -1354,11 +1807,11 @@ mod tests {
             modules_before,
             "capacity failure must not partially add kernel modules"
         );
-        assert!(!linker.has_nonempty_kernel());
+        assert!(!linker.has_kernel());
         assert!(linker.kernel_package().is_none());
 
         let retry_err = linker
-            .link_with_kernel(kernel_package)
+            .link_with_kernel(kernel_package, naming)
             .expect_err("retry should fail with the same capacity error");
         assert!(retry_err.to_string().contains("too many modules"));
         assert_eq!(linker.modules.len(), modules_before);
@@ -1439,183 +1892,71 @@ mod tests {
     }
 
     #[test]
-    fn analysis_mode_commits_cycle_and_reports_procedure_paths() {
-        let context = TestContext::default();
-        let module = context
-            .parse_module(source_file!(
-                &context,
-                r#"
-                namespace proj
+    fn runtime_cycles_and_address_taken_procedures_are_retained() {
+        for analysis in [false, true] {
+            let context = TestContext::default();
+            let module = context
+                .parse_module(source_file!(
+                    &context,
+                    r#"
+                    namespace proj
 
-                pub proc a
-                    call.b
-                    call.leaf
-                end
+                    pub proc a
+                        call.b
+                        call.leaf
+                        procref.callback
+                    end
 
-                pub proc b
-                    call.a
-                end
+                    pub proc b
+                        exec.a
+                    end
 
-                pub proc caller
-                    call.a
-                end
+                    pub proc caller
+                        call.a
+                    end
 
-                pub proc leaf
-                    push.1
-                end
+                    proc leaf
+                        push.1
+                    end
 
-                pub proc independent
-                    push.1
-                end
-                "#
-            ))
-            .expect("cyclic module must parse");
+                    proc callback
+                        procref.callback
+                    end
 
-        let mut linker = Linker::new(context.source_manager());
-        let analysis = linker
-            .link_analysis([module], None)
-            .expect("analysis link must not reject a static cycle");
+                    pub proc independent
+                        push.2
+                    end
+                    "#
+                ))
+                .expect("recursive module must parse");
+            let mut linker = Linker::new(context.source_manager());
+            let modules = if analysis {
+                linker.link_analysis([module], []).unwrap().module_indices
+            } else {
+                linker.link([module], []).unwrap()
+            };
+            let module_index = modules[0];
+            let caller = proc_gid(&linker, module_index, "caller");
+            let callback = proc_gid(&linker, module_index, "callback");
+            let mut expected = ["a", "b", "caller", "leaf", "callback"]
+                .into_iter()
+                .map(|name| proc_gid(&linker, module_index, name))
+                .collect::<Vec<_>>();
+            expected.sort();
+            assert_eq!(linker.runtime_reachable_from([caller]), expected);
+            assert_eq!(linker.runtime_reachable_from([callback]), vec![callback]);
 
-        // Analysis mode returns linked module indices and a cycle diagnostic.
-        assert!(
-            !analysis.module_indices.is_empty(),
-            "analysis must return linked module indices"
-        );
-        assert!(analysis.has_cycle(), "analysis must report the static recursion cycle");
-        let cycle: BTreeSet<String> = analysis.cycle.iter().cloned().collect();
-        assert_eq!(
-            cycle,
-            BTreeSet::from(["::proj::a".to_string(), "::proj::b".to_string()]),
-            "cycle diagnostic must exclude acyclic callees"
-        );
-
-        let module_index = analysis.module_indices[0];
-
-        // The cycle, and every caller that depends on it, cannot be lifted.
-        let a = proc_gid(&linker, module_index, "a");
-        let caller = proc_gid(&linker, module_index, "caller");
-        assert!(
-            linker.topological_sort_from_root(a).is_err(),
-            "a procedure in the cycle must be detected as part of a cycle"
-        );
-        assert!(
-            linker.topological_sort_from_root(caller).is_err(),
-            "a caller that depends on the cycle must be detected alongside it"
-        );
-
-        // Procedures outside the skipped set can still be lifted.
-        let independent = proc_gid(&linker, module_index, "independent");
-        let sorted = linker
-            .topological_sort_from_root(independent)
-            .expect("a procedure outside the cycle must still be liftable");
-        assert_eq!(sorted, vec![independent]);
-
-        // Once analysis mode commits the linked graph, later calls must still observe its cycle.
-        let repeated = linker
-            .link_analysis([], [])
-            .expect("repeated analysis must preserve the cycle diagnostic");
-        assert_eq!(repeated.cycle, analysis.cycle);
-
-        let err = linker
-            .link([], [])
-            .expect_err("strict linking must reject a cycle committed by analysis mode");
-        assert!(
-            err.to_string().contains("found a cycle in the call graph"),
-            "strict link should report the committed cycle, got: {err}"
-        );
-    }
-
-    #[test]
-    fn analysis_mode_reports_no_cycle_for_acyclic_graph() {
-        let context = TestContext::default();
-        let module = context
-            .parse_module(source_file!(
-                &context,
-                r#"
-                namespace proj
-
-                pub proc a
-                    push.1
-                end
-
-                pub proc b
-                    call.a
-                end
-                "#
-            ))
-            .expect("acyclic module must parse");
-
-        let mut linker = Linker::new(context.source_manager());
-        let analysis = linker
-            .link_analysis([module], None)
-            .expect("analysis link must succeed for an acyclic graph");
-
-        assert!(!analysis.has_cycle(), "an acyclic graph must not report a cycle");
-        assert!(analysis.cycle.is_empty());
-        assert!(!analysis.module_indices.is_empty());
-
-        let module_index = analysis.module_indices[0];
-        let a = proc_gid(&linker, module_index, "a");
-        let b = proc_gid(&linker, module_index, "b");
-        let sorted = linker
-            .topological_sort_from_root(b)
-            .expect("an acyclic graph must be fully liftable");
-        assert_eq!(sorted, vec![b, a]);
-    }
-
-    #[test]
-    fn strict_mode_rejects_cycle_and_rolls_back() {
-        let context = TestContext::default();
-        let module = context
-            .parse_module(source_file!(
-                &context,
-                r#"
-                namespace proj
-
-                pub proc a
-                    call.b
-                end
-
-                pub proc b
-                    call.a
-                end
-                "#
-            ))
-            .expect("cyclic module must parse");
-
-        let mut linker = Linker::new(context.source_manager());
-        let err = linker
-            .link([module], None)
-            .expect_err("strict linking must reject a static cycle before MAST is built");
-        assert!(
-            err.to_string().contains("found a cycle in the call graph"),
-            "strict link should report the cycle, got: {err}"
-        );
-
-        // A failed strict link rolls back all changes: the module stays in the graph but is
-        // unlinked, and no call edges are committed.
-        let module_index = linker
-            .modules()
-            .iter()
-            .position(|module| module.path().as_str().ends_with("::proj"))
-            .map(ModuleIndex::new)
-            .expect("module should still be present after a rolled-back link");
-        assert!(
-            linker[module_index].is_unlinked(),
-            "a failed strict link must not mark modules as linked"
-        );
-        let a = proc_gid(&linker, module_index, "a");
-        assert_eq!(
             linker
-                .topological_sort_from_root(a)
-                .expect("a failed strict link must not commit any call edges"),
-            vec![a],
-        );
+                .link([], [])
+                .expect("repeated linking must preserve recursive references");
+            linker.link_analysis([], []).expect("analysis also accepts committed recursion");
+            assert_eq!(linker.runtime_reachable_from([caller, caller]), expected);
+        }
     }
 
     #[test]
     fn fatal_link_error_rolls_back_symbol_status() {
-        for mode in [LinkMode::Strict, LinkMode::Analysis] {
+        for analysis in [false, true] {
             let context = TestContext::default();
             let module = context
                 .parse_module(source_file!(
@@ -1647,9 +1988,10 @@ mod tests {
                 .expect("support module must parse");
 
             let mut linker = Linker::new(context.source_manager());
-            let err = match mode {
-                LinkMode::Strict => linker.link([module], [support]).map(drop),
-                LinkMode::Analysis => linker.link_analysis([module], [support]).map(drop),
+            let err = if analysis {
+                linker.link_analysis([module], [support]).map(drop)
+            } else {
+                linker.link([module], [support]).map(drop)
             }
             .expect_err("an unresolved call must be fatal");
 
@@ -1659,6 +2001,8 @@ mod tests {
             );
             assert!(linker[ModuleIndex::new(0)].is_unlinked());
             assert!(linker[ModuleIndex::new(0)].symbols().all(Symbol::is_unlinked));
+            let linked = proc_gid(&linker, ModuleIndex::new(0), "linked");
+            assert_eq!(linker.runtime_reachable_from([linked]), vec![linked]);
         }
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! The word identities distinguish callable keys from code commitments and environment metadata.
 //! They serialize as ordinary canonical [`Word`] values. Constructing or decoding an identity does
-//! not authenticate a binding, authorize a kernel namespace, or establish that code is available.
+//! not authenticate a binding or establish that code is available.
 //! Ordering follows [`Word`]; it does not define canonical environment or verifier-configuration
 //! ordering.
 
@@ -135,28 +135,20 @@ impl Namespace {
 /// The fixed identities that define an execution in an authenticated code environment.
 ///
 /// The entry key must resolve under the environment root. Actual syscalls additionally require
-/// their authenticated parent namespace to match the kernel namespace. The verifier or protocol
-/// must independently authorize that namespace; this descriptor does not authenticate itself.
+/// their authenticated immediate parent namespace to equal [`Namespace::initial()`]. The verifier
+/// or protocol must independently authorize the environment root and its bindings; this descriptor
+/// does not authenticate itself.
 /// Code bundles and implementation-root hints are separate from these execution identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionDescriptor {
     entry_key: ProcedureKey,
     environment_root: EnvironmentRoot,
-    kernel_namespace: Namespace,
 }
 
 impl ExecutionDescriptor {
-    /// Creates a descriptor without authenticating its bindings or authorizing its namespace.
-    pub const fn new(
-        entry_key: ProcedureKey,
-        environment_root: EnvironmentRoot,
-        kernel_namespace: Namespace,
-    ) -> Self {
-        Self {
-            entry_key,
-            environment_root,
-            kernel_namespace,
-        }
+    /// Creates a descriptor without authenticating or authorizing its environment bindings.
+    pub const fn new(entry_key: ProcedureKey, environment_root: EnvironmentRoot) -> Self {
+        Self { entry_key, environment_root }
     }
 
     /// Returns the key of the ordinary procedure at which execution starts.
@@ -167,11 +159,6 @@ impl ExecutionDescriptor {
     /// Returns the environment root that remains fixed throughout execution.
     pub const fn environment_root(&self) -> EnvironmentRoot {
         self.environment_root
-    }
-
-    /// Returns the namespace whose direct exports may satisfy syscall resolution.
-    pub const fn kernel_namespace(&self) -> Namespace {
-        self.kernel_namespace
     }
 }
 
@@ -187,6 +174,18 @@ mod tests {
         assert_word_encoding(EnvironmentRoot::new, EnvironmentRoot::into_word);
         assert_word_encoding(Namespace::new, Namespace::into_word);
         assert_word_encoding(LabelCommitment::new, LabelCommitment::into_word);
+    }
+
+    #[test]
+    fn execution_descriptor_contains_only_entry_and_environment() {
+        let entry = ProcedureKey::new(Word::new([1, 2, 3, 4].map(Felt::new_unchecked)));
+        let environment = EnvironmentRoot::new(Word::new([5, 6, 7, 8].map(Felt::new_unchecked)));
+        let descriptor = ExecutionDescriptor::new(entry, environment);
+
+        assert_eq!(descriptor.entry_key(), entry);
+        assert_eq!(descriptor.environment_root(), environment);
+        assert_eq!(core::mem::size_of::<ExecutionDescriptor>(), 2 * core::mem::size_of::<Word>());
+        assert_ne!(Namespace::initial().into_word(), Word::empty());
     }
 
     #[test]

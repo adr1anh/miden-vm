@@ -797,7 +797,7 @@ mod tests {
             },
             BlockAddressReplay::default(),
             BlockStackReplay::default(),
-            ChipletsLayout::new(0, MAX_TRACE_LEN - 1, 0, 0, 0, 0).unwrap(),
+            ChipletsLayout::new(0, MAX_TRACE_LEN - 8, 0, 0, 0, 0).unwrap(),
         )
     }
 
@@ -818,8 +818,8 @@ mod tests {
             (ONE, Felt::from_u32(1 + CONTROLLER_ROWS_PER_HASHER_OP as u32)),
             (ZERO, ZERO),
             (
-                Felt::from_u32((MAX_TRACE_LEN - CONTROLLER_ROWS_PER_HASHER_OP) as u32),
-                Felt::from_u32(MAX_TRACE_LEN as u32),
+                Felt::from_u32((MAX_TRACE_LEN - 8) as u32),
+                Felt::from_u32((MAX_TRACE_LEN - 8 + CONTROLLER_ROWS_PER_HASHER_OP) as u32),
             ),
         ] {
             let mut buffer = [ZERO; CORE_TRACE_WIDTH];
@@ -848,7 +848,8 @@ mod tests {
     fn respan_overflow_preserves_trace_decoder_and_block_context() {
         let batch = respan_batch();
         let stack = StackState::new([ZERO; MIN_STACK_DEPTH], MIN_STACK_DEPTH, ZERO);
-        for address in [Felt::from_u32(MAX_TRACE_LEN as u32 + 1)] {
+        {
+            let address = Felt::from_u32(MAX_TRACE_LEN as u32 + 1);
             let untouched = [Felt::from_u8(99); CORE_TRACE_WIDTH];
             let mut buffer = untouched;
             {
@@ -896,7 +897,7 @@ mod tests {
                     OperationHelperRegisters::LogDeferred { addr: ONE, state_prev },
                 ),
             ] {
-                let layout = ChipletsLayout::new(7, 2, 0, 0, 0, 0).unwrap();
+                let layout = ChipletsLayout::new(8, 8, 0, 0, 0, 0).unwrap();
                 let mut system = system();
                 system.clk = 23u32.into();
                 system.ctx = ContextId::from(3);
@@ -936,17 +937,17 @@ mod tests {
                     assert_eq!(tracer.decoder_state.parent_addr, parent);
                 }
                 let row: &CoreCols<Felt> = buffer.as_slice().borrow();
-                assert_eq!(row.decoder.addr, Felt::from_u8(8));
+                assert_eq!(row.decoder.addr, Felt::from_u8(9));
                 assert_eq!(
                     row.decoder.hasher_state[1],
                     if parent == LogicalControllerAddress::ABSENT {
                         ZERO
                     } else {
-                        Felt::from_u8(8)
+                        Felt::from_u8(9)
                     }
                 );
                 let mut expected_helpers = helper.to_user_op_helpers();
-                expected_helpers[0] = Felt::from_u8(8);
+                expected_helpers[0] = Felt::from_u8(9);
                 assert_eq!(row.decoder.user_op_helpers(), expected_helpers);
                 assert_eq!(row.system.clk, expected_system.clk);
                 assert_eq!(row.system.ctx, expected_system.ctx);

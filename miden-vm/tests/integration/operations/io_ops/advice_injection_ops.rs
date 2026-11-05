@@ -4,7 +4,7 @@ use miden_processor::{
     ExecutionError, ExecutionOptions, FastProcessor, StackInputs, TestHost,
     advice::{AdviceError, AdviceInputs},
 };
-use miden_utils_testing::{build_test, crypto::MerkleStore};
+use miden_utils_testing::{build_test, crypto::MerkleStore, librarytree::assemble_fixture_program};
 
 // ADVICE INJECTION
 // ================================================================================================
@@ -547,11 +547,14 @@ fn run_insert_mem_with_max_value_elements_and_repeats(
         end"#,
     );
 
-    let program = Assembler::default()
-        .assemble_program("program", &source)
-        .unwrap()
-        .unwrap_program();
     let mut host = TestHost::default();
+    let named = assemble_fixture_program(
+        Assembler::new(host.source_manager.clone()),
+        "program",
+        &source,
+        &[],
+    );
+    host = host.with_environment_source(named.environment.source());
     let felt_bytes = Word::SERIALIZED_SIZE / Word::NUM_ELEMENTS;
     let base_store_bytes = MerkleStore::default().num_internal_nodes() * 3 * Word::SERIALIZED_SIZE;
     let map_entry_bytes = Word::SERIALIZED_SIZE + max_value_elements * felt_bytes;
@@ -560,7 +563,7 @@ fn run_insert_mem_with_max_value_elements_and_repeats(
 
     FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
         .map_err(ExecutionError::advice_error_no_context)?
-        .execute_sync(&program, &mut host)?;
+        .execute_sync(&named.program, named.environment.execution(), &mut host)?;
     Ok(())
 }
 
@@ -578,18 +581,21 @@ fn run_insert_mem_after_empty_insertion(range_len: u32) -> Result<(), ExecutionE
             dropw drop drop
         end"#,
     );
-    let program = Assembler::default()
-        .assemble_program("program", &source)
-        .unwrap()
-        .unwrap_program();
     let mut host = TestHost::default();
+    let named = assemble_fixture_program(
+        Assembler::new(host.source_manager.clone()),
+        "program",
+        &source,
+        &[],
+    );
+    host = host.with_environment_source(named.environment.source());
     let base_store_bytes = MerkleStore::default().num_internal_nodes() * 3 * Word::SERIALIZED_SIZE;
     let options = ExecutionOptions::default()
         .with_max_advice_size_bytes(base_store_bytes + Word::SERIALIZED_SIZE);
 
     FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
         .map_err(ExecutionError::advice_error_no_context)?
-        .execute_sync(&program, &mut host)?;
+        .execute_sync(&named.program, named.environment.execution(), &mut host)?;
     Ok(())
 }
 
@@ -609,15 +615,18 @@ fn run_conflicting_insert(max_advice_size_bytes: usize) -> Result<(), ExecutionE
         adv.insert_mem
         dropw drop drop
     end";
-    let program = Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
     let mut host = TestHost::default();
+    let named = assemble_fixture_program(
+        Assembler::new(host.source_manager.clone()),
+        "program",
+        source,
+        &[],
+    );
+    host = host.with_environment_source(named.environment.source());
     let options = ExecutionOptions::default().with_max_advice_size_bytes(max_advice_size_bytes);
 
     FastProcessor::new_with_options(StackInputs::default(), AdviceInputs::default(), options)
         .map_err(ExecutionError::advice_error_no_context)?
-        .execute_sync(&program, &mut host)?;
+        .execute_sync(&named.program, named.environment.execution(), &mut host)?;
     Ok(())
 }

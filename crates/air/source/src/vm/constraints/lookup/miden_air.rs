@@ -34,14 +34,16 @@ pub(crate) fn emit_core_boundary<B: BoundaryBuilder>(boundary: &mut B) {
 
 /// Emit boundary corrections for Chiplets lookup columns.
 ///
-/// The caller supplies exactly the Chiplets public vector `R_E || N_kernel` through the
+/// The caller supplies exactly the Chiplets public vector `R_E` through the
 /// existing boundary carrier. No auxiliary kernel list or absent-input default is accepted.
 pub(crate) fn emit_chiplets_boundary<B: BoundaryBuilder<F = Felt>>(boundary: &mut B) {
     let [public_values] = boundary.var_len_public_inputs() else {
         panic!("Chiplets boundary requires its validated public input slice");
     };
     assert_eq!(public_values.len(), NUM_CHIPLETS_PUBLIC_VALUES);
-    let environment_root = core::array::from_fn(|i| public_values[i]);
+    let environment_root: [Felt; WORD_SIZE] = (*public_values)
+        .try_into()
+        .expect("Chiplets boundary requires exactly four environment-root Felts");
     emit_open_seed(boundary, environment_root);
 }
 
@@ -120,6 +122,25 @@ mod tests {
         assert_eq!(boundary.events, vec![(Felt::ONE, initial), (-Felt::ONE, final_denominator)]);
         let correction: QuadFelt = boundary.events.iter().map(|(m, d)| d.inverse() * *m).sum();
         assert_eq!(correction, initial.inverse() - final_denominator.inverse());
+    }
+
+    #[test]
+    fn chiplets_boundary_adds_only_the_fixed_initial_namespace_open_seed() {
+        use miden_core::program::Namespace;
+
+        use crate::vm::constraints::lookup::messages::LibraryOpenMsg;
+
+        let environment_root = core::array::from_fn(|i| Felt::from_u32(71 + i as u32));
+        let inputs = [environment_root.as_slice()];
+        let mut boundary = CoreBoundary { inputs: &inputs, events: Vec::new() };
+        super::emit_chiplets_boundary(&mut boundary);
+        let seed = LibraryOpenMsg {
+            depth: Felt::ZERO,
+            commitment: environment_root,
+            namespace: Namespace::initial().into_word().into_elements(),
+        }
+        .encode(&challenges());
+        assert_eq!(boundary.events, vec![(Felt::ONE, seed)]);
     }
 
     #[test]

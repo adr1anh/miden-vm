@@ -138,7 +138,7 @@ fn append_program_acceptance_summary(output: &mut String, case_name: &str, progr
 #[test]
 fn vendoring() -> TestResult {
     let context = TestContext::new();
-    let vendor_lib = {
+    let (vendor_lib, mut naming) = {
         let mod1 = context
             .parse_module(source_file!(
                 &context,
@@ -146,10 +146,11 @@ fn vendoring() -> TestResult {
 pub proc bar push.1 end pub proc prune push.2 end"
             ))
             .unwrap();
-        Assembler::default()
-            .assemble_library("vendor", mod1, None::<Box<Module>>)
-            .unwrap()
+        context.assemble_library_with_fixture("vendor", None, mod1, None::<Box<Module>>)?
     };
+    let bar_root = vendor_lib.get_procedure_root_by_path("::test::mod1::bar").unwrap();
+    let prune_root = vendor_lib.get_procedure_root_by_path("::test::mod1::prune").unwrap();
+    let bar_key = naming.binding(Path::new("::test::mod1::bar")).unwrap().key();
 
     let lib = {
         let mod2 = context
@@ -160,19 +161,35 @@ pub proc foo exec.::test::mod1::bar end"
             ))
             .unwrap();
 
-        let mut assembler = Assembler::default();
-        assembler.link_package(Arc::from(vendor_lib), Linkage::Static)?;
+        naming.add_module(&mod2)?;
+        let mut assembler = Assembler::new(context.source_manager());
+        let vendor_naming = naming.admit_package(&vendor_lib)?;
+        assembler.link_package(Arc::from(vendor_lib), Linkage::Static, vendor_naming)?;
+        let assembler = naming.configure(assembler, [&*mod2])?;
         Arc::<Package>::from(assembler.assemble_library("lib", mod2, None::<Box<Module>>).unwrap())
     };
 
     // Rigorous testing of vendoring functionality
 
-    // 1. The vendored library (lib) has `exec.::test::mod1::bar` which is a 0-cycle instruction.
-    // 0-cycle instructions like `exec` don't generate AssemblyOps because they don't execute
-    // any VM operations. The debug info may still have procedure names, error codes, etc.
-    // The vendor_lib (mod1) has actual instructions (push.1, push.2) which do have AssemblyOps.
+    // 1. Vendoring supplies the original bodies while exec remains a runtime keyed invocation.
+    let foo_node = lib.get_procedure_node_by_path("::test::mod2::foo").unwrap();
+    let forest = lib.mast_forest();
+    assert_eq!(forest[foo_node].unwrap_exec().target(), bar_key);
+    assert!(!forest[foo_node].has_children());
+    for digest in [bar_root, prune_root] {
+        assert!(forest.find_procedure_root(digest).is_some(), "vendored body was pruned");
+    }
+    let info = lib.debug_info().into_diagnostic()?.unwrap();
+    let exec_rows = info
+        .nodes()
+        .iter()
+        .flat_map(|node| &node.asm_ops)
+        .filter(|row| info[row.op_name_idx].as_ref() == "exec.::test::mod1::bar")
+        .collect::<Vec<_>>();
+    assert_eq!(exec_rows.len(), 1);
+    assert_eq!(exec_rows[0].num_cycles, 1);
 
-    // 2. Create an equivalent expected library for structural comparison
+    // 2. Preserve the original push.1 body comparison independently of the caller's EXEC node.
     let expected_lib = {
         let mod2 = context
             .parse_module(source_file!(
@@ -180,10 +197,18 @@ pub proc foo exec.::test::mod1::bar end"
                 "namespace test::expected\npub proc foo push.1 end"
             ))
             .unwrap();
-        Assembler::default()
-            .assemble_library("test", mod2, None::<Box<Module>>)
-            .unwrap()
+        context.assemble_library("test", None, mod2, None::<Box<Module>>)?
     };
+    assert_eq!(expected_lib.get_procedure_root_by_path("::test::expected::foo"), Some(bar_root));
+    let prune_node = forest.find_procedure_root(prune_root).unwrap();
+    assert_eq!(
+        forest[prune_node]
+            .unwrap_basic_block()
+            .raw_operations()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![Operation::Push(Felt::from_u32(2))],
+    );
 
     // 3. Verify that the expected library (which has push.1) has package-owned AssemblyOps.
     assert_package_has_source_asm_ops(
@@ -193,7 +218,9 @@ pub proc foo exec.::test::mod1::bar end"
 
     // 4. Verify we can create an assembler that successfully links the vendored library
     let mut assembler_with_vendored_lib = Assembler::default();
-    let link_result = assembler_with_vendored_lib.link_package(lib.clone(), Linkage::Static);
+    let lib_naming = crate::testing::FixtureNamespace::assembly_tests().admit_package(&lib)?;
+    let link_result =
+        assembler_with_vendored_lib.link_package(lib.clone(), Linkage::Static, lib_naming);
     assert!(link_result.is_ok(), "Should be able to link the vendored library");
 
     // 5. Test that a simple program can be assembled with the linked library
@@ -204,8 +231,10 @@ pub proc foo exec.::test::mod1::bar end"
         add
     end
     "#;
-    let assemble_result =
-        assembler_with_vendored_lib.assemble_program("test", program_with_lib_source);
+    let program = context.parse_module(program_with_lib_source)?;
+    naming.add_module(&program)?;
+    let assembler_with_vendored_lib = naming.configure(assembler_with_vendored_lib, [&*program])?;
+    let assemble_result = assembler_with_vendored_lib.assemble_program("test", program);
     assert!(
         assemble_result.is_ok(),
         "Should be able to assemble program with linked library"

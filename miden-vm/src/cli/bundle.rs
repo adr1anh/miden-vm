@@ -7,6 +7,9 @@ use miden_assembly::{
 };
 use miden_core_lib::CoreLibrary;
 use miden_mast_package::{Package, Version};
+use miden_vm::internal::naming_inputs::NamingRole;
+
+use super::naming_inputs::{NamingArgs, NamingOutputArgs};
 
 fn parse_version(value: &str) -> Result<Version, String> {
     value.parse().map_err(|err| format!("invalid package version: {err}"))
@@ -24,8 +27,9 @@ pub struct BundleCmd {
     /// Path to the root `.masm` file for the library
     #[arg(value_parser)]
     root: PathBuf,
-    /// Defines the top-level namespace, e.g. `mylib`, otherwise a `namespace` declaration is
-    /// expected in the root module. For a kernel library the namespace defaults to `$kernel`.
+    /// Defines the source namespace for a library, otherwise read from its root module.
+    /// For a kernel this sets the package name; its source namespace remains `$kernel`.
+    /// Canonical callable homes and labels come from the naming-input file.
     #[arg(short, long)]
     namespace: Option<String>,
     /// Version of the library, defaults to `0.1.0`.
@@ -39,6 +43,10 @@ pub struct BundleCmd {
     /// Path of the output `.masp` file.
     #[arg(short, long)]
     output: Option<PathBuf>,
+    #[command(flatten)]
+    naming: NamingArgs,
+    #[command(flatten)]
+    naming_output: NamingOutputArgs,
 }
 
 impl BundleCmd {
@@ -47,7 +55,13 @@ impl BundleCmd {
         println!("Build library");
         println!("============================================================");
 
-        let mut assembler = Assembler::default();
+        let naming_inputs = self.naming.read()?;
+        naming_inputs.check_library_count(0)?;
+        if naming_inputs.has_kernel() {
+            return Err(Report::msg("bundle does not accept a separate kernel naming choice"));
+        }
+        let mut assembler =
+            Assembler::default().with_namespace_inputs(naming_inputs.source(NamingRole::Target)?);
 
         if !self.root.is_file() {
             return Err(Report::msg("`root` must be a '.masm' file."));
@@ -63,32 +77,35 @@ impl BundleCmd {
             },
         };
 
-        if self.kernel {
-            assembler.link_package(CoreLibrary::default().package(), Linkage::Dynamic)?;
+        let core = CoreLibrary::default();
+        assembler.link_package(core.package(), Linkage::Dynamic, core.naming().clone())?;
+        let product = if self.kernel {
             let namespace = match self.namespace.as_deref() {
                 Some(ns) => ns,
                 None => ast::Path::KERNEL_PATH,
             };
-            let mut library = assembler.assemble_kernel_from_root(namespace, &self.root)?;
-            library.version = self.version.clone();
-            if self.release {
-                library.strip_debug_info().into_diagnostic()?;
-            }
-            library.write_to_file(output_file).into_diagnostic()?;
-            println!("Built kernel library {} from {}", library.name, self.root.display());
+            assembler.assemble_kernel_from_root_with_naming(namespace, &self.root)?
         } else {
             let library_namespace = match self.namespace.as_ref() {
                 Some(ns) => Some(LibraryPath::new(ns).into_diagnostic()?),
                 None => None,
             };
-            assembler.link_package(CoreLibrary::default().package(), Linkage::Dynamic)?;
-            let mut library =
-                assembler.assemble_library_from_root(&self.root, library_namespace.as_deref())?;
-            library.version = self.version.clone();
-            if self.release {
-                library.strip_debug_info().into_diagnostic()?;
-            }
-            library.write_to_file(output_file).into_diagnostic()?;
+            assembler
+                .assemble_library_from_root_with_naming(&self.root, library_namespace.as_deref())?
+        };
+        let naming = product.naming().clone();
+        let naming_bytes = naming_inputs.encode_owned(&naming)?;
+        let mut library = product.into_artifact(true)?;
+        library.version = self.version.clone();
+        if self.release {
+            library.strip_debug_info().into_diagnostic()?;
+        }
+        library.check_naming(&naming).map_err(Report::msg)?;
+        library.write_to_file(output_file).into_diagnostic()?;
+        self.naming_output.write(&naming_bytes)?;
+        if self.kernel {
+            println!("Built kernel library {} from {}", library.name, self.root.display());
+        } else {
             println!("Built package '{}'", library.name);
         }
 

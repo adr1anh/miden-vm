@@ -13,13 +13,15 @@ use std::{
 
 use miden_assembly::{
     Assembler, DefaultSourceManager, MasmSourceProvider, ProjectSourceProvider,
-    ProjectTargetSelector, testing::TestRegistry,
+    ProjectTargetSelector,
+    testing::{FixtureNamespace, TestRegistry, configure_project_fixture},
 };
 use miden_mast_package::Package;
 use miden_processor::{
     DefaultHost, FastProcessor, StackInputs,
     serde::{Deserializable, Serializable},
 };
+use miden_utils_testing::librarytree::FixtureEnvironment;
 use miden_wasm_event_handlers::{WasmHandlerLimits, host_library_from_package};
 use miden_wasm_event_handlers_project::WasmEventHandlerCargoBuildProcessor;
 
@@ -56,23 +58,36 @@ fn a_project_build_ships_a_working_wasm_handler() {
     let mut project_assembler = Assembler::default()
         .for_project_at_path_with_providers(&manifest_path, &mut registry, providers())
         .expect("the fixture project loads");
+    configure_project_fixture(&mut project_assembler);
     project_assembler.with_package_post_processor(WasmEventHandlerCargoBuildProcessor::new());
 
     let package = project_assembler
         .assemble(ProjectTargetSelector::Executable("main"), "release")
         .expect("the project assembles and its guest crate builds");
 
+    let naming = FixtureNamespace::assembly_tests()
+        .admit_package(&package)
+        .expect("source naming uses the explicitly selected fixture home");
+
     // Full wire roundtrip: the handlers travel inside the .masp bytes.
     let decoded = Arc::new(Package::read_from_bytes(&package.to_bytes()).expect("package decodes"));
     assert_fixture_section(&decoded);
+    assert_eq!(
+        decoded.event_handlers().expect("roundtrip section decodes"),
+        package.event_handlers().expect("source section decodes"),
+    );
+    let program = decoded.try_into_program(&naming).expect("exact fixture naming selects code");
+    let environment =
+        FixtureEnvironment::new(naming.entry_key().expect("fixture entry is named"), [&naming])
+            .expect("fixture environment validates");
 
     let library = host_library_from_package(&decoded, WasmHandlerLimits::default())
         .expect("the handlers load from the package");
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     host.load_library(library).expect("the handlers register");
 
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&decoded.unwrap_program(), &mut host)
+        .execute_sync(&program, environment.execution(), &mut host)
         .expect("the handler's advice satisfies the in-VM check");
 }
 
@@ -92,6 +107,7 @@ fn the_midenc_call_shape_embeds_the_handlers() {
     let mut project_assembler = Assembler::new(source_manager)
         .for_project_with_providers(project, &mut registry, providers())
         .expect("the project assembler is configured");
+    configure_project_fixture(&mut project_assembler);
     project_assembler.with_package_post_processor(WasmEventHandlerCargoBuildProcessor::new());
 
     match project_assembler

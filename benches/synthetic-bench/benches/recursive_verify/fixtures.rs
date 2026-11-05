@@ -3,6 +3,7 @@
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use miden_assembly::Linkage;
@@ -18,7 +19,8 @@ use miden_core::{
 };
 use miden_core_lib::CoreLibrary;
 use miden_precompiles_stark::recursive::PvmRecursiveVerifierInputs;
-use miden_processor::{ExecutionOptions, FastProcessor};
+use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor};
+use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
 use miden_verifier::Verifier;
 use miden_vm::{
     Assembler, ExecutionProof, PrecompileWitness, ProgramInfo, Prover, StackInputs, StackOutputs,
@@ -35,8 +37,20 @@ use super::{
 };
 
 const PVM_PROOF_CACHE_KEY_VERSION: &[u8] = b"miden-synthetic-recursive-pvm-proof-cache-v6-eidos";
+
+struct TxProgramFixture {
+    program: NamedProgram,
+    core_lib: CoreLibrary,
+}
+
+impl TxProgramFixture {
+    fn host(&self) -> DefaultHost {
+        recursive_host(&self.program.environment, &self.core_lib)
+    }
+}
+
 pub(super) struct TxProofFixture {
-    program_info: ProgramInfo,
+    fixture: Arc<TxProgramFixture>,
     stack_inputs: StackInputs,
     stack_outputs: StackOutputs,
     proof: ExecutionProof,
@@ -294,16 +308,20 @@ fn hex_prefix(bytes: &[u8]) -> String {
     to_hex(&bytes[..bytes.len().min(16)])
 }
 
-fn print_tx_fixture_shape(program: &miden_vm::Program, stack_inputs: StackInputs, scenario: &str) {
+fn print_tx_fixture_shape(fixture: &TxProgramFixture, stack_inputs: StackInputs, scenario: &str) {
     let processor = FastProcessor::new_with_options(
         stack_inputs,
         AdviceInputs::default(),
-        ExecutionOptions::default(),
+        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
     )
     .expect("transaction fixture advice should fit provider limits");
-    let mut host = recursive_host();
+    let mut host = fixture.host();
     let witness = processor
-        .execute_for_proving_sync(program, &mut host)
+        .execute_for_proving_sync(
+            &fixture.program.program,
+            fixture.program.environment.execution(),
+            &mut host,
+        )
         .expect("execute transaction fixture");
     let (vm_witness, _) = witness.into_parts();
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget())
@@ -315,19 +333,18 @@ fn print_tx_fixture_shape(program: &miden_vm::Program, stack_inputs: StackInputs
 }
 
 pub(super) fn load_tx_fixtures(
+    core_lib: &CoreLibrary,
     config: &BenchConfig,
     proof_count: usize,
     source: &str,
     scenario: &str,
 ) -> Vec<TxProofFixture> {
-    let core_lib = CoreLibrary::default();
-    let program = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
-        .expect("link core library")
-        .assemble_program("tx_fixture", source)
-        .expect("assemble transaction fixture")
-        .unwrap_program();
-    let program_info = ProgramInfo::from(program.clone());
+    let assembler = Assembler::default()
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+        .expect("link core library");
+    let program = assemble_fixture_program(assembler, "tx_fixture", source, &[core_lib.naming()]);
+    let fixture = Arc::new(TxProgramFixture { program, core_lib: core_lib.clone() });
+    let program_info = fixture.program.program.to_info();
 
     println!(
         "\n=== transaction proof fixtures\n    scenario={scenario} hash={:?} proof_cache={}",
@@ -335,7 +352,7 @@ pub(super) fn load_tx_fixtures(
         config.tx_proof_cache_dir().display(),
     );
     // Synthetic snippets have fixed control flow and memory access patterns for all proof inputs.
-    print_tx_fixture_shape(&program, stack_inputs(&config.stack_values_for_proof(0)), scenario);
+    print_tx_fixture_shape(&fixture, stack_inputs(&config.stack_values_for_proof(0)), scenario);
 
     let compatibility = Verifier::proof_compatibility();
     let mut seen_proofs = HashSet::with_capacity(proof_count);
@@ -344,7 +361,12 @@ pub(super) fn load_tx_fixtures(
             let stack_values = config.stack_values_for_proof(proof_index);
             let stack_inputs = stack_inputs(&stack_values);
             let advice_inputs = AdviceInputs::default();
-            let proof_cache_key = tx_proof_cache_key(&program_info, &stack_values, &compatibility);
+            let proof_cache_key = tx_proof_cache_key(
+                &program_info,
+                fixture.program.environment.execution().descriptor(),
+                &stack_values,
+                &compatibility,
+            );
             let (stack_outputs, proof, proof_cache_status) = if let Some((stack_outputs, proof)) =
                 load_cached_tx_proof(
                     config.tx_proof_cache_dir(),
@@ -355,14 +377,15 @@ pub(super) fn load_tx_fixtures(
                 ) {
                 (stack_outputs, proof, "hit")
             } else {
-                let mut host = recursive_host();
+                let mut host = fixture.host();
                 let (stack_outputs, proof) = prove_sync(
                     &Prover::new().with_hash_fn(INNER_PROOF_HASH),
-                    &program,
+                    &fixture.program.program,
+                    fixture.program.environment.execution(),
                     stack_inputs,
                     advice_inputs,
                     &mut host,
-                    ExecutionOptions::default(),
+                    ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
                 )
                 .expect("prove transaction fixture");
                 assert!(
@@ -412,7 +435,7 @@ pub(super) fn load_tx_fixtures(
             );
 
             TxProofFixture {
-                program_info: program_info.clone(),
+                fixture: fixture.clone(),
                 stack_inputs,
                 stack_outputs,
                 proof,
@@ -426,7 +449,7 @@ pub(super) fn recursive_proof_advice(
     verifier_root: Word,
 ) -> RecursiveProofAdvice {
     let claim = ExecutionClaim::from_program_info(
-        fixture.program_info.clone(),
+        fixture.fixture.program.program.to_info(),
         fixture.stack_inputs,
         fixture.stack_outputs,
     );
@@ -438,9 +461,13 @@ pub(super) fn recursive_proof_advice(
     RecursiveProofAdvice { claim_commitment, advice_inputs }
 }
 
-pub(super) fn load_pvm_advice(config: &BenchConfig, ecdsa_count: usize) -> RecursiveProofAdvice {
+pub(super) fn load_pvm_advice(
+    core_lib: &CoreLibrary,
+    config: &BenchConfig,
+    ecdsa_count: usize,
+) -> RecursiveProofAdvice {
     let proof = load_pvm_proof(config, ecdsa_count);
-    let verifier_root = CoreLibrary::default().pvm_recursive_verifier_root();
+    let verifier_root = core_lib.pvm_recursive_verifier_root();
     let inputs = PvmRecursiveVerifierInputs::for_request(verifier_root, &proof)
         .expect("build PVM recursive advice");
     let (advice_inputs, claim_commitment) = inputs.into_parts();

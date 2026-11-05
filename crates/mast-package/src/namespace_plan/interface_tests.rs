@@ -8,10 +8,17 @@ use miden_assembly_syntax::{
 use miden_core::{Felt, Word, serde::DeserializationError};
 
 use super::*;
-use crate::{DeclarationSet, ProcedureDeclaration};
+use crate::{CallableProcedurePath, DeclarationSet, ProcedureDeclaration};
 
 fn path(source: &str) -> PublicProcedurePath {
     PublicProcedurePath::new(Path::new(source)).unwrap()
+}
+
+fn callable(components: &[&str]) -> CallableProcedurePath {
+    CallableProcedurePath::from_semantic_components(
+        components.iter().map(|component| (*component).into()).collect(),
+    )
+    .unwrap()
 }
 
 fn library_id() -> Word {
@@ -122,4 +129,92 @@ fn explicitly_supplied_root_home_derives_keys_without_granting_authority() {
     let named_home = NamespacePlan::new(vec![CanonicalLabel::text("kernel").unwrap()]);
     assert_ne!(root_key, named_home.procedure_key(&path("run")).unwrap());
     assert_ne!(plan.namespace(), named_home.namespace());
+}
+
+#[test]
+fn general_and_public_paths_derive_the_same_keys_without_bodies_or_abi() {
+    let plan = NamespacePlan::new(vec![CanonicalLabel::text("supplied_home").unwrap()]);
+    for source in [
+        "module::run",
+        r#""module"::"run""#,
+        r#""a::b""#,
+        r#""Å"::"Å""#,
+        r#""mod\ule"::"f\\tag""#,
+        r#"module::"f#tag""#,
+    ] {
+        let public = path(source);
+        let callable =
+            CallableProcedurePath::from_semantic_components(public.components().to_vec()).unwrap();
+        let absent_abi = ProcedureDeclaration::new(public.clone(), None);
+        let changed_abi = ProcedureDeclaration::new(public, Some(" changed ABI\r\n".into()))
+            .with_signature(FunctionType::new(CallConv::Fast, [Type::Felt], [Type::U32]));
+        let key = plan.callable_procedure_key(&callable).unwrap();
+        assert_eq!(key, plan.procedure_key(absent_abi.path()).unwrap(), "{source:?}");
+        assert_eq!(key, plan.procedure_key(changed_abi.path()).unwrap(), "{source:?}");
+        assert_eq!(
+            plan.callable_parent_namespace(&callable).unwrap(),
+            plan.parent_namespace(absent_abi.path()).unwrap(),
+            "{source:?}"
+        );
+    }
+
+    let key = |components: &[&str]| plan.callable_procedure_key(&callable(components)).unwrap();
+    assert_ne!(key(&["a::b"]), key(&["a", "b"]));
+    assert_ne!(key(&["Å"]), key(&["Å"]));
+    assert_ne!(key(&[r"a\b"]), key(&[r"a\\b"]));
+}
+
+#[test]
+fn entry_and_reserved_roots_derive_as_ordinary_text_under_the_explicit_home() {
+    let plan = NamespacePlan::new(vec![CanonicalLabel::text("supplied_home").unwrap()]);
+    let main = CanonicalLabel::text("$main").unwrap();
+    assert_eq!(plan.callable_parent_namespace(&callable(&["$main"])).unwrap(), plan.namespace());
+    assert_eq!(
+        plan.callable_procedure_key(&callable(&["$main"])).unwrap(),
+        plan.namespace().procedure_key(main.commitment())
+    );
+    for root in ["$exec", "$kernel"] {
+        let entry = callable(&[root, "$main"]);
+        let parent = plan.namespace().child(CanonicalLabel::text(root).unwrap().commitment());
+        assert_eq!(plan.callable_parent_namespace(&entry).unwrap(), parent);
+        assert_eq!(
+            plan.callable_procedure_key(&entry).unwrap(),
+            parent.procedure_key(main.commitment())
+        );
+        assert_ne!(parent, Namespace::initial());
+    }
+}
+
+#[test]
+fn helpers_require_an_explicit_private_prefix_and_preserve_typed_homes() {
+    let revision = NonZeroU32::new(7).unwrap();
+    let home = vec![
+        CanonicalLabel::text("pinned").unwrap(),
+        CanonicalLabel::library_id(library_id()),
+        CanonicalLabel::revision(revision),
+    ];
+    let plan = NamespacePlan::new(home.clone());
+    let helper = callable(&["private", "math", "helper"]);
+    let parent = plan
+        .namespace()
+        .child(CanonicalLabel::text("private").unwrap().commitment())
+        .child(CanonicalLabel::text("math").unwrap().commitment());
+    assert_eq!(plan.callable_parent_namespace(&helper).unwrap(), parent);
+    let key = plan.callable_procedure_key(&helper).unwrap();
+    assert_eq!(key, parent.procedure_key(CanonicalLabel::text("helper").unwrap().commitment()));
+    assert_ne!(key, plan.callable_procedure_key(&callable(&["math", "helper"])).unwrap());
+
+    let mut text_revision = home.clone();
+    text_revision[2] = CanonicalLabel::text("7").unwrap();
+    assert_ne!(key, NamespacePlan::new(text_revision).callable_procedure_key(&helper).unwrap());
+    let mut text_library_id = home;
+    text_library_id[1] = CanonicalLabel::text(&library_id().to_hex()).unwrap();
+    assert_ne!(
+        key,
+        NamespacePlan::new(text_library_id).callable_procedure_key(&helper).unwrap()
+    );
+    assert_ne!(
+        key,
+        plan.callable_procedure_key(&callable(&["private", "math::helper"])).unwrap()
+    );
 }

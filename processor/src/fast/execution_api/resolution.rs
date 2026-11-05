@@ -2,7 +2,7 @@
 
 use core::ops::ControlFlow;
 
-use miden_core::program::{ImplementationRoot, ProcedureKey};
+use miden_core::program::{ImplementationRoot, Namespace, ProcedureKey};
 
 use super::*;
 use crate::{
@@ -110,7 +110,7 @@ impl FastProcessor {
             PendingBinding::Verified(binding) => binding.namespace(),
             PendingBinding::Cached(binding) => binding.namespace(),
         };
-        let expected = resume.environment.descriptor().kernel_namespace();
+        let expected = Namespace::initial();
         if actual != expected {
             return Err(ExecutionError::EnvironmentSession(SessionError::UnauthorizedSyscall {
                 expected,
@@ -208,6 +208,27 @@ impl FastProcessor {
         Ok(())
     }
 
+    fn pending_code_not_found(
+        resume: &ResumeContext,
+        implementation: ImplementationRoot,
+        host: &impl BaseHost,
+    ) -> ExecutionError {
+        let source = match resume.pending.as_ref().expect("pending resolution").request {
+            PendingKey::Entry(_) => None,
+            PendingKey::Invoke(request) => request.source_node_id,
+        };
+        match (resume.package_debug_info.as_deref(), source) {
+            (Some(debug), Some(source)) => {
+                crate::errors::procedure_not_found_with_package_source_context(
+                    *implementation.as_word(),
+                    PackageSourceDebugContext::new(debug, source),
+                    host,
+                )
+            },
+            _ => crate::errors::procedure_not_found_with_context(*implementation.as_word()),
+        }
+    }
+
     fn resolve_pending_sync<S, T>(
         &mut self,
         host: &mut impl SyncHost,
@@ -236,9 +257,7 @@ impl FastProcessor {
         let loaded = self
             .local_code_candidate(resume, implementation)
             .or_else(|| host.get_mast_forest(implementation.as_word()))
-            .ok_or_else(|| {
-                crate::errors::procedure_not_found_with_context(*implementation.as_word())
-            })?;
+            .ok_or_else(|| Self::pending_code_not_found(resume, implementation, host))?;
         let prepared = self.prepare_pending_code(resume, loaded, implementation, host)?;
         self.finish_pending(host, tracer, stopper, resume, implementation, prepared)
     }
@@ -270,9 +289,10 @@ impl FastProcessor {
         let implementation = Self::pending_implementation(resume);
         let loaded = match self.local_code_candidate(resume, implementation) {
             Some(loaded) => loaded,
-            None => host.get_mast_forest(implementation.as_word()).await.ok_or_else(|| {
-                crate::errors::procedure_not_found_with_context(*implementation.as_word())
-            })?,
+            None => host
+                .get_mast_forest(implementation.as_word())
+                .await
+                .ok_or_else(|| Self::pending_code_not_found(resume, implementation, host))?,
         };
         let prepared = self.prepare_pending_code(resume, loaded, implementation, host)?;
         self.finish_pending(host, tracer, stopper, resume, implementation, prepared)

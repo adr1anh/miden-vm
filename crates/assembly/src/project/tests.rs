@@ -4,11 +4,13 @@ use miden_assembly_syntax::{ast::DebugVarLocation, source_file};
 use miden_core::{
     mast::{BasicBlockNodeBuilder, MastForest, MastNodeExt, MastNodeId},
     operations::Operation,
+    program::Namespace,
     serde::{Deserializable, Serializable, SliceReader},
     utils::{Idx, hash_string_to_word},
 };
 use miden_mast_package::{
     PackageExport, PackageModule, ProcedureExport, Section, SectionId,
+    arbitrary::fixture_naming,
     debug_info::{
         DEBUG_INFO_VERSION, DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, DebugSourceVar,
         PackageDebugInfo, PackageDebugInfoBuilder,
@@ -18,7 +20,10 @@ use miden_package_registry::PackageRegistry;
 use tempfile::TempDir;
 
 use super::*;
-use crate::testing::{TestContext, TestRegistry};
+use crate::testing::{
+    FixtureNamespace, TestContext, TestRegistry, configure_project_fixture, fixture_package_naming,
+    fixture_program,
+};
 
 #[test]
 fn builds_library_package_from_project_profiles() {
@@ -149,7 +154,127 @@ end
 }
 
 #[test]
-fn builds_kernel_package_and_supports_kernel_conversion() {
+fn top_level_project_assembly_retains_aliases_private_bindings_and_entry() {
+    let tempdir = TempDir::new().unwrap();
+    let manifest_path = tempdir.path().join("miden-project.toml");
+    write_file(
+        &manifest_path,
+        r#"[package]
+name = "named-project"
+version = "1.0.0"
+
+[lib]
+namespace = "named::library"
+path = "library/root.masm"
+
+[[bin]]
+name = "entry"
+path = "main.masm"
+"#,
+    );
+    write_file(
+        &tempdir.path().join("library/root.masm"),
+        r#"pub mod api
+pub use {run as exported} from named::library::api
+
+proc hidden
+    push.1
+end
+
+pub proc call
+    exec.hidden
+    exec.api::run
+end
+"#,
+    );
+    let api_path = tempdir.path().join("library/api.masm");
+    write_file(&api_path, "pub proc run push.2 end");
+    write_file(
+        &tempdir.path().join("main.masm"),
+        r#"use named::library
+
+begin
+    exec.library::exported
+    exec.library::call
+end
+"#,
+    );
+    let path = |components: &[&str]| {
+        miden_mast_package::CallableProcedurePath::from_semantic_components(
+            components.iter().map(|component| (*component).to_string()).collect(),
+        )
+        .unwrap()
+    };
+    let definition = path(&["named", "library", "api", "run"]);
+    let alias = path(&["named", "library", "exported"]);
+    let private = path(&["named", "library", "hidden"]);
+
+    let mut context = TestContext::new();
+    let mut assembler = context.project_assembler_for_path(&manifest_path).unwrap();
+    let library = assembler
+        .assemble_with_naming(ProjectTargetSelector::Library, "release")
+        .expect("library build should retain its compiler naming");
+    library.package.check_naming(&library.naming).unwrap();
+    assert!(library.package.debug_info().unwrap().is_none());
+    let callables = library.naming.callables();
+    let run_key = callables.key_for_visible_path(&definition).unwrap();
+    assert_eq!(callables.key_for_visible_path(&alias), Some(run_key));
+    assert_eq!(callables.binding(run_key).unwrap().path(), &definition);
+    assert_eq!(
+        callables.binding(run_key).unwrap().namespace_plan(),
+        FixtureNamespace::assembly_tests().namespace_plan()
+    );
+    let private_key = callables
+        .bindings()
+        .find_map(|(&key, binding)| (binding.path() == &private).then_some(key))
+        .expect("private definition must retain its canonical binding");
+    assert_eq!(callables.key_for_visible_path(&private), None);
+    assert!(callables.selected_implementation(private_key).is_some());
+    assert_eq!(library.naming.entry_key(), None);
+
+    let executable = match assembler
+        .assemble_interruptible_with_naming(ProjectTargetSelector::Executable("entry"), "release")
+        .expect("executable build should retain its compiler naming")
+    {
+        ControlFlow::Continue(resolved) => resolved,
+        ControlFlow::Break(_) => panic!("source build unexpectedly interrupted"),
+    };
+    executable.package.check_naming(&executable.naming).unwrap();
+    let entry_key = executable.naming.entry_key().expect("executable entry must be retained");
+    let entry_path = path(&["$exec", "$main"]);
+    assert_eq!(executable.naming.callables().key_for_visible_path(&entry_path), Some(entry_key));
+    assert!(executable.naming.callables().selected_implementation(entry_key).is_some());
+    assert_eq!(
+        executable.naming.callables().binding(private_key),
+        callables.binding(private_key),
+        "static linking must retain the library's private canonical binding"
+    );
+
+    write_file(&api_path, "pub proc run push.3 end");
+    let mut rebuilt_context = TestContext::new();
+    let mut rebuilt_assembler = rebuilt_context.project_assembler_for_path(&manifest_path).unwrap();
+    let rebuilt = rebuilt_assembler
+        .assemble_with_naming(ProjectTargetSelector::Library, "release")
+        .expect("changed source should rebuild with the same naming convention");
+    rebuilt.package.check_naming(&rebuilt.naming).unwrap();
+    assert_ne!(library.package.code_commitment(), rebuilt.package.code_commitment());
+    assert_eq!(
+        callables.bindings().collect::<Vec<_>>(),
+        rebuilt.naming.callables().bindings().collect::<Vec<_>>(),
+        "implementation changes must preserve canonical keys and private bindings"
+    );
+    assert_eq!(
+        callables.visible_paths().collect::<Vec<_>>(),
+        rebuilt.naming.callables().visible_paths().collect::<Vec<_>>()
+    );
+    assert_ne!(
+        callables.selected_implementation(run_key),
+        rebuilt.naming.callables().selected_implementation(run_key)
+    );
+}
+
+#[test]
+fn builds_kernel_package_and_supports_kernel_code_validation() {
     let tempdir = TempDir::new().unwrap();
     let manifest_path = tempdir.path().join("miden-project.toml");
     write_file(
@@ -165,7 +290,7 @@ path = "kernel.masm"
     );
     write_file(
         &tempdir.path().join("support.masm"),
-        r#"pub proc foo
+        r#"pub proc supporting_foo
     caller
 end
 "#,
@@ -174,20 +299,21 @@ end
         &tempdir.path().join("kernel.masm"),
         r#"pub mod support
 pub proc foo
-    exec.support::foo
+    exec.support::supporting_foo
 end
 "#,
     );
 
     let mut registry = TestRegistry::default();
-    let package = Assembler::default()
-        .for_project_at_path(&manifest_path, &mut registry)
-        .unwrap()
+    let mut assembler =
+        Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
+    configure_project_fixture(&mut assembler);
+    let package = assembler
         .assemble(ProjectTargetSelector::Library, "dev")
         .expect("kernel build should succeed");
 
     assert_eq!(package.kind, TargetType::Kernel);
-    assert!(package.to_kernel_descriptor().is_ok());
+    assert!(package.check_kernel_code(&fixture_package_naming(&package).unwrap()).is_ok());
 }
 
 #[test]
@@ -418,6 +544,12 @@ fn debug_bearing_static_package(
     exports.insert(0, PackageExport::Procedure(export));
 
     let modules = module_paths.into_iter().map(|path| PackageModule::new(path, []));
+    let naming = fixture_naming(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        TargetType::Library,
+        &forest,
+        &exports,
+    );
     let mut package = MastPackage::create_with_modules(
         PackageId::from(name),
         "1.0.0".parse().unwrap(),
@@ -426,6 +558,7 @@ fn debug_bearing_static_package(
         exports,
         modules,
         [],
+        &naming,
     )
     .expect("test package should be valid");
     package.sections = vec![Section::new(SectionId::DEBUG_INFO, debug_info.to_bytes())];
@@ -480,8 +613,8 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-depa = { path = "../depa.masp", linkage = "static" }
-depb = { path = "../depb.masp", linkage = "static" }
+depa = { path = "../depa.masp", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+depb = { path = "../depb.masp", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -525,14 +658,22 @@ end
         depa_exec, depb_exec,
         "identical static dependency bodies should dedup to one execution node",
     );
-    assert!(debug_info.nodes().iter().any(|node| {
-        node.exec_node == depa_exec
-            && node
-                .asm_ops
-                .iter()
-                .map(|row| debug_info.get_string(row.context_name_idx).unwrap())
-                .eq([Arc::from("depa_ctx"), Arc::from("depb_ctx")])
-    }));
+    // Runtime exec keeps each caller edge and each callee's distinct source provenance. It no
+    // longer concatenates both imported bodies into a caller block as implicit inline did.
+    let runtime_calls = debug_info
+        .nodes()
+        .iter()
+        .filter(|node| {
+            matches!(package.mast_forest()[node.exec_node], miden_core::mast::MastNode::Exec(_))
+                && node.asm_ops.iter().any(|row| {
+                    debug_info.get_string(row.op_name_idx).is_some_and(|op| op.starts_with("exec."))
+                })
+        })
+        .count();
+    assert_eq!(runtime_calls, 2, "both static calls must remain real runtime invocation nodes");
+    for source in [depa_source, depb_source] {
+        assert_eq!(debug_info.source_node(source).unwrap().asm_ops.len(), 1);
+    }
 
     let contexts_for_deduped_exec = [depa_source, depb_source]
         .into_iter()
@@ -685,7 +826,7 @@ path = "lib.masm"
 namespace = "deps::pathdep"
 
 [dependencies]
-runtime = "=1.0.0"
+runtime = { version = "=1.0.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -736,10 +877,10 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-pathdep = {{ path = "../pathdep", linkage = "static" }}
-gitdep = {{ git = "{}", branch = "main" }}
-regdep = "=1.0.0"
-predep = {{ path = "../predep.masp" }}
+pathdep = {{ path = "../pathdep", linkage = "static", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
+gitdep = {{ git = "{}", branch = "main", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
+regdep = {{ version = "=1.0.0", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
+predep = {{ path = "../predep.masp", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
 "#,
             gitdep_repo.display()
         ),
@@ -829,7 +970,7 @@ path = "lib.masm"
 namespace = "deps::pathdep"
 
 [dependencies]
-predep = { path = "../predep.masp" }
+predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -854,7 +995,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-pathdep = { path = "../pathdep" }
+pathdep = { path = "../pathdep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -917,7 +1058,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-predep = { path = "../predep.masp" }
+predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -981,7 +1122,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-predep = { path = "../predep.masp" }
+predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1034,7 +1175,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-predep = { path = "../predep.masp" }
+predep = { path = "../predep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1087,7 +1228,7 @@ path = "lib.masm"
 namespace = "deps::pathdep"
 
 [dependencies]
-shared = "^1.0.0"
+shared = { version = "^1.0.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1114,7 +1255,7 @@ path = "lib.masm"
 namespace = "deps::gitdep"
 
 [dependencies]
-shared = "=1.2.0"
+shared = { version = "=1.2.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1148,8 +1289,8 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-pathdep = {{ path = "../pathdep" }}
-gitdep = {{ git = "{}", branch = "main" }}
+pathdep = {{ path = "../pathdep", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
+gitdep = {{ git = "{}", branch = "main", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
 "#,
             gitdep_repo.display()
         ),
@@ -1223,7 +1364,7 @@ path = "lib.masm"
 namespace = "deps::pathdep"
 
 [dependencies]
-shared = "{shared_digest}"
+shared = {{ version = "{shared_digest}", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
 "#
         ),
     );
@@ -1252,7 +1393,7 @@ path = "lib.masm"
 namespace = "deps::gitdep"
 
 [dependencies]
-shared = "1.0.0#{shared_digest}"
+shared = {{ version = "1.0.0#{shared_digest}", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
 "#
         ),
     );
@@ -1287,8 +1428,8 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-pathdep = {{ path = "../pathdep" }}
-gitdep = {{ git = "{}", branch = "main" }}
+pathdep = {{ path = "../pathdep", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
+gitdep = {{ git = "{}", branch = "main", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
 "#,
             gitdep_repo.display()
         ),
@@ -1372,8 +1513,8 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-depa = { path = "../depa.masp" }
-depb = { path = "../depb.masp" }
+depa = { path = "../depa.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
+depb = { path = "../depb.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1419,7 +1560,7 @@ path = "lib.masm"
 namespace = "deps::mid"
 
 [dependencies]
-runtime = "=1.0.0"
+runtime = { version = "=1.0.0", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1444,7 +1585,7 @@ path = "lib.masm"
 namespace = "deps::top"
 
 [dependencies]
-mid = { path = "../mid", linkage = "static" }
+mid = { path = "../mid", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1469,7 +1610,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-top = { path = "../top", linkage = "static" }
+top = { path = "../top", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1526,7 +1667,7 @@ fn workspace_dependency_stays_on_the_workspace_member_version() {
 members = ["dep", "app"]
 
 [workspace.dependencies]
-dep = { path = "dep" }
+dep = { path = "dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     let dep_dir = root_dir.join("dep");
@@ -1620,7 +1761,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep" }
+dep = { path = "../dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1708,7 +1849,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep" }
+dep = { path = "../dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1730,6 +1871,7 @@ end
     let post_processed = dep_assembler
         .assemble(ProjectTargetSelector::Library, "dev")
         .expect("root build of dep should succeed");
+    drop(dep_assembler);
     assert!(
         post_processed
             .sections
@@ -1783,7 +1925,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep" }
+dep = { path = "../dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1847,7 +1989,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep" }
+dep = { path = "../dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1913,7 +2055,7 @@ path = "lib.masm"
 namespace = "deps::dep"
 
 [dependencies]
-leaf = { path = "../leaf", linkage = "static" }
+leaf = { path = "../leaf", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1938,7 +2080,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep" }
+dep = { path = "../dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -1965,7 +2107,7 @@ end
     let error = context
         .assemble_library_package(&root_manifest, None)
         .expect_err("changed transitive dependency sources should require a semver bump");
-    assert!(error.to_string().contains("package 'dep' version '1.0.0'"));
+    assert!(error.to_string().contains("package 'leaf' version '1.0.0'"));
     assert!(error.to_string().contains("different source provenance"));
 }
 
@@ -2003,7 +2145,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep" }
+dep = { path = "../dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -2062,7 +2204,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep" }
+dep = { path = "../dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -2109,7 +2251,7 @@ fn workspace_manifest_changes_without_effect_allow_reuse_of_member_packages() {
 members = ["dep", "app"]
 
 [workspace.dependencies]
-dep = { path = "dep" }
+dep = { path = "dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -2175,7 +2317,7 @@ end
 members = ["dep", "app"]
 
 [workspace.dependencies]
-dep = { path = "dep" }
+dep = { path = "dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 
 # comment changes provenance hashing for workspace member builds
 "#,
@@ -2238,7 +2380,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep" }
+dep = { path = "../dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -2333,7 +2475,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-gitdep = {{ git = "{}", branch = "main" }}
+gitdep = {{ git = "{}", branch = "main", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
 "#,
             gitdep_repo.display()
         ),
@@ -2398,7 +2540,7 @@ members = ["dep", "app"]
 version = "1.0.0"
 
 [workspace.dependencies]
-dep = { path = "dep" }
+dep = { path = "dep", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -2457,8 +2599,41 @@ end
     assert_eq!(dependencies[0].version.to_string(), "1.0.0");
 }
 
+fn assert_embedded_kernel_preserved(package: &MastPackage, expected: &MastPackage) {
+    let embedded = package
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
+        .expect("executable distribution must retain the selected kernel package");
+    assert_eq!(embedded.name, expected.name);
+    assert_eq!(embedded.version, expected.version);
+    assert_eq!(embedded.dependency_commitment(), expected.dependency_commitment());
+    let naming =
+        fixture_package_naming(&embedded).expect("embedded kernel naming must be admitted");
+    let expected_naming =
+        fixture_package_naming(expected).expect("selected kernel naming must be admitted");
+    assert_eq!(naming, expected_naming);
+    embedded
+        .check_kernel_code(&naming)
+        .expect("embedded kernel must retain public executable code");
+    let mut has_root_key = false;
+    for (key, binding) in naming
+        .callables()
+        .bindings()
+        .filter(|(_, binding)| binding.parent_namespace() == Namespace::initial())
+    {
+        has_root_key = true;
+        assert_eq!(*key, binding.key());
+        let implementation = naming
+            .callables()
+            .selected_implementation(*key)
+            .expect("root kernel key must select retained code");
+        assert!(embedded.mast_forest().find_procedure_root(implementation.into_word()).is_some());
+    }
+    assert!(has_root_key, "selected kernel must retain callable keys at N0");
+}
+
 #[test]
-fn executable_packages_preserve_kernel_when_converted_back_to_program() {
+fn executable_packages_preserve_kernel_distribution_with_code_only_program_conversion() {
     let tempdir = TempDir::new().unwrap();
     let manifest_path = write_kernel_program_project(tempdir.path());
 
@@ -2466,12 +2641,26 @@ fn executable_packages_preserve_kernel_when_converted_back_to_program() {
     let kernel_package = context
         .assemble_library_package(&manifest_path, None)
         .expect("kernel package build should succeed");
-    let expected_kernel = kernel_package
-        .to_kernel_descriptor()
-        .expect("kernel package should round-trip as a kernel library");
-    let package = context
-        .assemble_executable_package(&manifest_path, Some("main"), None)
+    let saw_kernel = std::rc::Rc::new(std::cell::Cell::new(false));
+    let mut assembler = context.project_assembler_for_path(&manifest_path).unwrap();
+    assembler.with_namespace_inputs_provider({
+        let saw_kernel = saw_kernel.clone();
+        move |context, sources, base| {
+            if context.target.is_executable() {
+                assert!(
+                    base.has_kernel(),
+                    "required kernel must be linked before target naming selection"
+                );
+                assert!(base.linker().kernel_naming().is_some());
+                saw_kernel.set(true);
+            }
+            crate::testing::project_fixture_namespace_inputs(context, sources, base)
+        }
+    });
+    let package = assembler
+        .assemble(ProjectTargetSelector::Executable("main"), "dev")
         .expect("executable package build should succeed");
+    assert!(saw_kernel.get());
     let kernel_dependency = package
         .manifest
         .dependencies()
@@ -2479,10 +2668,8 @@ fn executable_packages_preserve_kernel_when_converted_back_to_program() {
         .cloned()
         .expect("executable package should record the linked kernel runtime dependency");
     let embedded_kernel_package = package
-        .sections
-        .iter()
-        .find(|section| section.id == SectionId::KERNEL)
-        .map(|section| MastPackage::read_from_bytes_trusted(section.data.as_ref()).unwrap())
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
         .expect("executable package should embed the linked kernel package");
     assert_eq!(embedded_kernel_package.kind, TargetType::Kernel);
     assert_eq!(embedded_kernel_package.name, kernel_dependency.name);
@@ -2491,15 +2678,13 @@ fn executable_packages_preserve_kernel_when_converted_back_to_program() {
 
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
-    let round_tripped_program = round_tripped_package
-        .try_into_program()
-        .expect("executable package conversion should preserve kernel information");
-
-    assert_eq!(round_tripped_program.kernel(), &expected_kernel);
+    let round_tripped_program = fixture_program(&round_tripped_package);
+    assert!(round_tripped_program.kernel().is_empty());
+    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
 }
 
 #[test]
-fn executable_packages_preserve_transitive_kernel_when_converted_back_to_program() {
+fn executable_packages_preserve_transitive_kernel_distribution_with_code_only_conversion() {
     let tempdir = TempDir::new().unwrap();
     let (root_manifest, kernel_manifest) = write_transitive_kernel_program_project(tempdir.path());
 
@@ -2508,9 +2693,6 @@ fn executable_packages_preserve_transitive_kernel_when_converted_back_to_program
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
     assert!(kernel_package.is_kernel());
-    let expected_kernel = kernel_package
-        .to_kernel_descriptor()
-        .expect("kernel package should round-trip as a kernel library");
     let package = context
         .assemble_executable_package(&root_manifest, Some("main"), None)
         .expect("executable package build should succeed");
@@ -2521,10 +2703,8 @@ fn executable_packages_preserve_transitive_kernel_when_converted_back_to_program
         .cloned()
         .expect("executable package should record the transitive kernel runtime dependency");
     let embedded_kernel_package = package
-        .sections
-        .iter()
-        .find(|section| section.id == SectionId::KERNEL)
-        .map(|section| MastPackage::read_from_bytes_trusted(section.data.as_ref()).unwrap())
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
         .expect("executable package should embed the transitive kernel package");
     assert_eq!(embedded_kernel_package.kind, TargetType::Kernel);
     assert_eq!(embedded_kernel_package.name, kernel_dependency.name);
@@ -2533,11 +2713,9 @@ fn executable_packages_preserve_transitive_kernel_when_converted_back_to_program
 
     let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
         .expect("serialized executable package should round-trip");
-    let round_tripped_program = round_tripped_package
-        .try_into_program()
-        .expect("executable package conversion should preserve transitive kernel information");
-
-    assert_eq!(round_tripped_program.kernel(), &expected_kernel);
+    let round_tripped_program = fixture_program(&round_tripped_package);
+    assert!(round_tripped_program.kernel().is_empty());
+    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
 }
 
 #[test]
@@ -2571,9 +2749,6 @@ fn preassembled_libraries_prefer_store_kernel_over_embedded_copy() {
     let kernel_package = build_context
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
-    let expected_kernel = kernel_package
-        .to_kernel_descriptor()
-        .expect("kernel package should round-trip as a kernel library");
     let mut mid_package = MastPackage::read_from_bytes(
         &build_context
             .assemble_library_package(&mid_manifest, None)
@@ -2594,23 +2769,27 @@ fn preassembled_libraries_prefer_store_kernel_over_embedded_copy() {
     let mut context = TestContext::new();
     context.registry_mut().add_package(kernel_package.clone());
 
-    let package = context
-        .assemble_executable_package(&root_manifest, Some("main"), None)
+    let mut project_assembler = context.project_assembler_for_path(&root_manifest).unwrap();
+    allow_root_fixture_bindings(
+        &mut project_assembler,
+        vec![mid_package.commitment(), kernel_package.commitment()],
+    );
+    let package = project_assembler
+        .assemble(ProjectTargetSelector::Executable("main"), "dev")
         .expect("executable package build should prefer the store kernel");
+    drop(project_assembler);
     let embedded_kernel_package = package
-        .sections
-        .iter()
-        .find(|section| section.id == SectionId::KERNEL)
-        .map(|section| MastPackage::read_from_bytes_trusted(section.data.as_ref()).unwrap())
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
         .expect("executable package should embed the store-provided kernel package");
     assert_eq!(embedded_kernel_package.version, kernel_package.version);
     assert_eq!(embedded_kernel_package.commitment(), kernel_package.commitment());
 
-    let round_tripped_program = MastPackage::read_from_bytes(&package.to_bytes())
-        .expect("serialized executable package should round-trip")
-        .try_into_program()
-        .expect("program reconstruction should use the store-provided kernel");
-    assert_eq!(round_tripped_program.kernel(), &expected_kernel);
+    let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
+        .expect("serialized executable package should round-trip");
+    let round_tripped_program = fixture_program(&round_tripped_package);
+    assert!(round_tripped_program.kernel().is_empty());
+    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
 }
 
 #[test]
@@ -2657,9 +2836,6 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
     let kernel_package = build_context
         .assemble_library_package(&kernel_manifest, None)
         .expect("kernel package build should succeed");
-    let expected_kernel = kernel_package
-        .to_kernel_descriptor()
-        .expect("kernel package should round-trip as a kernel library");
     let kernel_version = miden_package_registry::Version::new(
         kernel_package.version.clone(),
         kernel_package.dependency_commitment(),
@@ -2686,14 +2862,18 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
     assert!(removed.is_some(), "expected indexed kernel artifact to exist");
     context.registry().clear_loaded_packages();
 
-    let package = context
-        .assemble_executable_package(&root_manifest, Some("main"), None)
+    let mut project_assembler = context.project_assembler_for_path(&root_manifest).unwrap();
+    allow_root_fixture_bindings(
+        &mut project_assembler,
+        vec![mid_package.commitment(), kernel_package.commitment()],
+    );
+    let package = project_assembler
+        .assemble(ProjectTargetSelector::Executable("main"), "dev")
         .expect("embedded kernel should be used when the indexed artifact is unreadable");
+    drop(project_assembler);
     let embedded_kernel_package = package
-        .sections
-        .iter()
-        .find(|section| section.id == SectionId::KERNEL)
-        .map(|section| MastPackage::read_from_bytes_trusted(section.data.as_ref()).unwrap())
+        .try_embedded_kernel_package()
+        .expect("embedded kernel must match its runtime dependency")
         .expect("executable package should embed the fallback kernel package");
     assert_eq!(embedded_kernel_package.version, kernel_package.version);
     assert_eq!(embedded_kernel_package.commitment(), kernel_package.commitment());
@@ -2709,11 +2889,11 @@ fn preassembled_libraries_fall_back_to_embedded_kernel_when_store_artifact_is_un
             .any(|entry| entry == &format!("kernelpkg@{kernel_version}"))
     );
 
-    let round_tripped_program = MastPackage::read_from_bytes(&package.to_bytes())
-        .expect("serialized executable package should round-trip")
-        .try_into_program()
-        .expect("program reconstruction should use the embedded fallback kernel");
-    assert_eq!(round_tripped_program.kernel(), &expected_kernel);
+    let round_tripped_package = MastPackage::read_from_bytes(&package.to_bytes())
+        .expect("serialized executable package should round-trip");
+    let round_tripped_program = fixture_program(&round_tripped_package);
+    assert!(round_tripped_program.kernel().is_empty());
+    assert_embedded_kernel_preserved(&round_tripped_package, &kernel_package);
 }
 
 #[test]
@@ -2770,10 +2950,14 @@ end
     let root_manifest =
         write_preassembled_kernel_executable_project(tempdir.path(), &mid_package_path);
     let mut context = TestContext::new();
-    context.registry_mut().add_package(kernel_package);
+    context.registry_mut().add_package(kernel_package.clone());
     let mut project_assembler = context
         .project_assembler_for_path(&root_manifest)
         .expect("dependency graph should build");
+    allow_root_fixture_bindings(
+        &mut project_assembler,
+        vec![mid_package.commitment(), kernel_package.commitment()],
+    );
     project_assembler.store.replace_semver_package(conflicting_kernel);
 
     project_assembler
@@ -2789,7 +2973,7 @@ end
 }
 
 #[test]
-fn preassembled_libraries_without_store_or_embedded_kernel_cannot_reconstruct_program() {
+fn preassembled_libraries_without_store_or_embedded_kernel_cannot_resolve_dependencies() {
     let tempdir = TempDir::new().unwrap();
     write_transitive_kernel_program_project(tempdir.path());
     let mid_manifest = tempdir.path().join("mid").join("miden-project.toml");
@@ -2840,16 +3024,17 @@ fn embedded_kernel_package_must_match_runtime_dependency() {
     embedded_kernel_package.version = "2.0.0".parse().unwrap();
     embedded_kernel_section.data = embedded_kernel_package.to_bytes().into();
 
+    assert!(fixture_program(&round_tripped_package).kernel().is_empty());
     let error = round_tripped_package
-        .try_into_program()
-        .expect_err("mismatched embedded kernel metadata should be rejected");
+        .try_embedded_kernel_package()
+        .expect_err("mismatched embedded kernel metadata should be rejected independently");
     let kernel_name = kernel_dependency.name.to_string();
     assert!(error.to_string().contains("does not match the embedded kernel package"));
     assert!(error.to_string().contains(&kernel_name));
 }
 
 #[test]
-fn executable_packages_without_embedded_kernel_section_are_rejected() {
+fn executable_code_conversion_does_not_require_embedded_kernel_code() {
     let tempdir = TempDir::new().unwrap();
     let manifest_path = write_kernel_program_project(tempdir.path());
 
@@ -2861,10 +3046,14 @@ fn executable_packages_without_embedded_kernel_section_are_rejected() {
         .expect("serialized executable package should round-trip");
     round_tripped_package.sections.retain(|section| section.id != SectionId::KERNEL);
 
-    let error = round_tripped_package
-        .try_into_program()
-        .expect_err("packages without embedded kernels should be rejected");
-    assert!(error.to_string().contains("does not embed the kernel package required"));
+    assert!(fixture_program(&round_tripped_package).kernel().is_empty());
+    assert!(round_tripped_package.kernel_runtime_dependency().unwrap().is_some());
+    assert!(
+        round_tripped_package
+            .try_embedded_kernel_package()
+            .expect("an absent embedded kernel section is a valid distribution choice")
+            .is_none()
+    );
 }
 
 #[test]
@@ -2887,7 +3076,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp" }
+dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -2960,7 +3149,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp", linkage = "static" }
+dep = { path = "../dep.masp", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -3000,18 +3189,26 @@ fn preassembled_dependency_must_match_graph_selected_runtime_dependencies() {
         [],
     ));
     let dep_package_path = tempdir.path().join("dep.masp");
+    let exports = runtime_v1.manifest.exports().cloned().collect::<Vec<_>>();
+    let naming = fixture_naming(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        TargetType::Library,
+        runtime_v1.mast_forest(),
+        &exports,
+    );
     let dep_v1 = MastPackage::create(
         "dep".into(),
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime_v1.mast_forest().clone(),
-        runtime_v1.manifest.exports().cloned(),
+        exports.clone(),
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime_v1.version.clone(),
             kind: TargetType::Library,
             digest: runtime_v1.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v1.write_to_file(&dep_package_path).unwrap();
@@ -3028,7 +3225,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp" }
+dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -3047,13 +3244,14 @@ end
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime_v1.mast_forest().clone(),
-        runtime_v1.manifest.exports().cloned(),
+        exports,
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime_v2.version.clone(),
             kind: TargetType::Library,
             digest: runtime_v2.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v2.write_to_file(&dep_package_path).unwrap();
@@ -3074,18 +3272,26 @@ fn preassembled_dependency_must_match_graph_selected_dependency_kinds() {
         [],
     ));
     let dep_package_path = tempdir.path().join("dep.masp");
+    let exports = runtime.manifest.exports().cloned().collect::<Vec<_>>();
+    let naming = fixture_naming(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        TargetType::Library,
+        runtime.mast_forest(),
+        &exports,
+    );
     let dep_v1 = MastPackage::create(
         "dep".into(),
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime.mast_forest().clone(),
-        runtime.manifest.exports().cloned(),
+        exports.clone(),
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime.version.clone(),
             kind: TargetType::Library,
             digest: runtime.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v1.write_to_file(&dep_package_path).unwrap();
@@ -3102,7 +3308,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp" }
+dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -3121,13 +3327,14 @@ end
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime.mast_forest().clone(),
-        runtime.manifest.exports().cloned(),
+        exports,
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime.version.clone(),
             kind: TargetType::Kernel,
             digest: runtime.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v2.write_to_file(&dep_package_path).unwrap();
@@ -3148,18 +3355,22 @@ fn preassembled_package_must_match_graph_selected_target_kind() {
         [],
     ));
     let dep_package_path = tempdir.path().join("dep.masp");
+    let exports = runtime.manifest.exports().cloned().collect::<Vec<_>>();
+    let home = FixtureNamespace::assembly_tests().namespace_plan().clone();
+    let naming = fixture_naming(home.clone(), TargetType::Library, runtime.mast_forest(), &exports);
     let dep_v1 = MastPackage::create(
         "dep".into(),
         "1.0.0".parse().unwrap(),
         TargetType::Library,
         runtime.mast_forest().clone(),
-        runtime.manifest.exports().cloned(),
+        exports.clone(),
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime.version.clone(),
             kind: TargetType::Library,
             digest: runtime.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v1.write_to_file(&dep_package_path).unwrap();
@@ -3176,7 +3387,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-dep = { path = "../dep.masp" }
+dep = { path = "../dep.masp", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -3190,18 +3401,20 @@ end
     let mut context = TestContext::new();
     context.registry_mut().add_package(runtime.clone());
     let mut project_assembler = context.project_assembler_for_path(&root_manifest).unwrap();
+    let naming = fixture_naming(home, TargetType::Kernel, runtime.mast_forest(), &exports);
     let dep_v2 = MastPackage::create(
         "dep".into(),
         "1.0.0".parse().unwrap(),
         TargetType::Kernel,
         runtime.mast_forest().clone(),
-        runtime.manifest.exports().cloned(),
+        exports,
         [miden_mast_package::Dependency {
             name: PackageId::from("runtime"),
             version: runtime.version.clone(),
             kind: TargetType::Library,
             digest: runtime.dependency_commitment(),
         }],
+        &naming,
     )
     .unwrap();
     dep_v2.write_to_file(&dep_package_path).unwrap();
@@ -3281,7 +3494,7 @@ path = "lib.masm"
 namespace = "deps::mid"
 
 [dependencies]
-kernelpkg = { path = "../kernel" }
+kernelpkg = { path = "../kernel", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -3305,7 +3518,7 @@ name = "main"
 path = "main.masm"
 
 [dependencies]
-mid = { path = "../mid", linkage = "static" }
+mid = { path = "../mid", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -3336,7 +3549,7 @@ name = "main"
 path = "main.masm"
 
 [dependencies]
-mid = {{ path = "{}", linkage = "static" }}
+mid = {{ path = "{}", linkage = "static", binding = {{ selection = "custom", home = [{{ text = "miden-assembly-test-fixtures" }}, {{ revision = 1 }}] }} }}
 "#,
             dependency_package_path.display()
         ),
@@ -3401,6 +3614,9 @@ fn locate_first_node_hash(bytes: &[u8]) -> (usize, usize) {
 
     let internal_node_count = read_usize_vint64(bytes, &mut offset);
     let external_node_count = read_usize_vint64(bytes, &mut offset);
+    // MAST0.0.6 stores the keyed invocation target table separately from node entries.
+    let target_count = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap()) as usize;
+    offset += 4;
     let node_count = internal_node_count
         .checked_add(external_node_count)
         .expect("node count overflow");
@@ -3415,6 +3631,7 @@ fn locate_first_node_hash(bytes: &[u8]) -> (usize, usize) {
 
     offset += node_count * 8;
     offset += external_node_count * 32;
+    offset += target_count * 32;
 
     (offset, internal_node_count)
 }
@@ -3501,6 +3718,7 @@ fn package_post_processors_default_to_empty() {
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
+    configure_project_fixture(&mut project_assembler);
     assert!(project_assembler.post_processors.is_empty());
 
     let package = project_assembler
@@ -3523,6 +3741,7 @@ fn package_post_processors_run_in_registration_order() {
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
+    configure_project_fixture(&mut project_assembler);
     project_assembler
         .with_package_post_processor(MarkerPostProcessor {
             tag: "pp-a",
@@ -3563,6 +3782,7 @@ fn manually_provided_sources_skip_package_post_processors() {
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
+    configure_project_fixture(&mut project_assembler);
     project_assembler.with_package_post_processor(MarkerPostProcessor {
         tag: "pp-manual",
         invocations: invocations.clone(),
@@ -3594,6 +3814,7 @@ fn manually_provided_sources_skip_package_post_processors() {
             Some(ProjectSourceInputs { root, support }),
             None,
             &mut cache,
+            None,
         )
         .expect("assembly from manual sources should succeed")
     {
@@ -3648,7 +3869,7 @@ version = "1.0.0"
 path = "lib.masm"
 
 [dependencies]
-pathdep = { path = "../pathdep", linkage = "static" }
+pathdep = { path = "../pathdep", linkage = "static", binding = { selection = "custom", home = [{ text = "miden-assembly-test-fixtures" }, { revision = 1 }] } }
 "#,
     );
     write_file(
@@ -3665,6 +3886,7 @@ end
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(&root_manifest, &mut registry).unwrap();
+    configure_project_fixture(&mut project_assembler);
     project_assembler.with_package_post_processor(MarkerPostProcessor {
         tag: "pp-root-only",
         invocations: invocations.clone(),
@@ -3682,5 +3904,376 @@ end
             .sections
             .iter()
             .any(|section| section.id == SectionId::custom("pp-root-only").unwrap())
+    );
+}
+
+// These composition fixtures explicitly authorize N0 naming on the selected mid/kernel artifacts.
+// An unlisted artifact still receives only the ordinary test home; raw names never select policy.
+fn allow_root_fixture_bindings(
+    assembler: &mut ProjectAssembler<'_, TestRegistry>,
+    artifacts: Vec<miden_core::Word>,
+) {
+    assembler.with_package_naming_provider(move |package| {
+        let mut homes = vec![FixtureNamespace::assembly_tests().namespace_plan().clone()];
+        if artifacts.contains(&package.commitment()) {
+            homes.push(miden_mast_package::NamespacePlan::new(vec![]));
+        }
+        crate::testing::admit_fixture_package(package, &homes)
+    });
+}
+
+fn cache_test_project(directory: &FsPath, source_path: &str) -> PathBuf {
+    let manifest = directory.join("miden-project.toml");
+    write_file(
+        &manifest,
+        &format!(
+            "[package]\nname = \"cachetest\"\nversion = \"1.0.0\"\n\n[lib]\npath = \"{source_path}\"\n"
+        ),
+    );
+    manifest
+}
+
+fn cache_test_inputs(
+    context: &TargetAssemblyContext<'_>,
+    sources: &ProjectSourceInputs,
+    home: miden_mast_package::NamespacePlan,
+) -> Result<NamespaceInputs, Report> {
+    let mut fixture = FixtureNamespace::new(home);
+    let modules = core::iter::once(sources.root.as_ref())
+        .chain(sources.support.iter().map(Box::as_ref))
+        .collect::<Vec<_>>();
+    for module in &modules {
+        fixture.add_module(module)?;
+    }
+    let assembler = fixture.configure(Assembler::new(context.source_manager.clone()), modules)?;
+    Ok(assembler.namespace_inputs().clone())
+}
+
+#[test]
+fn source_cache_selects_current_naming_before_reuse_and_rejects_changed_home() {
+    use std::{cell::Cell, rc::Rc};
+
+    let temp = TempDir::new().unwrap();
+    let manifest = cache_test_project(temp.path(), "lib.masm");
+    write_file(&temp.path().join("lib.masm"), "pub proc run push.1 end");
+    let calls = Rc::new(Cell::new(0));
+    let changed_home = Rc::new(Cell::new(false));
+    let mut context = TestContext::new();
+    let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+    assembler.with_namespace_inputs_provider({
+        let calls = calls.clone();
+        let changed_home = changed_home.clone();
+        move |context, sources, _base| {
+            calls.set(calls.get() + 1);
+            let home = if changed_home.get() {
+                miden_mast_package::NamespacePlan::new(vec![
+                    miden_core::program::CanonicalLabel::text("changed-caller").unwrap(),
+                ])
+            } else {
+                FixtureNamespace::assembly_tests().namespace_plan().clone()
+            };
+            cache_test_inputs(context, sources, home)
+        }
+    });
+    let project = assembler.project.clone();
+    let target = project.library_target().unwrap().inner().clone();
+    let id = assembler.dependency_graph.root().clone();
+    let mut cache = BTreeMap::new();
+    let mut assemble = |assembler: &mut ProjectAssembler<'_, TestRegistry>| {
+        assembler.assemble_source_package(
+            id.clone(),
+            project.clone(),
+            &target,
+            "dev",
+            InterruptedTargetRole::Dependency,
+            None,
+            None,
+            None,
+            &mut cache,
+            None,
+        )
+    };
+    let first = match assemble(&mut assembler).unwrap() {
+        ControlFlow::Continue(package) => package,
+        _ => panic!("source build unexpectedly interrupted"),
+    };
+    let second = match assemble(&mut assembler).unwrap() {
+        ControlFlow::Continue(package) => package,
+        _ => panic!("source build unexpectedly interrupted"),
+    };
+    assert!(
+        Arc::ptr_eq(&first.package, &second.package),
+        "exact matching source inputs should reuse the memory artifact"
+    );
+    assert_eq!(calls.get(), 2, "naming selection must run even on a memory hit");
+    changed_home.set(true);
+    let error = assemble(&mut assembler)
+        .err()
+        .expect("a different home must not reuse the previous artifact");
+    assert!(error.to_string().contains("different source provenance"));
+    assert!(error.to_string().contains("bump the semantic version"));
+    assert_eq!(calls.get(), 3);
+    assembler.namespace_inputs_provider = None;
+    let error = assemble(&mut assembler)
+        .err()
+        .expect("cached code cannot supply a missing naming policy");
+    assert!(error.to_string().contains("explicit namespace inputs provider"));
+}
+
+#[test]
+fn memory_cache_rejects_root_post_processing_when_used_as_dependency() {
+    let temp = TempDir::new().unwrap();
+    let manifest = cache_test_project(temp.path(), "lib.masm");
+    write_file(&temp.path().join("lib.masm"), "pub proc run push.1 end");
+    let mut context = TestContext::new();
+    let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+    let invocations = Arc::new(std::sync::Mutex::new(Vec::new()));
+    assembler.with_package_post_processor(MarkerPostProcessor {
+        tag: "memory-root-only",
+        invocations: invocations.clone(),
+    });
+    let project = assembler.project.clone();
+    let target = project.library_target().unwrap().inner().clone();
+    let id = assembler.dependency_graph.root().clone();
+    let mut cache = BTreeMap::new();
+    let outcome = assembler
+        .assemble_source_package(
+            id.clone(),
+            project.clone(),
+            &target,
+            "dev",
+            InterruptedTargetRole::Root,
+            None,
+            None,
+            None,
+            &mut cache,
+            None,
+        )
+        .unwrap();
+    assert!(matches!(outcome, ControlFlow::Continue(_)));
+    assert_eq!(invocations.lock().unwrap().len(), 1);
+    let error = assembler
+        .assemble_source_package(
+            id,
+            project,
+            &target,
+            "dev",
+            InterruptedTargetRole::Dependency,
+            None,
+            None,
+            None,
+            &mut cache,
+            None,
+        )
+        .err()
+        .expect(
+            "memory artifacts must meet the same dependency-section gate as registered artifacts",
+        );
+    assert!(error.to_string().contains("memory-root-only"));
+    assert!(error.to_string().contains("a dependency build does not produce"));
+    assert_eq!(invocations.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn manual_ast_without_source_file_or_provider_never_reuses_another_body() {
+    let temp = TempDir::new().unwrap();
+    let manifest = cache_test_project(temp.path(), "nonexistent.custom");
+    let mut context = TestContext::new();
+    let first_root = context.parse_module("namespace cachetest\npub proc run push.1 end").unwrap();
+    let second_root = context.parse_module("namespace cachetest\npub proc run push.2 end").unwrap();
+    let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+    let project = assembler.project.clone();
+    let target = project.library_target().unwrap().inner().clone();
+    let id = assembler.dependency_graph.root().clone();
+    let mut cache = BTreeMap::new();
+    let mut assemble = |root| match assembler
+        .assemble_source_package(
+            id.clone(),
+            project.clone(),
+            &target,
+            "dev",
+            InterruptedTargetRole::Root,
+            None,
+            Some(ProjectSourceInputs { root, support: vec![] }),
+            None,
+            &mut cache,
+            None,
+        )
+        .unwrap()
+    {
+        ControlFlow::Continue(package) => package,
+        _ => panic!("manual AST unexpectedly interrupted"),
+    };
+    let first = assemble(first_root);
+    let second = assemble(second_root);
+    assert_ne!(first.package.code_commitment(), second.package.code_commitment());
+    assert_eq!(
+        first.naming.callables().bindings().collect::<Vec<_>>(),
+        second.naming.callables().bindings().collect::<Vec<_>>(),
+        "body changes retain the caller's canonical names"
+    );
+    assert!(PackageBuildProvenance::from_package(&first.package).unwrap().is_none());
+    assert!(PackageBuildProvenance::from_package(&second.package).unwrap().is_none());
+}
+
+#[test]
+fn manual_dependency_ast_cannot_reuse_matching_file_provenance_for_another_body() {
+    let temp = TempDir::new().unwrap();
+    let manifest = cache_test_project(temp.path(), "nonexistent.custom");
+    let mut context = TestContext::new();
+    let first_root = context.parse_module("namespace cachetest\npub proc run push.1 end").unwrap();
+    let second_root = context.parse_module("namespace cachetest\npub proc run push.2 end").unwrap();
+    let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+    let project = assembler.project.clone();
+    let target = project.library_target().unwrap().inner().clone();
+    let id = assembler.dependency_graph.root().clone();
+    let mut cache = BTreeMap::new();
+    let mut assemble = |root| {
+        assembler.assemble_source_package(
+            id.clone(),
+            project.clone(),
+            &target,
+            "dev",
+            InterruptedTargetRole::Dependency,
+            None,
+            Some(ProjectSourceInputs { root, support: vec![] }),
+            Some(ProjectSourceProvenanceInputs {
+                root: SourceFileProvenance {
+                    path: temp.path().join("nonexistent.custom").into_boxed_path(),
+                    content: "pub proc run push.1 end".into(),
+                },
+                support: vec![],
+            }),
+            &mut cache,
+            None,
+        )
+    };
+    let first = assemble(first_root).unwrap();
+    assert!(matches!(first, ControlFlow::Continue(_)));
+    // Identical supplied source provenance cannot identify an AST mutated after parsing.
+    let error = assemble(second_root).err().expect("a changed manual body must compile and encounter the immutable semantic-version collision, never return the memoized first body");
+    assert!(error.to_string().contains("already registered"));
+}
+
+#[test]
+fn standard_dependency_bindings_match_compiled_homes_and_reject_changed_requests() {
+    use miden_project::{LibraryImport, LibrarySelection};
+    let id = "0x0100000000000000020000000000000003000000000000000400000000000000";
+    for (mode, revision, selection) in [
+        ("latest", "", LibrarySelection::Latest),
+        (
+            "pinned",
+            ", revision = 2",
+            LibrarySelection::Pinned(core::num::NonZeroU32::new(2).unwrap()),
+        ),
+    ] {
+        let temp = TempDir::new().unwrap();
+        let dep = temp.path().join("dep");
+        let app = temp.path().join("app");
+        write_file(
+            &dep.join("miden-project.toml"),
+            "[package]\nname = 'dep'\nversion = '1.0.0'\n[lib]\nnamespace = 'dep'\npath = 'mod.masm'\n",
+        );
+        write_file(&dep.join("mod.masm"), "pub proc run push.7 drop end");
+        let manifest = app.join("miden-project.toml");
+        let config = |base| {
+            format!(
+                "[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\nnamespace = 'client'\npath = 'mod.masm'\n[dependencies]\ndep = {{path = '../dep', linkage = 'static', binding = {{selection = '{mode}', library-id = '{id}', base = [{{text = '{base}'}}]{revision} }} }}\n"
+            )
+        };
+        write_file(&manifest, &config("owner"));
+        write_file(&app.join("mod.masm"), "use dep pub proc entry exec.dep::run end");
+        let import = LibraryImport::new(
+            miden_mast_package::NamespacePlan::new(vec![
+                miden_core::program::CanonicalLabel::text("owner").unwrap(),
+            ]),
+            miden_core::Word::try_from(id).unwrap(),
+            selection,
+        );
+        let expected = import
+            .callable_binding(
+                miden_mast_package::CallableProcedurePath::from_semantic_components(vec![
+                    "dep".into(),
+                    "run".into(),
+                ])
+                .unwrap(),
+            )
+            .unwrap();
+        let mut context = TestContext::new();
+        {
+            let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+            assembler.with_package_naming_provider(|package| {
+                crate::testing::admit_fixture_package(
+                    package,
+                    &[
+                        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+                        import.namespace_plan(),
+                    ],
+                )
+            });
+            assembler.with_namespace_inputs_provider(|context, sources, _| {
+                let home = if let Some(binding) = context.dependency_binding {
+                    assert_eq!(
+                        binding,
+                        &miden_project::DependencyBinding::Standard(import.clone())
+                    );
+                    binding.namespace_plan()
+                } else {
+                    FixtureNamespace::assembly_tests().namespace_plan().clone()
+                };
+                cache_test_inputs(context, sources, home)
+            });
+            let package = assembler.assemble(ProjectTargetSelector::Library, "dev").unwrap();
+            assert!(package.mast_forest().nodes().iter().any(|node|
+                matches!(node, miden_core::mast::MastNode::Exec(exec) if exec.target() == expected.key())));
+        }
+        // The same registry already has the compiled source artifacts. A changed requested base
+        // must still reject rather than accepting cached code or silently relocating inner keys.
+        write_file(&manifest, &config("different-owner"));
+        let mut assembler = context.project_assembler_for_path(&manifest).unwrap();
+        assembler.with_package_naming_provider(|package| {
+            crate::testing::admit_fixture_package(
+                package,
+                &[
+                    FixtureNamespace::assembly_tests().namespace_plan().clone(),
+                    import.namespace_plan(),
+                ],
+            )
+        });
+        assembler.with_namespace_inputs_provider(|context, sources, _| {
+            let home = if context.target.namespace.inner().as_str() == "::dep" {
+                import.namespace_plan()
+            } else {
+                FixtureNamespace::assembly_tests().namespace_plan().clone()
+            };
+            cache_test_inputs(context, sources, home)
+        });
+        let error = assembler.assemble(ProjectTargetSelector::Library, "dev").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("namespace inputs differ from its requested dependency home"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn standard_artifact_selection_requires_explicit_callable_expectations() {
+    let temp = TempDir::new().unwrap();
+    let artifact = debug_bearing_static_package("dep", "dep::run", "dep::run", "x", None);
+    let path = temp.path().join("dep.masp");
+    std::fs::write(&path, artifact.to_bytes()).unwrap();
+    let manifest = temp.path().join("miden-project.toml");
+    write_file(
+        &manifest,
+        "[package]\nname = 'app'\nversion = '1.0.0'\n[lib]\npath = 'mod.masm'\n[dependencies]\ndep = {path = 'dep.masp', binding = {selection = 'latest', library-id = '0x0100000000000000020000000000000003000000000000000400000000000000', base = []}}\n",
+    );
+    write_file(&temp.path().join("mod.masm"), "pub proc run nop end");
+    let mut context = TestContext::new();
+    let error = context.assemble_library_package(&manifest, None).unwrap_err();
+    assert!(
+        error.to_string().contains("requires explicit expected callable mappings"),
+        "{error}"
     );
 }

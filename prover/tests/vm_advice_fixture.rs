@@ -1,5 +1,8 @@
 #![cfg(feature = "std")]
 
+#[path = "common/named_source.rs"]
+mod named_source;
+
 use miden_core::{
     program::{KernelDescriptor, StackInputs, StackOutputs},
     proof::HashFunction,
@@ -17,13 +20,19 @@ fn regenerate_vm_advice_fixture() {
     );
     std::fs::create_dir_all(&directory).unwrap();
     rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap().install(|| {
-        let program = miden_assembly::Assembler::default()
-            .assemble_program("advice_fixture", "begin push.5 push.8 add drop end")
-            .unwrap()
-            .unwrap_program();
-        let witness = miden_processor::FastProcessor::new(StackInputs::default())
-            .execute_for_proving_sync(&program, &mut miden_processor::DefaultHost::default())
-            .unwrap();
+        let (program, environment) = named_source::named_source("begin push.5 push.8 add drop end");
+        let mut host =
+            miden_processor::DefaultHost::default().with_environment_source(environment.source());
+        let witness =
+            miden_processor::FastProcessor::new(StackInputs::default())
+                .with_options(
+                    miden_processor::ExecutionOptions::default().with_environment_trace_limits(
+                        miden_utils_testing::librarytree::trace_limits(),
+                    ),
+                )
+                .unwrap()
+                .execute_for_proving_sync(&program, environment.execution(), &mut host)
+                .unwrap();
         let claim = witness.claim();
         assert_eq!(*claim.kernel(), KernelDescriptor::default());
         assert_eq!(*claim.stack_inputs(), StackInputs::default());

@@ -1,7 +1,7 @@
 use alloc::{collections::BTreeMap, format, sync::Arc};
 
 use miden_assembly_syntax::diagnostics::Report;
-use miden_mast_package::{Dependency as PackageDependency, Package as MastPackage};
+use miden_mast_package::{Dependency as PackageDependency, Package as MastPackage, PackageNaming};
 use miden_package_registry::PackageId;
 use miden_project::Linkage;
 
@@ -13,7 +13,7 @@ use crate::project::ResolvedPackage;
 #[derive(Default)]
 pub(super) struct RuntimeDependencies {
     pub deps: BTreeMap<PackageId, PackageDependency>,
-    pub kernel: Option<Arc<MastPackage>>,
+    pub kernel: Option<(Arc<MastPackage>, Arc<PackageNaming>)>,
 }
 
 impl RuntimeDependencies {
@@ -23,9 +23,14 @@ impl RuntimeDependencies {
         linkage: Linkage,
     ) -> Result<(), Report> {
         if dependency.package.is_kernel() {
-            self.record_linked_kernel_dependency(dependency.package.clone())?;
-        } else if let Some(kernel_package) = dependency.linked_kernel_package.clone() {
-            self.record_linked_kernel_dependency(kernel_package)?;
+            self.record_linked_kernel_dependency(
+                dependency.package.clone(),
+                dependency.naming.clone(),
+            )?;
+        } else if let Some((kernel_package, kernel_naming)) =
+            dependency.linked_kernel_package.clone()
+        {
+            self.record_linked_kernel_dependency(kernel_package, kernel_naming)?;
         }
 
         // We record the dynamic/runtime dependencies of a package here.
@@ -57,20 +62,22 @@ impl RuntimeDependencies {
     pub fn record_linked_kernel_dependency(
         &mut self,
         package: Arc<MastPackage>,
+        naming: Arc<PackageNaming>,
     ) -> Result<(), Report> {
         debug_assert!(package.is_kernel());
+        package.check_naming(&naming).map_err(|error| Report::msg(format!("{error}")))?;
 
         self.merge_dependency(package.to_dependency())?;
 
         match &self.kernel {
-            Some(existing)
+            Some((existing, _))
                 if existing.name == package.name
                     && existing.version == package.version
                     && existing.dependency_commitment() == package.dependency_commitment() =>
             {
                 Ok(())
             },
-            Some(existing) => Err(Report::msg(format!(
+            Some((existing, _)) => Err(Report::msg(format!(
                 "conflicting linked kernel packages '{}@{}#{}' and '{}@{}#{}'",
                 existing.name,
                 existing.version,
@@ -80,7 +87,7 @@ impl RuntimeDependencies {
                 package.dependency_commitment()
             ))),
             None => {
-                self.kernel = Some(package);
+                self.kernel = Some((package, naming));
                 Ok(())
             },
         }

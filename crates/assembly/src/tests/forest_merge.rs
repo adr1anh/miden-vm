@@ -19,11 +19,7 @@ fn issue_3035_self_merge_does_not_grow_mast() -> TestResult {
             "
     ))?;
 
-    let library = Assembler::new(context.source_manager()).assemble_library(
-        "lib",
-        module,
-        None::<Box<Module>>,
-    )?;
+    let library = context.assemble_library("lib", None, module, [])?;
     let forest = library.mast_forest().as_ref().clone();
     assert!(
         forest

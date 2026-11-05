@@ -150,7 +150,7 @@ As noted in the previous section, the `[lib]` target we defined is equivalent to
 To recap, there are two categories of target, _library_ and _executable_, and _library_ targets have multiple flavors/kinds, listed below, and which are specified using `lib.kind`:
 
 * `library`, `lib` - produce a package which exports one or more procedures that can be called from other artifacts, but cannot be executed by the Miden VM without additional setup. Libraries have no implicit dependency on any particular kernel.
-* `kernel` - a special library type that provides core functionality in conjunction with an executable program. This is the only artifact type whose exports can be called using `syscall`, and that can be installed as a kernel when instantiating the VM.
+* `kernel` - a library build convention that places public executable exports at the fixed root namespace and private helpers beneath a child namespace. Actual `syscall` eligibility depends on the authenticated immediate parent, independently of the artifact tag.
 * `account-component` - produce a package which is a valid account component in the Miden protocol, and contains all metadata needed to construct that component. This type is only valid in conjunction with the Miden transaction kernel.
 * `note` - produce a package which is a valid note script in the Miden protocol, and exports the necessary metadata and procedures to construct and execute the note. This type is only valid in conjunction with the Miden transaction kernel.
 * `tx-script` - produce a package which is a valid transaction script in the Miden protocol, and exports the necessary metadata and procedures to construct and execute the script. This type is only valid in conjunction with the Miden transaction kernel.
@@ -161,68 +161,66 @@ As noted earlier, you may define multiple targets in a single Miden project - ho
 
 A key benefit of Miden project manifests is the ability to declare dependencies on Miden packages, and then use those packages in your project, without having to manage the complexity of working with the contents of those packages yourself.
 
-Dependencies are declared in `miden-project.toml` in one of the following forms:
+Each dependency table requires an explicit `binding`, independently of its source/version and
+`linkage`. There is no implicit Latest selection. Workspace members may inherit the explicitly
+selected workspace binding or override it locally. Bare requirement-string shorthand has no place
+to carry this choice and is rejected when loading a project.
 
 ```toml
-[dependencies]
-# A semantic version constraint
-a = "=0.1.0"
-# A specific package, given by its content digest
-b = "0x......"
-# A specific published package version, given by semantic version and digest
-c = "0.1.0#0x......"
-# A path dependency
-d = { path = "../d" }
-e = { path = "../d", version = "~> 0.1.0" }
-# A git dependency
-f = { git = "https://github.com/example/f", branch = "main" }
-g = { git = "https://github.com/example/g", rev = "deadbeef" }
-h = { git = "https://github.com/example/h", rev = "deadbeef", version = "~> 0.1.0" }
+[dependencies.math]
+version = "=1.0.0"
+binding = { selection = "latest", library-id = "0x0100000000000000020000000000000003000000000000000400000000000000", base = [{text = "example-owner"}] }
+
+[dependencies.math_v2]
+path = "../math"
+linkage = "static"
+binding = { selection = "pinned", library-id = "0x0100000000000000020000000000000003000000000000000400000000000000", revision = 2, base = [{text = "example-owner"}] }
+
+[dependencies.custom]
+git = "https://github.com/example/helpers"
+rev = "deadbeef"
+binding = { selection = "custom", home = [{text = "example-owner"}, {text = "helpers"}] }
 ```
 
-#### Linkage
+The ID above is a supplied example Word, not an identity derived by the project system. Standard
+Latest/Pinned choices append typed labels beneath the complete `base`; an empty base must be
+written explicitly as `[]`. Pinned requires a nonzero runtime revision. Source `version`, Git
+`rev`/`branch`, artifact digest, runtime revision and selected implementation D remain separate.
+Changing the source artifact or linkage does not change an explicitly retained callable key.
 
-Dependencies are dynamically-linked by default, which means that the assembled
-package will have a runtime dependency on the referenced package, and it is
-assumed that the dependency will have been loaded into the VM at runtime.
+Built-in home labels use `{text = "..."}`, `{library-id = "0x..."}` or `{revision = 1}`. Exact
+existing label bytes may use `{canonical = [...]}`; the generic reader still rejects TypedId
+codecs without their external owner. Programmatic `LibraryImport`/custom homes can retain already
+validated TypedId ancestors, but the generic manifest writer rejects those homes until a
+profile-aware writer is provided.
 
-You may also specify that a dependency should be statically-linked, like so:
+Source dependencies pass the requested default home to the namespace-inputs provider through
+`TargetAssemblyContext::dependency_binding`. Its returned caller home must agree before cache
+reuse. The provider still supplies exact callable paths and any complete custom bindings;
+reexports retain their defining keys. This request establishes no library ownership or public
+surface association. Target naming is not automatically inferred from source aliases.
 
-```toml
-[dependencies]
-a = { version = "=0.1.0", linkage = "static" }
-```
+Standard selection on preassembled artifacts currently requires consumer-supplied expected
+callable mappings and rejects until that support is implemented. A package's primary home cannot
+prove its exports' canonical identities. Explicit custom homes retain the separate package-naming
+admission provider and required profile checks; code supply never authorizes execution.
 
-When a dependency is statically-linked, it is as if the dependency was defined
-as part of your own package.
+#### Source resolution and linkage
 
-NOTE: Kernel dependencies are always statically-linked into executable targets,
-and dynamically-linked for library targets, and it is not possible to change
-this behavior.
+| Source | Fields |
+| --- | --- |
+| Registry | `version`: semantic constraint, digest, or exact `semver#digest` |
+| Path | `path`, with an optional semantic requirement checked against the referenced project/artifact |
+| Git | `git`, optional `branch` or `rev`, and optional semantic requirement checked after checkout |
+| Workspace | `workspace = true`, inheriting source/version/binding from `[workspace.dependencies]` |
 
-#### Workspace dependencies
+Workspace members resolve to their current source version. Path/Git dependencies without a
+version use the referenced source's current version. Digest/exact-published requirements apply to
+artifacts; source dependencies do not derive a runtime identity from them.
 
-Workspace-level shared dependencies are declared under `[workspace.dependencies]`, and inherited by members using `dep.workspace = true` (or the equivalent table form).
-
-When an inherited workspace dependency resolves to a member of the current workspace:
-
-- it resolves to that member's current source project, not to a package registry entry
-- the effective dependency version is the version currently declared by that member's manifest
-- any explicit semantic requirement carried on the workspace dependency declaration does not override the member's current source version
-- member projects may still override the linkage mode locally
-
-#### Semantics
-
-* `a` specifies a semantic version requirement, evaluated against a package registry implementation
-* `b` specifies a digest-only requirement, evaluated against a package registry implementation. A plain digest-only lookup selects the latest matching published version; if additional semantic constraints on the same dependency are introduced transitively, the dependency solver intersects those constraints and can select a compatible shared-digest version instead.
-* `c` specifies an exact published package version, including both semantic version and digest
-* `d` specifies that the package sources (or a package artifact) can be found at the given path. If no `version` is provided, the current version declared by the referenced source/artifact is used as-is.
-* `e` is the same as `d`, except it specifies a semantic version requirement that _MUST_ match the package found at `path`
-* `f` specifies that the package sources can be found by cloning the `git` repo, and checking out the `main` branch. If no `version` is provided, the current version declared by the checked out sources is used as-is.
-* `g` is the same as `f`, except it provides a specific revision in the `git` repo instead
-* `h` is the same as `g`, except it specifies a semantic version requirement that _MUST_ match the package found in the cloned repo
-
-In cases where the dependency is resolved to project sources and _not_ an assembled package, the behavior would be to assemble those dependencies first, and then link against them when assembling the current project. This is most useful when linking against packages which are _not_ contracts, or where the contracts are deployed together as a unit.
+Dynamic linkage is the default; `linkage = "static"` bundles code without opting into inlining or
+changing canonical keys. Kernel dependencies remain bundled for executable targets and dynamic
+for library targets. Static linkage does not relocate embedded keys or manufacture missing mounts.
 
 #### Source dependency reuse and provenance
 

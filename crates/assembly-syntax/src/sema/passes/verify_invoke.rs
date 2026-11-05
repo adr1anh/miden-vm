@@ -16,6 +16,9 @@ use crate::{
 
 const MAX_ALIAS_EXPANSION_DEPTH: usize = 128;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone)]
 pub(crate) enum LocalInvokeTarget {
     Procedure,
@@ -42,8 +45,8 @@ impl From<&Import> for LocalInvokeTarget {
     }
 }
 
-/// This visitor visits every `exec`, `call`, `syscall`, and `procref`, and ensures that the
-/// invocation target for that call is resolvable to the extent possible within the current
+/// This visitor visits every `exec`, `call`, `syscall`, `procref`, and `inline`, and ensures that
+/// the invocation target for that call is resolvable to the extent possible within the current
 /// module's context.
 ///
 /// This means that any reference to an external module must have a corresponding import, and that
@@ -57,7 +60,6 @@ pub(crate) struct VerifyInvokeTargets<'a> {
     module: &'a mut Module,
     locals: &'a BTreeMap<String, LocalInvokeTarget>,
     used_aliases: &'a mut BTreeSet<String>,
-    current_procedure: Option<ProcedureName>,
     current_constant: Option<Ident>,
     invoked: BTreeSet<Invoke>,
 }
@@ -68,14 +70,13 @@ impl<'a> VerifyInvokeTargets<'a> {
         module: &'a mut Module,
         locals: &'a BTreeMap<String, LocalInvokeTarget>,
         used_aliases: &'a mut BTreeSet<String>,
-        current_procedure: Option<ProcedureName>,
+        _current_procedure: Option<ProcedureName>,
     ) -> Self {
         Self {
             analyzer,
             module,
             locals,
             used_aliases,
-            current_procedure,
             current_constant: None,
             invoked: Default::default(),
         }
@@ -120,11 +121,6 @@ impl VerifyInvokeTargets<'_> {
                     &self.analyzer.source_manager(),
                 ),
             )));
-            return ControlFlow::Continue(());
-        }
-
-        if self.current_procedure.as_ref().is_some_and(|curr| curr.as_str() == name) {
-            self.analyzer.error(SemanticAnalysisError::SelfRecursive { span });
             return ControlFlow::Continue(());
         }
 
@@ -216,11 +212,6 @@ impl VisitMut for VerifyInvokeTargets<'_> {
         if import.visibility().is_public() {
             // Mark all public imported symbols as used
             if let Import::Item(import) = import {
-                if import.module_path().is_kernel_path() {
-                    self.analyzer.error(SemanticAnalysisError::ReexportedKernelProcedure {
-                        span: import.span(),
-                    });
-                }
                 import.uses += 1;
             }
         }
@@ -232,27 +223,15 @@ impl VisitMut for VerifyInvokeTargets<'_> {
         result
     }
     fn visit_mut_syscall(&mut self, target: &mut InvocationTarget) -> ControlFlow<()> {
-        match target {
-            // Syscalls to a local name will be rewritten to refer to implicit exports of the
-            // kernel module.
-            InvocationTarget::Symbol(name) => {
-                let span = name.span();
-                let path = Path::kernel_path().join(name).into();
-                *target = InvocationTarget::Path(Span::new(span, path));
-            },
-            // Syscalls which reference a path, are only valid if the module id is $kernel
-            InvocationTarget::Path(path) => {
-                let span = path.span();
-                if let Some(name) = path.as_ident() {
-                    let new_path = Path::kernel_path().join(&name).into();
-                    *path = Span::new(span, new_path);
-                } else {
-                    self.analyzer.error(SemanticAnalysisError::InvalidSyscallTarget { span });
-                }
-            },
-            // We assume that a syscall specifying a MAST root knows what it is doing, but this
-            // will be validated by the assembler
-            InvocationTarget::MastRoot(_) => (),
+        let name = match &*target {
+            InvocationTarget::Symbol(name) => Some(name.clone()),
+            InvocationTarget::Path(path) => path.as_ident(),
+            InvocationTarget::MastRoot(_) => None,
+        };
+        // Leave unresolved unqualified names for the frontend's explicit syscall source aliases.
+        // Neither a source alias nor a path's spelling authorizes the eventual invocation.
+        if name.as_ref().is_none_or(|name| self.locals.contains_key(name.as_str())) {
+            self.visit_mut_invoke_target(target)?;
         }
         self.invoked.insert(Invoke::new(InvokeKind::SysCall, target.clone()));
         ControlFlow::Continue(())
@@ -267,16 +246,16 @@ impl VisitMut for VerifyInvokeTargets<'_> {
         self.invoked.insert(Invoke::new(InvokeKind::Exec, target.clone()));
         ControlFlow::Continue(())
     }
+    fn visit_mut_inline(&mut self, target: &mut InvocationTarget) -> ControlFlow<()> {
+        self.visit_mut_invoke_target(target)?;
+        // Ownership, explicit pins, and structural cycles require frontend/linker context.
+        self.invoked.insert(Invoke::new(InvokeKind::Inline, target.clone()));
+        ControlFlow::Continue(())
+    }
     fn visit_mut_procref(&mut self, target: &mut InvocationTarget) -> ControlFlow<()> {
         self.visit_mut_invoke_target(target)?;
-        // We intentionally use `InvokeKind::Exec` here rather than `InvokeKind::ProcRef`.
-        // A `procref` instruction captures a procedure reference for *later* invocation,
-        // but we must pessimistically treat it as an actual invocation because we cannot
-        // know the specific call kind at this point. `Exec` is the most general invocation
-        // kind, and the linker relies on this signal to correctly track procedure
-        // dependencies. Using `ProcRef` would only indicate "named somewhere" and would
-        // not carry the full weight of "this procedure is invoked".
-        self.invoked.insert(Invoke::new(InvokeKind::Exec, target.clone()));
+        // Address-taken procedures are runtime roots; they do not require body expansion.
+        self.invoked.insert(Invoke::new(InvokeKind::ProcRef, target.clone()));
         ControlFlow::Continue(())
     }
     fn visit_mut_invoke_target(&mut self, target: &mut InvocationTarget) -> ControlFlow<()> {
@@ -288,18 +267,9 @@ impl VisitMut for VerifyInvokeTargets<'_> {
                 Span::new(symbol.span(), PathBuf::from(symbol.clone()).into())
             },
         };
-        let current = self.current_procedure.as_ref().map(ProcedureName::as_ident);
         if let Some(name) = path.as_ident() {
             let name = name.with_span(span);
-            if current.is_some_and(|curr| curr == name) {
-                self.analyzer.error(SemanticAnalysisError::SelfRecursive { span });
-            } else {
-                return self.resolve_local(&name);
-            }
-        } else if path.parent().unwrap() == self.module.path()
-            && current.is_some_and(|curr| curr.as_str() == path.last().unwrap())
-        {
-            self.analyzer.error(SemanticAnalysisError::SelfRecursive { span });
+            return self.resolve_local(&name);
         } else if self.resolve_external(target.span(), &path).is_none() {
             self.analyzer
                 .error(SemanticAnalysisError::MissingImport { span: target.span() });

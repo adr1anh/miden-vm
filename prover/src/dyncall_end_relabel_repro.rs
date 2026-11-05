@@ -14,7 +14,7 @@
 use alloc::vec;
 
 use miden_air_definitions::vm::trace::RowIndex;
-use miden_core::{Felt, Word, operations::opcodes, utils::RowMajorMatrix};
+use miden_core::{Felt, operations::opcodes, utils::RowMajorMatrix};
 use miden_processor::{DefaultHost, FastProcessor, StackInputs};
 
 use crate::repro_harness::{ReproTrace, core_row_mut};
@@ -33,7 +33,8 @@ struct Fixture {
 
 fn build_fixture() -> Fixture {
     // A DYNCALL at root depth 16 with an empty overflow table, so h4 = 16 is the sole nonzero
-    // caller-frame payload slot. `call.foo` keeps `foo` in the forest for the dynamic reference.
+    // caller-frame payload slot. `call.foo` keeps `foo` in the forest for the dynamic reference;
+    // its canonical key is retained separately.
     let source = "
         proc foo
             nop
@@ -45,28 +46,28 @@ fn build_fixture() -> Fixture {
             dyncall
         end
     ";
-    let program = miden_assembly::Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
-    let root = program.hash();
-    let foo_digest: Word = program
-        .mast_forest()
-        .procedure_digests()
-        .find(|d| *d != root)
-        .expect("foo must survive as its own procedure");
+    let fixture = crate::named_fixture::named_source(source);
+    let foo_key = fixture.key("foo").into_word();
+    let program = fixture.program;
+    let environment = fixture.environment;
 
     let mut stack_values = vec![Felt::ZERO; 16];
-    for (i, limb) in foo_digest.as_elements().iter().enumerate() {
+    for (i, limb) in foo_key.as_elements().iter().enumerate() {
         stack_values[i] = *limb;
     }
     stack_values[4] = Felt::new_unchecked(ADDR);
     let stack_inputs = StackInputs::new(&stack_values).unwrap();
 
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(stack_inputs)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
         .execute_and_build_trace_sync(
             &program,
+            environment.execution(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

@@ -41,6 +41,9 @@ pub struct DependencySpec {
     /// conjunction with `branch`.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub rev: Option<Span<Arc<str>>>,
+    /// Explicit default-home selection; independent of source version and linkage.
+    #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
+    pub binding: Option<Span<super::DependencyBindingSpec>>,
     /// If present, specifies the desired linkage for this dependency during assembly
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
     pub linkage: Option<Span<Linkage>>,
@@ -81,6 +84,9 @@ impl DependencySpec {
 impl SetSourceId for DependencySpec {
     fn set_source_id(&mut self, source_id: SourceId) {
         self.name.set_source_id(source_id);
+        if let Some(binding) = &mut self.binding {
+            binding.set_source_id(source_id);
+        }
         if let Some(version_or_digest) = self.version_or_digest.as_mut() {
             version_or_digest.set_source_id(source_id);
         }
@@ -138,6 +144,8 @@ mod serialization {
         rev: Option<Span<Arc<str>>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         linkage: Option<Span<crate::Linkage>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        binding: Option<Span<super::super::DependencyBindingSpec>>,
     }
 
     impl From<DependencySpecTable> for DependencySpec {
@@ -151,6 +159,7 @@ mod serialization {
                 branch: table.branch,
                 rev: table.rev,
                 linkage: table.linkage,
+                binding: table.binding,
             }
         }
     }
@@ -173,6 +182,7 @@ mod serialization {
                             branch: None,
                             rev: None,
                             linkage: None,
+                            binding: None,
                         },
                     )
                 })

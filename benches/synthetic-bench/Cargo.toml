@@ -16,6 +16,7 @@ miden-air-definitions.workspace = true
 miden-vm-stark = { workspace = true, features = ["std"] }
 miden-processor = { workspace = true, features = ["concurrent"] }
 miden-vm        = { path = "../../miden-vm", features = ["concurrent", "internal"] }
+miden-utils-testing = { workspace = true }
 serde           = { workspace = true, features = ["std"] }
 serde_json      = { workspace = true, features = ["std"] }
 thiserror       = { workspace = true, features = ["std"] }

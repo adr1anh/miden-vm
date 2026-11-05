@@ -7,6 +7,7 @@ use miden_processor::{
 };
 
 pub use crate::helpers::assert_precompile_witness_round_trips;
+use crate::naming::assemble;
 
 pub type U32x8 = [u32; 8];
 
@@ -35,14 +36,12 @@ pub fn run_precompile_program_with_stack(
     let core_lib = CoreLibrary::default();
     let mut assembler = Assembler::default();
     assembler
-        .link_package(core_lib.package(), Linkage::Dynamic)
+        .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to link core library package");
-    let program = assembler
-        .assemble_program("precompile_test", source)
-        .expect("failed to assemble precompile test program")
-        .unwrap_program();
+    let program = assemble(assembler, "precompile_test", source, &[core_lib.naming()]);
 
     let mut host = DefaultHost::default()
+        .with_environment_source(program.environment.source())
         .with_library(&core_lib)
         .expect("failed to load CoreLibrary into the host");
 
@@ -52,7 +51,7 @@ pub fn run_precompile_program_with_stack(
         ExecutionOptions::default(),
     )
     .expect("processor construction")
-    .execute_sync(&program, &mut host);
+    .execute_sync(&program.program, program.environment.execution(), &mut host);
 
     if let Ok(output) = &output {
         assert!(output.advice.stack().is_empty(), "precompile wrappers must consume advice");
@@ -97,14 +96,12 @@ pub fn expect_precompile_trap_with_processor(source: &str) -> (ExecutionError, F
     let core_lib = CoreLibrary::default();
     let mut assembler = Assembler::default();
     assembler
-        .link_package(core_lib.package(), Linkage::Dynamic)
+        .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to link core library package");
-    let program = assembler
-        .assemble_program("precompile_test", source)
-        .expect("failed to assemble precompile test program")
-        .unwrap_program();
+    let program = assemble(assembler, "precompile_test", source, &[core_lib.naming()]);
 
     let mut host = DefaultHost::default()
+        .with_environment_source(program.environment.source())
         .with_library(&core_lib)
         .expect("failed to load CoreLibrary into the host");
     let mut processor = FastProcessor::new_with_options(
@@ -114,7 +111,7 @@ pub fn expect_precompile_trap_with_processor(source: &str) -> (ExecutionError, F
     )
     .expect("processor construction");
     let error = processor
-        .execute_mut_sync(&program, &mut host)
+        .execute_mut_sync(&program.program, program.environment.execution(), &mut host)
         .expect_err("expected precompile program to trap");
     (error, processor)
 }

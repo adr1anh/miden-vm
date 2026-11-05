@@ -135,6 +135,16 @@ The **`package_deserialize`** target tests `Package::read_from_bytes`.
 cargo +nightly fuzz run package_deserialize --fuzz-dir tools/miden-core-fuzz
 ```
 
+The **`callable_inventory_codec`** target combines hostile v1 bytes with 1–4 valid callable
+bindings, optional aliases and shared implementation selections. It checks exact canonical round
+trips, changed-context rejection and trailing bytes under explicit 4 KiB/32-record/32-component/
+512-payload-byte limits. Its small synthetic home/TypedId allowlist establishes no Protocol or
+package admission.
+
+```bash
+cargo +nightly fuzz run callable_inventory_codec --fuzz-dir tools/miden-core-fuzz -- -max_total_time=30 -runs=10000 -max_len=4097 -timeout=5
+```
+
 The `event_handler_section_deserialize` target tests `EventHandlerSection::from_payload` (the
 untrusted `event_handlers` package section with its decode-time size caps), the same function
 `Package::event_handlers` uses.

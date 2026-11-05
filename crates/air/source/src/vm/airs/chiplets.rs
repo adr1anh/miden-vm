@@ -41,7 +41,7 @@ impl ChipletsAir {
 
     /// LogUp boundary correction for the chiplets trace.
     ///
-    /// The sole boundary slice is the mandatory eight public Felts `R_E || N_kernel`.
+    /// The sole boundary slice is the mandatory four public Felts `R_E`.
     pub(super) fn boundary_correction<EF: ExtensionField<Felt>>(
         self,
         challenges: &Challenges<EF>,
@@ -56,7 +56,7 @@ impl ChipletsAir {
         }
         if boundary_inputs[0].len() != NUM_CHIPLETS_PUBLIC_VALUES {
             return Err(format!(
-                "ChipletsAir expects {} public Felts R_E || N_kernel, got {}",
+                "ChipletsAir expects {} public Felts R_E, got {}",
                 NUM_CHIPLETS_PUBLIC_VALUES,
                 boundary_inputs[0].len()
             )
@@ -81,12 +81,11 @@ impl ChipletsAir {
         let selectors =
             constraints::chiplets::selectors::build_chiplet_selectors(builder, local, next);
 
-        let public_values: [AB::PublicVar; NUM_CHIPLETS_PUBLIC_VALUES] = builder
+        let _: [AB::PublicVar; NUM_CHIPLETS_PUBLIC_VALUES] = builder
             .public_values()
             .try_into()
-            .expect("ChipletsAir requires exactly 8 public Felts R_E || N_kernel");
-        let kernel = core::array::from_fn(|i| public_values[4 + i].into());
-        constraints::enforce_chiplets(builder, local, next, &selectors, &kernel);
+            .expect("ChipletsAir requires exactly 4 public Felts R_E");
+        constraints::enforce_chiplets(builder, local, next, &selectors);
 
         let mut lb = ConstraintLookupBuilder::new(builder, &MidenAir::Chiplets);
         self.lookup_eval(&mut lb);
@@ -134,10 +133,10 @@ mod tests {
     }
 
     #[test]
-    fn packed_boundary_requires_exactly_eight_public_felts() {
+    fn packed_boundary_requires_exactly_four_public_felts() {
         let challenges = challenges();
         assert!(ChipletsAir.boundary_correction(&challenges, &[]).is_err());
-        for len in [0, 4, 7, 9, 12] {
+        for len in [0, 1, 3, 5, 8, 12] {
             let values = alloc::vec![Felt::ONE; len];
             assert!(ChipletsAir.boundary_correction(&challenges, &[&values]).is_err());
         }

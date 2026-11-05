@@ -4,13 +4,11 @@ use miden_assembly::{
     Assembler, DefaultSourceManager, Linkage,
     diagnostics::{IntoDiagnostic, Report, WrapErr},
 };
-use miden_core::program::Program;
+use miden_core::program::{ProcedureKey, Program};
 use miden_core_lib::CoreLibrary;
-use miden_mast_package::{
-    EventHandlerSection, Package,
-    debug_info::{DebugSourceNodeId, PackageDebugInfo},
-};
+use miden_mast_package::{EventHandlerSection, Package};
 use miden_processor::{DefaultHost, HostLibrary};
+use miden_vm::internal::naming_inputs::{LoadedPackage, NamingInputs, NamingRole};
 use miden_wasm_event_handlers::{WasmHandlerLimits, host_library_from_package};
 
 use crate::cli::data::{Libraries, ProgramFile};
@@ -52,136 +50,150 @@ pub fn load_package_with_handlers(
         .event_handlers()
         .into_diagnostic()
         .wrap_err("Failed to load the package's Wasm event handlers")?;
-    if let Some(section) = section {
-        if loaded_handler_sections.contains(&section) {
+    if let Some(section) = &section {
+        if loaded_handler_sections.contains(section) {
             return host
                 .load_library(HostLibrary::from(package.clone()))
                 .into_diagnostic()
                 .wrap_err("Failed to register the package's MAST forest");
         }
-        loaded_handler_sections.push(section);
     }
     let library = host_library_from_package(package, WasmHandlerLimits::default())
         .into_diagnostic()
         .wrap_err("Failed to load the package's Wasm event handlers")?;
     host.load_library(library)
         .into_diagnostic()
-        .wrap_err("Failed to register the package's Wasm event handlers")
-}
-
-/// Registers a program package and its embedded kernel package, if any, with `host`.
-///
-/// `Package::try_into_program` selects the embedded kernel package, so kernel code runs at
-/// execution time; this function loads that package's MAST forest and Wasm event handlers into
-/// the host the same way it loads the outer package's. Library packages (`-l`) have no embedded
-/// kernel to honor and go through [`load_package_with_handlers`] directly.
-pub fn load_program_package_with_handlers(
-    host: &mut DefaultHost,
-    package: &Arc<Package>,
-    loaded_handler_sections: &mut Vec<EventHandlerSection>,
-) -> Result<(), Report> {
-    load_package_with_handlers(host, package, loaded_handler_sections)?;
-    if let Some(kernel_package) = package.try_embedded_kernel_package()? {
-        load_package_with_handlers(host, &Arc::from(kernel_package), loaded_handler_sections)?;
+        .wrap_err("Failed to register the package's Wasm event handlers")?;
+    if let Some(section) = section {
+        loaded_handler_sections.push(section);
     }
     Ok(())
 }
 
-/// Returns a `Program` type from a `.masm` assembly file.
-///
-/// When `kernel_file` is a `.masp` package, that package is returned alongside the program, so the
-/// caller can register its MAST forest and its Wasm event handlers with the host. A `.masm` kernel
-/// has neither a package nor handlers, so `None` is returned for it, as it is when no kernel is
-/// given.
-pub fn get_masm_program(
+/// Registers the already selected target/kernel and independently admitted code libraries.
+pub fn load_program_libraries(
+    host: &mut DefaultHost,
+    program: &LoadedProgram,
+    libraries: &Libraries,
+) -> Result<(), Report> {
+    host.load_library(&CoreLibrary::default()).into_diagnostic()?;
+    let mut sections = Vec::new();
+    for library in &libraries.libraries {
+        load_package_with_handlers(host, &library.package, &mut sections)?;
+    }
+    load_package_with_handlers(host, &program.target.package, &mut sections)?;
+    if let Some(kernel) = &program.kernel {
+        load_package_with_handlers(host, &kernel.package, &mut sections)?;
+    }
+    Ok(())
+}
+
+/// Code with its exact retained/admitted inventory and optional independent kernel inventory.
+pub struct LoadedProgram {
+    pub program: Program,
+    pub target: LoadedPackage,
+    pub kernel: Option<LoadedPackage>,
+    pub source_manager: Option<Arc<DefaultSourceManager>>,
+}
+
+/// Selects code only after its complete naming has been supplied independently.
+/// Execution authority continues to come from the caller's expected descriptor and openings.
+pub fn load_program(
     path: &Path,
     libraries: &Libraries,
     kernel_file: Option<&Path>,
-) -> Result<
-    (
-        Program,
-        Option<PackageDebugInfo>,
-        Option<DebugSourceNodeId>,
-        Arc<DefaultSourceManager>,
-        Option<Arc<Package>>,
-    ),
-    Report,
-> {
-    // Assembler debug mode is always enabled (issue #1821)
-    let program_file = ProgramFile::read(path)?;
-    let source_manager = program_file.source_manager().clone();
-
-    // A `.masp` kernel is handed back to the caller, which registers it with the host
-    let mut kernel_package = None;
-
-    // If kernel is provided, compile it and use it when compiling the program
-    let package = if let Some(kernel_path) = kernel_file {
-        // Determine file type based on extension
-        let ext = kernel_path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-
-        // Load kernel from .masp package or compile from .masm source
-        let kernel_lib = match ext.as_str() {
-            "masp" => {
-                // Load kernel from package file
-                let kernel_lib: Arc<Package> = Package::deserialize_from_file(kernel_path)
-                    .map(Arc::from)
-                    .into_diagnostic()
-                    .wrap_err_with(|| {
-                        format!("Failed to deserialize kernel package `{}`", kernel_path.display())
-                    })?;
-                kernel_package = Some(kernel_lib.clone());
-                kernel_lib
-            },
-            "masm" => {
-                // Compile kernel from assembly source
-                // Assembler debug mode is always enabled (issue #1821)
-                Assembler::new(source_manager.clone())
-                    .assemble_kernel_from_root("kernel", kernel_path)
-                    .map(Arc::from)
-                    .wrap_err_with(|| {
-                        format!("Failed to compile kernel from `{}`", kernel_path.display())
-                    })?
-            },
-            _ => {
-                return Err(Report::msg(format!(
-                    "Kernel file `{}` must have a .masm or .masp extension",
-                    kernel_path.display()
-                )));
-            },
-        };
-
-        // Create assembler with kernel
-        // Assembler debug mode is always enabled (issue #1821)
-        let mut assembler = Assembler::with_kernel(source_manager.clone(), kernel_lib)?;
-
-        // Link standard library
-        assembler
-            .link_package(CoreLibrary::default().package(), Linkage::Dynamic)
-            .wrap_err("Failed to load stdlib")?;
-
-        // Link user libraries
-        for library in libraries.libraries.iter().cloned() {
-            assembler
-                .link_package(library, Linkage::Dynamic)
-                .wrap_err("Failed to load libraries")?;
-        }
-
-        // Compile the program
-        assembler
-            .assemble_program("program", program_file.ast().clone())
-            .wrap_err("Failed to compile program")?
-    } else {
-        // No kernel, use the standard compilation path
-        program_file.compile_package(libraries.libraries.iter().cloned())?
+    naming: &NamingInputs,
+    expected_entry: ProcedureKey,
+) -> Result<LoadedProgram, Report> {
+    let (target, kernel, source_manager) = match extension(path).as_str() {
+        "masp" => {
+            if kernel_file.is_some() {
+                return Err(Report::msg(
+                    "--kernel applies to source assembly; a .masp carries its embedded kernel code",
+                ));
+            }
+            let target = naming.admit(NamingRole::Target, get_masp_package(path)?)?;
+            let kernel = match target.package.try_embedded_kernel_package()? {
+                Some(kernel) => Some(naming.admit(NamingRole::Kernel, Arc::from(kernel))?),
+                None => {
+                    if naming.has_kernel() {
+                        return Err(Report::msg("kernel naming was supplied without kernel code"));
+                    }
+                    None
+                },
+            };
+            (target, kernel, None)
+        },
+        "masm" => {
+            let program_file = ProgramFile::read(path)?;
+            let source_manager = program_file.source_manager().clone();
+            let kernel = match kernel_file {
+                Some(kernel_path) => {
+                    let kernel = match extension(kernel_path).as_str() {
+                        "masp" => {
+                            naming.admit(NamingRole::Kernel, get_masp_package(kernel_path)?)?
+                        },
+                        "masm" => {
+                            let mut assembler = Assembler::new(source_manager.clone())
+                                .with_namespace_inputs(naming.source(NamingRole::Kernel)?);
+                            let core = CoreLibrary::default();
+                            assembler.link_package(
+                                core.package(),
+                                Linkage::Dynamic,
+                                core.naming().clone(),
+                            )?;
+                            for library in &libraries.libraries {
+                                assembler.link_package(
+                                    library.package.clone(),
+                                    Linkage::Dynamic,
+                                    library.naming.clone(),
+                                )?;
+                            }
+                            let product = assembler
+                                .assemble_kernel_from_root_with_naming("kernel", kernel_path)?;
+                            let owned = Arc::new(product.naming().clone());
+                            naming.encode_owned(&owned)?;
+                            let package: Arc<Package> = product.into_artifact(true)?.into();
+                            package.check_naming(&owned).map_err(Report::msg)?;
+                            LoadedPackage { package, naming: owned }
+                        },
+                        _ => return Err(Report::msg("kernel input must be .masm or .masp")),
+                    };
+                    kernel.package.check_kernel_code(&kernel.naming)?;
+                    Some(kernel)
+                },
+                None => {
+                    if naming.has_kernel() {
+                        return Err(Report::msg("kernel naming was supplied without --kernel"));
+                    }
+                    None
+                },
+            };
+            let target = program_file.compile_package_with_kernel(
+                libraries.libraries.iter().cloned(),
+                naming.source(NamingRole::Target)?,
+                kernel.as_ref(),
+            )?;
+            naming.encode_owned(&target.naming)?;
+            (target, kernel, Some(source_manager))
+        },
+        _ => return Err(Report::msg("program input must be .masm or .masp")),
     };
-    let debug_info = package
-        .debug_info()
-        .into_diagnostic()
-        .wrap_err("Failed to read program debug info")?;
-    let entrypoint_source_node = package.entrypoint_source_node();
-    let program = package.unwrap_program();
+    if target.naming.entry_key() != Some(expected_entry) {
+        return Err(Report::msg("program entry differs from caller expected entry key"));
+    }
+    if let Some(kernel) = &kernel {
+        kernel.package.check_kernel_code(&kernel.naming)?;
+    }
+    let program = target.package.try_into_program(&target.naming)?;
+    Ok(LoadedProgram { program, target, kernel, source_manager })
+}
 
-    Ok((program, debug_info, entrypoint_source_node, source_manager, kernel_package))
+fn extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
 }
 
 /// Parses a byte-size string into a byte count.

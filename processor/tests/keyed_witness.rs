@@ -1,4 +1,4 @@
-//! Public replay-v4 transport and native trace-reconstruction regressions.
+//! Public replay-v5 transport and native trace-reconstruction regressions.
 //!
 //! The single-Mast environment and finite budgets are fixtures, not a Protocol policy. These
 //! programs retain entry resolution, whose completed session supplies the packed Library prefix.
@@ -23,7 +23,7 @@ use miden_core::{
 use miden_mast_package::debug_info::{DebugSourceAsmOp, DebugSourceNode, PackageDebugInfoBuilder};
 use miden_processor::{
     self as processor, EnvironmentTraceLimits, ExecutionError, ExecutionOptions, ExecutionWitness,
-    FastProcessor, Felt, ONE, StackInputs, ZERO,
+    FastProcessor, Felt, ONE, ReplayReadLimits, StackInputs, ZERO,
     trace::{KeyedReplayError, ReplayResource, RowIndex, build_trace},
 };
 
@@ -300,7 +300,7 @@ fn completed_witness_source_and_async_paths_rebuild_the_same_native_trace() {
         );
     }
     let bytes = witnesses[0].to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
-    assert_eq!(bytes[0], 4);
+    assert_eq!(bytes[0], 5);
     let claim = witnesses[0].claim();
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
@@ -432,10 +432,40 @@ fn witness_reports_precompile_state() {
 }
 
 #[test]
+fn witness_wire_limits_accept_exact_size_and_reject_one_byte_less() {
+    let fixture = deferred_witness();
+    let bytes = fixture.witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+    let exact = ReplayReadLimits {
+        max_wire_bytes: bytes.len(),
+        ..read_limits()
+    };
+    assert_eq!(fixture.witness.to_bytes_with_limits(trace_limits(), exact).unwrap(), bytes);
+    let restored = ExecutionWitness::read_from_bytes_with_limits(
+        &bytes,
+        &fixture.environment,
+        trace_limits(),
+        exact,
+    )
+    .unwrap();
+    assert_eq!(restored.execution_descriptor(), fixture.environment.descriptor());
+    let below = ReplayReadLimits { max_wire_bytes: bytes.len() - 1, ..exact };
+    assert!(fixture.witness.to_bytes_with_limits(trace_limits(), below).is_err());
+    assert!(
+        ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &fixture.environment,
+            trace_limits(),
+            below,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn witness_wire_rejects_unsupported_version() {
     let fixture = deferred_witness();
     let mut bytes = fixture.witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
-    assert_eq!(bytes[0], 4, "keyed replay witnesses must use wire version 4");
+    assert_eq!(bytes[0], 5, "keyed replay witnesses must use wire version 5");
     assert!(
         ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
@@ -447,7 +477,7 @@ fn witness_wire_rejects_unsupported_version() {
     );
 
     // Versions reject before any replay or precompile payload is decoded.
-    for version in [0, 1, 2, 3, 5] {
+    for version in [0, 1, 2, 3, 4, 6] {
         bytes[0] = version;
         let error = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,

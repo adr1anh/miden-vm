@@ -9,6 +9,7 @@ extern crate std;
 #[cfg(feature = "serde")]
 pub mod ast;
 mod dependencies;
+mod library_import;
 mod linkage;
 mod package;
 mod profile;
@@ -37,7 +38,12 @@ use serde::{Deserialize, Serialize};
 pub use toml::Value;
 
 pub use self::{
-    dependencies::*, linkage::Linkage, package::Package, profile::Profile, target::Target,
+    dependencies::*,
+    library_import::{LibraryImport, LibrarySelection},
+    linkage::Linkage,
+    package::Package,
+    profile::Profile,
+    target::Target,
     workspace::Workspace,
 };
 

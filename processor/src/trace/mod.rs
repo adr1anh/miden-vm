@@ -114,7 +114,7 @@ impl ExecutionWitness {
         self.vm.trace.environment.descriptor()
     }
 
-    /// Reads replay v4 using caller authority and explicit transport/revalidation budgets.
+    /// Reads replay v5 using caller authority and explicit transport/revalidation budgets.
     pub fn read_from_bytes_with_limits(
         bytes: &[u8],
         environment: &ExecutionEnvironment,
@@ -189,10 +189,11 @@ const EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER: usize = 4;
 /// Current wire format version for [`ExecutionWitness`] serialization.
 ///
 /// The version is written as the first byte of every serialized witness. Deserialization only
-/// accepts this exact value; older formats are intentionally unsupported. Version 4 includes
-/// mandatory authenticated environment metadata and per-fragment keyed observations. This
-/// replay version is separate from proof transport and execution-claim versions.
-const EXECUTION_WITNESS_WIRE_VERSION: u8 = 4;
+/// accepts this exact value; older formats are intentionally unsupported. Version 5 fixes the
+/// descriptor to (entry key, environment root), retaining authenticated environment metadata and
+/// per-fragment keyed observations. This replay version is separate from proof transport and
+/// execution-claim versions.
+const EXECUTION_WITNESS_WIRE_VERSION: u8 = 5;
 
 impl ExecutionWitness {
     fn write_payload<W: ByteWriter>(&self, target: &mut W) {

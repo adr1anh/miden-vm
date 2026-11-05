@@ -85,8 +85,7 @@ impl<'a> LibraryTrace<'a> {
                     || binding.procedure_key() != occurrence.namespace().procedure_key(*label)
                     || counts.normal > MAX_TRACE_LEN
                     || counts.syscall > MAX_TRACE_LEN
-                    || (counts.syscall != 0
-                        && binding.namespace() != session.descriptor().kernel_namespace())
+                    || (counts.syscall != 0 && binding.namespace() != Namespace::initial())
                 {
                     return Err(inconsistent());
                 }

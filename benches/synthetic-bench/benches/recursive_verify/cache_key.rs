@@ -2,17 +2,19 @@
 
 use miden_air::vm::config::RELATION_DIGEST;
 use miden_core::{
-    crypto::hash::Blake3_256, proof::ExecutionProofCompatibility, serde::Serializable,
-    utils::to_hex,
+    crypto::hash::Blake3_256, program::ExecutionDescriptor, proof::ExecutionProofCompatibility,
+    serde::Serializable, utils::to_hex,
 };
 use miden_stark::pcs::PcsParams;
 use miden_vm::{HashFunction, ProgramInfo};
 
-const TX_PROOF_CACHE_KEY_VERSION: &[u8] = b"miden-synthetic-recursive-tx-proof-cache-v5-eidos";
+const TX_PROOF_CACHE_KEY_VERSION: &[u8] =
+    b"miden-synthetic-recursive-tx-proof-cache-v6-environment-eidos";
 pub(super) const INNER_PROOF_HASH: HashFunction = HashFunction::Eidos;
 
 pub(super) fn tx_proof_cache_key(
     program_info: &ProgramInfo,
+    descriptor: ExecutionDescriptor,
     stack_values: &[u64],
     compatibility: &ExecutionProofCompatibility,
 ) -> String {
@@ -21,6 +23,11 @@ pub(super) fn tx_proof_cache_key(
     for digest in program_info.kernel_procedures() {
         program_bytes.extend_from_slice(&digest.as_bytes());
     }
+    // This local cache must distinguish authorized environments even while legacy claims still
+    // expose ProgramInfo. Neither the implementation root nor the source identifies K_entry/R_E.
+    let mut environment_bytes = Vec::with_capacity(64);
+    environment_bytes.extend_from_slice(&descriptor.entry_key().into_word().as_bytes());
+    environment_bytes.extend_from_slice(&descriptor.environment_root().into_word().as_bytes());
 
     let mut stack_bytes = Vec::with_capacity(stack_values.len() * 8);
     for value in stack_values {
@@ -48,6 +55,7 @@ pub(super) fn tx_proof_cache_key(
             relation_digest_bytes.as_slice(),
             compatibility_bytes.as_slice(),
             program_bytes.as_slice(),
+            environment_bytes.as_slice(),
             stack_bytes.as_slice(),
             hash_fn_byte.as_slice(),
             parameters.as_slice(),

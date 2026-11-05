@@ -179,6 +179,7 @@ impl DependencyGraph {
                     resolved_revision: resolved_revision.to_string(),
                     dependency_hash,
                     build_settings,
+                    compilation_commitment: None,
                 })
             },
             ProjectSourceOrigin::Path | ProjectSourceOrigin::Root
@@ -194,6 +195,7 @@ impl DependencyGraph {
                     ),
                     dependency_hash,
                     build_settings,
+                    compilation_commitment: None,
                 })
             },
             ProjectSourceOrigin::Path | ProjectSourceOrigin::Root => {
@@ -211,6 +213,7 @@ impl DependencyGraph {
                     source_hash: self.compute_path_source_hash(&context, source_provider)?,
                     dependency_hash,
                     build_settings,
+                    compilation_commitment: None,
                 })
             },
         }

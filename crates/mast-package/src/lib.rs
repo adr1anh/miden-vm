@@ -26,19 +26,21 @@ pub use self::package::arbitrary;
 pub use self::{
     dependency::Dependency,
     interface::{
-        DeclarationError, DeclarationSet, ProcedureDeclaration, PublicProcedurePath,
+        CallableProcedurePath, DeclarationError, DeclarationSet, ProcedureDeclaration,
+        PublicProcedurePath,
         artifact::{
             ArtifactError, ArtifactProfileOperation, DeclarationCommitment, InterfaceArtifactV1,
             InterfaceProfile, LibraryId,
         },
     },
-    namespace_plan::NamespacePlan,
+    namespace_plan::{CallableBinding, NamespacePlan},
     package::{
-        ConstantExport, EventHandlerManifestEntry, EventHandlerSection, EventHandlerSectionError,
-        InvalidSectionIdError, InvalidTargetTypeError, MAX_HANDLERS, MAX_MODULE_BYTES,
-        MAX_NAME_BYTES, MIN_ABI_VERSION, ManifestValidationError, Package, PackageDebugInfoError,
-        PackageExport, PackageId, PackageManifest, PackageModule, PackageStripError,
-        PackageSubmodule, ProcedureExport, Section, SectionId, TargetType, TypeExport,
-        validate_manifest_entries,
+        CallablesCodecError, ConstantExport, EventHandlerManifestEntry, EventHandlerSection,
+        EventHandlerSectionError, InvalidSectionIdError, InvalidTargetTypeError, MAX_HANDLERS,
+        MAX_MODULE_BYTES, MAX_NAME_BYTES, MIN_ABI_VERSION, ManifestValidationError,
+        NamingCodecError, Package, PackageCallables, PackageCallablesError, PackageDebugInfoError,
+        PackageExport, PackageId, PackageManifest, PackageModule, PackageNaming,
+        PackageNamingError, PackageStripError, PackageSubmodule, ProcedureExport, Section,
+        SectionId, TargetType, TypeExport, UnverifiedPackageNaming, validate_manifest_entries,
     },
 };

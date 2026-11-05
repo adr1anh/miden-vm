@@ -14,7 +14,7 @@ begin
                 incr
                 noop
             end
-            external.0x5e32b0bada16504f63d32dff1f7ece008c78b3c516486068ca1366b6cd9f9648
+            exec.0x3ae1e10d6c9e2c0e31b65ad9b7a50d6c49c0a111285faa37e3d15a4e6edafd5a
         end
         basic_block add add end
     end

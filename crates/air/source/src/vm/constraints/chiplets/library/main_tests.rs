@@ -4,7 +4,11 @@
 use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
 
-use miden_core::{Word, field::QuadFelt, program::domain};
+use miden_core::{
+    Word,
+    field::QuadFelt,
+    program::{Namespace, domain},
+};
 use miden_crypto::hash::eidos::{Eidos, EidosFrame};
 use miden_stark::air::{
     AirBuilder, WindowAccess,
@@ -24,12 +28,9 @@ use crate::vm::{
 
 type SharedRow = [Felt; NUM_CHIPLETS_COLS];
 
-const KERNEL: [Felt; 4] = [
-    Felt::new_unchecked(31),
-    Felt::new_unchecked(32),
-    Felt::new_unchecked(33),
-    Felt::new_unchecked(34),
-];
+fn initial_namespace() -> [Felt; 4] {
+    Namespace::initial().into_word().into_elements()
+}
 
 fn word(base: u32) -> [Felt; 4] {
     core::array::from_fn(|i| Felt::from_u32(base + i as u32))
@@ -60,7 +61,7 @@ fn object_pair(kind: [Felt; 3]) -> [SharedRow; 2] {
     let a = cols_mut(&mut pair[0]);
     a.x = word(1);
     a.y = word(11);
-    a.w = KERNEL;
+    a.w = initial_namespace();
     a.d = Felt::from_u8(3);
     let init = if kind == MERKLE {
         Eidos::init_chaining_word(domain::ENV_MERKLE, 8)
@@ -140,7 +141,7 @@ fn list_pairs(num_children: usize) -> Vec<SharedRow> {
             cols.x = x;
             cols.y = y;
             cols.z = if phase == 0 { output } else { input };
-            cols.w = KERNEL;
+            cols.w = initial_namespace();
             cols.d = Felt::from_u8(3);
             cols.a = Felt::from_usize(length);
             cols.b = if phase == 0 {
@@ -188,7 +189,7 @@ fn evaluations(rows: &[SharedRow]) -> Vec<(usize, Vec<QuadFelt>)> {
                 phase: Felt::from_usize(index % 2),
                 exit_aligned: Felt::from_bool(index % 8 == 7),
             };
-            enforce_library_constraints(&mut builder, cols(local), cols(next), &context, &KERNEL);
+            enforce_library_constraints(&mut builder, cols(local), cols(next), &context);
             (index, builder.evaluations)
         })
         .collect()
@@ -481,7 +482,7 @@ fn library_main_checks_each_syscall_supplier_namespace_without_frequency_ranges(
             compress(Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8).into_elements(), b.x, b.y);
         cancellation.extend(pair);
     }
-    for (coordinate, authorized) in KERNEL.iter().enumerate() {
+    for (coordinate, authorized) in initial_namespace().iter().enumerate() {
         let aggregate = cols(&cancellation[1]).b
             * (cols(&cancellation[1]).x[coordinate] - *authorized)
             + cols(&cancellation[3]).b * (cols(&cancellation[3]).x[coordinate] - *authorized);
@@ -491,13 +492,25 @@ fn library_main_checks_each_syscall_supplier_namespace_without_frequency_ranges(
 }
 
 #[test]
+fn library_main_rejects_zero_word_as_syscall_namespace() {
+    assert_ne!(initial_namespace(), [Felt::ZERO; 4]);
+    let mut pair = object_pair(MAST);
+    cols_mut(&mut pair[0]).w = [Felt::ZERO; 4];
+    let b = cols_mut(&mut pair[1]);
+    b.x = [Felt::ZERO; 4];
+    b.z = compress(Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8).into_elements(), b.x, b.y);
+    assert_ne!(b.b, Felt::ZERO);
+    assert_reject(&finish(pair.into()));
+}
+
+#[test]
 fn library_main_symbolic_degree_is_nine_with_explicit_shared_inputs() {
-    // A test adapter calls the same entry point with actual shared-row variables, four public
-    // namespace coordinates, and the planned fixed periodic order; it creates no production AIR.
+    // A test adapter calls the same entry point with actual shared-row variables and the fixed
+    // periodic order; the initial namespace is a VM constant, not a public input.
     let mut builder = SymbolicAirBuilder::<Felt>::new(AirLayout {
         preprocessed_width: 0,
         main_width: NUM_CHIPLETS_COLS,
-        num_public_values: 4,
+        num_public_values: 0,
         permutation_width: 0,
         num_permutation_challenges: 0,
         num_permutation_values: 0,
@@ -512,8 +525,7 @@ fn library_main_symbolic_degree_is_nine_with_explicit_shared_inputs() {
         phase: builder.periodic_values()[8].into(),
         exit_aligned: builder.periodic_values()[7].into(),
     };
-    let kernel = core::array::from_fn(|i| builder.public_values()[i].into());
-    enforce_library_constraints(&mut builder, local.library(), next.library(), &context, &kernel);
+    enforce_library_constraints(&mut builder, local.library(), next.library(), &context);
     assert_eq!(
         builder
             .base_constraints()

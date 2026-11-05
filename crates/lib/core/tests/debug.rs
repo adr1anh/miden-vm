@@ -4,6 +4,9 @@
 //! buffer (instead of stdout). The capture tests assert on the printed text; the stack-effect
 //! tests assert on the resulting operand stack.
 
+#[path = "support/naming.rs"]
+mod naming;
+
 use std::{
     fmt,
     sync::{Arc, Mutex},
@@ -21,7 +24,7 @@ use miden_core_lib::{
 };
 use miden_processor::{
     DefaultHost, ExecutionError, ExecutionOptions, ExecutionOutput, FastProcessor, HostLibrary,
-    MemoryError, Program, StackInputs, SyncHost,
+    MemoryError, StackInputs, SyncHost,
     advice::{AdviceInputs, AdviceStack},
     event::{EventHandler, EventName},
 };
@@ -29,9 +32,9 @@ use miden_processor::{
 // HARNESS
 // ================================================================================================
 
-/// Runs `program` against `host`, constructing a [`FastProcessor`] the way production callers do.
+/// Runs the named program against `host` with its explicit execution environment.
 fn execute_sync(
-    program: &Program,
+    named: &crate::naming::NamedProgram,
     stack_inputs: StackInputs,
     advice_inputs: AdviceInputs,
     host: &mut impl SyncHost,
@@ -39,7 +42,7 @@ fn execute_sync(
 ) -> Result<ExecutionOutput, ExecutionError> {
     let processor = FastProcessor::new_with_options(stack_inputs, advice_inputs, options)
         .expect("failed to construct FastProcessor");
-    processor.execute_sync(program, host)
+    processor.execute_sync(&named.program, named.environment.execution(), host)
 }
 
 /// A [`fmt::Write`] that appends into a shared, thread-safe string buffer.
@@ -71,12 +74,10 @@ fn debug_handlers_with_writer(writer: SharedBuf) -> Vec<(EventName, Arc<dyn Even
 fn run(source: &str, advice: AdviceInputs) -> (String, ExecutionOutput) {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let program = assembler
-        .assemble_program("program", source)
-        .expect("failed to assemble program")
-        .unwrap_program();
+    let named =
+        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
     let buf = Arc::new(Mutex::new(String::new()));
     let host_lib = HostLibrary {
@@ -84,10 +85,13 @@ fn run(source: &str, advice: AdviceInputs) -> (String, ExecutionOutput) {
         package_debug_info: Ok(None),
         handlers: debug_handlers_with_writer(SharedBuf(buf.clone())),
     };
-    let mut host = DefaultHost::default().with_library(host_lib).expect("failed to load host lib");
+    let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
+        .with_library(host_lib)
+        .expect("failed to load host lib");
 
     let output = execute_sync(
-        &program,
+        &named,
         StackInputs::default(),
         advice,
         &mut host,
@@ -112,17 +116,16 @@ fn run_and_capture(source: &str, advice: AdviceInputs) -> String {
 fn run_with_default_core_handlers(source: &str, advice: AdviceInputs) -> ExecutionOutput {
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let program = assembler
-        .assemble_program("program", source)
-        .expect("failed to assemble program")
-        .unwrap_program();
+    let named =
+        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
         .with_library(&core_lib)
         .expect("failed to load core library handlers");
 
-    execute_sync(&program, StackInputs::default(), advice, &mut host, ExecutionOptions::default())
+    execute_sync(&named, StackInputs::default(), advice, &mut host, ExecutionOptions::default())
         .expect("execution failed")
 }
 
@@ -298,21 +301,22 @@ fn print_mem_rejects_out_of_bounds_range_end() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let program = assembler
-        .assemble_program("program", source)
-        .expect("failed to assemble program")
-        .unwrap_program();
+    let named =
+        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary {
         mast_forest: core_lib.mast_forest().clone(),
         package_debug_info: Ok(None),
         handlers: debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))),
     };
-    let mut host = DefaultHost::default().with_library(host_lib).expect("failed to load host lib");
+    let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
+        .with_library(host_lib)
+        .expect("failed to load host lib");
 
     match execute_sync(
-        &program,
+        &named,
         StackInputs::default(),
         AdviceInputs::default(),
         &mut host,
@@ -341,21 +345,22 @@ fn print_mem_rejects_oversized_range() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let program = assembler
-        .assemble_program("program", source)
-        .expect("failed to assemble program")
-        .unwrap_program();
+    let named =
+        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary {
         mast_forest: core_lib.mast_forest().clone(),
         package_debug_info: Ok(None),
         handlers: debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))),
     };
-    let mut host = DefaultHost::default().with_library(host_lib).expect("failed to load host lib");
+    let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
+        .with_library(host_lib)
+        .expect("failed to load host lib");
 
     match execute_sync(
-        &program,
+        &named,
         StackInputs::default(),
         AdviceInputs::default(),
         &mut host,
@@ -384,21 +389,22 @@ fn print_mem_rejects_full_range() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let program = assembler
-        .assemble_program("program", source)
-        .expect("failed to assemble program")
-        .unwrap_program();
+    let named =
+        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary {
         mast_forest: core_lib.mast_forest().clone(),
         package_debug_info: Ok(None),
         handlers: debug_handlers_with_writer(SharedBuf(Arc::new(Mutex::new(String::new())))),
     };
-    let mut host = DefaultHost::default().with_library(host_lib).expect("failed to load host lib");
+    let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
+        .with_library(host_lib)
+        .expect("failed to load host lib");
 
     match execute_sync(
-        &program,
+        &named,
         StackInputs::default(),
         AdviceInputs::default(),
         &mut host,
@@ -587,12 +593,10 @@ fn debug_handlers_compose_with_default_core_handlers() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let program = assembler
-        .assemble_program("program", source)
-        .expect("failed to assemble program")
-        .unwrap_program();
+    let named =
+        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
 
     let mut handlers = core_lib.handlers();
     handlers.extend(advice_debug_handlers());
@@ -601,10 +605,13 @@ fn debug_handlers_compose_with_default_core_handlers() {
         package_debug_info: Ok(None),
         handlers,
     };
-    let mut host = DefaultHost::default().with_library(host_lib).expect("failed to load host lib");
+    let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
+        .with_library(host_lib)
+        .expect("failed to load host lib");
 
     let output = execute_sync(
-        &program,
+        &named,
         StackInputs::default(),
         advice,
         &mut host,
@@ -660,21 +667,22 @@ fn noop_debug_handlers_run_print_stack_without_output() {
 
     let core_lib = CoreLibrary::default();
     let assembler = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
+        .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("failed to load core library");
-    let program = assembler
-        .assemble_program("program", source)
-        .expect("failed to assemble program")
-        .unwrap_program();
+    let named =
+        crate::naming::assemble(assembler, "program", source, &[core_lib.naming().as_ref()]);
     let host_lib = HostLibrary {
         mast_forest: core_lib.mast_forest().clone(),
         package_debug_info: Ok(None),
         handlers: noop_debug_handlers(),
     };
-    let mut host = DefaultHost::default().with_library(host_lib).expect("failed to load host lib");
+    let mut host = DefaultHost::default()
+        .with_environment_source(named.environment.source())
+        .with_library(host_lib)
+        .expect("failed to load host lib");
 
     let output = execute_sync(
-        &program,
+        &named,
         StackInputs::default(),
         AdviceInputs::default(),
         &mut host,

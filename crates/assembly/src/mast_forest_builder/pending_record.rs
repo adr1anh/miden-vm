@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use miden_core::{
     Word,
     mast::{MastNode, OpBatch},
+    program::ProcedureKey,
     utils::newtype_id,
 };
 use miden_mast_package::debug_info::{
@@ -48,14 +49,16 @@ pub(super) struct PendingMastNode {
 /// Compact representation of a pending node's structural variant.
 ///
 /// Child references live on [`PendingMastNode`]; this enum stores only the data needed to
-/// materialize the final node variant.
+/// materialize the final node variant. Immediate invocation targets are procedure keys and never
+/// contribute structural child references.
 #[derive(Clone, Debug)]
 pub(super) enum PendingMastNodeKind {
     BasicBlock { op_batches: Vec<OpBatch> },
     Join,
     Split,
     Loop,
-    Call { is_syscall: bool },
+    Exec { target: ProcedureKey },
+    Call { target: ProcedureKey, is_syscall: bool },
     Dyn { is_dyncall: bool },
     External,
 }
@@ -67,6 +70,7 @@ impl PendingMastNodeKind {
             Self::Join => "join",
             Self::Split => "split",
             Self::Loop => "loop",
+            Self::Exec { .. } => "exec",
             Self::Call { .. } => "call",
             Self::Dyn { .. } => "dyn",
             Self::External => "external",
@@ -79,7 +83,11 @@ impl PendingMastNodeKind {
             MastNode::Join(_) => Self::Join,
             MastNode::Split(_) => Self::Split,
             MastNode::Loop(_) => Self::Loop,
-            MastNode::Call(node) => Self::Call { is_syscall: node.is_syscall() },
+            MastNode::Exec(node) => Self::Exec { target: node.target() },
+            MastNode::Call(node) => Self::Call {
+                target: node.target(),
+                is_syscall: node.is_syscall(),
+            },
             MastNode::Dyn(node) => Self::Dyn { is_dyncall: node.is_dyncall() },
             MastNode::External(_) => Self::External,
         }

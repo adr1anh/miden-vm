@@ -1,7 +1,7 @@
-use miden_assembly::package::Package;
+use miden_utils_testing::Test;
 
 use super::*;
-use crate::test_utils::TestHost;
+use crate::test_utils::{TestHost, native_fixture_environment};
 
 #[test]
 fn test_advice_provider() {
@@ -142,28 +142,18 @@ fn test_advice_provider() {
     end
     ";
 
-    let (program, kernel_lib) = {
-        let source_manager = Arc::new(DefaultSourceManager::default());
-        let kernel = parse_kernel_source(source_manager.clone(), kernel_source);
-
-        let kernel_lib = Assembler::new(source_manager.clone())
-            .assemble_kernel("kernel", kernel, None)
-            .map(Arc::<Package>::from)
-            .unwrap();
-        let program = Assembler::with_kernel(source_manager, kernel_lib.clone())
-            .unwrap()
-            .assemble_program("program", program_source)
-            .unwrap()
-            .unwrap_program();
-
-        (program, kernel_lib)
-    };
-
-    let mut fast_host = TestHost::with_kernel_forest(kernel_lib.mast_forest().clone());
+    let test =
+        Test::new("program", program_source, false).with_kernel_source("kernel", kernel_source);
+    let (program, kernel_lib, _) = test.compile().unwrap();
+    let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
+    let kernel_lib = kernel_lib.expect("test has an assembled kernel");
+    let mut fast_host = TestHost::with_kernel_forest(kernel_lib.mast_forest().clone())
+        .with_environment_source(source);
     let processor = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
-    let fast_stack_outputs = processor.execute_sync(&program, &mut fast_host).unwrap().stack;
+    let fast_stack_outputs =
+        processor.execute_sync(&program, environment, &mut fast_host).unwrap().stack;
 
     // check outputs
     insta::assert_debug_snapshot!("stack_outputs", fast_stack_outputs);

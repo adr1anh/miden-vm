@@ -191,24 +191,29 @@ fn pvm_verifies_a_session_mixing_every_precompile() {
         p256_commitment =
             masm_push_word(&ecdsa_p256_sha256::public_key_commitment(p256_key.verifying_key())),
     );
-    let program = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
-        .unwrap()
-        .assemble_program("pvm_mixed_session", source)
-        .unwrap()
-        .unwrap_program();
+    let program = crate::naming::assemble(
+        Assembler::default()
+            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .unwrap(),
+        "pvm_mixed_session",
+        source,
+        &[core_lib.naming()],
+    );
     let mut advice = AdviceStack::new();
     advice.append_elements(k256.advice);
     advice.append_elements(eddsa_25519_sha512::sign(&ed25519_key, k256.message));
     advice.append_elements(ecdsa_p256_sha256::sign(&p256_key, k256.message));
-    let mut host = DefaultHost::default().with_library(&core_lib).unwrap();
+    let mut host = DefaultHost::default()
+        .with_environment_source(program.environment.source())
+        .with_library(&core_lib)
+        .unwrap();
     let output = FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default().with_stack(advice),
         ExecutionOptions::default(),
     )
     .unwrap()
-    .execute_sync(&program, &mut host)
+    .execute_sync(&program.program, program.environment.execution(), &mut host)
     .expect("the mixed execution must succeed");
     assert!(output.advice.stack().is_empty(), "the execution must consume its advice");
 

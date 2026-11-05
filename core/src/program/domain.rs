@@ -182,12 +182,14 @@ miden_crypto::eidos_domain_registry! {
                 description: "Runtime-linked execution-verifier identity.",
                 schema: "param0 = 12; param1 = 0; param2 = 0; payload = relation identity || verifier entry key || verifier configuration commitment",
             }
+            // Version 2 committed a configurable kernel namespace and is retired. Its numeric
+            // tag remains reserved; fixed-root configurations use a distinct v3 commitment.
             pub EXEC_VERIFIER_CONFIG: ExecutionVerifierConfigDomain {
                 local_id: 0x010a,
-                version: DomainVersion::numbered(2),
+                version: DomainVersion::numbered(3),
                 encoding: FeltSequence,
-                description: "Execution-verifier configuration with authorized kernel namespace.",
-                schema: "param0 = 14 + 8 * mount count, checked u32; param1 = 0; param2 = 0; payload = 2 || entry implementation root || authorized kernel namespace || mount count || unique mount pairs sorted lexicographically by canonical Felt coordinates, namespace before fragment commitment || resource inventory root",
+                description: "Execution-verifier configuration with fixed-root syscall semantics.",
+                schema: "param0 = 10 + 8 * mount count, checked u32; param1 = 0; param2 = 0; payload = 3 || entry implementation root || mount count || unique mount pairs sorted lexicographically by canonical Felt coordinates, namespace before fragment commitment || resource inventory root",
             }
         }
     }
@@ -252,7 +254,7 @@ mod tests {
         assert_framing(ENV_MERKLE, "object_merkle", &[8]);
         assert_framing(ENV_LIST, "object_list_0", &[0, 4, 8, 12, 16]);
         assert_framing(EXEC_VERIFIER_IDENTITY, "domain_verifier_identity_sequential", &[12]);
-        assert_framing(EXEC_VERIFIER_CONFIG, "domain_verifier_config_empty_mounts", &[14, 22, 30]);
+        assert_framing(EXEC_VERIFIER_CONFIG, "domain_verifier_config_empty_mounts", &[10, 18, 26]);
     }
 
     fn assert_framing<D: EidosDomain<Encoding = FeltSequence>>(

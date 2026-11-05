@@ -363,7 +363,11 @@ fn assert_fold_coefficients_match_the_proof_order(
 /// at return.
 pub(super) fn execute_and_check(test: &Test, proof_stream: &[u64], claim: &[u64]) -> Vec<usize> {
     let (program, ..) = test.compile().expect("the verifier fixture must assemble");
-    let mut host = DefaultHost::default().with_library(&CoreLibrary::default()).unwrap();
+    let environment = test.fixture_environment().expect("the verifier fixture must be named");
+    let mut host = DefaultHost::default()
+        .with_environment_source(environment.source())
+        .with_library(&CoreLibrary::default())
+        .unwrap();
     for (event, handler) in &test.trace_handlers {
         host.register_trace_handler(event.clone(), handler.clone()).unwrap();
     }
@@ -374,13 +378,19 @@ pub(super) fn execute_and_check(test: &Test, proof_stream: &[u64], claim: &[u64]
     )
     .unwrap();
     let mut verifier_context = None;
-    let mut resume = Some(processor.get_initial_resume_context(&program).unwrap());
-    while let Some(next) = resume {
-        resume = processor.step_sync(&mut host, next).expect("recursive verification failed");
+    let mut resume =
+        processor.get_initial_resume_context(&program, environment.execution()).unwrap();
+    loop {
+        let complete = processor
+            .step_sync(&mut host, &mut resume)
+            .expect("recursive verification failed");
         let ctx = processor.state().ctx();
         // The verifier is the first child context in these fixtures.
         if !ctx.is_root() {
             verifier_context.get_or_insert(ctx);
+        }
+        if complete {
+            break;
         }
     }
 

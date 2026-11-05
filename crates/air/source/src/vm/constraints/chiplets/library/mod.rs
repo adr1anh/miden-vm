@@ -1,7 +1,7 @@
 //! Scoped Library expressions for the packed Chiplets prefix.
 //!
-//! The Chiplets MAIN dispatcher supplies the section selector, fixed periodics, and mandatory
-//! public kernel namespace. Rooted authorization is completed by its paired lookup relation.
+//! The Chiplets MAIN dispatcher supplies the section selector and fixed periodics. Syscall
+//! suppliers use the fixed initial namespace; the paired lookup relation authenticates its root.
 
 pub mod columns;
 pub(crate) mod constraints;

@@ -1,22 +1,31 @@
 use std::sync::Arc;
 
-use miden_assembly::Assembler;
+#[path = "common/named_source.rs"]
+mod named_source;
 use miden_debug_types::{Location, SourceFile, SourceSpan};
 use miden_processor::{
-    BaseHost, DefaultHost, ExecutionOptions, FastProcessor, Felt, FutureMaybeSend, Host,
-    LoadedMastForest, ProcessorState, StackInputs, Word,
+    BaseHost, DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest,
+    EnvironmentWitnessSource, ExecutionOptions, FastProcessor, Felt, FutureMaybeSend, Host,
+    LoadedMastForest, ProcessorState, ResolutionWitness, StackInputs, Word,
     advice::{AdviceInputs, AdviceMutation},
     event::{EventError, EventName, TraceError},
 };
+use miden_utils_testing::librarytree::{FixtureEnvironment, trace_limits};
+use named_source::named_source;
 
 struct YieldingAsyncHost {
     event_calls: usize,
     trace_calls: usize,
+    environment: Arc<dyn EnvironmentWitnessSource>,
 }
 
 impl YieldingAsyncHost {
-    fn new() -> Self {
-        Self { event_calls: 0, trace_calls: 0 }
+    fn new(environment: &FixtureEnvironment) -> Self {
+        Self {
+            event_calls: 0,
+            trace_calls: 0,
+            environment: environment.source(),
+        }
     }
 }
 
@@ -30,6 +39,16 @@ impl BaseHost for YieldingAsyncHost {
 }
 
 impl Host for YieldingAsyncHost {
+    fn get_environment_witness(
+        &mut self,
+        request: EnvironmentWitnessRequest,
+    ) -> impl FutureMaybeSend<Result<Option<ResolutionWitness>, EnvironmentSourceError>> {
+        async move {
+            tokio::task::yield_now().await;
+            self.environment.get(request)
+        }
+    }
+
     fn get_mast_forest(
         &self,
         _node_digest: &Word,
@@ -60,51 +79,35 @@ impl Host for YieldingAsyncHost {
     }
 }
 
-fn simple_program() -> miden_processor::Program {
-    Assembler::default()
-        .assemble_program(
-            "program",
-            r#"
-            begin
-                push.2
-                add
-            end
-            "#,
-        )
-        .expect("program should compile")
-        .unwrap_program()
+fn simple_program() -> (miden_processor::Program, FixtureEnvironment) {
+    named_source("begin push.2 add end")
 }
 
-fn emit_trace_program() -> miden_processor::Program {
-    let trace_name = "test::async::trace_emit";
-
-    Assembler::default()
-        .assemble_program("program", format!("begin trace.event(\"{trace_name}\") end"))
-        .expect("program should compile")
-        .unwrap_program()
+fn emit_trace_program() -> (miden_processor::Program, FixtureEnvironment) {
+    named_source("begin trace.event(\"test::async::trace_emit\") end")
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn execute_async_matches_execute() {
-    let program = simple_program();
+    let (program, environment) = simple_program();
     let stack_inputs = StackInputs::new(&[Felt::new_unchecked(3)]).unwrap();
     let advice_inputs = AdviceInputs::default();
 
-    let mut sync_host = DefaultHost::default();
+    let mut sync_host = DefaultHost::default().with_environment_source(environment.source());
     let sync_output = FastProcessor::new_with_options(
         stack_inputs,
         advice_inputs.clone(),
         ExecutionOptions::default(),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&program, &mut sync_host)
+    .execute_sync(&program, environment.execution(), &mut sync_host)
     .unwrap();
 
-    let mut async_host = DefaultHost::default();
+    let mut async_host = DefaultHost::default().with_environment_source(environment.source());
     let async_output =
         FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
             .expect("failed to construct FastProcessor")
-            .execute(&program, &mut async_host)
+            .execute(&program, environment.execution(), &mut async_host)
             .await
             .unwrap();
 
@@ -113,19 +116,29 @@ async fn execute_async_matches_execute() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn fast_processor_execute_for_proving_async_matches_sync() {
-    let program = simple_program();
+    let (program, environment) = simple_program();
     let stack_inputs = StackInputs::new(&[Felt::new_unchecked(3)]).unwrap();
 
-    let mut sync_host = DefaultHost::default();
-    let sync_witness = FastProcessor::new(stack_inputs)
-        .execute_for_proving_sync(&program, &mut sync_host)
-        .unwrap();
+    let mut sync_host = DefaultHost::default().with_environment_source(environment.source());
+    let sync_witness = FastProcessor::new_with_options(
+        stack_inputs,
+        AdviceInputs::default(),
+        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+    )
+    .unwrap()
+    .execute_for_proving_sync(&program, environment.execution(), &mut sync_host)
+    .unwrap();
 
-    let mut async_host = DefaultHost::default();
-    let async_witness = FastProcessor::new(stack_inputs)
-        .execute_for_proving(&program, &mut async_host)
-        .await
-        .unwrap();
+    let mut async_host = DefaultHost::default().with_environment_source(environment.source());
+    let async_witness = FastProcessor::new_with_options(
+        stack_inputs,
+        AdviceInputs::default(),
+        ExecutionOptions::default().with_environment_trace_limits(trace_limits()),
+    )
+    .unwrap()
+    .execute_for_proving(&program, environment.execution(), &mut async_host)
+    .await
+    .unwrap();
 
     assert_eq!(sync_witness.claim().stack_outputs(), async_witness.claim().stack_outputs());
     let (sync_vm_witness, _) = sync_witness.into_parts();
@@ -154,14 +167,11 @@ async fn fast_processor_execute_for_proving_async_matches_sync() {
 async fn execute_async_supports_async_only_host_events() {
     let event_name = EventName::new("test::async::emit");
     let event_id = event_name.to_event_id().as_u64();
-    let program = Assembler::default()
-        .assemble_program("program", format!("begin push.{event_id} emit drop end"))
-        .expect("program should compile")
-        .unwrap_program();
+    let (program, environment) = named_source(&format!("begin push.{event_id} emit drop end"));
 
-    let mut host = YieldingAsyncHost::new();
+    let mut host = YieldingAsyncHost::new(&environment);
     let output = FastProcessor::new(StackInputs::default())
-        .execute(&program, &mut host)
+        .execute(&program, environment.execution(), &mut host)
         .await
         .expect("async execution should succeed");
 
@@ -171,11 +181,11 @@ async fn execute_async_supports_async_only_host_events() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn execute_async_supports_async_only_host_traces() {
-    let program = emit_trace_program();
+    let (program, environment) = emit_trace_program();
 
-    let mut host = YieldingAsyncHost::new();
+    let mut host = YieldingAsyncHost::new(&environment);
     let output = FastProcessor::new(StackInputs::default())
-        .execute(&program, &mut host)
+        .execute(&program, environment.execution(), &mut host)
         .await
         .expect("async execution should succeed");
 

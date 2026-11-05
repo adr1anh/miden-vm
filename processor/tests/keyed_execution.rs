@@ -174,9 +174,9 @@ impl EnvironmentFixture {
         })
     }
 
-    fn configuration(&self, entry: ProcedureKey, kernel: Namespace) -> ExecutionEnvironment {
+    fn configuration(&self, entry: ProcedureKey) -> ExecutionEnvironment {
         ExecutionEnvironment::new(
-            ExecutionDescriptor::new(entry, self.root, kernel),
+            ExecutionDescriptor::new(entry, self.root),
             opening_limits(),
             ledger_limits(),
             session_limits(),
@@ -353,7 +353,7 @@ fn entry_authenticates_fixed_root_and_key_before_loading_authenticated_body() {
         (&["app"], "entry", authenticated.hash()),
         (&["app"], "other", hint.hash()),
     ]);
-    let configuration = environment.configuration(entry, namespace(&["kernel"]));
+    let configuration = environment.configuration(entry);
 
     let mut wrong_key = CountingHost::new(&environment, &[&authenticated, &hint]);
     wrong_key.substitute_witness = Some(other);
@@ -370,7 +370,7 @@ fn entry_authenticates_fixed_root_and_key_before_loading_authenticated_body() {
     assert!(wrong_key.code_requests.borrow().is_empty());
 
     let wrong_root = ExecutionEnvironment::new(
-        ExecutionDescriptor::new(entry, EnvironmentRoot::new(hint.hash()), namespace(&["kernel"])),
+        ExecutionDescriptor::new(entry, EnvironmentRoot::new(hint.hash())),
         opening_limits(),
         ledger_limits(),
         session_limits(),
@@ -412,11 +412,7 @@ fn available_implementation_never_substitutes_for_missing_key_evidence() {
     let digest_shaped_key = ProcedureKey::new(hint.hash());
     let mut host = CountingHost::new(&environment, &[&hint]);
     let error = FastProcessor::new(StackInputs::default())
-        .execute_sync(
-            &hint,
-            environment.configuration(digest_shaped_key, namespace(&["kernel"])),
-            &mut host,
-        )
+        .execute_sync(&hint, environment.configuration(digest_shaped_key), &mut host)
         .unwrap_err();
     assert!(matches!(error, ExecutionError::EnvironmentWitnessUnavailable { key, .. }
         if key == digest_shaped_key));
@@ -444,10 +440,7 @@ fn same_body_aliases_preserve_exec_principal_and_establish_each_call_key() {
         let mut host = CountingHost::new(&environment, &[&callee]);
         let mut processor = FastProcessor::new(StackInputs::default());
         let mut resume = processor
-            .get_initial_resume_context(
-                &program,
-                environment.configuration(entry, namespace(&["kernel"])),
-            )
+            .get_initial_resume_context(&program, environment.configuration(entry))
             .unwrap();
         run_steps(&mut processor, &mut host, &mut resume);
         assert_eq!(host.observations.len(), 3);
@@ -503,10 +496,7 @@ fn bounded_keyed_self_recursion_restores_frames_and_closes_entry_only_at_root_en
     let mut host = CountingHost::new(&environment, &[]);
     let mut processor = FastProcessor::new(StackInputs::new(&[felt(3)]).unwrap());
     let mut resume = processor
-        .get_initial_resume_context(
-            &program,
-            environment.configuration(recursive, namespace(&["kernel"])),
-        )
+        .get_initial_resume_context(&program, environment.configuration(recursive))
         .unwrap();
     let mut restored_before_root_end = false;
     for _ in 0..512 {
@@ -568,32 +558,32 @@ fn bounded_keyed_self_recursion_restores_frames_and_closes_entry_only_at_root_en
 }
 
 #[test]
-fn syscall_requires_exact_full_namespace_before_code_lookup() {
+fn syscall_requires_fixed_root_namespace_before_code_lookup() {
     let entry = key(&["app"], "entry");
-    let kernel_path = ["runtime", "kernel", "v2"];
-    let target = key(&kernel_path, "read_principal");
     let callee = body(observe());
-    let program = invocation_program(Mode::Syscall, target);
-    let environment = EnvironmentFixture::new(&[
-        (&["app"], "entry", program.hash()),
-        (&kernel_path, "read_principal", callee.hash()),
-    ]);
-    let exact = namespace(&kernel_path);
-    for authorized in [
-        namespace(&["kernel"]),
-        namespace(&["runtime", "kernel"]),
-        namespace(&["runtime", "kernel", "v2", "child"]),
+    for path in [
+        &["kernel"][..],
+        &["runtime", "kernel"][..],
+        &["runtime", "kernel", "v2", "child"][..],
     ] {
+        let target = key(path, "read_principal");
+        let program = invocation_program(Mode::Syscall, target);
+        let environment = EnvironmentFixture::new(&[
+            (&["app"], "entry", program.hash()),
+            (path, "read_principal", callee.hash()),
+        ]);
         let mut host = CountingHost::new(&environment, &[&callee]);
         let error = FastProcessor::new(StackInputs::default())
-            .execute_sync(&program, environment.configuration(entry, authorized), &mut host)
+            .execute_sync(&program, environment.configuration(entry), &mut host)
             .unwrap_err();
         assert!(matches!(error, ExecutionError::EnvironmentSession(
             SessionError::UnauthorizedSyscall { expected, actual })
-            if expected == authorized && actual == exact));
+            if expected == Namespace::initial() && actual == namespace(path)));
         assert!(host.code_requests.borrow().is_empty());
         assert!(host.observations.is_empty());
     }
+    let kernel_path = [];
+    let target = key(&kernel_path, "read_principal");
     // Start the successful syscall inside an ordinary user CALL: kernel entry must switch
     // back to root context, preserve the established user key, then restore the user frame.
     let user = key(&["app"], "user");
@@ -611,7 +601,7 @@ fn syscall_requires_exact_full_namespace_before_code_lookup() {
     let mut host = CountingHost::new(&environment, &[&user_body, &callee]);
     let mut processor = FastProcessor::new(StackInputs::default());
     let mut resume = processor
-        .get_initial_resume_context(&program, environment.configuration(entry, exact))
+        .get_initial_resume_context(&program, environment.configuration(entry))
         .unwrap();
     run_steps(&mut processor, &mut host, &mut resume);
     assert_eq!(host.observations.len(), 2);
@@ -624,8 +614,8 @@ fn syscall_requires_exact_full_namespace_before_code_lookup() {
 }
 
 #[test]
-fn entry_and_ordinary_call_may_use_exports_in_the_authorized_kernel_namespace() {
-    let kernel_path = ["runtime", "kernel", "v2"];
+fn entry_and_ordinary_call_may_use_root_exports() {
+    let kernel_path = [];
     let target = key(&kernel_path, "ordinary");
     let callee = body(observe());
     let program = invocation_program(Mode::Call, target);
@@ -638,11 +628,7 @@ fn entry_and_ordinary_call_may_use_exports_in_the_authorized_kernel_namespace() 
     {
         let mut host = CountingHost::new(&environment, &[&callee]);
         let output = FastProcessor::new(StackInputs::default())
-            .execute_sync(
-                hint,
-                environment.configuration(entry, namespace(&kernel_path)),
-                &mut host,
-            )
+            .execute_sync(hint, environment.configuration(entry), &mut host)
             .unwrap();
         assert_eq!(output.stack.get_word(0), Some(target.into_word()));
         assert_eq!(host.observations[0].context.is_root(), expected_root);
@@ -763,7 +749,7 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
     };
 
     let entry = key(&["app"], "entry");
-    let aliases = [key(&["lib"], "a"), key(&["lib"], "b")];
+    let aliases = [key(&[], "a"), key(&[], "b")];
     let callee = body(vec![Operation::Noop]);
     let mut callee_builder = PackageDebugInfoBuilder::default();
     let callee_source =
@@ -846,10 +832,10 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
         let source_debug = *source_builder.build();
         let environment = EnvironmentFixture::new(&[
             (&["app"], "entry", program.hash()),
-            (&["lib"], "a", callee.hash()),
-            (&["lib"], "b", callee.hash()),
+            (&[], "a", callee.hash()),
+            (&[], "b", callee.hash()),
         ]);
-        let configuration = environment.configuration(entry, namespace(&["lib"]));
+        let configuration = environment.configuration(entry);
         let expected: Vec<_> = keys.into_iter().map(|key| (opcode, key, callee.hash())).collect();
         let mut baseline = None;
         // A one-row fragment places a cut on both sides of every invocation and return.
@@ -968,7 +954,7 @@ fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay(
     use miden_processor::trace::{RowIndex, build_trace};
 
     let entry = key(&["app"], "entry");
-    let target = key(&["kernel"], "shared");
+    let target = key(&[], "shared");
     let callee = body(vec![Operation::Noop]);
     let modes = [Mode::Exec, Mode::Syscall, Mode::Call, Mode::Syscall];
     let mut forest = MastForest::new();
@@ -980,9 +966,9 @@ fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay(
     let program = finish_program(forest, root);
     let environment = EnvironmentFixture::new(&[
         (&["app"], "entry", program.hash()),
-        (&["kernel"], "shared", callee.hash()),
+        (&[], "shared", callee.hash()),
     ]);
-    let configuration = environment.configuration(entry, namespace(&["kernel"]));
+    let configuration = environment.configuration(entry);
     let expected = [opcodes::EXEC, opcodes::SYSCALL, opcodes::CALL, opcodes::SYSCALL]
         .map(|opcode| (opcode, target, callee.hash()));
     let budget = miden_vm_stark::memory::default_budget();
@@ -1073,7 +1059,7 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
         (&["app"], "entry", program.hash()),
         (&["lib"], "child", callee.hash()),
     ]);
-    let configuration = environment.configuration(entry, namespace(&["kernel"]));
+    let configuration = environment.configuration(entry);
     let witness = FastProcessor::new(StackInputs::default())
         .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
         .unwrap()
@@ -1330,11 +1316,7 @@ fn dyn_shares_ram_fmp_and_principal_while_dyncall_uses_call_conventions() {
         ]);
         let mut host = CountingHost::new(&environment, &[&callee]);
         let output = FastProcessor::new(StackInputs::default())
-            .execute_sync(
-                &program,
-                environment.configuration(entry, namespace(&["kernel"])),
-                &mut host,
-            )
+            .execute_sync(&program, environment.configuration(entry), &mut host)
             .unwrap();
         let before = &host.observations[0];
         let after = &host.observations[1];
@@ -1391,10 +1373,7 @@ fn root_call_and_terminal_dyncall_restore_before_discharge_at_actual_entry_end()
         let mut host = CountingHost::new(&environment, &[&callee]);
         let mut processor = FastProcessor::new(StackInputs::default());
         let mut resume = processor
-            .get_initial_resume_context(
-                &program,
-                environment.configuration(entry, namespace(&["kernel"])),
-            )
+            .get_initial_resume_context(&program, environment.configuration(entry))
             .unwrap();
         for _ in 0..64 {
             assert!(!processor.step_sync(&mut host, &mut resume).unwrap());
@@ -1417,7 +1396,7 @@ fn root_call_and_terminal_dyncall_restore_before_discharge_at_actual_entry_end()
             .unwrap()
             .execute_for_proving_sync(
                 &program,
-                environment.configuration(entry, namespace(&["kernel"])),
+                environment.configuration(entry),
                 &mut CountingHost::new(&environment, &[&callee]),
             )
             .unwrap();
@@ -1462,10 +1441,7 @@ fn unavailable_witness_and_code_retries_keep_invocation_and_charge_once() {
     host.unavailable_code.insert(callee.hash());
     let mut processor = FastProcessor::new(StackInputs::default());
     let mut resume = processor
-        .get_initial_resume_context(
-            &program,
-            environment.configuration(entry, namespace(&["kernel"])),
-        )
+        .get_initial_resume_context(&program, environment.configuration(entry))
         .unwrap();
     for _ in 0..2 {
         assert!(matches!(processor.step_sync(&mut host, &mut resume),
@@ -1528,7 +1504,7 @@ fn explicit_native_budgets_and_missing_trace_policy_fail_closed() {
             SessionLimits { max_requests: 0, ..session_limits() }
         };
         let configuration = ExecutionEnvironment::new(
-            ExecutionDescriptor::new(entry, environment.root, namespace(&["kernel"])),
+            ExecutionDescriptor::new(entry, environment.root),
             opening,
             ledger_limits(),
             session,
@@ -1564,7 +1540,7 @@ fn explicit_native_budgets_and_missing_trace_policy_fail_closed() {
     assert!(matches!(
         FastProcessor::new(StackInputs::default()).execute_for_proving_sync(
             &program,
-            environment.configuration(entry, namespace(&["kernel"])),
+            environment.configuration(entry),
             &mut host,
         ),
         Err(ExecutionError::MissingEnvironmentTraceLimits)
@@ -1573,7 +1549,7 @@ fn explicit_native_budgets_and_missing_trace_policy_fail_closed() {
 }
 
 #[test]
-fn replay_v4_roundtrip_uses_caller_authority_and_explicit_budgets() {
+fn replay_v5_roundtrip_uses_caller_authority_and_explicit_budgets() {
     let entry = key(&[], "entry");
     let target = key(&["lib"], "child");
     let callee = body(observe());
@@ -1582,7 +1558,7 @@ fn replay_v4_roundtrip_uses_caller_authority_and_explicit_budgets() {
         (&[], "entry", program.hash()),
         (&["lib"], "child", callee.hash()),
     ]);
-    let configuration = environment.configuration(entry, namespace(&["kernel"]));
+    let configuration = environment.configuration(entry);
     let mut host = CountingHost::new(&environment, &[&callee]);
     let witness = FastProcessor::new(StackInputs::default())
         .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
@@ -1590,7 +1566,7 @@ fn replay_v4_roundtrip_uses_caller_authority_and_explicit_budgets() {
         .execute_for_proving_sync(&program, configuration, &mut host)
         .unwrap();
     let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
-    assert_eq!(bytes[0], 4);
+    assert_eq!(bytes[0], 5);
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
         &configuration,
@@ -1601,7 +1577,7 @@ fn replay_v4_roundtrip_uses_caller_authority_and_explicit_budgets() {
     assert_eq!(restored.execution_descriptor(), configuration.descriptor());
     assert_eq!(restored.claim(), witness.claim());
     assert_eq!(restored.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
-    for version in [3, 5] {
+    for version in [3, 4, 6] {
         assert!(
             ExecutionWitness::read_from_bytes_with_limits(
                 &[version],
@@ -1627,11 +1603,26 @@ fn replay_v4_roundtrip_uses_caller_authority_and_explicit_budgets() {
         )
         .is_err()
     );
-    let wrong_authority = environment.configuration(target, namespace(&["kernel"]));
+    let wrong_authority = environment.configuration(target);
     assert!(
         ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
             &wrong_authority,
+            trace_limits(),
+            read_limits(),
+        )
+        .is_err()
+    );
+    let changed_callee = body(vec![Operation::Noop]);
+    let changed_environment = EnvironmentFixture::new(&[
+        (&[], "entry", program.hash()),
+        (&["lib"], "child", changed_callee.hash()),
+    ]);
+    assert_ne!(changed_environment.root, environment.root);
+    assert!(
+        ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &changed_environment.configuration(entry),
             trace_limits(),
             read_limits(),
         )
@@ -1702,7 +1693,7 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
     };
     let mut processor = FastProcessor::new(StackInputs::default());
     let mut resume = processor
-        .get_initial_resume_context(&hint, environment.configuration(entry, namespace(&["kernel"])))
+        .get_initial_resume_context(&hint, environment.configuration(entry))
         .unwrap();
     {
         let mut future = Box::pin(processor.step(&mut host, &mut resume));
@@ -1939,10 +1930,7 @@ impl PendingSourceDynCall {
         assert!(Arc::ptr_eq(resume.current_forest(), &self.forest));
         assert_eq!(
             resume.environment().descriptor(),
-            fixture
-                .environment
-                .configuration(fixture.entry, namespace(&["kernel"]))
-                .descriptor()
+            fixture.environment.configuration(fixture.entry).descriptor()
         );
         let session = resume.resolution_session();
         assert_eq!(session.phase(), SessionPhase::PendingEntry);
@@ -1975,7 +1963,7 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
     let mut resume = processor
         .get_initial_resume_context(
             &fixture.program,
-            fixture.environment.configuration(fixture.entry, namespace(&["kernel"])),
+            fixture.environment.configuration(fixture.entry),
         )
         .unwrap();
     reach_source_dyncall(&mut processor, &mut host, &mut resume, &fixture);
@@ -2123,7 +2111,7 @@ fn source_dyncall_request_limit_after_entry_is_atomic_and_terminal() {
     };
     let mut processor = source_dyncall_processor();
     let configuration = ExecutionEnvironment::new(
-        ExecutionDescriptor::new(fixture.entry, fixture.environment.root, namespace(&["kernel"])),
+        ExecutionDescriptor::new(fixture.entry, fixture.environment.root),
         opening_limits(),
         ledger_limits(),
         SessionLimits { max_requests: 1, ..session_limits() },
@@ -2178,7 +2166,7 @@ fn mode_matrix_fixture(mode: Mode, local_target: bool) -> ModeMatrixFixture {
     // Synthetic names and explicit finite budgets exercise native execution only.
     let entry = key(&["native_fixture"], "entry");
     let user = key(&["native_fixture"], "user");
-    let target = key(&["native_fixture", "kernel", "v7"], "target");
+    let target = key(&[], "target");
     let mut target_ops = preserved_observation();
     store_element(&mut target_ops, felt(VALUE_ADDR), felt(111));
     store_element(&mut target_ops, FMP_ADDR, felt(222));
@@ -2297,7 +2285,7 @@ fn mode_matrix_fixture(mode: Mode, local_target: bool) -> ModeMatrixFixture {
     let environment = EnvironmentFixture::new(&[
         (&["native_fixture"], "entry", program.hash()),
         (&["native_fixture"], "user", program.mast_forest()[user_root].digest()),
-        (&["native_fixture", "kernel", "v7"], "target", callee.hash()),
+        (&[], "target", callee.hash()),
     ]);
     ModeMatrixFixture {
         entry,
@@ -2437,10 +2425,7 @@ fn runtime_debug_frames_separate_real_modes_and_inline_sources_at_every_return_c
                 let mut resume = processor
                     .get_initial_resume_context(
                         &fixture.program,
-                        fixture.environment.configuration(
-                            fixture.entry,
-                            namespace(&["native_fixture", "kernel", "v7"]),
-                        ),
+                        fixture.environment.configuration(fixture.entry),
                     )
                     .unwrap();
                 assert!(resume.debug_runtime_frames().is_empty());
@@ -2599,7 +2584,7 @@ fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancel
     let mut resume = processor
         .get_initial_resume_context(
             &fixture.program,
-            fixture.environment.configuration(fixture.entry, namespace(&["kernel"])),
+            fixture.environment.configuration(fixture.entry),
         )
         .unwrap();
     reach_source_dyncall(&mut processor, &mut host, &mut resume, &fixture);
@@ -2668,10 +2653,7 @@ fn runtime_debug_frames_keep_cached_recursive_exec_activations_distinct() {
         };
         let mut processor = FastProcessor::new(StackInputs::new(&[felt(3)]).unwrap());
         let mut resume = processor
-            .get_initial_resume_context(
-                &program,
-                environment.configuration(recursive, namespace(&["kernel"])),
-            )
+            .get_initial_resume_context(&program, environment.configuration(recursive))
             .unwrap();
         let mut previous = Vec::<DebugRuntimeFrame>::new();
         let mut invocations = Vec::<DebugRuntimeFrame>::new();
@@ -2733,10 +2715,7 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
                     let mut user_stack = (40..44).rev().map(felt).collect::<Vec<_>>();
                     user_stack.extend_from_slice(&original);
                     assert!(user_stack[16..].iter().all(|value| *value != felt(0)));
-                    let configuration = fixture.environment.configuration(
-                        fixture.entry,
-                        namespace(&["native_fixture", "kernel", "v7"]),
-                    );
+                    let configuration = fixture.environment.configuration(fixture.entry);
                     let mut resume = processor
                         .get_initial_resume_context(&fixture.program, configuration)
                         .unwrap();
@@ -2969,9 +2948,7 @@ fn source_async_host_call_event_error_invalidates_the_published_target() {
     let mut resume = processor
         .get_initial_resume_context(
             &fixture.program,
-            fixture
-                .environment
-                .configuration(fixture.entry, namespace(&["native_fixture", "kernel", "v7"])),
+            fixture.environment.configuration(fixture.entry),
         )
         .unwrap();
     for _ in 0..256 {

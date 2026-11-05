@@ -3,42 +3,19 @@ source: crates/assembly/src/tests/procedures.rs
 expression: program
 ---
 begin
-    basic_block
-        push(2147483648)
-        push(4294967294)
-        mstore
-        drop
-        push(10)
-        push(9)
-        push(8)
-        push(4)
-        noop
-        noop
-        push(4294967294)
-        mload
-        add
-        push(4294967294)
-        mstore
-        drop
-        push(18446744069414584317)
-        push(4294967294)
-        mload
-        add
-        mstore
-        drop
-        add
-        push(18446744069414584317)
-        push(4294967294)
-        mload
-        add
-        mload
-        mul
-        push(18446744069414584317)
-        push(4294967294)
-        mload
-        add
-        push(4294967294)
-        mstore
-        drop
+    join
+        basic_block
+            push(2147483648)
+            push(4294967294)
+            mstore
+            drop
+            push(10)
+            push(9)
+            push(8)
+            noop
+            noop
+            noop
+        end
+        exec.0x325d68c99cdd29554aeca3e5f9455f1bc60235358b751329bfc24b51c52eef03
     end
 end

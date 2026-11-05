@@ -2233,7 +2233,9 @@ mod controller_address_tests {
 
     #[test]
     fn infallible_hook_reports_address_error_at_cycle_finalization() {
-        let mut tracer = ExecutionTracer::new(64, MIN_STACK_DEPTH);
+        let mut tracer =
+            ExecutionTracer::new(64, MIN_STACK_DEPTH, crate::test_utils::native_trace_limits())
+                .unwrap();
         tracer.hasher_chiplet_shim.next_row = ControllerRow::new(MAX_TRACE_LEN).unwrap();
         tracer.record_hasher_compress([ZERO; STATE_WIDTH], [ZERO; STATE_WIDTH]);
         assert!(tracer.pending_address_error.is_some());

@@ -18,52 +18,32 @@ use crate::{
 
 /// Procedure Invocation
 impl Assembler {
-    /// Returns the [`MastNodeRef`] of the invoked procedure specified by `callee`.
-    ///
-    /// For example, given `exec.f`, this method would return the procedure body id of `f`. If the
-    /// only representation of `f` that we have is its MAST root, then this method will also insert
-    /// a [`core::mast::ExternalNode`] that wraps `f`'s MAST root and return the corresponding id.
+    /// Emits a retained runtime invocation using the declaration's prebound callable key.
     pub(super) fn invoke(
         &self,
         kind: InvokeKind,
         callee: &InvocationTarget,
         caller: GlobalItemIndex,
-        call_site: SourceSpan,
+        _call_site: SourceSpan,
         mast_forest_builder: &mut MastForestBuilder,
         asm_op: Option<AssemblyOp>,
-        mut inline_calls: Vec<DebugSourceInlineCall>,
+        inline_calls: Vec<DebugSourceInlineCall>,
     ) -> Result<MastNodeUse, Report> {
-        let resolved = self.resolve_target(kind, callee, caller.module, mast_forest_builder)?;
-
+        let resolved = self.resolve_target(kind, callee, caller.module)?;
         match kind {
-            InvokeKind::ProcRef => Ok(resolved.node),
-            InvokeKind::Exec => {
-                // Ordinary exec is the innermost caller context; explicit source inline
-                // annotations enclose it. Existing callee rows remain still further inside.
-                if !matches!(callee, InvocationTarget::MastRoot(_))
-                    && let Some(callee_idx) = resolved.function
-                    && let Ok(location) = self.source_manager().location(call_site)
-                {
-                    let loc_idx = mast_forest_builder.debug_info_mut().add_location(location);
-                    // The exec source-tree copy assigns each occurrence's operation range.
-                    inline_calls.insert(
-                        0,
-                        DebugSourceInlineCall {
-                            op_idx: 0,
-                            op_end: 0,
-                            callee_idx,
-                            loc_idx,
-                        },
-                    );
-                }
-                mast_forest_builder.record_exec_inline_calls(resolved.node, &inline_calls)
-            },
+            InvokeKind::Exec => mast_forest_builder.ensure_exec_node_use(
+                resolved.key,
+                asm_op.expect("exec invocations must provide an AssemblyOp"),
+                inline_calls,
+            ),
             InvokeKind::Call | InvokeKind::SysCall => mast_forest_builder.ensure_call_node_use(
-                resolved.node,
+                resolved.key,
                 matches!(kind, InvokeKind::SysCall),
                 asm_op.expect("call and syscall invocations must provide an AssemblyOp"),
                 inline_calls,
             ),
+            InvokeKind::ProcRef => unreachable!("procref emits a key into its basic block"),
+            InvokeKind::Inline => unreachable!("inline expands an explicitly selected body"),
         }
     }
 
@@ -98,29 +78,14 @@ impl Assembler {
         caller: GlobalItemIndex,
         block_builder: &mut BasicBlockBuilder,
     ) -> Result<(), Report> {
-        let mast_root = {
-            let resolved = self.resolve_target(
-                InvokeKind::ProcRef,
-                callee,
-                caller.module,
-                block_builder.mast_forest_builder_mut(),
-            )?;
-            // Note: it's ok to `unwrap()` here since `proc_body_id` was returned from
-            // `mast_forest_builder`
-            block_builder
-                .mast_forest_builder()
-                .mast_root_for_ref(resolved.node.node_ref())
-                .unwrap()
-        };
-
-        self.procref_mast_root(mast_root, block_builder);
+        let resolved = self.resolve_target(InvokeKind::ProcRef, callee, caller.module)?;
+        self.procref_key(resolved.key.into_word(), block_builder);
         Ok(())
     }
 
-    fn procref_mast_root(&self, mast_root: Word, block_builder: &mut BasicBlockBuilder) {
-        // Create an array with `Push` operations containing root elements.
-        // Push in reverse order so that mast_root[0] ends up on top.
-        let ops = mast_root
+    fn procref_key(&self, key: Word, block_builder: &mut BasicBlockBuilder) {
+        // Push in reverse order so that key[0] ends up on top.
+        let ops = key
             .iter()
             .rev()
             .map(|elem| Operation::Push(*elem))

@@ -10,7 +10,8 @@ use std::{fs, path::Path, sync::Arc};
 
 use miden_assembly::{
     Assembler, PackagePostProcessor, PostProcessContext, ProjectTargetSelector,
-    diagnostics::Report, testing::TestRegistry,
+    diagnostics::Report,
+    testing::{TestRegistry, configure_project_fixture},
 };
 use miden_mast_package::{MAX_MODULE_BYTES, Package as MastPackage};
 use miden_processor::DefaultHost;
@@ -189,6 +190,7 @@ fn assemble_with(
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(manifest_path, &mut registry)?;
+    configure_project_fixture(&mut project_assembler);
     project_assembler.with_package_post_processor(processor);
     project_assembler.assemble(target, "dev")
 }
@@ -557,6 +559,7 @@ fn a_second_handler_section_is_an_error() {
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(&manifest_path, &mut registry).unwrap();
+    configure_project_fixture(&mut project_assembler);
     project_assembler
         .with_package_post_processor(WasmEventHandlerProcessor::new())
         .with_package_post_processor(WasmEventHandlerProcessor::new());
@@ -592,6 +595,7 @@ fn assemble_shared(
     let mut registry = TestRegistry::default();
     let mut project_assembler =
         Assembler::default().for_project_at_path(manifest_path, &mut registry)?;
+    configure_project_fixture(&mut project_assembler);
     project_assembler.with_package_post_processor(SharedProcessor(processor.clone()));
     project_assembler.assemble(ProjectTargetSelector::Library, "dev")
 }

@@ -102,7 +102,10 @@ impl<'a, 'b: 'a> ModuleRewriter<'a, 'b> {
                     .expect("constant value inserted into cache must be retrievable");
                 return Ok(Some(CachedConstantValue::Hit(cached)));
             },
-            SymbolItem::Compiled(_) | SymbolItem::Procedure(_) | SymbolItem::Type(_) => (),
+            SymbolItem::CallableDeclaration(_)
+            | SymbolItem::Compiled(_)
+            | SymbolItem::Procedure(_)
+            | SymbolItem::Type(_) => (),
         }
 
         Err(self.invalid_constant_ref(span))
@@ -181,6 +184,9 @@ impl<'a, 'b: 'a> VisitMut<LinkerError> for ModuleRewriter<'a, 'b> {
     }
     fn visit_mut_call(&mut self, target: &mut InvocationTarget) -> ControlFlow<LinkerError> {
         self.validate_target(InvokeKind::Call, target)
+    }
+    fn visit_mut_inline(&mut self, target: &mut InvocationTarget) -> ControlFlow<LinkerError> {
+        self.validate_target(InvokeKind::Inline, target)
     }
     fn visit_mut_invoke_target(
         &mut self,

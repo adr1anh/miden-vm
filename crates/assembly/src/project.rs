@@ -7,14 +7,14 @@ use std::{
 
 use miden_assembly_syntax::{ast::ModuleKind, diagnostics::Report};
 use miden_core::serde::Deserializable;
-use miden_mast_package::{Package as MastPackage, SectionId, TargetType};
+use miden_mast_package::{Package as MastPackage, PackageNaming, SectionId, TargetType};
 use miden_package_registry::{PackageCache, PackageId, Version as PackageVersion};
 use miden_project::{
     Linkage, Package as ProjectPackage, PreassembledDependencyMetadata, Profile,
-    ProjectDependencyNodeProvenance, ProjectSource, ProjectSourceOrigin, Target,
+    ProjectDependencyNodeProvenance, ProjectSource, Target,
 };
 
-use crate::{Assembler, ast::Module};
+use crate::{Assembler, NamespaceInputs, ast::Module};
 
 mod build_provenance;
 mod dependency_graph;
@@ -76,6 +76,8 @@ impl Assembler {
             source_provider: SourceProviderRegistry::new(providers),
             dependency_graph,
             post_processors: Vec::new(),
+            package_naming_provider: None,
+            namespace_inputs_provider: None,
             store,
         })
     }
@@ -112,6 +114,8 @@ impl Assembler {
             source_provider: SourceProviderRegistry::new(providers),
             dependency_graph,
             post_processors: Vec::new(),
+            package_naming_provider: None,
+            namespace_inputs_provider: None,
             store,
         })
     }
@@ -228,6 +232,14 @@ impl core::fmt::Display for InterruptedTargetRole {
     }
 }
 
+type PackageNamingProvider<'a> = dyn Fn(&MastPackage) -> Result<PackageNaming, Report> + 'a;
+type NamespaceInputsProvider<'a> = dyn Fn(
+        &TargetAssemblyContext<'_>,
+        &ProjectSourceInputs,
+        &Assembler,
+    ) -> Result<NamespaceInputs, Report>
+    + 'a;
+
 pub struct ProjectAssembler<'a, S: PackageCache> {
     assembler: Assembler,
     project: Arc<ProjectPackage>,
@@ -235,6 +247,8 @@ pub struct ProjectAssembler<'a, S: PackageCache> {
     source_provider: SourceProviderRegistry,
     /// Package post-processors, run in registration order. Empty by default.
     post_processors: Vec<Box<dyn PackagePostProcessor>>,
+    package_naming_provider: Option<Box<PackageNamingProvider<'a>>>,
+    namespace_inputs_provider: Option<Box<NamespaceInputsProvider<'a>>>,
     store: &'a mut S,
 }
 
@@ -242,6 +256,39 @@ impl<'a, S> ProjectAssembler<'a, S>
 where
     S: PackageCache,
 {
+    /// Selects complete naming for each source target after its root/support modules are loaded.
+    ///
+    /// The callback runs before memoized or registered source artifacts are considered. Package
+    /// identifiers, source namespaces and supplied bodies never imply a caller home or binding.
+    /// The read-only assembler contains the actual resolved imports, including their existing
+    /// canonical bindings. This configures compiler inputs; it does not grant publication or
+    /// execution authority.
+    pub fn with_namespace_inputs_provider(
+        &mut self,
+        provider: impl Fn(
+            &TargetAssemblyContext<'_>,
+            &ProjectSourceInputs,
+            &Assembler,
+        ) -> Result<NamespaceInputs, Report>
+        + 'a,
+    ) -> &mut Self {
+        self.namespace_inputs_provider = Some(Box::new(provider));
+        self
+    }
+
+    /// Provides canonical naming for packages read from storage or preassembled artifacts.
+    ///
+    /// The provider must admit raw naming using the caller's explicit current home profile,
+    /// context and codec limits. Its result is checked against the exact package before use.
+    /// Source compilation retains its own canonical naming and does not use this provider.
+    pub fn with_package_naming_provider(
+        &mut self,
+        provider: impl Fn(&MastPackage) -> Result<PackageNaming, Report> + 'a,
+    ) -> &mut Self {
+        self.package_naming_provider = Some(Box::new(provider));
+        self
+    }
+
     pub fn with_source_provider(
         &mut self,
         provider: impl ProjectSourceProvider + 'static,
@@ -286,7 +333,22 @@ where
         target_selector: ProjectTargetSelector<'_>,
         profile_name: &str,
     ) -> Result<Arc<MastPackage>, Report> {
-        let result = self.assemble_interruptible(target_selector, profile_name)?;
+        self.assemble_with_naming(target_selector, profile_name)
+            .map(|resolved| resolved.package)
+    }
+
+    /// Like [`Self::assemble`], retaining the compiler's complete canonical naming inventory.
+    ///
+    /// The result includes private declarations, source-visible aliases and the executable entry
+    /// key, together with any required linked kernel package and its naming. This metadata is
+    /// structurally checked against the exact package; it does not grant home/profile admission
+    /// or execution authority.
+    pub fn assemble_with_naming(
+        &mut self,
+        target_selector: ProjectTargetSelector<'_>,
+        profile_name: &str,
+    ) -> Result<ResolvedPackage, Report> {
+        let result = self.assemble_interruptible_with_naming(target_selector, profile_name)?;
 
         match result {
             ControlFlow::Continue(package) => Ok(package),
@@ -318,6 +380,17 @@ where
         target_selector: ProjectTargetSelector<'_>,
         profile_name: &str,
     ) -> Result<ControlFlow<AssemblyInterrupted, Arc<MastPackage>>, Report> {
+        self.assemble_interruptible_with_naming(target_selector, profile_name)
+            .map(|resolved| resolved.map_continue(|r| r.package))
+    }
+
+    /// Like [`Self::assemble_interruptible`], retaining the complete naming described by
+    /// [`Self::assemble_with_naming`] when assembly succeeds.
+    pub fn assemble_interruptible_with_naming(
+        &mut self,
+        target_selector: ProjectTargetSelector<'_>,
+        profile_name: &str,
+    ) -> Result<ControlFlow<AssemblyInterrupted, ResolvedPackage>, Report> {
         let target = target_selector.select_target(self.project.as_ref())?;
 
         // When building an executable target from a project with a library target, we require
@@ -338,6 +411,7 @@ where
                 None,
                 None,
                 &mut cache,
+                None,
             )? {
                 ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
                 ControlFlow::Continue(resolved) => Some(resolved),
@@ -356,8 +430,8 @@ where
             None,
             None,
             &mut cache,
+            None,
         )
-        .map(|resolved| resolved.map_continue(|r| r.package))
     }
 
     /// This is a low-level utility function of the project assembly infrastructure for assembling
@@ -369,13 +443,16 @@ where
     /// indicates the package/target which was interrupted, and the role that target played in
     /// assembly of the provided project and target.
     ///
-    /// In almost all cases you should prefer to use [`ProjectAssembler::assemble`] or
-    /// [`ProjectAssembler::assemble_interruptible`] instead.
+    /// In almost all cases you should prefer to use [`ProjectAssembler::assemble_with_naming`] or
+    /// [`ProjectAssembler::assemble_interruptible_with_naming`] instead.
     ///
     /// Callers are required to uphold the following invariants:
     ///
     /// * `package_id` must be the package identifier for `project` in the current dependency graph
     /// * `target` must be a target extracted from `project`
+    /// * `requested_binding`, when present, is the parent's source-target default-home request; its
+    ///   exact home is checked against namespace inputs before any cache reuse. It does not approve
+    ///   public callable mappings or replace complete Bound declarations.
     /// * `required_lib` must be set if assembly of `target` would depend on another target of the
     ///   same project (i.e. an executable target implicitly depends on the library target).
     ///
@@ -392,18 +469,20 @@ where
         sources: Option<ProjectSourceInputs>,
         source_provenance: Option<ProjectSourceProvenanceInputs>,
         cache: &mut BTreeMap<PackageId, ResolvedPackage>,
+        requested_binding: Option<&miden_project::DependencyBinding>,
     ) -> Result<ControlFlow<AssemblyInterrupted, ResolvedPackage>, Report> {
         assert!(
             source_provenance.is_none() || sources.is_some(),
             "source provenance may only be provided with sources"
         );
 
-        let cache_key = project.target_package_name(target);
-        if let Some(package) = cache.get(&cache_key).cloned() {
-            assert_eq!(package.package.kind, target.ty);
-            return Ok(ControlFlow::Continue(package));
-        }
-
+        // Keep dependency graph identities distinct even when two projects publish the same name.
+        // Executables also need a separate slot from their required library in this same graph.
+        let cache_key = if target.ty.is_executable() {
+            format!("{package_id}:{}", target.name.inner()).into()
+        } else {
+            package_id.clone()
+        };
         let profile = project.resolve_profile(profile_name)?;
         let mut assembler = self.assembler.clone().with_profile(profile);
         let mut runtime_dependencies = RuntimeDependencies::default();
@@ -416,12 +495,18 @@ where
                 // We do not link the package here, as by definition a required library is only
                 // present for executable targets, and we always unconditionally link kernel
                 // dependencies just prior to assembling the package
-                runtime_dependencies.record_linked_kernel_dependency(required_lib.package)?;
+                runtime_dependencies
+                    .record_linked_kernel_dependency(required_lib.package, required_lib.naming)?;
             },
             Some(required_lib) => {
-                assembler.link_package(required_lib.package.clone(), Linkage::Static)?;
-                if let Some(kernel_package) = required_lib.linked_kernel_package {
-                    runtime_dependencies.record_linked_kernel_dependency(kernel_package)?;
+                assembler.link_package(
+                    required_lib.package.clone(),
+                    Linkage::Static,
+                    required_lib.naming.clone(),
+                )?;
+                if let Some((kernel_package, kernel_naming)) = required_lib.linked_kernel_package {
+                    runtime_dependencies
+                        .record_linked_kernel_dependency(kernel_package, kernel_naming)?;
                 }
             },
             None => (),
@@ -430,11 +515,15 @@ where
         let node = self.dependency_graph.get(&package_id)?;
         let dependencies = node.dependencies.clone();
         for edge in dependencies.iter() {
-            let dependency_package =
-                match self.resolve_dependency_package(&edge.dependency, profile_name, cache)? {
-                    ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
-                    ControlFlow::Continue(pkg) => pkg,
-                };
+            let dependency_package = match self.resolve_dependency_package(
+                &edge.dependency,
+                profile_name,
+                cache,
+                edge.binding.as_ref(),
+            )? {
+                ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
+                ControlFlow::Continue(pkg) => pkg,
+            };
             if !dependency_package.package.is_library() {
                 return Err(Report::msg(format!(
                     "dependency '{}' resolved to executable package '{}', but only library-like packages can be linked",
@@ -442,14 +531,28 @@ where
                 )));
             }
 
+            // Custom homes state the caller's exact package-default metadata expectation. They
+            // do not claim ownership of visible paths or constrain retained foreign bindings.
+            if let Some(miden_project::DependencyBinding::Custom(home)) = &edge.binding
+                && dependency_package.naming.namespace_plan() != home
+            {
+                return Err(Report::msg(format!(
+                    "dependency '{}' default home differs from its explicit custom home",
+                    edge.dependency
+                )));
+            }
             if !dependency_package.package.is_kernel() {
-                assembler.link_package(dependency_package.package.clone(), edge.linkage)?;
+                assembler.link_package(
+                    dependency_package.package.clone(),
+                    edge.linkage,
+                    dependency_package.naming.clone(),
+                )?;
             }
             runtime_dependencies.merge_package(dependency_package, edge.linkage)?;
         }
 
         let manually_provided_sources = sources.is_some();
-        let ProjectSourceInputs { root, support } = match sources {
+        let sources = match sources {
             Some(sources) => sources,
             None => {
                 match self.load_target_sources(project.clone(), target, profile, package_role)? {
@@ -459,38 +562,104 @@ where
             },
         };
 
-        // Collect specific well-known custom sections produced by the project assembler
-        let mut sections = Vec::new();
-
-        // Section: build provenance
-        //
-        // This is produced before actual assembly, while we still have the sources on hand
-        let build_provenance = if source_provenance.is_some() || !manually_provided_sources {
-            self.dependency_graph.build_source_provenance(
-                &package_id,
-                project.clone(),
-                target,
-                profile_name,
-                &self.source_provider,
-                self.store,
-                source_provenance.as_ref(),
-            )?
-        } else {
-            None
-        };
-        if let Some(build_provenance) = build_provenance {
-            sections.push(build_provenance.to_section());
-        }
-
-        if let Some(kernel_package) = runtime_dependencies.kernel.clone() {
+        if let Some((kernel_package, kernel_naming)) = runtime_dependencies.kernel.clone() {
             if matches!(target.ty, TargetType::Kernel) {
                 return Err(Report::msg(format!(
                     "kernel targets cannot depend on a kernel, dependency '{}' is a kernel",
                     kernel_package.name
                 )));
             }
-            assembler.link_package(kernel_package, Linkage::Dynamic)?;
+            assembler.link_package(kernel_package, Linkage::Dynamic, kernel_naming)?;
         }
+
+        let namespace_inputs = {
+            let provider = self.namespace_inputs_provider.as_ref().ok_or_else(|| {
+                Report::msg(format!(
+                    "source target '{}' requires an explicit namespace inputs provider; configure with_namespace_inputs_provider",
+                    target.name.inner()
+                ))
+            })?;
+            let mut context = self.get_target_assembly_context(
+                &project,
+                target,
+                profile,
+                manually_provided_sources,
+            )?;
+            context.dependency_binding = requested_binding;
+            provider(&context, &sources, &assembler)?
+        };
+        // Validate even when inherited AST inputs prevent persistent cache reuse.
+        if let Some(binding) = requested_binding
+            && namespace_inputs.namespace_plan() != Some(&binding.namespace_plan())
+        {
+            return Err(Report::msg(format!(
+                "source target '{}' namespace inputs differ from its requested dependency home",
+                target.name.inner()
+            )));
+        }
+        namespace_inputs.cache_commitment()?;
+        assembler = assembler.with_namespace_inputs(namespace_inputs);
+
+        // Extend, rather than replace, source/Git, graph and effective profile provenance with
+        // the actual canonical naming, pins and resolved package inputs selected for this build.
+        let compilation_commitment = assembler.project_cache_commitment(profile_name)?;
+        let build_provenance = if source_provenance.is_some() || !manually_provided_sources {
+            self.dependency_graph
+                .build_source_provenance(
+                    &package_id,
+                    project.clone(),
+                    target,
+                    profile_name,
+                    &self.source_provider,
+                    self.store,
+                    source_provenance.as_ref(),
+                )?
+                .map(|provenance| match compilation_commitment {
+                    Some(commitment) => provenance.with_compilation_commitment(commitment),
+                    None => provenance,
+                })
+        } else {
+            None
+        };
+        // Caller-provided ASTs are not identified by source file provenance: they may have been
+        // edited after parsing. Likewise inherited AST/advice/declarations have no exact snapshot.
+        let can_reuse = !manually_provided_sources
+            && build_provenance
+                .as_ref()
+                .and_then(PackageBuildProvenance::compilation_commitment)
+                .is_some();
+        if can_reuse
+            && package_role == InterruptedTargetRole::Dependency
+            && let Some(expected) = &build_provenance
+            && let Some(cached) = cache.get(&cache_key)
+            && cached.package.kind == target.ty
+            && PackageBuildProvenance::from_package(&cached.package)?.as_ref() == Some(expected)
+        {
+            Self::check_source_dependency_sections(&cached.package)?;
+            cached.package.check_naming(&cached.naming).map_err(Report::msg)?;
+            return Ok(ControlFlow::Continue(cached.clone()));
+        }
+
+        let reuse = if can_reuse && package_role == InterruptedTargetRole::Dependency {
+            self.try_reuse_registered_source_package(
+                &package_id,
+                project.version().inner(),
+                build_provenance.as_ref().expect("real provider sources have provenance"),
+            )?
+        } else {
+            RegisteredSourcePackage::Missing
+        };
+        if let RegisteredSourcePackage::Loaded(package) = &reuse {
+            let resolved = self.resolve_loaded_package(package.clone())?;
+            cache.insert(cache_key, resolved.clone());
+            return Ok(ControlFlow::Continue(resolved));
+        }
+
+        let mut sections = Vec::new();
+        if let Some(build_provenance) = build_provenance {
+            sections.push(build_provenance.to_section());
+        }
+        let ProjectSourceInputs { root, support } = sources;
 
         let mut product = match target.ty {
             TargetType::Executable => {
@@ -506,6 +675,7 @@ where
             .extend_dependencies(runtime_dependencies.deps.into_values())
             .expect("assembled package manifest should have unique runtime dependencies");
 
+        let naming = Arc::new(product.naming().clone());
         let mut package = product.into_artifact(profile.should_emit_debug_info())?;
         package.name = project.target_package_name(target);
         package.version = project.version().into_inner().clone();
@@ -523,13 +693,30 @@ where
             )?;
         }
 
+        package.check_naming(&naming).map_err(|error| Report::msg(error.to_string()))?;
         let package = Arc::from(package);
 
         let resolved = ResolvedPackage {
             package,
+            naming,
             linked_kernel_package: runtime_dependencies.kernel,
         };
-        cache.insert(package_id, resolved.clone());
+        if let RegisteredSourcePackage::IndexedButUnreadable(expected) = reuse {
+            let actual = PackageVersion::new(
+                resolved.package.version.clone(),
+                resolved.package.dependency_commitment(),
+            );
+            if actual != expected {
+                return Err(Report::msg(format!(
+                    "package '{package_id}' version '{}' is already registered as '{expected}', but the canonical artifact could not be loaded and rebuilding from source produced '{actual}'; bump the semantic version or repair the package store",
+                    project.version()
+                )));
+            }
+        }
+        if package_role == InterruptedTargetRole::Dependency {
+            self.cache_resolved_package(&resolved)?;
+        }
+        cache.insert(cache_key, resolved.clone());
 
         Ok(ControlFlow::Continue(resolved))
     }
@@ -539,13 +726,23 @@ where
         package_id: &PackageId,
         profile_name: &str,
         cache: &mut BTreeMap<PackageId, ResolvedPackage>,
+        requested_binding: Option<&miden_project::DependencyBinding>,
     ) -> Result<ControlFlow<AssemblyInterrupted, ResolvedPackage>, Report> {
-        if let Some(package) = cache.get(package_id).cloned() {
-            return Ok(ControlFlow::Continue(package));
-        }
-
         let node = self.dependency_graph.get(package_id)?;
         let node_version = node.version.clone();
+        if matches!(requested_binding, Some(miden_project::DependencyBinding::Standard(_)))
+            && !matches!(
+                &node.provenance,
+                ProjectDependencyNodeProvenance::Source(ProjectSource::Real {
+                    library_path: Some(_),
+                    ..
+                })
+            )
+        {
+            return Err(Report::msg(format!(
+                "standard namespace selection for artifact dependency '{package_id}' requires explicit expected callable mappings; use an admitted custom binding or compile its source",
+            )));
+        }
 
         let (package, should_cache) = match &node.provenance {
             ProjectDependencyNodeProvenance::Source(ProjectSource::Virtual { .. }) => {
@@ -555,7 +752,6 @@ where
             },
             ProjectDependencyNodeProvenance::Source(ProjectSource::Real {
                 manifest_path,
-                origin,
                 library_path: Some(_),
                 ..
             }) => {
@@ -573,56 +769,23 @@ where
                             "dependency '{package_id}' does not define a library target"
                         ))
                     })?;
-                match self.try_reuse_registered_source_package(
-                    package_id,
-                    &node_version,
-                    project.clone(),
+                let package = match self.assemble_source_package(
+                    package_id.clone(),
+                    project,
                     &target,
                     profile_name,
-                    origin,
-                    manifest_path,
+                    InterruptedTargetRole::Dependency,
+                    None,
+                    None,
+                    None,
+                    cache,
+                    requested_binding,
                 )? {
-                    RegisteredSourcePackage::Loaded(package) => (
-                        ResolvedPackage {
-                            linked_kernel_package: self
-                                .resolve_linked_kernel_package(package.clone())?,
-                            package,
-                        },
-                        false,
-                    ),
-                    reuse => {
-                        let package = match self.assemble_source_package(
-                            package_id.clone(),
-                            project,
-                            &target,
-                            profile_name,
-                            InterruptedTargetRole::Dependency,
-                            None,
-                            None,
-                            None,
-                            cache,
-                        )? {
-                            ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
-                            ControlFlow::Continue(package) => package,
-                        };
-                        match reuse {
-                            RegisteredSourcePackage::Missing => (),
-                            RegisteredSourcePackage::IndexedButUnreadable(expected) => {
-                                let actual = PackageVersion::new(
-                                    package.package.version.clone(),
-                                    package.package.dependency_commitment(),
-                                );
-                                if actual != expected {
-                                    return Err(Report::msg(format!(
-                                        "package '{package_id}' version '{node_version}' is already registered as '{expected}', but the canonical artifact could not be loaded and rebuilding from source produced '{actual}'; bump the semantic version or repair the package store"
-                                    )));
-                                }
-                            },
-                            RegisteredSourcePackage::Loaded(_) => unreachable!(),
-                        }
-                        (package, true)
-                    },
-                }
+                    ControlFlow::Break(breaker) => return Ok(ControlFlow::Break(breaker)),
+                    ControlFlow::Continue(package) => package,
+                };
+                // Source assembly checks/stores its own exact provenance after resolving inputs.
+                (package, false)
             },
             ProjectDependencyNodeProvenance::Source(_) => {
                 let package =
@@ -631,25 +794,11 @@ where
                             "dependency '{package_id}' version '{node_version}' was not found in the package registry"
                         ))
                     })?;
-                (
-                    ResolvedPackage {
-                        linked_kernel_package: self
-                            .resolve_linked_kernel_package(package.clone())?,
-                        package,
-                    },
-                    false,
-                )
+                (self.resolve_loaded_package(package)?, false)
             },
             ProjectDependencyNodeProvenance::Registry { selected, .. } => {
                 let package = self.store.load_package(package_id, selected)?;
-                (
-                    ResolvedPackage {
-                        linked_kernel_package: self
-                            .resolve_linked_kernel_package(package.clone())?,
-                        package,
-                    },
-                    false,
-                )
+                (self.resolve_loaded_package(package)?, false)
             },
             ProjectDependencyNodeProvenance::Preassembled {
                 path,
@@ -665,14 +814,7 @@ where
                     requirements,
                 )?;
                 let should_cache = self.should_cache_preassembled_package(package_id, selected);
-                (
-                    ResolvedPackage {
-                        linked_kernel_package: self
-                            .resolve_linked_kernel_package(package.clone())?,
-                        package,
-                    },
-                    should_cache,
-                )
+                (self.resolve_loaded_package(package)?, should_cache)
             },
         };
 
@@ -683,12 +825,35 @@ where
         Ok(ControlFlow::Continue(package))
     }
 
+    fn naming_for_loaded_package(
+        &self,
+        package: &MastPackage,
+    ) -> Result<Arc<PackageNaming>, Report> {
+        let provider = self.package_naming_provider.as_ref().ok_or_else(|| {
+            Report::msg(format!(
+                "package '{}@{}' requires an explicit package naming provider; configure with_package_naming_provider with the current home profile, context and codec limits",
+                package.name, package.version
+            ))
+        })?;
+        let naming = provider(package)?;
+        package.check_naming(&naming).map_err(|error| Report::msg(error.to_string()))?;
+        Ok(Arc::new(naming))
+    }
+
+    fn resolve_loaded_package(&self, package: Arc<MastPackage>) -> Result<ResolvedPackage, Report> {
+        let naming = self.naming_for_loaded_package(&package)?;
+        let linked_kernel_package =
+            self.resolve_linked_kernel_package(package.clone(), naming.clone())?;
+        Ok(ResolvedPackage { package, naming, linked_kernel_package })
+    }
+
     fn resolve_linked_kernel_package(
         &self,
         package: Arc<MastPackage>,
-    ) -> Result<Option<Arc<MastPackage>>, Report> {
+        naming: Arc<PackageNaming>,
+    ) -> Result<Option<(Arc<MastPackage>, Arc<PackageNaming>)>, Report> {
         if package.is_kernel() {
-            return Ok(Some(package));
+            return Ok(Some((package, naming)));
         }
 
         let Some(kernel_dependency) = package.kernel_runtime_dependency()? else {
@@ -709,14 +874,16 @@ where
                             kernel_package.name
                         )));
                     }
-                    return Ok(Some(kernel_package));
+                    let kernel_naming = self.naming_for_loaded_package(&kernel_package)?;
+                    return Ok(Some((kernel_package, kernel_naming)));
                 },
                 Err(load_error) => {
                     if let Some(kernel_package) = package
                         .try_embedded_kernel_package()
                         .map(|kernel_package| kernel_package.map(Arc::from))?
                     {
-                        return Ok(Some(kernel_package));
+                        let kernel_naming = self.naming_for_loaded_package(&kernel_package)?;
+                        return Ok(Some((kernel_package, kernel_naming)));
                     }
                     return Err(load_error);
                 },
@@ -724,8 +891,13 @@ where
         }
 
         package
-            .try_embedded_kernel_package()
-            .map(|kernel_package| kernel_package.map(Arc::from))
+            .try_embedded_kernel_package()?
+            .map(|kernel_package| {
+                let kernel_package: Arc<MastPackage> = Arc::from(kernel_package);
+                let kernel_naming = self.naming_for_loaded_package(&kernel_package)?;
+                Ok((kernel_package, kernel_naming))
+            })
+            .transpose()
     }
 
     fn load_canonical_package(
@@ -743,11 +915,7 @@ where
         &self,
         package_id: &PackageId,
         version: &miden_project::SemVer,
-        project: Arc<ProjectPackage>,
-        target: &Target,
-        profile_name: &str,
-        origin: &ProjectSourceOrigin,
-        manifest_path: &FsPath,
+        expected: &PackageBuildProvenance,
     ) -> Result<RegisteredSourcePackage, Report> {
         let Some(record) = self.store.get_by_semver(package_id, version) else {
             return Ok(RegisteredSourcePackage::Missing);
@@ -759,20 +927,8 @@ where
             },
         };
 
-        let expected = self.dependency_graph.expected_source_provenance(
-            package_id,
-            project,
-            target,
-            profile_name,
-            origin,
-            manifest_path,
-            &self.source_provider,
-            self.store,
-            None,
-        )?;
-
         match PackageBuildProvenance::from_package(&package)? {
-            Some(actual) if actual == expected => Ok(()),
+            Some(actual) if &actual == expected => Ok(()),
             Some(actual) => Err(Report::msg(format!(
                 "package '{}' version '{}' is already registered with different source provenance (expected {}, found {}); bump the semantic version",
                 package_id,
@@ -785,6 +941,11 @@ where
             ))),
         }?;
 
+        Self::check_source_dependency_sections(&package)?;
+        Ok(RegisteredSourcePackage::Loaded(package))
+    }
+
+    fn check_source_dependency_sections(package: &MastPackage) -> Result<(), Report> {
         // Source provenance covers the sources only, so it cannot tell a dependency build from a
         // root build that registered post-processors extended (for example with an
         // `event_handlers` section). Reusing such an artifact as a dependency would give it a
@@ -805,11 +966,11 @@ where
         {
             return Err(Report::msg(format!(
                 "package '{}' version '{}' is already registered, but the canonical artifact carries a '{}' section a dependency build does not produce (it was assembled as a project root with a package post-processor); bump the semantic version",
-                package_id, version, section.id,
+                package.name, package.version, section.id,
             )));
         }
 
-        Ok(RegisteredSourcePackage::Loaded(package))
+        Ok(())
     }
 
     fn should_cache_preassembled_package(
@@ -829,7 +990,7 @@ where
 
     fn cache_resolved_package(&mut self, package: &ResolvedPackage) -> Result<(), Report> {
         self.cache_package(package.package.clone())?;
-        if let Some(kernel_package) = package.linked_kernel_package.clone()
+        if let Some((kernel_package, _)) = package.linked_kernel_package.clone()
             && self.should_cache_linked_kernel_package(kernel_package.as_ref())
         {
             self.cache_package(kernel_package)?;
@@ -932,33 +1093,55 @@ where
         Ok(())
     }
 
+    fn get_target_assembly_context<'this>(
+        &'this self,
+        project: &'this Arc<ProjectPackage>,
+        target: &'this Target,
+        profile: &'this Profile,
+        provided_sources: bool,
+    ) -> Result<TargetAssemblyContext<'this>, Report> {
+        let mut context = if provided_sources {
+            TargetAssemblyContext::for_provided_sources(
+                project,
+                target,
+                profile,
+                self.dependency_graph.as_ref(),
+                self.store,
+                self.assembler.source_manager(),
+            )?
+        } else {
+            match project.manifest_path() {
+                Some(manifest_path) => TargetAssemblyContext::new(
+                    project.clone(),
+                    manifest_path,
+                    target,
+                    profile,
+                    self.dependency_graph.as_ref(),
+                    self.store,
+                    self.assembler.source_manager(),
+                )?,
+                None => TargetAssemblyContext::new_virtual(
+                    project.clone(),
+                    target,
+                    profile,
+                    self.dependency_graph.as_ref(),
+                    self.store,
+                    self.assembler.source_manager(),
+                )?,
+            }
+        };
+        context.with_warnings_as_errors(self.assembler.warnings_as_errors());
+
+        Ok(context)
+    }
+
     fn get_provider_and_target_assembly_context<'this>(
         &'this self,
         project: &'this Arc<ProjectPackage>,
         target: &'this Target,
         profile: &'this Profile,
     ) -> Result<(&'this dyn ProjectSourceProvider, TargetAssemblyContext<'this>), Report> {
-        let mut context = match project.manifest_path() {
-            Some(manifest_path) => TargetAssemblyContext::new(
-                project.clone(),
-                manifest_path,
-                target,
-                profile,
-                self.dependency_graph.as_ref(),
-                self.store,
-                self.assembler.source_manager(),
-            )?,
-            None => TargetAssemblyContext::new_virtual(
-                project.clone(),
-                target,
-                profile,
-                self.dependency_graph.as_ref(),
-                self.store,
-                self.assembler.source_manager(),
-            )?,
-        };
-        context.with_warnings_as_errors(self.assembler.warnings_as_errors());
-
+        let context = self.get_target_assembly_context(project, target, profile, false)?;
         let extension = context.resolved_target_root.extension().ok_or_else(|| {
             Report::msg(format!(
                 "invalid target 'path' {}: path must have an extension",
@@ -978,7 +1161,8 @@ where
 #[derive(Clone)]
 pub struct ResolvedPackage {
     pub package: Arc<MastPackage>,
-    pub linked_kernel_package: Option<Arc<MastPackage>>,
+    pub naming: Arc<PackageNaming>,
+    pub linked_kernel_package: Option<(Arc<MastPackage>, Arc<PackageNaming>)>,
 }
 
 enum RegisteredSourcePackage {

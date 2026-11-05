@@ -7,7 +7,7 @@ macro_rules! build_test {
         let core_lib = miden_core_lib::CoreLibrary::default();
         let source = $source;
         miden_utils_testing::build_test_by_mode!(false, source $(, $tail)*)
-            .with_library(core_lib.package())
+            .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
             .with_event_handlers(core_lib.handlers())
     }}
 }
@@ -19,7 +19,7 @@ macro_rules! build_debug_test {
         let core_lib = miden_core_lib::CoreLibrary::default();
         let source = $source;
         miden_utils_testing::build_test_by_mode!(true, source $(, $tail)*)
-            .with_library(core_lib.package())
+            .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
             .with_event_handlers(core_lib.handlers())
     }}
 }
@@ -183,10 +183,19 @@ fn core_packages_do_not_block_sibling_miden_namespaces() {
         )
         .expect("protocol utility module should parse");
 
+    let core_lib = CoreLibrary::default();
     let mut assembler = Assembler::new(source_manager);
     assembler
-        .link_package(CoreLibrary::default().package(), Linkage::Dynamic)
+        .link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
         .expect("official Miden packages should link");
+
+    let mut names = miden_assembly::testing::FixtureNamespace::assembly_tests();
+    names
+        .add_module(&protocol_utils)
+        .expect("protocol utility declarations must be named");
+    let assembler = names
+        .configure(assembler, [protocol_utils.as_ref()])
+        .expect("protocol utility naming must be explicit");
 
     assembler
         .assemble_library("miden-protocol-utils", protocol_utils, None::<Box<Module>>)
@@ -237,6 +246,8 @@ mod helpers;
 mod mast_forest_merge;
 mod math;
 mod mem;
+#[path = "support/naming.rs"]
+mod naming;
 mod pcs;
 mod precompiles;
 mod stark_asserts;

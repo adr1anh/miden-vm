@@ -25,9 +25,9 @@
 use std::{sync::Arc, time::Duration};
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use miden_assembly::{Assembler, DefaultSourceManager};
 use miden_event_handler_abi::ABI_VERSION;
 use miden_processor::{DefaultHost, FastProcessor, StackInputs, event::EventName};
+use miden_utils_testing::Test;
 use miden_wasm_event_handlers::{WasmHandlerLimits, WasmHandlerModule};
 
 const EVENT: EventName = EventName::new("bench::wasm::handler");
@@ -140,14 +140,17 @@ fn processor_with_populated_memory() -> FastProcessor {
         end"#,
         limit = MEMORY_WORDS * 4,
     );
-    let program = Assembler::new(Arc::new(DefaultSourceManager::default()))
-        .assemble_program("bench_memory", source)
-        .expect("the bench program assembles")
-        .unwrap_program();
+    let test = Test::new("bench_memory", &source, false);
+    let (program, ..) = test.compile().expect("the bench program assembles");
+    let environment = test.fixture_environment().expect("fixture environment validates");
 
     let mut processor = FastProcessor::new(StackInputs::default());
     processor
-        .execute_mut_sync(&program, &mut DefaultHost::default())
+        .execute_mut_sync(
+            &program,
+            environment.execution(),
+            &mut DefaultHost::default().with_environment_source(environment.source()),
+        )
         .expect("the bench program populates the memory");
     processor
 }

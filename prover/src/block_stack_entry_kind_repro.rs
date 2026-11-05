@@ -32,15 +32,20 @@ struct Fixture {
 }
 
 fn build_fixture() -> Fixture {
-    let program = miden_assembly::Assembler::default()
-        .assemble_program("program", "proc inner nop nop end begin call.inner end")
-        .unwrap()
-        .unwrap_program();
+    let fixture = crate::named_fixture::named_source("proc inner nop nop end begin call.inner end");
+    let program = fixture.program;
+    let environment = fixture.environment;
 
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(StackInputs::default())
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
         .execute_and_build_trace_sync(
             &program,
+            environment.execution(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

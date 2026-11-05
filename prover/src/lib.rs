@@ -19,8 +19,8 @@ pub use miden_core::{
 };
 pub use miden_precompiles_stark::prover::PrecompileProvingError;
 pub use miden_processor::{
-    ExecutionError, ExecutionOptions, ExecutionOutput, ExecutionWitness, FutureMaybeSend, Host,
-    SyncHost, VmWitness,
+    ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionOutput, ExecutionWitness,
+    FutureMaybeSend, Host, SyncHost, VmWitness,
 };
 pub use prover::{Prover, ProverError, prove_sync};
 
@@ -46,3 +46,7 @@ mod repeat_loop_schema_soundness_repro;
 mod repro_harness;
 #[cfg(all(test, feature = "std"))]
 mod span_entry_soundness_repro;
+
+#[cfg(test)]
+#[path = "test_utils/named_fixture.rs"]
+mod named_fixture;

@@ -87,13 +87,20 @@ fn build_basic_harness() -> (ReproTrace, BasicRows) {
         BasicBlockNodeBuilder::new(operations).add_to_forest(&mut mast_forest).unwrap();
     mast_forest.make_root(basic_block_id);
     let program = Program::new(mast_forest.into(), basic_block_id);
+    let environment = crate::named_fixture::raw_environment(&program, "continuation-end");
 
     let stack_values = (1..17).rev().map(Felt::new_unchecked).collect::<Vec<_>>();
     let stack_inputs = StackInputs::new(&stack_values).unwrap();
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(stack_inputs)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
         .execute_and_build_trace_sync(
             &program,
+            environment.execution(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )
@@ -219,15 +226,20 @@ fn build_call_harness() -> (ReproTrace, CallRows) {
             call.inner
         end
     ";
-    let program = miden_assembly::Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
+    let fixture = crate::named_fixture::named_source(source);
+    let program = fixture.program;
+    let environment = fixture.environment;
 
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(StackInputs::default())
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
         .execute_and_build_trace_sync(
             &program,
+            environment.execution(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

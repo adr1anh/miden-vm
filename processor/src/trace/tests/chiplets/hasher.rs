@@ -70,13 +70,13 @@ fn hasher_response_rows(main: &MainTrace) -> Vec<(RowIndex, HasherResponseKind)>
         if !is_hasher_controller_row(main, idx) {
             continue;
         }
-        let Some(hs0) = as_bit(main.chiplet_selector_1(idx)) else {
+        let Some(hs0) = as_bit(main.chiplet_cols(idx).controller().s0) else {
             continue;
         };
-        let Some(hs1) = as_bit(main.chiplet_selector_2(idx)) else {
+        let Some(hs1) = as_bit(main.chiplet_cols(idx).controller().s1) else {
             continue;
         };
-        let Some(hs2) = as_bit(main.chiplet_selector_3(idx)) else {
+        let Some(hs2) = as_bit(main.chiplet_cols(idx).controller().s2) else {
             continue;
         };
         let Some(merkle_or_padding) =
@@ -683,12 +683,12 @@ fn mrupdate_emits_sibling_add_and_remove_per_level(#[case] index: u64) {
     let mut mu_rows: Vec<RowIndex> = Vec::new();
     for row in 0..main.chiplets_height() {
         let idx = RowIndex::from(row);
-        if main.chiplet_selector_0(idx) != ONE {
+        if !is_hasher_controller_row(main, idx) {
             continue;
         }
-        let hs0 = main.chiplet_selector_1(idx);
-        let hs1 = main.chiplet_selector_2(idx);
-        let hs2 = main.chiplet_selector_3(idx);
+        let hs0 = main.chiplet_cols(idx).controller().s0;
+        let hs1 = main.chiplet_cols(idx).controller().s1;
+        let hs2 = main.chiplet_cols(idx).controller().s2;
         if hs0 == ONE && hs1 == ONE && hs2 == ZERO {
             mv_rows.push(idx);
         } else if hs0 == ONE && hs1 == ONE && hs2 == ONE {

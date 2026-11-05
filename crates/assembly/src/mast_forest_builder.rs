@@ -13,10 +13,12 @@ use miden_core::{
     advice::AdviceMap,
     chiplets::hasher,
     mast::{
-        BasicBlockNode, BasicBlockNodeBuilder, CallNode, DynNode, JoinNode, LoopNode, MastForest,
-        MastForestRootMap, MastNode, MastNodeExt, OpBatch, SplitNode, error_code_from_msg,
+        BasicBlockNode, BasicBlockNodeBuilder, CallNodeBuilder, DynNode, ExecNodeBuilder, JoinNode,
+        LoopNode, MastForest, MastForestRootMap, MastNode, MastNodeExt, OpBatch, SplitNode,
+        error_code_from_msg,
     },
     operations::{AssemblyOp, Operation},
+    program::ProcedureKey,
     serde::Serializable,
     utils::{IndexVec, bytes_to_packed_u32_elements},
 };
@@ -124,6 +126,10 @@ pub struct MastForestBuilder {
     procedure_source_root_count_by_node_ref: BTreeMap<MastNodeRef, usize>,
     /// A map of MAST node interning keys to their corresponding builder-local node refs.
     node_ref_by_key: BTreeMap<MastNodeKey, MastNodeRef>,
+    /// First successfully materialized concrete node for each structural code digest.
+    /// This indexes code availability only. Full pending keys keep same-digest error codes and
+    /// source layouts distinct, and this lookup never resolves or authorizes a procedure key.
+    concrete_node_ref_by_digest: BTreeMap<Word, MastNodeRef>,
     /// Builder-owned dense storage for node refs.
     nodes: IndexVec<MastNodeRef, PendingMastNode>,
     /// Most recent source occurrence for each execution node ref.
@@ -156,6 +162,9 @@ pub struct MastForestBuilder {
     /// Maps procedure roots from each source static library to their new root ID in the merged
     /// static forest.
     statically_linked_root_map: MastForestRootMap,
+    /// Completed code-inventory imports, with exact-source and code-only provenance kept separate.
+    /// This caches materialization only; code availability does not authorize a callable key.
+    retained_static_inventories: BTreeSet<(usize, static_import::StaticInventoryKind)>,
 }
 
 /// Statically-linked library data used by [`MastForestBuilder`].
@@ -165,7 +174,6 @@ pub(crate) struct StaticLibrary<'a> {
     /// cause panics during assembly.
     debug_info: Option<PackageDebugInfo>,
     source_library_commitment: Word,
-    alternate_source_library_commitment: Option<Word>,
 }
 
 impl<'a> StaticLibrary<'a> {
@@ -178,7 +186,6 @@ impl<'a> StaticLibrary<'a> {
             // hints scoped to the same roots, external dependencies, and advice as
             // package-backed static libraries.
             source_library_commitment: mast.commitment(),
-            alternate_source_library_commitment: None,
         }
     }
 
@@ -186,25 +193,20 @@ impl<'a> StaticLibrary<'a> {
         library: &'a LinkLibrary,
         debug_info: Option<PackageDebugInfo>,
     ) -> Result<Self, ManifestValidationError> {
+        library.package.check_naming(library.naming())?;
         Ok(Self::from_mast_forest(library.mast().as_ref(), debug_info)
-            .with_source_library_commitment(library.commitment())
-            .with_alternate_source_library_commitment(library.interface_commitment()?))
+            .with_source_library_commitment(library.commitment()))
     }
 
     fn with_source_library_commitment(mut self, source_library_commitment: Word) -> Self {
         self.source_library_commitment = source_library_commitment;
         self
     }
-
-    fn with_alternate_source_library_commitment(mut self, source_library_commitment: Word) -> Self {
-        self.alternate_source_library_commitment = Some(source_library_commitment);
-        self
-    }
 }
 
 impl MastForestBuilder {
-    /// Creates a new builder which will transitively include the MAST of any procedures referenced
-    /// in the provided set of statically-linked libraries.
+    /// Creates a new builder which, when static code is referenced, retains every callable root in
+    /// the supplied static-library code inventories independently of structural invocation edges.
     ///
     /// In all other cases, references to procedures not present in the main MastForest are assumed
     /// to be dynamically-linked, and are inserted as an external node. Dynamically-linked libraries
@@ -254,14 +256,6 @@ impl MastForestBuilder {
                 .entry(library.source_library_commitment)
                 .or_insert_with(Vec::new)
                 .push(idx);
-            if let Some(source_library_commitment) = library.alternate_source_library_commitment
-                && source_library_commitment != library.source_library_commitment
-            {
-                statically_linked_forest_indices_by_commitment
-                    .entry(source_library_commitment)
-                    .or_insert_with(Vec::new)
-                    .push(idx);
-            }
         }
         let (statically_linked_mast, statically_linked_root_map) =
             MastForest::merge(forests.iter().copied()).into_diagnostic()?;
@@ -323,24 +317,17 @@ impl MastForestBuilder {
         source_child_refs: Vec<SourceNodeRef>,
     ) -> Result<MastNodeUse, Report> {
         let dedup_key = self.dedup_key_for_pending_data(&draft);
-        let node_ref = if let Some(node_ref) = self.find_node_ref_by_key(&dedup_key) {
-            if self.should_replace_pending_node(node_ref, &draft) {
-                self.replace_pending_node_record_ref(
-                    node_ref,
-                    dedup_key,
-                    draft.clone(),
-                    &source_child_refs,
-                );
-            }
-            node_ref
-        } else {
-            self.insert_pending_node_record_ref(dedup_key, draft.clone())?
-        };
+        let node_ref = self.insert_or_replace_pending_node_record_ref(
+            dedup_key,
+            draft.clone(),
+            &source_child_refs,
+        )?;
 
         let source_ref = self.record_source_occurrence(node_ref, source_child_refs, &draft)?;
         Ok(MastNodeUse::new(node_ref, source_ref))
     }
 
+    #[cfg(test)]
     fn intern_pending_node(&mut self, draft: PendingMastNodeDraft) -> Result<MastNodeRef, Report> {
         let source_child_refs = self.source_child_refs_for_node_refs(&draft.child_refs);
         Ok(self.intern_pending_node_use(draft, source_child_refs)?.node_ref())
@@ -355,8 +342,19 @@ impl MastForestBuilder {
         key: &MastNodeKey,
         draft: &PendingMastNodeDraft,
     ) -> Option<MastNodeRef> {
+        if self.pending_external_for_draft(draft).is_some() {
+            return None;
+        }
         self.find_node_ref_by_key(key)
             .filter(|&node_ref| !self.should_replace_pending_node(node_ref, draft))
+    }
+
+    /// Structural External(D) placeholders are indexed by D. A concrete node's interning key may
+    /// additionally preserve error codes or source layouts, but those do not prevent replacing the
+    /// placeholder with the selected implementation while retaining its stable references.
+    fn pending_external_for_draft(&self, draft: &PendingMastNodeDraft) -> Option<MastNodeRef> {
+        self.find_node_ref_by_key(&draft.digest)
+            .filter(|&node_ref| self.should_replace_pending_node(node_ref, draft))
     }
 
     fn should_replace_pending_node(
@@ -374,6 +372,10 @@ impl MastForestBuilder {
         draft: PendingMastNodeDraft,
         source_child_refs: &[SourceNodeRef],
     ) {
+        let old_key = self.nodes[node_ref].key;
+        if old_key != key && self.node_ref_by_key.get(&old_key) == Some(&node_ref) {
+            self.node_ref_by_key.remove(&old_key);
+        }
         // An external node is a zero-child placeholder, so every source occurrence recorded for
         // it initially has no children. Preserve those occurrence IDs when the concrete node
         // becomes available, but update their shape to match the replacement. This also preserves
@@ -391,6 +393,30 @@ impl MastForestBuilder {
             child_refs: draft.child_refs,
         };
         self.node_ref_by_key.insert(key, node_ref);
+        if old_key != key {
+            self.refresh_pending_node_keys();
+        }
+    }
+
+    /// A structural external can acquire a richer content key when its implementation arrives.
+    /// Reuse the existing child-first execution layout and key policy so already interned parents
+    /// also preserve the selected error codes and raw source layouts.
+    fn refresh_pending_node_keys(&mut self) {
+        let roots = (0..self.nodes.len()).map(|index| MastNodeRef::from(index as u32)).collect();
+        let layout = FinalForestLayout::plan(roots, &self.nodes);
+        for node_ref in layout.live_node_refs {
+            let node = &self.nodes[node_ref];
+            let old_key = node.key;
+            let key = self.key_for_pending_record(node.digest, &node.kind, &node.child_refs);
+            if old_key == key {
+                continue;
+            }
+            if self.node_ref_by_key.get(&old_key) == Some(&node_ref) {
+                self.node_ref_by_key.remove(&old_key);
+            }
+            self.nodes[node_ref].key = key;
+            self.node_ref_by_key.insert(key, node_ref);
+        }
     }
 
     fn insert_or_replace_pending_node_record_ref(
@@ -399,6 +425,10 @@ impl MastForestBuilder {
         draft: PendingMastNodeDraft,
         source_child_refs: &[SourceNodeRef],
     ) -> Result<MastNodeRef, Report> {
+        if let Some(node_ref) = self.pending_external_for_draft(&draft) {
+            self.replace_pending_node_record_ref(node_ref, key, draft, source_child_refs);
+            return Ok(node_ref);
+        }
         if let Some(node_ref) = self.find_node_ref_by_key(&key) {
             if self.should_replace_pending_node(node_ref, &draft) {
                 self.replace_pending_node_record_ref(node_ref, key, draft, source_child_refs);
@@ -605,12 +635,12 @@ impl MastForestBuilder {
         self.debug_info.add_function(function);
     }
 
-    /// Records a source occurrence of an `exec` target under the supplied inline call chain.
+    /// Records a source occurrence of an `inline` target under the supplied inline call chain.
     ///
-    /// `exec` reuses the callee's execution node instead of creating a control node. Clone its
+    /// `inline` reuses the callee's execution node instead of creating a control node. Clone its
     /// source tree even when debug call data is unavailable: a caller must never share its
     /// definition occurrence with the callee. Inline rows decorate only the invocation copy.
-    pub(crate) fn record_exec_inline_calls(
+    pub(crate) fn record_inline_calls(
         &mut self,
         target: MastNodeUse,
         inline_calls: &[DebugSourceInlineCall],
@@ -828,6 +858,9 @@ impl MastForestBuilder {
         if !is_external_boundary {
             self.concrete_source_ref_by_node_ref.insert(exec_ref, source_ref);
             self.remap_external_boundary_occurrences(exec_ref, source_ref)?;
+            self.concrete_node_ref_by_digest
+                .entry(self.nodes[exec_ref].digest)
+                .or_insert(exec_ref);
         }
 
         Ok(source_ref)
@@ -1405,44 +1438,48 @@ impl MastForestBuilder {
     #[cfg(test)]
     pub(crate) fn ensure_call_node_ref(
         &mut self,
-        callee: MastNodeRef,
+        target: ProcedureKey,
         is_syscall: bool,
         asm_op: AssemblyOp,
         inline_calls: Vec<DebugSourceInlineCall>,
     ) -> Result<MastNodeRef, Report> {
-        let callee = MastNodeUse::new(
-            callee,
-            self.latest_source_ref_for_node_ref(callee)
-                .expect("execution ref must have a source occurrence"),
-        );
-        Ok(self.ensure_call_node_use(callee, is_syscall, asm_op, inline_calls)?.node_ref())
+        Ok(self.ensure_call_node_use(target, is_syscall, asm_op, inline_calls)?.node_ref())
+    }
+
+    /// Creates a same-context invocation without retaining the target's implementation as a child.
+    pub(crate) fn ensure_exec_node_use(
+        &mut self,
+        target: ProcedureKey,
+        asm_op: AssemblyOp,
+        inline_calls: Vec<DebugSourceInlineCall>,
+    ) -> Result<MastNodeUse, Report> {
+        let digest = ExecNodeBuilder::new(target).build().digest();
+        let mut draft =
+            PendingMastNodeDraft::new(PendingMastNodeKind::Exec { target }, digest, Vec::new());
+        draft.inline_calls = inline_calls;
+        self.intern_pending_node_with_asm_op_use(draft, asm_op, Vec::new())
     }
 
     pub(crate) fn ensure_call_node_use(
         &mut self,
-        callee: MastNodeUse,
+        target: ProcedureKey,
         is_syscall: bool,
         asm_op: AssemblyOp,
         inline_calls: Vec<DebugSourceInlineCall>,
     ) -> Result<MastNodeUse, Report> {
-        let source_child_refs = vec![callee.source_ref()];
-        let callee = callee.node_ref();
-        let callee_digest = self.pending_node_mast_root(callee);
-        let call_domain = if is_syscall {
-            CallNode::SYSCALL_DOMAIN
+        let builder = if is_syscall {
+            CallNodeBuilder::new_syscall(target)
         } else {
-            CallNode::CALL_DOMAIN
+            CallNodeBuilder::new(target)
         };
-        let call_digest =
-            hasher::merge_in_mast_domain(&[callee_digest, Word::default()], call_domain);
-        let child_refs = vec![callee];
+        let digest = builder.build().digest();
         let mut draft = PendingMastNodeDraft::new(
-            PendingMastNodeKind::Call { is_syscall },
-            call_digest,
-            child_refs,
+            PendingMastNodeKind::Call { target, is_syscall },
+            digest,
+            Vec::new(),
         );
         draft.inline_calls = inline_calls;
-        self.intern_pending_node_with_asm_op_use(draft, asm_op, source_child_refs)
+        self.intern_pending_node_with_asm_op_use(draft, asm_op, Vec::new())
     }
 
     pub(crate) fn ensure_dyn_node_use(
@@ -1772,12 +1809,14 @@ mod tests {
     use miden_core::{
         mast::{MastNodeBuilder, MastNodeId},
         operations::Operation,
+        program::{CanonicalLabel, Namespace},
         serde::Serializable,
         utils::Idx,
     };
     use miden_mast_package::{
         Package, PackageExport, PackageId, PathBuf, ProcedureExport, Section, SectionId,
         TargetType, Version,
+        arbitrary::fixture_naming,
         debug_info::{
             DebugFieldInfo, DebugPrimitiveType, DebugSourceAsmOp, DebugSourceInlineCall,
             DebugSourceNode, DebugSourceVar, DebugTypeIdx, DebugTypeInfo, FunctionInfo,
@@ -1787,6 +1826,9 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::testing::FixtureNamespace;
+
+    mod keyed_invocations;
 
     #[test]
     fn inline_range_remapping_batches_all_endpoints() {
@@ -1889,6 +1931,10 @@ mod tests {
         Word::from([Felt::new_unchecked(value), Felt::ZERO, Felt::ZERO, Felt::ZERO])
     }
 
+    fn test_procedure_key(name: &str) -> ProcedureKey {
+        Namespace::initial().procedure_key(CanonicalLabel::text(name).unwrap().commitment())
+    }
+
     fn source_nodes_for_exec(
         debug_info: &PackageDebugInfo,
         exec_node: MastNodeId,
@@ -1927,15 +1973,15 @@ mod tests {
     }
 
     #[test]
-    fn exec_without_debug_data_keeps_source_occurrences_distinct() {
+    fn inline_without_debug_data_keeps_source_occurrences_distinct() {
         let mut builder = MastForestBuilder::new(&[]).unwrap();
         let target = builder
             .ensure_block_use(vec![Operation::Add], vec![], vec![], vec![], vec![])
             .unwrap();
         let source_node_count = builder.debug_info.debug_info().nodes().len();
 
-        let first = builder.record_exec_inline_calls(target, &[]).unwrap();
-        let second = builder.record_exec_inline_calls(target, &[]).unwrap();
+        let first = builder.record_inline_calls(target, &[]).unwrap();
+        let second = builder.record_inline_calls(target, &[]).unwrap();
         assert_eq!(first.node_ref(), target.node_ref());
         assert_eq!(second.node_ref(), target.node_ref());
         assert_ne!(first.source_ref(), target.source_ref());
@@ -1944,7 +1990,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_decorated_exec_reuses_the_same_source_tree() {
+    fn repeated_decorated_inline_reuses_the_same_source_tree() {
         let mut builder = MastForestBuilder::new(&[]).unwrap();
         let target = builder
             .ensure_block_use(vec![Operation::Add], vec![], vec![], vec![], vec![])
@@ -1953,12 +1999,12 @@ mod tests {
             let inline_call = DebugInlineCallInfo::new(
                 "source::callee",
                 FileLineCol::new(
-                    "file:///decorated-exec.masm",
+                    "file:///decorated-inline.masm",
                     LineNumber::new(1).unwrap(),
                     ColumnNumber::new(1).unwrap(),
                 ),
                 FileLineCol::new(
-                    "file:///decorated-exec.masm",
+                    "file:///decorated-inline.masm",
                     LineNumber::new(2).unwrap(),
                     ColumnNumber::new(1).unwrap(),
                 ),
@@ -1967,7 +2013,7 @@ mod tests {
             let duplicate_idx = builder.register_inline_function(&inline_call);
             assert_eq!(callee_idx, duplicate_idx);
             let call_site_span = builder.debug_info_mut().add_location(Location::new(
-                Uri::from("file:///decorated-exec.masm"),
+                Uri::from("file:///decorated-inline.masm"),
                 ByteIndex::from(1u32),
                 ByteIndex::from(2u32),
             ));
@@ -1979,14 +2025,11 @@ mod tests {
             callee_idx,
             loc_idx,
         };
-        let decorated = builder.record_exec_inline_calls(target, &[inline_call]).unwrap();
+        let decorated = builder.record_inline_calls(target, &[inline_call]).unwrap();
         let source_node_count = builder.debug_info.debug_info().nodes().len();
 
         for _ in 0..1_024 {
-            assert_eq!(
-                builder.record_exec_inline_calls(target, &[inline_call]).unwrap(),
-                decorated
-            );
+            assert_eq!(builder.record_inline_calls(target, &[inline_call]).unwrap(), decorated);
         }
 
         assert_eq!(builder.debug_info.debug_info().nodes().len(), source_node_count);
@@ -1995,7 +2038,7 @@ mod tests {
     }
 
     #[test]
-    fn external_exec_preserves_the_source_boundary_index() {
+    fn external_inline_preserves_the_source_boundary_index() {
         let mut builder = MastForestBuilder::new(&[]).unwrap();
         let mast_root = test_word(7);
         let (callee_idx, loc_idx) = {
@@ -2043,7 +2086,7 @@ mod tests {
             .unwrap();
         let target = MastNodeUse::new(external_ref, boundary_source_ref);
 
-        let decorated = builder.record_exec_inline_calls(target, &[inline_call]).unwrap();
+        let decorated = builder.record_inline_calls(target, &[inline_call]).unwrap();
         let source_node = &builder.debug_info[decorated.source_ref()];
 
         assert_eq!((source_node.op_start, source_node.op_end), (7, 7));
@@ -2153,7 +2196,7 @@ mod tests {
             .ensure_external_link_with_source_ref(block_digest, None, None, None)
             .unwrap();
         let external_use = builder.latest_node_use(external_ref).unwrap();
-        let decorated = builder.record_exec_inline_calls(external_use, &[inline_call]).unwrap();
+        let decorated = builder.record_inline_calls(external_use, &[inline_call]).unwrap();
         builder.record_procedure_root_use(decorated);
 
         let concrete = builder
@@ -2287,7 +2330,7 @@ mod tests {
                         .unwrap(),
                     3 => builder
                         .ensure_call_node_ref(
-                            first_ref,
+                            test_procedure_key(&context),
                             step.flags & 1 == 1,
                             test_asm_op(context.clone(), "call"),
                             vec![],
@@ -2954,19 +2997,19 @@ mod tests {
             "an explicit trailing Noop must remain invisible to the MAST digest",
         );
 
-        let call_ref = builder
-            .ensure_call_node_ref(block_ref, false, test_asm_op("test", "call"), vec![])
+        let loop_ref = builder
+            .ensure_loop_node_ref(block_ref, test_asm_op("test", "while.true"), vec![])
             .unwrap();
-        let trailing_noop_call_ref = builder
-            .ensure_call_node_ref(trailing_noop_ref, false, test_asm_op("test", "call"), vec![])
+        let trailing_noop_loop_ref = builder
+            .ensure_loop_node_ref(trailing_noop_ref, test_asm_op("test", "while.true"), vec![])
             .unwrap();
         assert_ne!(
-            call_ref, trailing_noop_call_ref,
+            loop_ref, trailing_noop_loop_ref,
             "incompatible child source layouts must propagate through control-node identity",
         );
         assert_eq!(
-            builder.pending_node_mast_root(call_ref),
-            builder.pending_node_mast_root(trailing_noop_call_ref),
+            builder.pending_node_mast_root(loop_ref),
+            builder.pending_node_mast_root(trailing_noop_loop_ref),
         );
 
         let duplicate_trailing_noop_ref = builder
@@ -2977,8 +3020,8 @@ mod tests {
             "identical raw-to-padded layouts should still deduplicate",
         );
 
-        record_test_root(&mut builder, call_ref);
-        record_test_root(&mut builder, trailing_noop_call_ref);
+        record_test_root(&mut builder, loop_ref);
+        record_test_root(&mut builder, trailing_noop_loop_ref);
         let (forest, remapping, debug_info, _) =
             builder.build().unwrap().into_parts_with_debug_info();
         let final_block = remapping[&block_ref];
@@ -3010,20 +3053,27 @@ mod tests {
         let export_path = PathBuf::new("source_layout_test::entry").unwrap();
         let export_path = export_path.as_path().to_absolute().unwrap().into_owned();
         let export_path = Arc::from(export_path.into_boxed_path());
-        let final_call = remapping[&call_ref];
-        let export = PackageExport::Procedure(ProcedureExport::new(
+        let final_loop = remapping[&loop_ref];
+        let exports = [PackageExport::Procedure(ProcedureExport::new(
             export_path,
-            Some(final_call),
-            forest[final_call].digest(),
+            Some(final_loop),
+            forest[final_loop].digest(),
             None,
-        ));
+        ))];
+        let naming = fixture_naming(
+            FixtureNamespace::assembly_tests().namespace_plan().clone(),
+            TargetType::Library,
+            &forest,
+            &exports,
+        );
         let mut package = Package::create(
             PackageId::from("source-layout-test"),
             Version::new(0, 0, 0),
             TargetType::Library,
             Arc::new(forest),
-            [export],
+            exports,
             [],
+            &naming,
         )
         .unwrap();
         package
@@ -3200,15 +3250,15 @@ mod tests {
             builder.pending_node_mast_root(second_block)
         );
 
-        let first_call = builder
-            .ensure_call_node_ref(first_block, false, test_asm_op("test", "call"), vec![])
+        let first_loop = builder
+            .ensure_loop_node_ref(first_block, test_asm_op("test", "while.true"), vec![])
             .unwrap();
-        let second_call = builder
-            .ensure_call_node_ref(second_block, false, test_asm_op("test", "call"), vec![])
+        let second_loop = builder
+            .ensure_loop_node_ref(second_block, test_asm_op("test", "while.true"), vec![])
             .unwrap();
 
         assert_ne!(
-            first_call, second_call,
+            first_loop, second_loop,
             "same-digest control nodes must not dedup when their children differ by runtime error code",
         );
     }
@@ -3497,12 +3547,10 @@ mod tests {
     fn test_non_block_nodes_keep_different_asm_ops_distinct() {
         let mut builder = MastForestBuilder::new(&[]).unwrap();
 
-        let callee_ref = builder
-            .ensure_block_ref(vec![Operation::Add], vec![], vec![], vec![], vec![])
-            .unwrap();
+        let target = test_procedure_key("foo");
         let call_a_ref = builder
             .ensure_call_node_ref(
-                callee_ref,
+                target,
                 false,
                 AssemblyOp::new(None, "ctx_a", 1, "call.foo"),
                 vec![],
@@ -3510,7 +3558,7 @@ mod tests {
             .unwrap();
         let call_b_ref = builder
             .ensure_call_node_ref(
-                callee_ref,
+                target,
                 false,
                 AssemblyOp::new(None, "ctx_b", 1, "call.foo"),
                 vec![],

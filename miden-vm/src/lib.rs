@@ -18,8 +18,10 @@ pub use miden_core::{
         PrecompileWitnessEntry, PreparationError, WorkClass, WorkLimit,
     },
     operations::Operation,
+    program,
     program::{
-        ExecutionClaim, InputError, KernelDescriptor, Program, ProgramInfo, StackInputs,
+        CanonicalLabel, EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, ImplementationRoot,
+        InputError, KernelDescriptor, Namespace, ProcedureKey, Program, ProgramInfo, StackInputs,
         StackOutputs,
     },
     proof::{
@@ -33,9 +35,11 @@ pub use miden_precompiles::{
     default_verification_precompile_limits,
 };
 pub use miden_processor::{
-    BaseHost, DefaultHost, ExecutionError, ExecutionOptions, ExecutionOutput, ExecutionWitness,
-    FastProcessor, FutureMaybeSend, Host, ProgramExecutor, SyncHost, VmWitness, advice, crypto,
-    field, serde, trace, trace::VmTrace, utils,
+    BaseHost, DefaultHost, EnvironmentSourceError, EnvironmentTraceLimits,
+    EnvironmentWitnessRequest, EnvironmentWitnessSource, ExecutionEnvironment, ExecutionError,
+    ExecutionOptions, ExecutionOutput, ExecutionWitness, FastProcessor, FutureMaybeSend, Host,
+    LedgerLimits, OpeningLimits, OpeningStep, ProgramExecutor, ResolutionWitness, SessionLimits,
+    SyncHost, VmWitness, advice, crypto, field, serde, trace, trace::VmTrace, utils,
 };
 pub use miden_prover::{PrecompileProvingError, Prover, ProverError, prove_sync};
 pub use miden_verifier::{

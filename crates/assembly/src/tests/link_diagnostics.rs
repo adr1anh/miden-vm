@@ -152,7 +152,7 @@ fn private_submodule_is_visible_to_descendants_of_its_parent() -> TestResult {
         "#
     ))?;
 
-    Assembler::new(context.source_manager()).assemble_library("diag", root, [internal, api])?;
+    context.assemble_library("diag", None, root, [internal, api])?;
 
     Ok(())
 }
@@ -503,7 +503,7 @@ fn code_paths_can_reference_current_and_descendant_items_absolutely() -> TestRes
         "#
     ))?;
 
-    Assembler::new(context.source_manager()).assemble_library("diag", root, [child])?;
+    context.assemble_library("diag", None, root, [child])?;
 
     Ok(())
 }
@@ -534,7 +534,7 @@ fn code_paths_can_reference_local_submodules_without_imports() -> TestResult {
         "#
     ))?;
 
-    Assembler::new(context.source_manager()).assemble_library("diag", root, [child])?;
+    context.assemble_library("diag", None, root, [child])?;
 
     Ok(())
 }
@@ -613,7 +613,7 @@ fn code_paths_can_reference_imported_module_subpaths() -> TestResult {
         "#
     ))?;
 
-    Assembler::new(context.source_manager()).assemble_library("diag", consumer, [dep, child])?;
+    context.assemble_library("diag", None, consumer, [dep, child])?;
 
     Ok(())
 }
@@ -646,7 +646,7 @@ fn self_relative_import_walks_public_submodules() -> TestResult {
         "#
     ))?;
 
-    Assembler::new(context.source_manager()).assemble_library("diag", root, [child])?;
+    context.assemble_library("diag", None, root, [child])?;
 
     Ok(())
 }
@@ -765,12 +765,20 @@ begin
 end
 "#;
 
+    let module_a = <&str as Parse>::parse(module_a_src, false, source_manager.clone())
+        .expect("module a parsing must succeed");
+    let mut bindings = crate::testing::FixtureNamespace::assembly_tests();
+    bindings.add_module(&module_b).expect("module b naming must succeed");
+    bindings.add_module(&module_a).expect("module a naming must succeed");
+
     let assembled = catch_unwind(AssertUnwindSafe(|| {
-        let mut assembler = Assembler::new(source_manager);
+        let mut assembler = bindings
+            .configure(Assembler::new(source_manager), [&*module_b, &*module_a])
+            .expect("fixture configuration must succeed");
         assembler
             .compile_and_statically_link(module_b)
             .expect("linking module b must succeed");
-        assembler.assemble_program("test", module_a_src)
+        assembler.assemble_program("test", module_a)
     }));
 
     assert!(assembled.is_ok(), "assembler panicked during assembly");

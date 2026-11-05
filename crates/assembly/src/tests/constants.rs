@@ -2,6 +2,7 @@
 // ================================================================================================
 
 use super::*;
+use crate::testing::FixtureNamespace;
 
 #[test]
 fn unused_constant_warning() {
@@ -264,24 +265,22 @@ fn relative_full_namespace_does_not_mark_constant_used() {
     assert!(rendered.contains("const A = 1"), "{rendered}");
 }
 
-fn constant_library(context: &TestContext, name: &str) -> Box<Package> {
+fn constant_library(context: &TestContext, name: &str) -> (Box<Package>, FixtureNamespace) {
     let module = parse_module!(
         context,
         format!(
             "namespace lib::a\n\npub const {name} = 42\n\npub proc noop\n    push.1 drop\nend\n"
         )
     );
-    Assembler::new(context.source_manager())
-        .assemble_library("lib", module, None::<Box<Module>>)
-        .unwrap()
+    context.assemble_library_with_fixture("lib", None, module, []).unwrap()
 }
 
 #[test]
 fn dead_constant_does_not_mask_unused_import() {
     let context = TestContext::default();
-    let library = constant_library(&context, "BAR");
+    let (library, bindings) = constant_library(&context, "BAR");
     let mut context = TestContext::default();
-    context.add_library(Arc::from(library)).unwrap();
+    context.add_library_with_bindings(Arc::from(library), &bindings).unwrap();
     let source =
         source_file!(&context, "\nuse lib::a\n\nconst DEAD = a::BAR\n\nbegin\n    push.1\nend");
     let error = context.assemble(source).expect_err("both declarations should warn");
@@ -295,9 +294,9 @@ fn dead_constant_does_not_mask_unused_import() {
 #[test]
 fn dead_constant_direct_import_warns_unused_import() {
     let context = TestContext::default();
-    let library = constant_library(&context, "BAR");
+    let (library, bindings) = constant_library(&context, "BAR");
     let mut context = TestContext::default();
-    context.add_library(Arc::from(library)).unwrap();
+    context.add_library_with_bindings(Arc::from(library), &bindings).unwrap();
     let source = source_file!(
         &context,
         "\nuse {BAR} from lib::a\n\nconst DEAD = BAR\n\nbegin\n    push.1\nend"
@@ -313,9 +312,9 @@ fn dead_constant_direct_import_warns_unused_import() {
 #[test]
 fn public_constant_keeps_import_live() -> TestResult {
     let context = TestContext::default();
-    let library = constant_library(&context, "BAR");
+    let (library, bindings) = constant_library(&context, "BAR");
     let mut context = TestContext::default();
-    context.add_library(Arc::from(library))?;
+    context.add_library_with_bindings(Arc::from(library), &bindings)?;
     let source = source_file!(
         &context,
         "\nnamespace test::lib\n\nuse lib::a\n\npub const LIVE = a::BAR\n\npub proc foo\n    push.1\nend"
@@ -329,9 +328,9 @@ fn public_constant_keeps_import_live() -> TestResult {
 #[test]
 fn reexported_private_constant_keeps_import_live() -> TestResult {
     let context = TestContext::default();
-    let library = constant_library(&context, "BAR");
+    let (library, bindings) = constant_library(&context, "BAR");
     let mut context = TestContext::default();
-    context.add_library(Arc::from(library))?;
+    context.add_library_with_bindings(Arc::from(library), &bindings)?;
     let source = source_file!(
         &context,
         "namespace test::lib\n\nuse {BAR} from lib::a\nconst A = BAR\npub use {A as EXPORTED} from self\n\npub proc noop\n    nop\nend\n"
@@ -1286,7 +1285,7 @@ fn test_push_word_slice_invalid() {
 
 #[test]
 fn link_time_const_evaluation_succeeds() -> TestResult {
-    let context = TestContext::default();
+    let mut context = TestContext::default();
     let a = r#"
             namespace lib::a
 
@@ -1297,8 +1296,25 @@ fn link_time_const_evaluation_succeeds() -> TestResult {
         "#;
     let a = parse_module!(&context, a);
 
-    let lib =
-        Assembler::new(context.source_manager()).assemble_library("lib", a, None::<Box<Module>>)?;
+    let (lib, bindings) = context.assemble_library_with_fixture("lib", None, a, [])?;
+    let callee = Path::new("::lib::a::f");
+    let target = bindings.binding(callee).unwrap().key();
+    let callee_root = &lib.mast_forest()[lib.get_export_node_id(callee)];
+    // Keep the implementation commitment formerly checked by the external-node snapshot.
+    assert_eq!(
+        callee_root.digest(),
+        Word::parse("0x5e32b0bada16504f63d32dff1f7ece008c78b3c516486068ca1366b6cd9f9648").unwrap(),
+    );
+    assert_eq!(
+        callee_root
+            .get_basic_block()
+            .unwrap()
+            .raw_operations()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![Operation::Pad, Operation::Incr],
+    );
+    context.add_library_with_bindings(Arc::from(lib), &bindings)?;
 
     let program_source = source_file!(
         &context,
@@ -1313,10 +1329,18 @@ fn link_time_const_evaluation_succeeds() -> TestResult {
         end"
     );
 
-    let program = Assembler::new(context.source_manager())
-        .with_package(Arc::from(lib), Linkage::Dynamic)?
-        .assemble_program("program", program_source)?
-        .unwrap_program();
+    let program = context.assemble(program_source)?;
+    let targets = program
+        .mast_forest()
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            MastNode::Exec(exec) => Some(exec.target()),
+            MastNode::Call(_) => panic!("exec source must retain EXEC mode"),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(targets, vec![target]);
     insta::assert_snapshot!(program);
 
     Ok(())
@@ -1324,7 +1348,7 @@ fn link_time_const_evaluation_succeeds() -> TestResult {
 
 #[test]
 fn link_time_const_evaluation_deferred_expressions_succeed() -> TestResult {
-    let context = TestContext::default();
+    let mut context = TestContext::default();
     let constants = parse_module!(
         &context,
         r#"
@@ -1337,11 +1361,8 @@ fn link_time_const_evaluation_deferred_expressions_succeed() -> TestResult {
             end
         "#
     );
-    let lib = Assembler::new(context.source_manager()).assemble_library(
-        "lib",
-        constants,
-        None::<Box<Module>>,
-    )?;
+    let (lib, bindings) = context.assemble_library_with_fixture("lib", None, constants, [])?;
+    context.add_library_with_bindings(Arc::from(lib), &bindings)?;
 
     let program = source_file!(
         &context,
@@ -1380,16 +1401,14 @@ fn link_time_const_evaluation_deferred_expressions_succeed() -> TestResult {
         "#
     );
 
-    Assembler::new(context.source_manager())
-        .with_package(Arc::from(lib), Linkage::Dynamic)?
-        .assemble_program("program", program)?;
+    context.assemble(program)?;
 
     Ok(())
 }
 
 #[test]
 fn link_time_event_constants_must_be_event_hashes() -> TestResult {
-    let context = TestContext::default();
+    let mut context = TestContext::default();
     let constants = parse_module!(
         &context,
         r#"
@@ -1404,11 +1423,8 @@ fn link_time_event_constants_must_be_event_hashes() -> TestResult {
             end
         "#
     );
-    let lib: Arc<Package> = Arc::from(Assembler::new(context.source_manager()).assemble_library(
-        "lib",
-        constants,
-        None::<Box<Module>>,
-    )?);
+    let (lib, bindings) = context.assemble_library_with_fixture("lib", None, constants, [])?;
+    context.add_library_with_bindings(Arc::from(lib), &bindings)?;
 
     for (instruction, constant) in
         [("emit", "INT"), ("emit", "WORD"), ("trace", "INT"), ("trace", "WORD")]
@@ -1419,9 +1435,8 @@ fn link_time_event_constants_must_be_event_hashes() -> TestResult {
                 "use {{{constant}}} from lib::constants\nbegin\n    {instruction}.{constant}\nend"
             )
         );
-        let err = Assembler::new(context.source_manager())
-            .with_package(lib.clone(), Linkage::Dynamic)?
-            .assemble_program("program", program)
+        let err = context
+            .assemble(program)
             .expect_err("imported event constant must be defined via event() hashing");
         assert_diagnostic!(&err, "expected an event name");
     }
@@ -1430,16 +1445,14 @@ fn link_time_event_constants_must_be_event_hashes() -> TestResult {
         &context,
         "use {EVENT} from lib::constants\nbegin\n    emit.EVENT\n    trace.EVENT\nend"
     );
-    Assembler::new(context.source_manager())
-        .with_package(lib, Linkage::Dynamic)?
-        .assemble_program("program", program)?;
+    context.assemble(program)?;
 
     Ok(())
 }
 
 #[test]
 fn link_time_const_evaluation_undefined_symbol() -> TestResult {
-    let context = TestContext::default();
+    let mut context = TestContext::default();
     let a = r#"
             namespace lib::a
 
@@ -1449,8 +1462,8 @@ fn link_time_const_evaluation_undefined_symbol() -> TestResult {
         "#;
     let a = parse_module!(&context, a);
 
-    let lib =
-        Assembler::new(context.source_manager()).assemble_library("lib", a, None::<Box<Module>>)?;
+    let (lib, bindings) = context.assemble_library_with_fixture("lib", None, a, [])?;
+    context.add_library_with_bindings(Arc::from(lib), &bindings)?;
 
     let source = source_file!(
         &context,
@@ -1463,9 +1476,8 @@ fn link_time_const_evaluation_undefined_symbol() -> TestResult {
         end"
     );
 
-    let error = Assembler::new(context.source_manager())
-        .with_package(Arc::from(lib), Linkage::Dynamic)?
-        .assemble_program("program", source)
+    let error = context
+        .assemble(source)
         .expect_err("expected diagnostic to be raised, but compilation succeeded");
     assert_diagnostic_lines!(
         error,
@@ -1483,7 +1495,7 @@ fn link_time_const_evaluation_undefined_symbol() -> TestResult {
 
 #[test]
 fn link_time_const_evaluation_invalid_constant() -> TestResult {
-    let context = TestContext::default();
+    let mut context = TestContext::default();
     let a = r#"
             namespace lib::a
 
@@ -1493,8 +1505,8 @@ fn link_time_const_evaluation_invalid_constant() -> TestResult {
         "#;
     let a = parse_module!(&context, a);
 
-    let lib =
-        Assembler::new(context.source_manager()).assemble_library("lib", a, None::<Box<Module>>)?;
+    let (lib, bindings) = context.assemble_library_with_fixture("lib", None, a, [])?;
+    context.add_library_with_bindings(Arc::from(lib), &bindings)?;
 
     let source = source_file!(
         &context,
@@ -1505,9 +1517,8 @@ fn link_time_const_evaluation_invalid_constant() -> TestResult {
     end"
     );
 
-    let error = Assembler::new(context.source_manager())
-        .with_package(Arc::from(lib), Linkage::Dynamic)?
-        .assemble_program("program", source)
+    let error = context
+        .assemble(source)
         .expect_err("expected diagnostic to be raised, but compilation succeeded");
 
     assert_diagnostic_lines!(

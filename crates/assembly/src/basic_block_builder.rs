@@ -127,11 +127,6 @@ impl<'a> BasicBlockBuilder<'a> {
 
 /// Accessors
 impl BasicBlockBuilder<'_> {
-    /// Returns a reference to the internal [`MastForestBuilder`].
-    pub fn mast_forest_builder(&self) -> &MastForestBuilder {
-        self.mast_forest_builder
-    }
-
     /// Returns a mutable reference to the internal [`MastForestBuilder`].
     pub fn mast_forest_builder_mut(&mut self) -> &mut MastForestBuilder {
         self.mast_forest_builder

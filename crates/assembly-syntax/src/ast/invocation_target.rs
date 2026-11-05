@@ -16,6 +16,8 @@ pub enum InvokeKind {
     Call,
     SysCall,
     ProcRef,
+    /// An explicit structural body expansion, whose eligibility is checked during assembly.
+    Inline,
 }
 
 impl fmt::Display for InvokeKind {
@@ -25,6 +27,7 @@ impl fmt::Display for InvokeKind {
             Self::Call => f.write_str("call"),
             Self::SysCall => f.write_str("syscall"),
             Self::ProcRef => f.write_str("procref"),
+            Self::Inline => f.write_str("inline"),
         }
     }
 }
@@ -51,7 +54,7 @@ impl Invoke {
 // INVOCATION TARGET
 // ================================================================================================
 
-/// Describes targets of `exec`, `call`, `syscall`, and `procref` instructions.
+/// Describes targets of `exec`, `call`, `syscall`, `procref`, and `inline` instructions.
 ///
 /// A label of an invoked procedure must comply with the following rules:
 /// - It can be a hexadecimal string representing a ProcedureKey K ([Word]). In this case, the label

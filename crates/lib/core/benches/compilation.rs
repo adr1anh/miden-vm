@@ -1,8 +1,14 @@
-use std::{fmt::Write, hint::black_box, path::Path, time::Duration};
+use std::{fmt::Write, hint::black_box, path::Path, sync::Arc, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use miden_assembly::{Assembler, ProjectTargetSelector};
+use miden_assembly::{
+    Assembler, ProjectTargetSelector, ast::Module, debuginfo::DefaultSourceManager,
+    package::NamespacePlan,
+};
 use miden_package_registry::InMemoryPackageRegistry;
+
+#[path = "../source_naming.rs"]
+mod source_naming;
 
 fn core_lib(c: &mut Criterion) {
     let mut group = c.benchmark_group("compile_core_lib");
@@ -18,8 +24,17 @@ fn core_lib(c: &mut Criterion) {
             let manifest_path = Path::new(manifest_dir).join("asm/miden-project.toml");
             let mut project_assembler =
                 assembler.for_project_at_path(manifest_path, &mut registry).unwrap();
-            black_box(project_assembler.assemble(ProjectTargetSelector::Library, "release"))
-                .unwrap();
+            project_assembler.with_namespace_inputs_provider(|_, sources, _| {
+                source_naming::source_namespace_inputs(
+                    NamespacePlan::new(vec![]),
+                    core::iter::once(sources.root.as_ref())
+                        .chain(sources.support.iter().map(Box::as_ref)),
+                )
+            });
+            black_box(
+                project_assembler.assemble_with_naming(ProjectTargetSelector::Library, "release"),
+            )
+            .unwrap();
         });
     });
 
@@ -53,8 +68,16 @@ fn bench_generated_programs(c: &mut Criterion, group_name: &str, cases: &[(&str,
     for (name, size, source) in cases {
         group.bench_with_input(BenchmarkId::new(*name, *size), source, |bench, source| {
             bench.iter(|| {
-                let assembler = Assembler::default();
-                black_box(assembler.assemble_program("bench", source.as_str()).unwrap());
+                let source_manager = Arc::new(DefaultSourceManager::default());
+                let module =
+                    Module::parser(None).parse_str(None, source, source_manager.clone()).unwrap();
+                let inputs = source_naming::source_namespace_inputs(
+                    NamespacePlan::new(vec![]),
+                    core::iter::once(module.as_ref()),
+                )
+                .unwrap();
+                let assembler = Assembler::new(source_manager).with_namespace_inputs(inputs);
+                black_box(assembler.assemble_program("bench", module).unwrap());
             });
         });
     }

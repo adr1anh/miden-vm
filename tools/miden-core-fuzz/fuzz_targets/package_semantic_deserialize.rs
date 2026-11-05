@@ -9,16 +9,32 @@
 
 use libfuzzer_sys::fuzz_target;
 use miden_core::serde::{Deserializable, Serializable, SliceReader};
+use miden_core_fuzz::naming::{SyntheticProfile, check_naming_admission, named_package_fixture};
 use miden_mast_package::{
-    Package, SectionId, TargetType,
+    Package, SectionId,
     debug_info::{DebugSourceNodeId, PackageDebugInfo},
+    interface::serialization::CodecLimits,
 };
-use miden_processor::{
-    DefaultHost, PackageSourceDebugContext,
-    operation::OperationError,
-};
+use miden_processor::{DefaultHost, PackageSourceDebugContext, operation::OperationError};
+
+const NAMING_LIMITS: CodecLimits =
+    CodecLimits::new(4 * 1024 * 1024, 100_000, 100_000, 4 * 1024 * 1024);
 
 fuzz_target!(|data: &[u8]| {
+    let profile = SyntheticProfile::packages();
+    // Run semantic code selection before any arbitrary-input rejection. The retained expected
+    // inventory comes from explicit names selected before constructing the fixture's bodies.
+    let (fixture, expected_naming) = named_package_fixture(data);
+    let fixture_bytes = fixture.to_bytes();
+    for fixture in [
+        Package::read_from_bytes(&fixture_bytes).unwrap(),
+        Package::read_from_bytes_trusted(&fixture_bytes).unwrap(),
+    ] {
+        assert_eq!(
+            check_naming_admission(&fixture, &profile, &true, NAMING_LIMITS).unwrap(),
+            expected_naming
+        );
+    }
     if let Ok(package) = Package::read_from_bytes_trusted(data) {
         validate_debug_sections(&package);
         match package.debug_info() {
@@ -55,27 +71,28 @@ fuzz_target!(|data: &[u8]| {
         .expect("round-tripped debug info should remain valid");
     assert_eq!(actual_debug_info, expected_debug_info);
 
+    let naming = check_naming_admission(&package, &profile, &true, NAMING_LIMITS);
+    assert_eq!(check_naming_admission(&round_tripped, &profile, &true, NAMING_LIMITS), naming);
+    let trusted = Package::read_from_bytes_trusted(&encoded).unwrap();
+    assert_eq!(trusted, package);
+    assert_eq!(check_naming_admission(&trusted, &profile, &true, NAMING_LIMITS), naming);
+    let raw_trusted = Package::read_from_bytes_trusted(data)
+        .expect("safe admission must also be readable through the trusted path");
+    assert_eq!(raw_trusted, package);
+    assert_eq!(check_naming_admission(&raw_trusted, &profile, &true, NAMING_LIMITS), naming);
+
     if let Some(debug_info) = expected_debug_info.as_ref() {
         exercise_execution_diagnostics(debug_info);
     }
 
     let _ = package.kernel_runtime_dependency();
-    exercise_embedded_kernel(&package);
-
-    // These conversion helpers borrow the package, despite the `try_into_*` names.
-    match package.kind {
-        TargetType::Executable => {
-            let _ = package.try_into_program();
-        },
-        TargetType::Kernel => {
-            let _ = package.kernel_module_descriptor();
-            let _ = package.to_kernel_descriptor();
-        },
-        _ => (),
+    exercise_embedded_kernel(&package, &profile);
+    if package.is_kernel() {
+        let _ = package.kernel_module_descriptor();
     }
 });
 
-fn exercise_embedded_kernel(package: &Package) {
+fn exercise_embedded_kernel(package: &Package, profile: &SyntheticProfile) {
     let mut kernel_sections =
         package.sections.iter().filter(|section| section.id == SectionId::KERNEL);
     let Some(kernel_section) = kernel_sections.next() else {
@@ -112,9 +129,13 @@ fn exercise_embedded_kernel(package: &Package) {
     let round_tripped = Package::read_from_bytes(&encoded)
         .expect("an admitted embedded kernel should survive serialization and re-admission");
     assert_eq!(
-        round_tripped.debug_info().expect("round-tripped kernel debug info should remain valid"),
+        round_tripped
+            .debug_info()
+            .expect("round-tripped kernel debug info should remain valid"),
         actual_debug_info
     );
+    let naming = check_naming_admission(&kernel, profile, &true, NAMING_LIMITS);
+    assert_eq!(check_naming_admission(&round_tripped, profile, &true, NAMING_LIMITS), naming);
 }
 
 fn validate_debug_sections(package: &Package) {
@@ -133,10 +154,8 @@ fn exercise_execution_diagnostics(debug_info: &PackageDebugInfo) {
         let Ok(source_node_idx) = u32::try_from(source_node_idx) else {
             break;
         };
-        let context = PackageSourceDebugContext::new(
-            debug_info,
-            DebugSourceNodeId::from(source_node_idx),
-        );
+        let context =
+            PackageSourceDebugContext::new(debug_info, DebugSourceNodeId::from(source_node_idx));
 
         let _ = context.assembly_location(None);
         for asm_op in &source_node.asm_ops {

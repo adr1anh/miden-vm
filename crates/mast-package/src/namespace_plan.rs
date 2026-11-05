@@ -4,13 +4,16 @@
 //! establish a kernel namespace, or select code. Protocol-specific home policies and interchange
 //! formats remain the responsibility of their owning layers.
 
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 
 use miden_core::program::{CanonicalLabel, LabelError, Namespace, ProcedureKey};
 
-use crate::PublicProcedurePath;
+use crate::{CallableProcedurePath, PublicProcedurePath};
 
+mod callable_binding;
 mod serialization;
+
+pub use callable_binding::CallableBinding;
 
 /// An explicitly supplied complete home path, independent of code and source import aliases.
 ///
@@ -50,7 +53,26 @@ impl NamespacePlan {
     ///
     /// Public namespace components are Text labels; source aliases do not enter the derivation.
     pub fn parent_namespace(&self, path: &PublicProcedurePath) -> Result<Namespace, LabelError> {
-        let (_, namespaces) = path.components().split_last().expect("public paths are nonempty");
+        self.parent_namespace_from_components(path.components())
+    }
+
+    /// Derives the immediate parent namespace of any callable under this explicit home.
+    ///
+    /// Every path component is Text, including reserved source roots. The caller must supply
+    /// canonical helper prefixes explicitly. This method does not resolve aliases, choose a
+    /// profile, or authorize a kernel namespace.
+    pub fn callable_parent_namespace(
+        &self,
+        path: &CallableProcedurePath,
+    ) -> Result<Namespace, LabelError> {
+        self.parent_namespace_from_components(path.components())
+    }
+
+    fn parent_namespace_from_components(
+        &self,
+        components: &[String],
+    ) -> Result<Namespace, LabelError> {
+        let (_, namespaces) = components.split_last().expect("validated paths are nonempty");
         let mut namespace = self.namespace();
         for component in namespaces {
             namespace = namespace.child(CanonicalLabel::text(component)?.commitment());
@@ -63,9 +85,27 @@ impl NamespacePlan {
     /// ABI text, tooling signatures, source aliases, forests and the execution environment root
     /// do not enter the key. The result does not authenticate a callable binding.
     pub fn procedure_key(&self, path: &PublicProcedurePath) -> Result<ProcedureKey, LabelError> {
-        let local = path.components().last().expect("public paths are nonempty");
+        self.procedure_key_from_components(path.components())
+    }
+
+    /// Derives a callable key without a body, implementation root, ABI, or selected release.
+    ///
+    /// Entry and helper paths use the same Text label derivation as public paths. Naming a
+    /// callable grants no binding or publication authority and does not make it a public export.
+    pub fn callable_procedure_key(
+        &self,
+        path: &CallableProcedurePath,
+    ) -> Result<ProcedureKey, LabelError> {
+        self.procedure_key_from_components(path.components())
+    }
+
+    fn procedure_key_from_components(
+        &self,
+        components: &[String],
+    ) -> Result<ProcedureKey, LabelError> {
+        let local = components.last().expect("validated paths are nonempty");
         Ok(self
-            .parent_namespace(path)?
+            .parent_namespace_from_components(components)?
             .procedure_key(CanonicalLabel::text(local)?.commitment()))
     }
 }

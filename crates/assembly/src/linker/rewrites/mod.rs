@@ -24,6 +24,7 @@ pub fn rewrite_symbol(
 
     log::trace!(target: "linker::rewrite_symbol", "rewriting {}", symbol.name());
     match symbol.item() {
+        SymbolItem::CallableDeclaration(_) => (),
         SymbolItem::Compiled(item) => match item {
             ItemInfo::Constant(value) => {
                 cache.constants.insert(gid, value.value.clone());

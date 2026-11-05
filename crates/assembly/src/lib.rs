@@ -28,7 +28,7 @@ mod tests;
 
 // Re-exported for downstream crates
 pub use miden_assembly_syntax::{
-    ModuleParser, Path, PathBuf, ast,
+    ModuleParser, Parse, Path, PathBuf, ast,
     ast::{GlobalItemIndex, ModuleIndex},
     debuginfo::{
         self, DefaultSourceManager, SourceFile, SourceId, SourceManager, SourceSpan, Span, Spanned,
@@ -41,6 +41,7 @@ pub use miden_assembly_syntax::{
 /// Merkelized abstract syntax tree (MAST) components defining Miden VM programs.
 pub use miden_core::{mast, serde, utils};
 pub use miden_mast_package as package;
+pub use miden_mast_package::CallableBinding;
 
 #[doc(hidden)]
 pub use self::linker::LinkerError;
@@ -52,9 +53,9 @@ pub use self::project::{
     SourceProviderRegistry, TargetAssemblyContext,
 };
 pub use self::{
-    assembler::Assembler,
+    assembler::{Assembler, AssemblyProduct, NamespaceInputs},
     linker::Linkage,
-    procedure::{Procedure, ProcedureContext},
+    procedure::{CallableDeclaration, Procedure, ProcedureContext},
 };
 
 // CONSTANTS

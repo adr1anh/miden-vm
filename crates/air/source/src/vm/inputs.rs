@@ -74,7 +74,7 @@ impl PublicInputs {
 
     /// Returns the legacy Core public values and statement-input carrier.
     ///
-    /// This projection omits mandatory Chiplets8 and is incomplete for the packed statement.
+    /// This projection omits mandatory Chiplets4 and is incomplete for the packed statement.
     /// Producers must migrate with the canonical claim; missing values are never inferred.
     ///
     /// `air_inputs` (read by Core; all other AIRs have empty slices) layout:
@@ -152,15 +152,15 @@ impl Deserializable for PublicInputs {
 ///   [16..32] stack outputs
 ///   [32..36] entry ProcedureKey
 ///
-/// Chiplets separately reads `R_E || N_kernel`. The legacy carrier above does not yet project
+/// Chiplets separately reads `R_E`. The legacy carrier above does not yet project
 /// these complete public groups; canonical claim/statement activation remains PR12 work.
 pub const NUM_PUBLIC_VALUES: usize = MIN_STACK_DEPTH + MIN_STACK_DEPTH + WORD_SIZE;
 
-/// Mandatory Chiplets public values: `R_E[4] || N_kernel[4]`.
+/// Mandatory Chiplets public values: `R_E[4]`.
 ///
 /// This count does not supply the values. Statement producers must pass them explicitly;
 /// the claim/Core public-input cutover remains a separate integration requirement.
-pub const NUM_CHIPLETS_PUBLIC_VALUES: usize = 2 * WORD_SIZE;
+pub const NUM_CHIPLETS_PUBLIC_VALUES: usize = WORD_SIZE;
 
 // `aux_inputs` layout offsets — statement inputs that the AIRs do not read. The fixed program
 // hash and final deferred root occupy the first two words; the variable-length kernel-procedure

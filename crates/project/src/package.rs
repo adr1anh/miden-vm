@@ -409,7 +409,12 @@ impl Package {
                 dependencies: self
                     .dependencies()
                     .iter()
-                    .map(|dep| {
+                    .map(|dep| -> Result<_, Report> {
+                        let binding = dep.binding().ok_or_else(|| Report::msg(format!(
+                            "dependency '{}' requires an explicit Latest/Pinned binding or custom home",
+                            dep.name()
+                        )))?;
+                        let binding = Some(Span::unknown(ast::DependencyBindingSpec::try_from(binding)?));
                         let name = Span::unknown(dep.name().clone());
                         let linkage = if matches!(dep.linkage(), Linkage::Dynamic) {
                             None
@@ -425,6 +430,7 @@ impl Package {
                                 git: None,
                                 branch: None,
                                 rev: None,
+                                binding: binding.clone(),
                                 linkage,
                             },
                             DependencyVersionScheme::WorkspacePath { path, version } => {
@@ -436,6 +442,7 @@ impl Package {
                                     git: None,
                                     branch: None,
                                     rev: None,
+                                    binding: binding.clone(),
                                     linkage,
                                 }
                             },
@@ -447,6 +454,7 @@ impl Package {
                                 git: None,
                                 branch: None,
                                 rev: None,
+                                binding: binding.clone(),
                                 linkage,
                             },
                             DependencyVersionScheme::Path { path, version } => {
@@ -458,6 +466,7 @@ impl Package {
                                     git: None,
                                     branch: None,
                                     rev: None,
+                                    binding: binding.clone(),
                                     linkage,
                                 }
                             },
@@ -480,14 +489,15 @@ impl Package {
                                     git: Some(repo.clone()),
                                     branch,
                                     rev,
+                                    binding: binding.clone(),
                                     linkage,
                                 }
                             },
                         };
 
-                        (name, Span::unknown(spec))
+                        Ok((name, Span::unknown(spec)))
                     })
-                    .collect(),
+                    .collect::<Result<_, _>>()?,
                 lints: self.lints.clone(),
             },
             lib: self.lib.as_ref().map(|lib| {

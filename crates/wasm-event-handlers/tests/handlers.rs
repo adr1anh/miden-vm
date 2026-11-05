@@ -313,7 +313,7 @@ fn mem_get_reads_unwritten_memory_as_zero() {
 
 #[test]
 fn mem_get_zero_fills_across_word_boundaries() {
-    use miden_assembly::{Assembler, DefaultSourceManager};
+    use miden_utils_testing::Test;
 
     // The zero fill is uniform: it does not stop at the word the program touched. After the
     // program writes address 0, the handler reads that value back, and both address 1 (the same
@@ -339,17 +339,16 @@ fn mem_get_zero_fills_across_word_boundaries() {
         end"#,
         event = EVENT.as_str(),
     );
-    let package = Assembler::new(Arc::new(DefaultSourceManager::default()))
-        .assemble_program("wasm_handler_partial_word", source)
-        .expect("program assembles");
-    let program = package.unwrap_program();
+    let test = Test::new("wasm_handler_partial_word", &source, false);
+    let (program, ..) = test.compile().expect("program assembles");
+    let environment = test.fixture_environment().expect("fixture environment validates");
 
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     for (event, handler) in module.handlers() {
         host.register_handler(event, handler).expect("registration succeeds");
     }
     FastProcessor::new(StackInputs::default())
-        .execute_sync(&program, &mut host)
+        .execute_sync(&program, environment.execution(), &mut host)
         .expect("memory the program never wrote reads as zero, inside and outside a written word");
 }
 

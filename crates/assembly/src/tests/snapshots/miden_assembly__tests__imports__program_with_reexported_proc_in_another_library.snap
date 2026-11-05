@@ -17,8 +17,8 @@ begin
                 noop
                 noop
             end
-            external.0x0c4bbef7c722554dc2aa498067ed8920b2fb10c66babad7137161797f5d8765d
+            exec.0x0e0947ef05247120c85167d03fca276fb54859c019ebae4970c76b569aa6b36c
         end
-        external.0x97ffb6ae921f7e0080ba47bbd5111f21ffb569de24f7923ee1c379395ede815e
+        exec.0x3de6752412fb336899343bf9fe6e9c5fe702a8fa7920bd2f661b10a1e5874d2e
     end
 end

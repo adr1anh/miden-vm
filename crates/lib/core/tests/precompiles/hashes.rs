@@ -24,6 +24,7 @@ use super::helpers::{
     TRUNCATE_STACK_TO_OUTPUT_PROC, assert_precompile_witness_round_trips, masm_store_felts,
     read_memory_felts, read_stack_felts, run_precompile_program,
 };
+use crate::naming::assemble;
 
 const IN_PTR: u32 = 128;
 const OUT_PTR: u32 = 256;
@@ -282,13 +283,18 @@ fn sha512_hash_bytes_mem_rejects_a_forged_upper_digest_half() {
         "begin {stores} push.{OUT_PTR} push.3 push.{IN_PTR} \
          exec.::miden::core::precompiles::hashes::sha512::hash_bytes_mem end"
     );
-    let program = Assembler::default()
-        .with_package(library.package(), Linkage::Dynamic)
-        .unwrap()
-        .assemble_program("sha512_forged_digest", source)
-        .unwrap()
-        .unwrap_program();
-    let mut host = DefaultHost::default().with_library(&library).unwrap();
+    let program = assemble(
+        Assembler::default()
+            .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
+            .unwrap(),
+        "sha512_forged_digest",
+        source,
+        &[library.naming()],
+    );
+    let mut host = DefaultHost::default()
+        .with_environment_source(program.environment.source())
+        .with_library(&library)
+        .unwrap();
     assert!(host.replace_handler(SHA512_DIGEST_EVENT_NAME, handler).unwrap());
     let result = FastProcessor::new_with_options(
         StackInputs::default(),
@@ -296,7 +302,7 @@ fn sha512_hash_bytes_mem_rejects_a_forged_upper_digest_half() {
         ExecutionOptions::default(),
     )
     .unwrap()
-    .execute_sync(&program, &mut host);
+    .execute_sync(&program.program, program.environment.execution(), &mut host);
     assert!(result.is_err(), "the second SHA-512 output chunk must be authenticated");
 }
 
@@ -361,13 +367,18 @@ fn sha256_hash_bytes_mem_rejects_a_forged_digest() {
         "begin {stores} push.{OUT_PTR} push.3 push.{IN_PTR} \
          exec.::miden::core::precompiles::hashes::sha256::hash_bytes_mem end"
     );
-    let program = Assembler::default()
-        .with_package(library.package(), Linkage::Dynamic)
-        .unwrap()
-        .assemble_program("sha256_forged_digest", source)
-        .unwrap()
-        .unwrap_program();
-    let mut host = DefaultHost::default().with_library(&library).unwrap();
+    let program = assemble(
+        Assembler::default()
+            .with_package(library.package(), Linkage::Dynamic, library.naming().clone())
+            .unwrap(),
+        "sha256_forged_digest",
+        source,
+        &[library.naming()],
+    );
+    let mut host = DefaultHost::default()
+        .with_environment_source(program.environment.source())
+        .with_library(&library)
+        .unwrap();
     assert!(host.replace_handler(SHA256_DIGEST_EVENT_NAME, handler).unwrap());
     let result = FastProcessor::new_with_options(
         StackInputs::default(),
@@ -375,7 +386,7 @@ fn sha256_hash_bytes_mem_rejects_a_forged_digest() {
         ExecutionOptions::default(),
     )
     .unwrap()
-    .execute_sync(&program, &mut host);
+    .execute_sync(&program.program, program.environment.execution(), &mut host);
     assert!(result.is_err(), "a forged SHA-256 digest must fail the deferred assertion");
 }
 

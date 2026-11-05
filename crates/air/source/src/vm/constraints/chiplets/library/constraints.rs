@@ -1,6 +1,9 @@
 //! Library MAIN equations for the packed Chiplets prefix.
 
-use miden_core::{field::PrimeCharacteristicRing, program::domain};
+use miden_core::{
+    field::PrimeCharacteristicRing,
+    program::{Namespace, domain},
+};
 use miden_stark::air::AirBuilder;
 
 use super::{
@@ -9,17 +12,16 @@ use super::{
 };
 use crate::{shared::eidos::framing::initial_cv_from_frame, vm::MidenAirBuilder};
 
-/// Enforces the complete local Library relation with explicit section, periodic, and public inputs.
+/// Enforces the complete local Library relation with explicit section and periodic inputs.
 ///
 /// Hashing and rooted authorization are supplied by the paired Library lookup entry point. This
 /// function constrains routing, complete reverse Lists, prefix boundaries, and each syscall
-/// supplier's full namespace. The Chiplets dispatcher supplies mandatory public inputs explicitly.
+/// supplier's full namespace against the fixed initial namespace.
 pub fn enforce_library_constraints<AB: MidenAirBuilder>(
     builder: &mut AB,
     local: &LibraryCols<AB::Var>,
     next: &LibraryCols<AB::Var>,
     context: &LibraryRowContext<AB::Expr>,
-    kernel: &[AB::Expr; 4],
 ) {
     let kinds = LibraryKindFlags::<AB::Expr>::new(local);
     let next_kinds = LibraryKindFlags::<AB::Expr>::new(next);
@@ -120,10 +122,11 @@ pub fn enforce_library_constraints<AB: MidenAirBuilder>(
     {
         let builder = &mut builder.when(phases.kind_b(kinds.is_mast.clone()));
         // Separate supplier-local equations prevent cancellation across different namespaces.
-        // Normal resolution remains unrestricted, including under the authorized kernel namespace.
-        for (coordinate, authorized) in local.x.into_iter().zip(kernel) {
+        // Normal resolution remains unrestricted, including under the initial namespace.
+        let initial = Namespace::initial().into_word().into_elements();
+        for (coordinate, authorized) in local.x.into_iter().zip(initial) {
             let namespace: AB::Expr = coordinate.into();
-            builder.assert_zero(local.b * (namespace - authorized.clone()));
+            builder.assert_zero(local.b * (namespace - AB::Expr::from(authorized)));
         }
     }
 

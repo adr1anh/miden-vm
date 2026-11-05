@@ -205,11 +205,7 @@ impl NamespaceGraph {
             }
 
             if !progress {
-                if let Some(import) = next.iter().copied().find(|import| {
-                    self.visible_import_dependency(import).is_some_and(|dependency| {
-                        next.iter().any(|candidate| candidate.key() == dependency)
-                    })
-                }) {
+                if let Some(import) = self.pending_import_cycle(&next) {
                     return Err(LinkerError::ImportReExportCycle {
                         span: import.span(),
                         source_file: source_file(linker.source_manager.as_ref(), import.span()),
@@ -257,25 +253,7 @@ impl NamespaceGraph {
                     path: item_path(linker, item),
                 })
             },
-            (ImportKind::Item, ResolvedUse::Item { id: item, .. }) => {
-                // Reject re-export of kernel syscalls from any module other than the root kernel
-                // module itself
-                if import.visibility().is_public()
-                    && linker[item.module].path().is_kernel_path()
-                    && linker[item].is_procedure()
-                    && import.owner != item.module
-                {
-                    let span = import.span();
-                    let source_file = source_file(linker.source_manager.as_ref(), span);
-                    Err(LinkerError::InvalidReExportOfKernelSyscall {
-                        span,
-                        source_file,
-                        path: import.target().inner().clone(),
-                    })
-                } else {
-                    Ok(())
-                }
-            },
+            (ImportKind::Item, ResolvedUse::Item { .. }) => Ok(()),
             (ImportKind::Item, ResolvedUse::Module(id)) => {
                 Err(LinkerError::InvalidItemImportTarget {
                     span: import.span(),
@@ -292,6 +270,32 @@ impl NamespaceGraph {
         let parent = self.find_import_target_parent(import.owner(), parent_path)?;
         let dependency = self.module(parent).import(name)?;
         (parent == import.owner() || dependency.visibility().is_public()).then(|| dependency.key())
+    }
+
+    /// Finds a closed alias chain among unresolved imports. An edge to another pending import
+    /// alone is insufficient: the chain may terminate at an undefined symbol instead of a cycle.
+    fn pending_import_cycle<'a>(&self, pending: &[&'a UseDecl]) -> Option<&'a UseDecl> {
+        let by_key =
+            pending.iter().map(|&import| (import.key(), import)).collect::<BTreeMap<_, _>>();
+        let mut finished = BTreeSet::new();
+        for &import in pending {
+            let mut visiting = BTreeSet::new();
+            let mut next = Some(import.key());
+            while let Some(key) = next {
+                if finished.contains(&key) {
+                    break;
+                }
+                let Some(&candidate) = by_key.get(&key) else {
+                    break;
+                };
+                if !visiting.insert(key) {
+                    return Some(candidate);
+                }
+                next = self.visible_import_dependency(candidate);
+            }
+            finished.extend(visiting);
+        }
+        None
     }
 
     fn find_import_target_parent(&self, owner: ModuleIndex, path: &Path) -> Option<ModuleIndex> {
@@ -1408,5 +1412,43 @@ mod tests {
         let graph = NamespaceGraph::build(&linker).expect("namespace graph should build");
         let err = graph.resolve_imports(&linker).expect_err("import chaining should fail");
         assert!(matches!(err, LinkerError::ImportTargetUsesImport { .. }));
+    }
+
+    #[test]
+    fn namespace_graph_rejects_closed_item_alias_cycles() {
+        let source_manager: Arc<dyn SourceManager> = Arc::new(DefaultSourceManager::default());
+        let mut a =
+            parse_module(source_manager.clone(), "a.masm", "namespace a\npub use {run} from ::b");
+        let mut b =
+            parse_module(source_manager.clone(), "b.masm", "namespace b\npub use {run} from ::a");
+        let mut linker = Linker::new(source_manager);
+        linker.link_module(&mut a).unwrap();
+        linker.link_module(&mut b).unwrap();
+
+        let graph = NamespaceGraph::build(&linker).unwrap();
+        let err = graph.resolve_imports(&linker).expect_err("closed alias cycles must reject");
+        assert!(matches!(err, LinkerError::ImportReExportCycle { .. }));
+    }
+
+    #[test]
+    fn namespace_graph_reports_undefined_tail_instead_of_alias_cycle() {
+        let source_manager: Arc<dyn SourceManager> = Arc::new(DefaultSourceManager::default());
+        let mut a =
+            parse_module(source_manager.clone(), "a.masm", "namespace a\npub use {run} from ::b");
+        let mut b =
+            parse_module(source_manager.clone(), "b.masm", "namespace b\npub use {run} from ::c");
+        let mut c = parse_module(
+            source_manager.clone(),
+            "c.masm",
+            "namespace c\npub proc different push.1 end",
+        );
+        let mut linker = Linker::new(source_manager);
+        linker.link_module(&mut a).unwrap();
+        linker.link_module(&mut b).unwrap();
+        linker.link_module(&mut c).unwrap();
+
+        let graph = NamespaceGraph::build(&linker).unwrap();
+        let err = graph.resolve_imports(&linker).expect_err("the missing tail must reject");
+        assert!(matches!(err, LinkerError::UndefinedSymbol { .. }));
     }
 }

@@ -1,4 +1,4 @@
-use alloc::sync::Arc;
+use alloc::{string::String, sync::Arc};
 
 use miden_assembly_syntax::{
     Path,
@@ -8,6 +8,15 @@ use miden_assembly_syntax::{
 
 #[derive(Debug, thiserror::Error, Diagnostic)]
 pub(crate) enum AssemblerError {
+    #[error("invalid inline target: {reason}")]
+    #[diagnostic(help("inline requires a local fixed body or an explicitly pinned import"))]
+    InvalidInlineTarget {
+        #[label("this target cannot be structurally expanded")]
+        span: SourceSpan,
+        #[source_code]
+        source_file: Option<Arc<SourceFile>>,
+        reason: String,
+    },
     #[error("control-flow nesting depth exceeded")]
     #[diagnostic(help("control-flow nesting exceeded the maximum depth of {max_depth}"))]
     ControlFlowNestingDepthExceeded {

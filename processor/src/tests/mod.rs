@@ -3,22 +3,30 @@ use alloc::{boxed::Box, string::ToString, sync::Arc, vec::Vec};
 use miden_assembly::{
     Assembler, DefaultSourceManager, Path, PathBuf,
     ast::{Module, ModuleKind},
-    testing::{Pattern, TestContext, regex, source_file},
+    testing::{FixtureNamespace, Pattern, TestContext, regex, source_file},
 };
 use miden_core::{
     crypto::merkle::{MerkleStore, MerkleTree},
-    mast::{BasicBlockNodeBuilder, MastForest, error_code_from_msg},
+    mast::{BasicBlockNodeBuilder, CallNodeBuilder, MastForest, MastNodeExt, error_code_from_msg},
+    program::{ImplementationRoot, Namespace},
 };
 use miden_debug_types::{Location, SourceFile, SourceManager, SourceSpan};
-use miden_utils_testing::crypto::{init_merkle_leaves, init_merkle_store};
+use miden_mast_package::{
+    CallableBinding, CallableProcedurePath, Package, PackageNaming, TargetType,
+};
+use miden_utils_testing::{
+    Test,
+    crypto::{init_merkle_leaves, init_merkle_store},
+};
 
 /// Tests in this file make sure that diagnostics presented to the user are as expected.
 use crate::{
-    BaseHost, DefaultHost, FastProcessor, KernelDescriptor, LoadedMastForest, ONE, ProcessorState,
-    Program, StackInputs, SyncHost, Word, ZERO,
+    BaseHost, DefaultHost, FastProcessor, LoadedMastForest, ONE, ProcessorState, Program,
+    StackInputs, SyncHost, Word, ZERO,
     advice::{AdviceInputs, AdviceMap, AdviceMutation},
     event::{EventError, EventHandler, EventName, TraceError, TraceHandler},
     operation::Operation,
+    test_utils::{NamedFixture, named_module, named_program, native_fixture_environment},
 };
 
 macro_rules! assert_diagnostic_lines {
@@ -80,9 +88,53 @@ fn parse_library_module(
     parser.parse_str(Some(path.as_path()), source, source_manager).unwrap()
 }
 
-fn parse_kernel_module(source_manager: Arc<dyn SourceManager>, source: &str) -> Box<Module> {
-    let mut parser = Module::parser(Some(ModuleKind::Kernel));
-    parser.parse_str(Some(Path::KERNEL), source, source_manager).unwrap()
+fn diagnostic_binding(name: &str) -> CallableBinding {
+    CallableBinding::new(
+        FixtureNamespace::assembly_tests().namespace_plan().clone(),
+        CallableProcedurePath::from_semantic_components(vec![name.to_string()]).unwrap(),
+    )
+    .unwrap()
+}
+
+fn diagnostic_fixture(
+    source_manager: Arc<DefaultSourceManager>,
+    assembler: Assembler,
+    source: &str,
+) -> NamedFixture {
+    let root = Module::parser(Some(ModuleKind::Executable))
+        .parse_str(Some(Path::exec_path()), source, source_manager)
+        .unwrap();
+    named_module(assembler, root, []).unwrap()
+}
+
+fn diagnostic_library(
+    source_manager: Arc<DefaultSourceManager>,
+    module: Box<Module>,
+    name: &str,
+) -> (Arc<Package>, PackageNaming) {
+    let mut names = FixtureNamespace::assembly_tests();
+    names.add_module(&module).unwrap();
+    let assembler = names.configure(Assembler::new(source_manager), [module.as_ref()]).unwrap();
+    let product = assembler
+        .assemble_library_modules(name.into(), module, [], TargetType::Library)
+        .unwrap();
+    let naming = product.naming().clone();
+    (Arc::from(product.into_artifact(true).unwrap()), naming)
+}
+
+/// Authorizes the missing procedure independently of withholding its implementation from the host.
+fn missing_code_fixture(
+    source_manager: Arc<DefaultSourceManager>,
+    source: &str,
+) -> (NamedFixture, Word) {
+    let module =
+        parse_library_module(source_manager.clone(), "foo::bar", "pub proc dummy_proc push.1 end");
+    let (library, naming) = diagnostic_library(source_manager.clone(), module, "missing-code");
+    let implementation = library.mast_forest().procedure_digests().next().unwrap();
+    let assembler = Assembler::new(source_manager.clone())
+        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
+        .unwrap();
+    (diagnostic_fixture(source_manager, assembler, source), implementation)
 }
 
 macro_rules! build_test {
@@ -106,6 +158,7 @@ macro_rules! build_test_by_mode {
 struct MalformedMastForestHost {
     source_manager: Arc<DefaultSourceManager>,
     mast_forest: Arc<MastForest>,
+    environment_source: Arc<dyn crate::EnvironmentWitnessSource>,
 }
 
 impl BaseHost for MalformedMastForestHost {
@@ -120,6 +173,13 @@ impl BaseHost for MalformedMastForestHost {
 }
 
 impl SyncHost for MalformedMastForestHost {
+    fn get_environment_witness(
+        &mut self,
+        request: crate::EnvironmentWitnessRequest,
+    ) -> Result<Option<crate::ResolutionWitness>, crate::EnvironmentSourceError> {
+        self.environment_source.get(request)
+    }
+
     fn get_mast_forest(&self, _node_digest: &Word) -> Option<LoadedMastForest> {
         Some(LoadedMastForest::new(self.mast_forest.clone()))
     }
@@ -185,10 +245,17 @@ fn test_diagnostic_advice_map_key_already_present() {
         .unwrap();
     mast_forest.make_root(basic_block_id);
 
-    let program = Program::new(mast_forest.into(), basic_block_id);
-
+    let fixture = named_program(
+        Program::new(mast_forest.into(), basic_block_id),
+        diagnostic_binding("advice_entry"),
+        [],
+    )
+    .unwrap();
+    host = host.with_environment_source(fixture.source);
     let processor = FastProcessor::new(StackInputs::default());
-    let err = processor.execute_sync(&program, &mut host).unwrap_err();
+    let err = processor
+        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .unwrap_err();
 
     assert_diagnostic_lines!(
         err,
@@ -255,19 +322,24 @@ fn test_diagnostic_host_event_error_uses_emit_location() {
             push.1 emit.event(\"{event}\")
         end"
     );
-    let package = Assembler::new(source_manager.clone())
-        .assemble_program("program", source)
-        .unwrap();
-    let debug_info = package.debug_info().unwrap().unwrap();
-    let program = package.unwrap_program();
-    let mut host = DefaultHost::default().with_source_manager(source_manager);
+    let fixture =
+        diagnostic_fixture(source_manager.clone(), Assembler::new(source_manager.clone()), &source);
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.source);
     host.register_handler(event.clone(), Arc::new(AlwaysFailEventHandler)).unwrap();
 
     let processor = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
     let err = processor
-        .execute_with_package_debug_info_sync(&program, &debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
         .expect_err("expected error");
     #[rustfmt::skip]
     assert_diagnostic_lines!(
@@ -295,12 +367,12 @@ fn test_diagnostic_host_trace_error_uses_trace_location() {
             trace.event(\"{trace}\")
         end"
     );
-    let package = Assembler::new(source_manager.clone())
-        .assemble_program("program", source)
-        .unwrap();
-    let debug_info = package.debug_info().unwrap().unwrap();
-    let program = package.unwrap_program();
-    let mut host = DefaultHost::default().with_source_manager(source_manager);
+    let fixture =
+        diagnostic_fixture(source_manager.clone(), Assembler::new(source_manager.clone()), &source);
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.source);
     host.register_trace_handler(trace.clone(), Arc::new(AlwaysFailTraceHandler))
         .unwrap();
 
@@ -308,7 +380,12 @@ fn test_diagnostic_host_trace_error_uses_trace_location() {
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
     let err = processor
-        .execute_with_package_debug_info_sync(&program, &debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
         .expect_err("expected error");
     #[rustfmt::skip]
     assert_diagnostic_lines!(
@@ -334,19 +411,24 @@ fn test_diagnostic_host_event_advice_error_uses_emit_location() {
             push.1 emit.event(\"{event}\")
         end"
     );
-    let package = Assembler::new(source_manager.clone())
-        .assemble_program("program", source)
-        .unwrap();
-    let debug_info = package.debug_info().unwrap().unwrap();
-    let program = package.unwrap_program();
-    let mut host = DefaultHost::default().with_source_manager(source_manager);
+    let fixture =
+        diagnostic_fixture(source_manager.clone(), Assembler::new(source_manager.clone()), &source);
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.source);
     host.register_handler(event, Arc::new(DuplicateMapMutationHandler)).unwrap();
 
     let processor = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default().with_map([(Word::default(), vec![ZERO])]))
         .expect("advice inputs should fit advice map limits");
     let err = processor
-        .execute_with_package_debug_info_sync(&program, &debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
         .expect_err("expected error");
     #[rustfmt::skip]
     assert_diagnostic_lines!(
@@ -436,16 +518,28 @@ fn test_diagnostic_divide_by_zero_2() {
 #[test]
 fn test_diagnostic_procedure_not_found_dynexec() {
     let source = "
-        begin
+        begin procref.::foo::bar::dummy_proc mem_storew_le.0 dropw push.0
             dynexec
         end";
 
-    let build_test = build_test_by_mode!(true, source, &[]);
-    let err = build_test.execute().expect_err("expected error");
+    let source_manager = Arc::new(DefaultSourceManager::default());
+    let (fixture, missing_root) = missing_code_fixture(source_manager.clone(), source);
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.source);
+    let err = FastProcessor::new(StackInputs::default())
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
+        .expect_err("expected missing implementation");
     assert_diagnostic_lines!(
         err,
-        "procedure with root digest 0x0000000000000000000000000000000000000000000000000000000000000000 could not be found",
-        regex!(r#",-\[test[\d]+:3:13\]"#),
+        format!("procedure with root digest {missing_root} could not be found"),
+        regex!(r#",-\[.*:3:13\]"#),
         " 2 |         begin",
         " 3 |             dynexec",
         "   :             ^^^^^^^",
@@ -457,16 +551,28 @@ fn test_diagnostic_procedure_not_found_dynexec() {
 #[test]
 fn test_diagnostic_procedure_not_found_dyncall() {
     let source = "
-        begin
+        begin procref.::foo::bar::dummy_proc mem_storew_le.0 dropw push.0
             dyncall
         end";
 
-    let build_test = build_test_by_mode!(true, source, &[]);
-    let err = build_test.execute().expect_err("expected error");
+    let source_manager = Arc::new(DefaultSourceManager::default());
+    let (fixture, missing_root) = missing_code_fixture(source_manager.clone(), source);
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.source);
+    let err = FastProcessor::new(StackInputs::default())
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
+        .expect_err("expected missing implementation");
     assert_diagnostic_lines!(
         err,
-        "procedure with root digest 0x0000000000000000000000000000000000000000000000000000000000000000 could not be found",
-        regex!(r#",-\[test[\d]+:3:13\]"#),
+        format!("procedure with root digest {missing_root} could not be found"),
+        regex!(r#",-\[.*:3:13\]"#),
         " 2 |         begin",
         " 3 |             dyncall",
         "   :             ^^^^^^^",
@@ -980,30 +1086,27 @@ fn test_diagnostic_procedure_not_found_call() {
         end
     ";
 
-    let library = Assembler::new(source_manager.clone())
-        .assemble_library("lib", lib_module, None::<Box<Module>>)
+    let (library, naming) = diagnostic_library(source_manager.clone(), lib_module, "library");
+    let missing_root = library.mast_forest().procedure_digests().next().unwrap();
+    let assembler = Assembler::new(source_manager.clone())
+        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
         .unwrap();
-    let missing_root = library
-        .mast_forest()
-        .procedure_digests()
-        .next()
-        .expect("library must contain dummy_proc");
-
-    let package = Assembler::new(source_manager.clone())
-        .with_package(library.into(), miden_assembly::Linkage::Dynamic)
-        .unwrap()
-        .assemble_program("program", program_source)
-        .unwrap();
-    let debug_info = package.debug_info().unwrap().unwrap();
-    let program = package.unwrap_program();
-
-    let mut host = DefaultHost::default().with_source_manager(source_manager);
+    let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.source);
 
     let processor = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
     let err = processor
-        .execute_with_package_debug_info_sync(&program, &debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
         .unwrap_err();
     assert_diagnostic_lines!(
         err,
@@ -1040,41 +1143,36 @@ fn test_diagnostic_procedure_not_found_join() {
         end
     ";
 
-    let library = Assembler::new(source_manager.clone())
-        .assemble_library("library", lib_module, None::<Box<Module>>)
+    let (library, naming) = diagnostic_library(source_manager.clone(), lib_module, "library");
+    let missing_root = library.mast_forest().procedure_digests().next().unwrap();
+    let assembler = Assembler::new(source_manager.clone())
+        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
         .unwrap();
-    let missing_root = library
-        .mast_forest()
-        .procedure_digests()
-        .next()
-        .expect("library must contain dummy_proc");
-
-    let package = Assembler::new(source_manager.clone())
-        .with_package(library.into(), miden_assembly::Linkage::Dynamic)
-        .unwrap()
-        .assemble_program("program", program_source)
-        .unwrap();
-    let debug_info = package.debug_info().unwrap().unwrap();
-    let program = package.unwrap_program();
-
-    let mut host = DefaultHost::default().with_source_manager(source_manager);
+    let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.source);
 
     let processor = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
     let err = processor
-        .execute_with_package_debug_info_sync(&program, &debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
         .unwrap_err();
     assert_diagnostic_lines!(
         err,
         format!("procedure with root digest {missing_root} could not be found"),
-        regex!(r#",-\[.*:4:9\]"#),
-        " 3 |",
-        " 4 | ,->         begin",
-        " 5 | |               exec.bar::dummy_proc",
-        " 6 | |               call.bar::dummy_proc",
-        " 7 | `->         end",
-        " 8 |",
+        regex!(r#",-\[.*:5:13\]"#),
+        " 4 |         begin",
+        " 5 |             exec.bar::dummy_proc",
+        "   :             ^^^^^^^^^^^^^^^^^^^^",
+        " 6 |             call.bar::dummy_proc",
         "   `----"
     );
 }
@@ -1104,41 +1202,37 @@ fn test_diagnostic_procedure_not_found_loop() {
         end
     ";
 
-    let library = Assembler::new(source_manager.clone())
-        .assemble_library("library", lib_module, None::<Box<Module>>)
+    let (library, naming) = diagnostic_library(source_manager.clone(), lib_module, "library");
+    let missing_root = library.mast_forest().procedure_digests().next().unwrap();
+    let assembler = Assembler::new(source_manager.clone())
+        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
         .unwrap();
-    let missing_root = library
-        .mast_forest()
-        .procedure_digests()
-        .next()
-        .expect("library must contain dummy_proc");
-
-    let package = Assembler::new(source_manager.clone())
-        .with_package(library.into(), miden_assembly::Linkage::Dynamic)
-        .unwrap()
-        .assemble_program("program", program_source)
-        .unwrap();
-    let debug_info = package.debug_info().unwrap().unwrap();
-    let program = package.unwrap_program();
-
-    let mut host = DefaultHost::default().with_source_manager(source_manager);
+    let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.source);
 
     let processor = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
     let err = processor
-        .execute_with_package_debug_info_sync(&program, &debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
         .unwrap_err();
     assert_diagnostic_lines!(
         err,
         format!("procedure with root digest {missing_root} could not be found"),
-        regex!(r#",-\[.*:6:13\]"#),
-        "  5 |                 push.1",
-        "  6 | ,->             while.true",
-        "  7 | |                   exec.bar::dummy_proc",
-        "  8 | `->             end",
-        "  9 |             end",
-        "    `----"
+        regex!(r#",-\[.*:7:17\]"#),
+        " 6 |             while.true",
+        " 7 |                 exec.bar::dummy_proc",
+        "   :                 ^^^^^^^^^^^^^^^^^^^^",
+        " 8 |             end",
+        "   `----"
     );
 }
 
@@ -1169,60 +1263,51 @@ fn test_diagnostic_procedure_not_found_split() {
         end
     ";
 
-    let library = Assembler::new(source_manager.clone())
-        .assemble_library("library", lib_module, None::<Box<Module>>)
+    let (library, naming) = diagnostic_library(source_manager.clone(), lib_module, "library");
+    let missing_root = library.mast_forest().procedure_digests().next().unwrap();
+    let assembler = Assembler::new(source_manager.clone())
+        .with_package(library, miden_assembly::Linkage::Dynamic, naming)
         .unwrap();
-    let missing_root = library
-        .mast_forest()
-        .procedure_digests()
-        .next()
-        .expect("library must contain dummy_proc");
-
-    let package = Assembler::new(source_manager.clone())
-        .with_package(library.into(), miden_assembly::Linkage::Dynamic)
-        .unwrap()
-        .assemble_program("program", program_source)
-        .unwrap();
-    let debug_info = package.debug_info().unwrap().unwrap();
-    let program = package.unwrap_program();
-
-    let mut host = DefaultHost::default().with_source_manager(source_manager);
+    let fixture = diagnostic_fixture(source_manager.clone(), assembler, program_source);
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
+    let mut host = DefaultHost::default()
+        .with_source_manager(source_manager)
+        .with_environment_source(fixture.source);
 
     let processor = FastProcessor::new(StackInputs::default())
         .with_advice(AdviceInputs::default())
         .expect("advice inputs should fit advice map limits");
     let err = processor
-        .execute_with_package_debug_info_sync(&program, &debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
         .unwrap_err();
     assert_diagnostic_lines!(
         err,
         format!("procedure with root digest {missing_root} could not be found"),
-        regex!(r#",-\[.*:6:13\]"#),
-        "  5 |                 push.1",
-        "  6 | ,->             if.true",
-        "  7 | |                   exec.bar::dummy_proc",
-        "  8 | |               else",
-        "  9 | |                   push.2",
-        " 10 | `->             end",
-        " 11 |             end",
-        "    `----"
+        regex!(r#",-\[.*:7:17\]"#),
+        " 6 |             if.true",
+        " 7 |                 exec.bar::dummy_proc",
+        "   :                 ^^^^^^^^^^^^^^^^^^^^",
+        " 8 |             else",
+        "   `----"
     );
 }
 
 #[test]
 fn test_diagnostic_malformed_mast_forest_in_host() {
     let source_manager = Arc::new(DefaultSourceManager::default());
-    let package = Assembler::new(source_manager.clone())
-        .assemble_program(
-            "program",
-            "
-            begin
+    let (fixture, requested_root) = missing_code_fixture(
+        source_manager.clone(),
+        "
+            begin procref.::foo::bar::dummy_proc mem_storew_le.0 dropw push.0
                 dyncall
             end",
-        )
-        .unwrap();
-    let debug_info = package.debug_info().unwrap().unwrap();
-    let program = package.unwrap_program();
+    );
+    let debug_info = fixture.package.debug_info().unwrap().unwrap();
 
     let mut malformed_forest = MastForest::new();
     let unexpected_root = BasicBlockNodeBuilder::new(vec![Operation::Noop])
@@ -1233,16 +1318,24 @@ fn test_diagnostic_malformed_mast_forest_in_host() {
     let mut host = MalformedMastForestHost {
         source_manager,
         mast_forest: malformed_forest.into(),
+        environment_source: fixture.source,
     };
 
     let processor = FastProcessor::new(StackInputs::default());
     let err = processor
-        .execute_with_package_debug_info_sync(&program, &debug_info, &mut host)
+        .execute_with_package_debug_info_sync(
+            &fixture.program,
+            fixture.environment,
+            &debug_info,
+            &mut host,
+        )
         .unwrap_err();
 
     assert_diagnostic_lines!(
         err,
-        "  x MAST forest in host indexed by procedure root 0x0000000000000000000000000000000000000000000000000000000000000000 doesn't contain that root",
+        format!(
+            "  x MAST forest in host indexed by procedure root {requested_root} doesn't contain that root"
+        ),
         regex!(r#",-\[.*:3:17\]"#),
         " 2 |             begin",
         " 3 |                 dyncall",
@@ -1430,72 +1523,52 @@ fn test_diagnostic_not_u32_value() {
     );
 }
 
-// SyscallTargetNotInKernel
+// Syscall namespace authorization
 // -------------------------------------------------------------------------------------------------
 
 #[test]
-fn test_diagnostic_syscall_target_not_in_kernel() {
-    let source_manager = Arc::new(DefaultSourceManager::default());
-
-    let kernel_source = "
-        pub proc dummy_proc
-            push.1 drop
-        end
-    ";
-
-    let program_source = "
-        begin
-            syscall.dummy_proc
-        end
-    ";
-
-    let kernel = parse_kernel_module(source_manager.clone(), kernel_source);
-    let kernel_library = Assembler::new(source_manager.clone())
-        .assemble_kernel("kernel", kernel, None)
+fn test_diagnostic_syscall_rejects_authenticated_child_target() {
+    let target = diagnostic_binding("ordinary_target");
+    let mut forest = MastForest::new();
+    let body = BasicBlockNodeBuilder::new(vec![Operation::Noop])
+        .add_to_forest(&mut forest)
         .unwrap();
-    let missing_root = kernel_library
-        .mast_forest()
-        .procedure_digests()
-        .next()
-        .expect("kernel must contain dummy_proc");
-
-    let program = {
-        let package = Assembler::with_kernel(source_manager.clone(), kernel_library.into())
-            .unwrap()
-            .assemble_program("program", program_source)
-            .unwrap();
-        let debug_info = package.debug_info().unwrap().unwrap();
-        let program = package.unwrap_program();
-
-        // Note: we do not provide the kernel to trigger the error
-        (
-            Program::with_kernel(
-                program.mast_forest().clone(),
-                program.entrypoint(),
-                KernelDescriptor::default(),
-            ),
-            debug_info,
-        )
-    };
-
-    let mut host = DefaultHost::default().with_source_manager(source_manager);
-
-    let processor = FastProcessor::new(StackInputs::default())
-        .with_advice(AdviceInputs::default())
-        .expect("advice inputs should fit advice map limits");
-    let err = processor
-        .execute_with_package_debug_info_sync(&program.0, &program.1, &mut host)
-        .unwrap_err();
-    assert_diagnostic_lines!(
+    forest.make_root(body);
+    let implementation = ImplementationRoot::new(forest[body].digest());
+    let entry = CallNodeBuilder::new_syscall(target.key()).add_to_forest(&mut forest).unwrap();
+    forest.make_root(entry);
+    let fixture = named_program(
+        Program::new(forest.into(), entry),
+        diagnostic_binding("syscall_entry"),
+        [(target.clone(), implementation)],
+    )
+    .unwrap();
+    let mut host = DefaultHost::default().with_environment_source(fixture.source);
+    let err = FastProcessor::new(StackInputs::default())
+        .execute_sync(&fixture.program, fixture.environment, &mut host)
+        .expect_err(
+            "authenticated ordinary target must be rejected before entering available code",
+        );
+    assert!(matches!(
         err,
-        format!("syscall failed: procedure with root {missing_root} was not found in the kernel"),
-        regex!(r#",-\[.*:3:13\]"#),
-        " 2 |         begin",
-        " 3 |             syscall.dummy_proc",
-        "   :             ^^^^^^^^^^^^^^^^^^",
-        " 4 |         end",
-        "   `----"
-    );
+        crate::ExecutionError::EnvironmentSession(crate::SessionError::UnauthorizedSyscall {
+            expected,
+            actual,
+        }) if expected == Namespace::initial() && actual == target.parent_namespace()
+    ));
+}
+
+#[test]
+fn syscall_root_target_executes_without_a_kernel_descriptor() {
+    let test = Test::new("program", "begin syscall.dummy_proc end", false)
+        .with_kernel_source("kernel", "pub proc dummy_proc push.1 drop end");
+    let (program, kernel, _) = test.compile().unwrap();
+    let (environment, source) = native_fixture_environment(&test.fixture_environment().unwrap());
+    let mut host = DefaultHost::default().with_environment_source(source);
+    host.load_library(kernel.unwrap().mast_forest()).unwrap();
+    FastProcessor::new(StackInputs::default())
+        .execute_sync(&program, environment, &mut host)
+        .unwrap();
 }
 
 // Tests that assertion messages are not recovered without package debug info.

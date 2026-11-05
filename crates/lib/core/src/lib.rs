@@ -14,9 +14,13 @@ extern crate alloc;
 use alloc::{sync::Arc, vec, vec::Vec};
 
 use miden_core::{Word, events::EventName, mast::MastForest};
-use miden_mast_package::Package;
+use miden_mast_package::{Package, PackageNaming};
 use miden_processor::{HostLibrary, event::EventHandler};
 use miden_utils_sync::LazyLock;
+
+mod embedded_naming {
+    include!(concat!(env!("OUT_DIR"), "/core_naming.rs"));
+}
 
 use crate::handlers::{
     aead_eidos::{AEAD_EIDOS_DECRYPT_EVENT_NAME, handle_aead_eidos_decrypt},
@@ -89,7 +93,7 @@ pub const PVM_PROOF_REQUEST_EVENT_NAME: EventName =
 ///
 /// let core_lib = CoreLibrary::default();
 /// let mut assembler = Assembler::new(source_manager);
-/// assembler.link_package(core_lib.package(), Linkage::Dynamic).unwrap();
+/// assembler.link_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone()).unwrap();
 /// ```
 ///
 /// For program execution, you'll also need to register the event handlers:
@@ -109,6 +113,7 @@ pub const PVM_PROOF_REQUEST_EVENT_NAME: EventName =
 #[derive(Clone)]
 pub struct CoreLibrary {
     package: Arc<Package>,
+    naming: Arc<PackageNaming>,
 }
 
 impl From<&CoreLibrary> for HostLibrary {
@@ -135,24 +140,26 @@ impl CoreLibrary {
         Arc::clone(&self.package)
     }
 
-    /// Returns the MAST root of `sys::vm::verify_proof`, the verifier identity under
-    /// which recursive proofs are content-addressed.
+    /// Returns the compiler-owned naming retained for the exact embedded core package.
+    pub fn naming(&self) -> &Arc<PackageNaming> {
+        &self.naming
+    }
+
+    /// Returns the selected MAST implementation root of `sys::vm::verify_proof`.
     ///
-    /// Operators pass this root when registering a proof package in the advice map
-    /// (`RecursiveVerifierInputs::for_request`). A consumer derives the identical value
-    /// in-VM with `procref` — a procedure's root is intrinsic to its own MAST — so the two sides
-    /// agree without a shared constant; consumers key their proof fetches by this root.
+    /// The existing recursive advice builder uses this implementation root. The `procref`
+    /// instruction returns the callable key, which is a different value; retaining core naming
+    /// does not establish compatibility between those recursive proof-request paths.
     pub fn vm_recursive_verifier_root(&self) -> Word {
         self.package
             .get_procedure_root_by_path("::miden::core::sys::vm::verify_proof")
             .expect("vm::verify_proof is exported from the core library")
     }
 
-    /// Returns the MAST root of `sys::pvm::verify_proof` — the verifier identity under which PVM
-    /// proof packages are content-addressed.
+    /// Returns the selected MAST implementation root of `sys::pvm::verify_proof`.
     ///
-    /// A host passes this root to the PVM advice builder when registering a package. A consumer
-    /// derives the same root in-VM with `procref`, avoiding a duplicated constant.
+    /// The existing PVM advice builder uses this implementation root. The `procref` instruction
+    /// returns the callable key, so the proof-request paths still require their own migration.
     pub fn pvm_recursive_verifier_root(&self) -> Word {
         self.package
             .get_procedure_root_by_path("::miden::core::sys::pvm::verify_proof")
@@ -224,8 +231,12 @@ impl Default for CoreLibrary {
                 Package::read_from_bytes_trusted(CoreLibrary::SERIALIZED)
                     .expect("failed to read core package!"),
             );
+            let naming = Arc::new(embedded_naming::reconstruct());
+            package
+                .check_naming(&naming)
+                .expect("embedded core package must match its compiler-owned naming");
 
-            CoreLibrary { package }
+            CoreLibrary { package, naming }
         });
         CORELIB.clone()
     }
@@ -246,9 +257,75 @@ pub fn proven_security_estimator_root() -> Word {
 
 #[cfg(test)]
 mod tests {
+    use miden_core::program::Namespace;
+    use miden_mast_package::{CallableProcedurePath, NamespacePlan};
     use miden_verifier::Verifier;
 
     use super::*;
+
+    fn callable_path(components: &[&str]) -> CallableProcedurePath {
+        CallableProcedurePath::from_semantic_components(
+            components.iter().map(|component| (*component).into()).collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn embedded_naming_preserves_private_address_taken_procedures() {
+        let core_lib = CoreLibrary::default();
+        let naming = core_lib.naming();
+        let path = callable_path(&["miden", "core", "sys", "vm", "ood_frames", "pipe_2"]);
+        let key = NamespacePlan::new(vec![]).callable_procedure_key(&path).unwrap();
+        let binding = naming.callables().binding(key).expect("private pipe_2 must retain its name");
+
+        assert_eq!(binding.path(), &path);
+        assert!(binding.namespace_plan().home().is_empty());
+        assert_ne!(binding.parent_namespace(), Namespace::initial());
+        assert!(naming.callables().selected_implementation(key).is_some());
+        assert!(naming.callables().visible_paths().all(|(_, visible_key)| *visible_key != key));
+        core_lib.package().check_naming(naming).unwrap();
+    }
+
+    #[test]
+    fn owned_core_inventory_executes_through_shared_test_import() {
+        let core = CoreLibrary::default();
+        let test = miden_utils_testing::Test::new(
+            "owned_core_import",
+            "use miden::core::math::u64\nbegin push.0.2.0.3 exec.u64::wrapping_add swap drop swap drop end",
+            false,
+        )
+        .with_library_and_naming(core.package(), core.naming().clone());
+        let (output, _) = test.execute_for_output().expect("owned core import must execute");
+        assert_eq!(output.stack.get_element(0), Some(miden_core::Felt::from_u32(5)));
+    }
+
+    #[test]
+    fn embedded_reexports_keep_the_defining_callable_key() {
+        let core_lib = CoreLibrary::default();
+        let callables = core_lib.naming().callables();
+        let defining = callable_path(&["miden", "core", "stark", "verifier", "verify"]);
+        let alias = callable_path(&["miden", "core", "stark", "verify"]);
+        let home = NamespacePlan::new(vec![]);
+        let key = home.callable_procedure_key(&defining).unwrap();
+
+        assert_eq!(callables.key_for_visible_path(&alias), Some(key));
+        assert_eq!(callables.binding(key).unwrap().path(), &defining);
+        assert_ne!(key, home.callable_procedure_key(&alias).unwrap());
+    }
+
+    #[test]
+    fn embedded_package_rejects_a_different_retained_compilation_home() {
+        let core_lib = CoreLibrary::default();
+        let naming = core_lib.naming();
+        let different = PackageNaming::new(
+            NamespacePlan::new(vec![miden_core::program::CanonicalLabel::text("other").unwrap()]),
+            naming.callables().clone(),
+            naming.entry_key(),
+        )
+        .unwrap();
+
+        assert!(core_lib.package().check_naming(&different).is_err());
+    }
 
     fn core_package_versions_match(
         crate_version: &miden_mast_package::Version,

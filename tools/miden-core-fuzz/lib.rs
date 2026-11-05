@@ -2,6 +2,8 @@
 
 use miden_core::mast::MastNodeId;
 
+pub mod naming;
+
 /// Root selection for the generator-driven oracle in `mast_forest_wire_view_new`: `k` in
 /// 0..=node_ids.len(), distinct node ids in first-occurrence order over `data[1..]`, padded
 /// deterministically. The count check precedes each push so k == 0 yields an EMPTY root list
@@ -34,8 +36,9 @@ pub fn select_roots(data: &[u8], node_ids: &[MastNodeId], k: usize) -> Vec<MastN
 
 #[cfg(test)]
 mod tests {
-    use super::select_roots;
     use miden_core::mast::MastNodeId;
+
+    use super::select_roots;
 
     /// BEHAVIORAL REGRESSION : zero-count inputs produce EMPTY root
     /// lists even with trailing bytes — the former push-then-check ordering produced one

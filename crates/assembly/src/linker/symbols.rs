@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, sync::Arc};
-use core::cell::{Cell, RefCell};
+use core::cell::{Cell, OnceCell, RefCell};
 
 use miden_assembly_syntax::{
     Path,
@@ -9,6 +9,7 @@ use miden_assembly_syntax::{
 };
 
 use super::LinkStatus;
+use crate::{CallableBinding, CallableDeclaration};
 
 /// A [Symbol] is a named, linkable item defined within a module.
 #[derive(Debug, Clone)]
@@ -21,6 +22,8 @@ pub struct Symbol {
     status: Cell<LinkStatus>,
     /// The type of item associated with this symbol.
     item: SymbolItem,
+    /// Canonical declaration identity, never inferred from source aliases or compiled code.
+    callable_binding: OnceCell<CallableBinding>,
 }
 
 /// An import declared by a module.
@@ -35,6 +38,8 @@ pub struct Import {
 /// A [SymbolItem] represents the type of item associated with a [Symbol].
 #[derive(Debug, Clone)]
 pub enum SymbolItem {
+    /// A declaration whose implementation has not been selected or supplied.
+    CallableDeclaration(CallableDeclaration),
     /// A constant declaration in AST form
     Constant(ast::Constant),
     /// A type or enum declaration in AST form
@@ -122,6 +127,7 @@ impl Symbol {
             visibility,
             status: Cell::new(status),
             item,
+            callable_binding: OnceCell::new(),
         }
     }
 
@@ -141,6 +147,18 @@ impl Symbol {
     #[inline(always)]
     pub fn item(&self) -> &SymbolItem {
         &self.item
+    }
+
+    pub fn callable_binding(&self) -> Option<&CallableBinding> {
+        self.callable_binding.get()
+    }
+
+    /// Binds a concrete declaration once. Repeating the identical metadata is harmless.
+    pub fn bind_callable(&self, binding: CallableBinding) -> Result<(), CallableBinding> {
+        if self.callable_binding.get() == Some(&binding) {
+            return Ok(());
+        }
+        self.callable_binding.set(binding)
     }
 
     /// Get the current link status of this symbol
@@ -171,7 +189,9 @@ impl Symbol {
     pub fn is_procedure(&self) -> bool {
         matches!(
             &self.item,
-            SymbolItem::Compiled(ItemInfo::Procedure(_)) | SymbolItem::Procedure(_)
+            SymbolItem::CallableDeclaration(_)
+                | SymbolItem::Compiled(ItemInfo::Procedure(_))
+                | SymbolItem::Procedure(_)
         )
     }
 }

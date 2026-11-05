@@ -5,8 +5,8 @@ use alloc::{
 
 use crate::GlobalItemIndex;
 
-/// Represents the inability to construct a topological ordering of the nodes in a [CallGraph]
-/// due to a cycle in the graph, which can happen due to recursion.
+/// Represents the inability to construct an acyclic ordering of the nodes in a [CallGraph].
+/// Runtime reachability accepts these cycles without requesting a topological ordering.
 #[derive(Debug)]
 pub struct CycleError(BTreeSet<GlobalItemIndex>);
 
@@ -23,12 +23,10 @@ impl CycleError {
 // CALL GRAPH
 // ================================================================================================
 
-/// A [CallGraph] is a directed, acyclic graph which represents all of the edges between procedures
-/// formed by a caller/callee relationship.
+/// A [CallGraph] is a directed graph of procedure references, including recursive runtime calls.
 ///
 /// More precisely, this graph can be used to perform the following analyses:
 ///
-/// - What is the maximum call stack depth for a program?
 /// - Are there any recursive procedure calls?
 /// - Are there procedures which are unreachable from the program entrypoint?, i.e. dead code
 /// - What is the set of procedures which are reachable from a given procedure, and which of those
@@ -57,34 +55,35 @@ impl CallGraph {
         self.nodes.entry(id).or_default()
     }
 
-    /// Add an edge in the call graph from `caller` to `callee`.
+    /// Adds a runtime-reference edge, including a self-reference.
     ///
-    /// This operation is unchecked, i.e. it is possible to introduce cycles in the graph using it.
-    /// As a result, it is essential that the caller either know that adding the edge does _not_
-    /// introduce a cycle, or that [Self::toposort] is run once the graph is built, in order to
-    /// verify that the graph is valid and has no cycles.
-    ///
-    /// Returns an error if adding the edge would introduce a trivial self-cycle.
-    pub fn add_edge(
-        &mut self,
-        caller: GlobalItemIndex,
-        callee: GlobalItemIndex,
-    ) -> Result<(), CycleError> {
-        if caller == callee {
-            return Err(CycleError::new([caller]));
-        }
-
+    /// Edges are stored in index order so graph queries do not depend on insertion order.
+    pub fn add_edge(&mut self, caller: GlobalItemIndex, callee: GlobalItemIndex) {
         // Make sure the callee is in the graph
         self.get_or_insert_node(callee);
         // Make sure the caller is in the graph
         let callees = self.get_or_insert_node(caller);
-        // If the caller already references the callee, we're done
-        if callees.contains(&callee) {
-            return Ok(());
+        if let Err(index) = callees.binary_search(&callee) {
+            callees.insert(index, callee);
         }
+    }
 
-        callees.push(callee);
-        Ok(())
+    /// Returns every node reachable from `roots` once, in index order.
+    ///
+    /// Runtime references do not impose a body-compilation order. A visited set bounds this
+    /// traversal even for self-references and mutually recursive groups.
+    pub fn reachable_from(
+        &self,
+        roots: impl IntoIterator<Item = GlobalItemIndex>,
+    ) -> Vec<GlobalItemIndex> {
+        let mut worklist = roots.into_iter().collect::<Vec<_>>();
+        let mut visited = BTreeSet::new();
+        while let Some(gid) = worklist.pop() {
+            if visited.insert(gid) {
+                worklist.extend_from_slice(self.out_edges(gid));
+            }
+        }
+        visited.into_iter().collect()
     }
 
     /// Returns the number of predecessors of `id` in the graph, i.e.
@@ -93,7 +92,10 @@ impl CallGraph {
         self.nodes.iter().filter(|(_, out_edges)| out_edges.contains(&id)).count()
     }
 
-    /// Construct the topological ordering of all nodes in the call graph.
+    /// Constructs an acyclic dependency ordering of this graph.
+    ///
+    /// This query is suitable for structural dependencies, which must be acyclic. Runtime
+    /// reference retention uses [`Self::reachable_from`] instead.
     ///
     /// Uses Kahn's algorithm with pre-computed in-degrees for O(V + E) complexity.
     ///
@@ -312,7 +314,7 @@ mod tests {
 
         assert_eq!(graph.out_edges(A1), &[A2]);
         assert_eq!(graph.out_edges(B1), &[B2]);
-        assert_eq!(graph.out_edges(A2), &[B2, A3]);
+        assert_eq!(graph.out_edges(A2), &[A3, B2]);
         assert_eq!(graph.out_edges(B2), &[B3]);
         assert_eq!(graph.out_edges(A3), &[]);
         assert_eq!(graph.out_edges(B3), &[A3]);
@@ -399,18 +401,40 @@ mod tests {
     }
 
     #[test]
-    fn callgraph_add_edge_with_self_cycle_is_error() {
+    fn runtime_reachability_accepts_self_reference_but_structural_order_rejects_it() {
         let mut graph = CallGraph::default();
+        graph.add_edge(A1, A1);
+        graph.add_edge(A1, A1);
 
-        let err = graph.add_edge(A1, A1).expect_err("expected self-edge to be rejected");
+        assert_eq!(graph.out_edges(A1), &[A1]);
+        assert_eq!(graph.reachable_from([A1]), vec![A1]);
+        let err = graph.toposort().expect_err("a structural self-cycle has no ordering");
         assert_eq!(err.0.into_iter().collect::<Vec<_>>(), &[A1]);
+        assert!(graph.toposort_caller(A1).is_err());
+    }
+
+    #[test]
+    fn runtime_reachability_is_deterministic_and_deduplicates_recursive_roots() {
+        let edges = [(A1, B1), (B1, A1), (A1, A2), (B1, B2), (A2, B2)];
+        let mut forward = CallGraph::default();
+        let mut reverse = CallGraph::default();
+        for (caller, callee) in edges {
+            forward.add_edge(caller, callee);
+        }
+        for (caller, callee) in edges.into_iter().rev() {
+            reverse.add_edge(caller, callee);
+        }
+        let expected = vec![A1, A2, A3, B1, B2];
+        assert_eq!(forward.reachable_from([A1, A3, B1, A1]), expected);
+        assert_eq!(reverse.reachable_from([B1, A3, A1]), expected);
+        assert_eq!(forward.out_edges(A1), reverse.out_edges(A1));
     }
 
     #[test]
     fn callgraph_rootless_cycle_toposort_is_error() {
         let mut graph = CallGraph::default();
-        graph.add_edge(A1, B1).expect("A1 -> B1 must be accepted");
-        graph.add_edge(B1, A1).expect("B1 -> A1 must be accepted");
+        graph.add_edge(A1, B1);
+        graph.add_edge(B1, A1);
 
         let err = graph.toposort().expect_err("expected topological sort to fail with cycle");
         assert_eq!(err.0.into_iter().collect::<Vec<_>>(), &[A1, B1]);
@@ -432,12 +456,12 @@ mod tests {
     fn callgraph_simple() -> CallGraph {
         // Construct the graph
         let mut graph = CallGraph::default();
-        graph.add_edge(A1, A2).expect("A1 -> A2 must be accepted");
-        graph.add_edge(B1, B2).expect("B1 -> B2 must be accepted");
-        graph.add_edge(A2, B2).expect("A2 -> B2 must be accepted");
-        graph.add_edge(A2, A3).expect("A2 -> A3 must be accepted");
-        graph.add_edge(B2, B3).expect("B2 -> B3 must be accepted");
-        graph.add_edge(B3, A3).expect("B3 -> A3 must be accepted");
+        graph.add_edge(A1, A2);
+        graph.add_edge(B1, B2);
+        graph.add_edge(A2, B2);
+        graph.add_edge(A2, A3);
+        graph.add_edge(B2, B3);
+        graph.add_edge(B3, A3);
 
         graph
     }
@@ -449,12 +473,12 @@ mod tests {
     fn callgraph_cycle() -> CallGraph {
         // Construct the graph
         let mut graph = CallGraph::default();
-        graph.add_edge(A1, A2).expect("A1 -> A2 must be accepted");
-        graph.add_edge(B1, B2).expect("B1 -> B2 must be accepted");
-        graph.add_edge(A2, B2).expect("A2 -> B2 must be accepted");
-        graph.add_edge(B2, B3).expect("B2 -> B3 must be accepted");
-        graph.add_edge(B3, A3).expect("B3 -> A3 must be accepted");
-        graph.add_edge(A3, A2).expect("A3 -> A2 must be accepted");
+        graph.add_edge(A1, A2);
+        graph.add_edge(B1, B2);
+        graph.add_edge(A2, B2);
+        graph.add_edge(B2, B3);
+        graph.add_edge(B3, A3);
+        graph.add_edge(A3, A2);
 
         graph
     }
@@ -466,9 +490,9 @@ mod tests {
     /// Every node has in-degree 1, so Kahn's algorithm starts with an empty queue.
     fn callgraph_cycle_without_roots() -> CallGraph {
         let mut graph = CallGraph::default();
-        graph.add_edge(A1, A2).expect("A1 -> A2 must be accepted");
-        graph.add_edge(A2, A3).expect("A2 -> A3 must be accepted");
-        graph.add_edge(A3, A1).expect("A3 -> A1 must be accepted");
+        graph.add_edge(A1, A2);
+        graph.add_edge(A2, A3);
+        graph.add_edge(A3, A1);
 
         graph
     }

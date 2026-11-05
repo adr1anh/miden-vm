@@ -6,7 +6,7 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::assert_matches;
+use core::{assert_matches, cell::Cell};
 use std::collections::BTreeMap;
 #[cfg(feature = "std")]
 use std::fs;
@@ -16,11 +16,11 @@ use miden_core::{
     Felt, Word,
     advice::AdviceMap,
     mast::{
-        BasicBlockNodeBuilder, DenseMastForestBuilder, ExecNodeBuilder, MastForest, MastNode,
-        MastNodeEntry, MastNodeExt, MastNodeId,
+        BasicBlockNodeBuilder, DenseMastForestBuilder, ExecNodeBuilder, ExternalNodeBuilder,
+        MastForest, MastNode, MastNodeEntry, MastNodeExt, MastNodeId,
     },
     operations::Operation,
-    program::ProcedureKey,
+    program::{CanonicalLabel, ProcedureKey},
     serde::{
         BudgetedReader, ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable,
         SliceReader,
@@ -32,9 +32,11 @@ use super::{
     MAGIC_PACKAGE, PACKAGE_BYTE_READ_BUDGET_MULTIPLIER, Package, PackageManifest, Section, VERSION,
 };
 use crate::{
-    Dependency, ManifestValidationError, PackageExport, PackageId, PackageModule, PackageSubmodule,
-    ProcedureExport, SectionId, TargetType,
+    Dependency, ManifestValidationError, NamespacePlan, PackageExport, PackageId, PackageModule,
+    PackageSubmodule, ProcedureExport, SectionId, TargetType, UnverifiedPackageNaming,
     debug_info::{DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, PackageDebugInfoBuilder},
+    interface::serialization::{CodecLimits, HomeProfile, TypedIdProfile},
+    package::arbitrary::fixture_naming,
 };
 
 fn build_single_node_forest(
@@ -72,10 +74,42 @@ fn build_package_exports() -> (Arc<MastForest>, Vec<PackageExport>) {
     (Arc::new(forest), vec![PackageExport::Procedure(export)])
 }
 
+fn fixture_home() -> NamespacePlan {
+    NamespacePlan::new(vec![CanonicalLabel::text("package-serde-fixture").unwrap()])
+}
+
+fn fixture_create(
+    name: PackageId,
+    version: crate::Version,
+    kind: TargetType,
+    mast: Arc<MastForest>,
+    exports: impl IntoIterator<Item = PackageExport>,
+    dependencies: impl IntoIterator<Item = Dependency>,
+) -> Result<Package, ManifestValidationError> {
+    let exports = exports.into_iter().collect::<Vec<_>>();
+    let naming = fixture_naming(fixture_home(), kind, &mast, &exports);
+    Package::create(name, version, kind, mast, exports, dependencies, &naming)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fixture_create_with_modules(
+    name: PackageId,
+    version: crate::Version,
+    kind: TargetType,
+    mast: Arc<MastForest>,
+    exports: impl IntoIterator<Item = PackageExport>,
+    modules: impl IntoIterator<Item = PackageModule>,
+    dependencies: impl IntoIterator<Item = Dependency>,
+) -> Result<Package, ManifestValidationError> {
+    let exports = exports.into_iter().collect::<Vec<_>>();
+    let naming = fixture_naming(fixture_home(), kind, &mast, &exports);
+    Package::create_with_modules(name, version, kind, mast, exports, modules, dependencies, &naming)
+}
+
 fn build_package() -> Package {
     let (mast, exports) = build_package_exports();
 
-    Package::create(
+    fixture_create(
         PackageId::from("test_pkg"),
         crate::Version::new(0, 0, 0),
         TargetType::Library,
@@ -103,7 +137,7 @@ fn build_package_with_debug_info() -> Package {
     let exports = vec![PackageExport::Procedure(
         ProcedureExport::new(path, Some(node_id), digest, None).with_source_node(Some(source_node)),
     )];
-    let mut package = Package::create(
+    let mut package = fixture_create(
         PackageId::from("test_pkg"),
         crate::Version::new(0, 0, 0),
         TargetType::Library,
@@ -154,6 +188,8 @@ fn package_bytes_with_sections_count(count: usize) -> Vec<u8> {
     package.description.write_into(&mut bytes);
     bytes.write_u8(package.kind.into());
     package.mast.write_into(&mut bytes);
+    bytes.write_u32(package.naming_transport().as_bytes().len().try_into().unwrap());
+    bytes.write_bytes(package.naming_transport().as_bytes());
     package.manifest.write_into(&mut bytes);
     bytes.write_usize(count);
 
@@ -185,24 +221,315 @@ fn package_serialization_roundtrip() {
 }
 
 #[test]
-fn package_format_version_rejects_previous_version() {
-    let bytes = build_package().to_bytes();
-    let version_offset = MAGIC_PACKAGE.len();
-    assert_eq!(&bytes[version_offset..version_offset + 3], &[8, 0, 0]);
+fn private_only_code_package_roundtrips_without_public_exports() {
+    let (forest, _) = build_forest();
+    // An explicit implementation reference is also a code candidate. Its root records the
+    // caller-supplied D without asserting code availability or creating a public export.
+    let mut builder = DenseMastForestBuilder::new();
+    let external = builder
+        .push_node(ExternalNodeBuilder::new(forest.procedure_digests().next().unwrap()))
+        .unwrap();
+    builder.mark_root(external);
+    let external_forest = builder.build().unwrap();
 
-    let mut old_bytes = bytes;
-    old_bytes[version_offset..version_offset + 3].copy_from_slice(&[7, 0, 0]);
-    // The header alone must reject the old version, before reading the package body.
-    old_bytes.truncate(version_offset + 3);
-    for result in [
-        Package::read_from_bytes(&old_bytes),
-        Package::read_from_bytes_trusted(&old_bytes),
-    ] {
+    for mast in [forest, external_forest] {
+        for kind in [TargetType::Library, TargetType::Executable, TargetType::Kernel] {
+            let package = fixture_create_with_modules(
+                PackageId::from("private"),
+                crate::Version::new(0, 0, 0),
+                kind,
+                Arc::new(mast.clone()),
+                [],
+                [PackageModule::new(absolute_path("private"), [])],
+                [],
+            )
+            .expect("private callable roots should form a package without a public API");
+            let bytes = package.to_bytes();
+
+            for decoded in [
+                Package::read_from_bytes(&bytes)
+                    .expect("safe reader should accept private callable roots"),
+                Package::read_from_bytes_trusted(&bytes)
+                    .expect("trusted reader should accept private callable roots"),
+            ] {
+                assert_eq!(package, decoded);
+                assert_eq!(decoded.manifest.num_exports(), 0);
+                assert_eq!(decoded.manifest.num_modules(), 1);
+                assert_eq!(decoded.entrypoint(), None);
+                assert_eq!(decoded.mast_forest().procedure_roots().len(), 1);
+                assert_eq!(decoded.code_commitment(), package.code_commitment());
+                assert_eq!(decoded.commitment(), package.commitment());
+                let naming = fixture_naming(fixture_home(), kind, decoded.mast_forest(), &[]);
+                decoded.check_naming(&naming).unwrap();
+                assert!(decoded.try_into_program(&naming).is_err());
+                assert!(decoded.check_kernel_code(&naming).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn package_readers_reject_empty_and_unrooted_private_code() {
+    let (unrooted, _) = build_single_node_forest(vec![Operation::Add], false);
+
+    for mast in [MastForest::new(), unrooted] {
+        for kind in [TargetType::Library, TargetType::Executable] {
+            let mut package = build_package();
+            package.kind = kind;
+            package.mast = Arc::new(mast.clone());
+            package.manifest = PackageManifest::new([])
+                .and_then(|manifest| {
+                    manifest.with_modules([PackageModule::new(absolute_path("declarations"), [])])
+                })
+                .unwrap();
+            let bytes = package.to_bytes();
+
+            for result in
+                [Package::read_from_bytes(&bytes), Package::read_from_bytes_trusted(&bytes)]
+            {
+                assert_matches!(
+                    result,
+                    Err(DeserializationError::InvalidValue(message))
+                        if message.contains("at least one callable procedure root")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn trusted_package_reader_still_requires_roots_for_public_code() {
+    let (forest, node) = build_single_node_forest(vec![Operation::Add], false);
+    let mut package = build_package();
+    package.manifest = PackageManifest::new([PackageExport::Procedure(ProcedureExport::new(
+        absolute_path("public::procedure"),
+        Some(node),
+        forest[node].digest(),
+        None,
+    ))])
+    .unwrap();
+    package.mast = Arc::new(forest);
+
+    let error = Package::read_from_bytes_trusted(&package.to_bytes())
+        .expect_err("trusted readers must reject code packages with no callable roots");
+    assert!(error.to_string().contains("at least one callable procedure root"));
+}
+
+#[test]
+fn package_readers_reject_non_executable_entrypoint() {
+    let mut package = build_package();
+    let node = package.mast.procedure_roots()[0];
+    let entrypoint =
+        Arc::from(AstPath::exec_path().join(ProcedureName::MAIN_PROC_NAME).into_boxed_path());
+    package.manifest = PackageManifest::new([PackageExport::Procedure(ProcedureExport::new(
+        entrypoint,
+        Some(node),
+        package.mast[node].digest(),
+        None,
+    ))])
+    .unwrap();
+    let bytes = package.to_bytes();
+
+    for result in [Package::read_from_bytes(&bytes), Package::read_from_bytes_trusted(&bytes)] {
         assert_matches!(
             result,
             Err(DeserializationError::InvalidValue(message))
-                if message == "unsupported version. Got '[7, 0, 0]', but only '[8, 0, 0]' is supported"
+                if message.contains("entrypoint in a package declared with non-executable type")
         );
+    }
+}
+
+#[test]
+fn package_format_version_rejects_previous_version() {
+    let bytes = build_package().to_bytes();
+    let version_offset = MAGIC_PACKAGE.len();
+    assert_eq!(&bytes[version_offset..version_offset + 3], &[9, 0, 0]);
+
+    for previous in [[8, 0, 0], [7, 0, 0], [4, 0, 0]] {
+        let mut old_bytes = bytes.clone();
+        old_bytes[version_offset..version_offset + 3].copy_from_slice(&previous);
+        // The header alone must reject old versions, before reading the package body.
+        old_bytes.truncate(version_offset + 3);
+        for result in [
+            Package::read_from_bytes(&old_bytes),
+            Package::read_from_bytes_trusted(&old_bytes),
+        ] {
+            assert_matches!(
+                result,
+                Err(DeserializationError::InvalidValue(message))
+                    if message == alloc::format!(
+                        "unsupported version. Got '{previous:?}', but only '[9, 0, 0]' is supported"
+                    )
+            );
+        }
+    }
+}
+
+fn package_naming_offset(package: &Package) -> usize {
+    let mut prefix = Vec::new();
+    package.write_header_into(&mut prefix);
+    package.mast.write_into(&mut prefix);
+    assert!(package.to_bytes().starts_with(&prefix));
+    prefix.len()
+}
+
+#[test]
+fn package_readers_require_complete_exactly_framed_naming_transport() {
+    let package = build_package();
+    let bytes = package.to_bytes();
+    let offset = package_naming_offset(&package);
+    let payload = package.naming_transport().as_bytes();
+    let payload_start = offset + size_of::<u32>();
+    let payload_end = payload_start + payload.len();
+    assert_eq!(
+        u32::from_le_bytes(bytes[offset..payload_start].try_into().unwrap()) as usize,
+        payload.len(),
+        "NamingV1 must use the required u32 little-endian length frame"
+    );
+    assert_eq!(&bytes[payload_start..payload_end], payload);
+
+    let mut absent = bytes[..offset].to_vec();
+    absent.extend_from_slice(&bytes[payload_end..]);
+    let mut empty = bytes[..offset].to_vec();
+    empty.write_u32(0);
+    empty.extend_from_slice(&bytes[payload_end..]);
+    let mut oversized_length = bytes.clone();
+    oversized_length[offset..payload_start].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut unsupported = bytes.clone();
+    unsupported[payload_start] = 2;
+    let mut trailing_payload = bytes[..offset].to_vec();
+    trailing_payload.write_u32((payload.len() + 1).try_into().unwrap());
+    trailing_payload.extend_from_slice(payload);
+    trailing_payload.push(0);
+    trailing_payload.extend_from_slice(&bytes[payload_end..]);
+
+    for (case, malformed) in [
+        ("missing required naming", bytes[..offset].to_vec()),
+        ("absent naming before manifest", absent),
+        ("truncated length frame", bytes[..payload_start - 1].to_vec()),
+        ("truncated NamingV1", bytes[..payload_end - 1].to_vec()),
+        ("empty NamingV1", empty),
+        ("oversized declared NamingV1 length", oversized_length),
+        ("unsupported NamingV1 version", unsupported),
+        ("trailing bytes inside NamingV1 frame", trailing_payload),
+    ] {
+        for result in [
+            Package::read_from_bytes(&malformed),
+            Package::read_from_bytes_trusted(&malformed),
+        ] {
+            assert!(result.is_err(), "reader accepted {case}");
+        }
+    }
+}
+
+#[test]
+fn package_byte_slice_readers_reject_trailing_bytes() {
+    let mut bytes = build_package().to_bytes();
+    bytes.push(0);
+    for result in [Package::read_from_bytes(&bytes), Package::read_from_bytes_trusted(&bytes)] {
+        assert_matches!(
+            result,
+            Err(DeserializationError::InvalidValue(message)) if message == "trailing package bytes"
+        );
+    }
+}
+
+struct SerdeNamingProfile {
+    codec: u32,
+    typed_calls: Cell<usize>,
+    home_calls: Cell<usize>,
+}
+
+impl SerdeNamingProfile {
+    fn new(codec: u32) -> Self {
+        Self {
+            codec,
+            typed_calls: Cell::new(0),
+            home_calls: Cell::new(0),
+        }
+    }
+}
+
+impl TypedIdProfile for SerdeNamingProfile {
+    type Context = NamespacePlan;
+    type Error = &'static str;
+
+    fn validate_typed_id(
+        &self,
+        _context: &Self::Context,
+        codec: u32,
+        bytes: &[u8],
+    ) -> Result<(), Self::Error> {
+        self.typed_calls.set(self.typed_calls.get() + 1);
+        if codec == self.codec && bytes == [0xa5, 0, 0xff] {
+            Ok(())
+        } else {
+            Err("unknown fixture TypedId codec or noncanonical payload")
+        }
+    }
+}
+
+impl HomeProfile for SerdeNamingProfile {
+    fn validate_home(
+        &self,
+        context: &Self::Context,
+        home: &[CanonicalLabel],
+    ) -> Result<(), Self::Error> {
+        self.home_calls.set(self.home_calls.get() + 1);
+        if context.home() == home {
+            Ok(())
+        } else {
+            Err("home is absent from current fixture evidence")
+        }
+    }
+}
+
+#[test]
+fn package_readers_preserve_unknown_typed_ids_until_explicit_current_admission() {
+    let codec = 9127;
+    let home = NamespacePlan::new(vec![
+        CanonicalLabel::typed_id(codec, &[0xa5, 0, 0xff], |_, _| Ok(())).unwrap(),
+    ]);
+    let (mast, exports) = build_package_exports();
+    let naming = fixture_naming(home.clone(), TargetType::Library, &mast, &exports);
+    let package = Package::create(
+        PackageId::from("typed_naming"),
+        crate::Version::new(0, 0, 0),
+        TargetType::Library,
+        mast,
+        exports,
+        [],
+        &naming,
+    )
+    .unwrap();
+    let bytes = package.to_bytes();
+    let limits = super::super::FORMAT_NAMING_LIMITS;
+
+    for trusted in [false, true] {
+        let selected = SerdeNamingProfile::new(codec);
+        let decoded = if trusted {
+            Package::read_from_bytes_trusted(&bytes)
+        } else {
+            Package::read_from_bytes(&bytes)
+        }
+        .expect("raw readers must retain structurally bounded unknown TypedId transport");
+        assert_eq!(selected.typed_calls.get(), 0);
+        assert_eq!(selected.home_calls.get(), 0);
+        assert_eq!(decoded.naming_transport(), package.naming_transport());
+        assert_eq!(decoded.to_bytes(), bytes);
+
+        let unknown = SerdeNamingProfile::new(77);
+        assert!(decoded.admit_naming(&unknown, &home, limits).is_err());
+        assert!(unknown.typed_calls.get() > 0);
+        assert_eq!(decoded.admit_naming(&selected, &home, limits).unwrap(), naming);
+        assert!(selected.typed_calls.get() > 0);
+        assert!(selected.home_calls.get() > 0);
+        // Prior admission confers no cached permission under a changed caller context.
+        assert!(decoded.admit_naming(&selected, &fixture_home(), limits).is_err());
+        let calls = (selected.typed_calls.get(), selected.home_calls.get());
+        assert!(decoded.admit_naming(&selected, &home, CodecLimits::new(0, 0, 0, 0)).is_err());
+        assert_eq!((selected.typed_calls.get(), selected.home_calls.get()), calls);
+        assert_eq!(decoded.naming_transport(), package.naming_transport());
     }
 }
 
@@ -217,7 +544,7 @@ fn executable_package_entrypoint_roundtrips() {
         forest[node_id].digest(),
         None,
     );
-    let package = Package::create(
+    let package = fixture_create(
         PackageId::from("test_pkg"),
         crate::Version::new(0, 0, 0),
         TargetType::Executable,
@@ -450,7 +777,7 @@ fn interface_and_code_commitments_change_with_exports() {
     let second_node_id = remapping.get(second_node_id).expect("second root should be retained");
     let forest = Arc::new(forest);
     let package_with_export = |node_id| {
-        Package::create(
+        fixture_create(
             PackageId::from("test_pkg"),
             crate::Version::new(0, 0, 0),
             TargetType::Library,
@@ -555,6 +882,11 @@ fn package_rejects_non_root_export() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Library,
+        naming: UnverifiedPackageNaming::from_owned(
+            &fixture_naming(fixture_home(), TargetType::Library, &forest, &exports),
+            super::super::FORMAT_NAMING_LIMITS,
+        )
+        .unwrap(),
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
@@ -589,6 +921,22 @@ fn package_manifest_new_rejects_duplicate_export_paths() {
     let err = PackageManifest::new(exports)
         .expect_err("duplicate export paths should be rejected by constructors");
     assert_matches!(err, ManifestValidationError::DuplicateExport(err_path) if err_path == path);
+}
+
+#[test]
+fn package_manifest_without_procedure_exports_roundtrips_independently_of_code() {
+    let manifest = PackageManifest::new([])
+        .and_then(|manifest| manifest.with_modules([PackageModule::new(absolute_path("api"), [])]))
+        .and_then(|manifest| manifest.with_dependencies([build_dependency()]))
+        .expect("declaration metadata does not require public procedures");
+    let bytes = manifest.to_bytes();
+    let decoded = PackageManifest::read_from_bytes(&bytes).unwrap();
+
+    assert_eq!(decoded, manifest);
+    assert_eq!(decoded.num_exports(), 0);
+    assert_eq!(decoded.entrypoint(), None);
+    assert_eq!(decoded.num_modules(), 1);
+    assert_eq!(decoded.num_dependencies(), 1);
 }
 
 #[test]
@@ -787,6 +1135,11 @@ fn regression_package_deserialisation_rejects_spoofed_mast_node_digests() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Library,
+        naming: UnverifiedPackageNaming::from_owned(
+            &fixture_naming(fixture_home(), TargetType::Library, &forest, &exports),
+            super::super::FORMAT_NAMING_LIMITS,
+        )
+        .unwrap(),
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
@@ -815,7 +1168,7 @@ fn trusted_package_deserialisation_accepts_spoofed_mast_hashes() {
     //     push.1
     // end
     let (forest, node_id) =
-        build_single_node_forest(vec![Operation::Push(Felt::from_u32(1))], false);
+        build_single_node_forest(vec![Operation::Push(Felt::from_u32(1))], true);
     let digest = forest[node_id].digest();
 
     let path = absolute_path("lib::p");
@@ -831,6 +1184,11 @@ fn trusted_package_deserialisation_accepts_spoofed_mast_hashes() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Library,
+        naming: UnverifiedPackageNaming::from_owned(
+            &fixture_naming(fixture_home(), TargetType::Library, &forest, &exports),
+            super::super::FORMAT_NAMING_LIMITS,
+        )
+        .unwrap(),
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
@@ -879,6 +1237,11 @@ fn regression_kernel_package_deserialisation_rejects_spoofed_mast_node_digests()
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Kernel,
+        naming: UnverifiedPackageNaming::from_owned(
+            &fixture_naming(fixture_home(), TargetType::Kernel, &forest, &exports),
+            super::super::FORMAT_NAMING_LIMITS,
+        )
+        .unwrap(),
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
@@ -924,6 +1287,11 @@ fn package_deserialize_from_file_rejects_spoofed_kernel_mast_node_digests() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Kernel,
+        naming: UnverifiedPackageNaming::from_owned(
+            &fixture_naming(fixture_home(), TargetType::Kernel, &forest, &exports),
+            super::super::FORMAT_NAMING_LIMITS,
+        )
+        .unwrap(),
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
@@ -961,7 +1329,7 @@ fn trusted_kernel_package_deserialisation_accepts_spoofed_mast_hashes() {
     //     push.1
     // end
     let (forest, node_id) =
-        build_single_node_forest(vec![Operation::Push(Felt::from_u32(1))], false);
+        build_single_node_forest(vec![Operation::Push(Felt::from_u32(1))], true);
     let digest = forest[node_id].digest();
 
     let path = absolute_path("$kernel::k1");
@@ -977,6 +1345,11 @@ fn trusted_kernel_package_deserialisation_accepts_spoofed_mast_hashes() {
         version: crate::Version::new(0, 0, 0),
         description: None,
         kind: TargetType::Kernel,
+        naming: UnverifiedPackageNaming::from_owned(
+            &fixture_naming(fixture_home(), TargetType::Kernel, &forest, &exports),
+            super::super::FORMAT_NAMING_LIMITS,
+        )
+        .unwrap(),
         mast: Arc::new(forest),
         manifest: PackageManifest::new(exports).expect("test manifest should be valid"),
         sections: Default::default(),
@@ -1004,7 +1377,7 @@ fn spoofed_mast_hash_with_keyed_target_is_rejected_unless_trusted() {
         digest,
         None,
     ))];
-    let package = Package::create(
+    let package = fixture_create(
         PackageId::from("lib"),
         crate::Version::new(0, 0, 0),
         TargetType::Library,

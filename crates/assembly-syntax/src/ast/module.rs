@@ -503,8 +503,10 @@ impl Module {
     pub fn define_import(&mut self, import: Import) -> Result<(), SemanticAnalysisError> {
         self.ensure_name_map_current();
         self.ensure_import_capacity(import.span())?;
-        if self.is_kernel() && import.visibility().is_public() {
-            return Err(SemanticAnalysisError::ReexportFromKernel { span: import.span() });
+        if self.is_kernel()
+            && matches!(&import, Import::Module(import) if import.visibility().is_public())
+        {
+            return Err(SemanticAnalysisError::ReexportedModule { span: import.span() });
         }
         if let Some(prev) = self.get_declaration(import.local_name().as_str()) {
             return Err(SemanticAnalysisError::SymbolConflict {

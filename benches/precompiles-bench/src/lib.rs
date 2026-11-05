@@ -2,6 +2,7 @@
 
 use miden_core::{Felt, Word, deferred::PrecompileWitness, program::ExecutionClaim};
 use miden_core_lib::CoreLibrary;
+use miden_utils_testing::librarytree::{self, FixtureEnvironment, assemble_fixture_program};
 use miden_vm::{
     Assembler, DefaultHost, ExecutionOptions, ExecutionProof, FastProcessor, HashFunction,
     PrecompileLimits, Program, Prover, StackInputs, StackOutputs, Verifier, advice::AdviceInputs,
@@ -15,6 +16,7 @@ pub use input_generation::PrecompileWorkload;
 
 pub struct PrecompileFixture {
     pub program: Program,
+    pub environment: FixtureEnvironment,
     pub stack_inputs: StackInputs,
     pub advice_inputs: AdviceInputs,
     /// Admission limits for exporting and proving this fixture's deferred witness.
@@ -32,15 +34,23 @@ impl PrecompileFixture {
             .with_verification_precompile_limits(verification_limits.clone());
         let source = generate_program_source(workload);
         let core_lib = CoreLibrary::default();
-        let program = Assembler::default()
-            .with_package(core_lib.package(), miden_vm::assembly::Linkage::Dynamic)
-            .expect("failed to link core library")
-            .assemble_program("precompile_workload", source.as_str())
-            .expect("failed to assemble precompile benchmark program")
-            .unwrap_program();
+        let assembler = Assembler::default()
+            .with_package(
+                core_lib.package(),
+                miden_vm::assembly::Linkage::Dynamic,
+                core_lib.naming().clone(),
+            )
+            .expect("failed to link core library");
+        let named = assemble_fixture_program(
+            assembler,
+            "precompile_workload",
+            source.as_str(),
+            &[core_lib.naming()],
+        );
 
         Self {
-            program,
+            program: named.program,
+            environment: named.environment,
             stack_inputs: generate_stack_inputs(workload),
             advice_inputs: generate_advice_inputs(workload),
             verification_limits,
@@ -52,14 +62,15 @@ impl PrecompileFixture {
     pub fn precompile_witness(&self) -> (PrecompileWitness, Word) {
         let mut host = DefaultHost::default()
             .with_library(&CoreLibrary::default())
-            .expect("load precompile workload library");
+            .expect("load precompile workload library")
+            .with_environment_source(self.environment.source());
         let output = FastProcessor::new_with_options(
             self.stack_inputs,
             self.advice_inputs.clone(),
             self.execution_options.clone(),
         )
         .expect("construct precompile workload processor")
-        .execute_sync(&self.program, &mut host)
+        .execute_sync(&self.program, self.environment.execution(), &mut host)
         .expect("execute precompile workload");
         let root = output.precompile_root();
         let witness = output.precompile_witness.expect("workload must authenticate deferred work");
@@ -141,19 +152,21 @@ fn execution_options() -> ExecutionOptions {
         ExecutionOptions::DEFAULT_CORE_TRACE_FRAGMENT_SIZE,
     )
     .expect("precompile benchmark execution options should be valid")
+    .with_environment_trace_limits(librarytree::trace_limits())
 }
 
 pub fn prove_once(fixture: &PrecompileFixture) -> (StackOutputs, ExecutionProof) {
     let mut host = DefaultHost::default()
         .with_library(&CoreLibrary::default())
-        .expect("failed to load core library into host");
+        .expect("failed to load core library into host")
+        .with_environment_source(fixture.environment.source());
     let witness = FastProcessor::new_with_options(
         fixture.stack_inputs,
         fixture.advice_inputs.clone(),
         fixture.execution_options.clone(),
     )
     .expect("failed to initialize precompile benchmark processor")
-    .execute_for_proving_sync(&fixture.program, &mut host)
+    .execute_for_proving_sync(&fixture.program, fixture.environment.execution(), &mut host)
     .expect("failed to execute precompile benchmark");
     let stack_outputs = *witness.claim().stack_outputs();
     let proof = Prover::new()
@@ -169,6 +182,7 @@ pub fn verify_once(
     stack_outputs: StackOutputs,
     proof: &ExecutionProof,
 ) {
+    // PR12 must migrate this legacy ProgramInfo claim adapter to the caller's expected statement.
     let claim = ExecutionClaim::from_program_info(
         fixture.program.to_info(),
         fixture.stack_inputs,

@@ -1,6 +1,8 @@
 mod bundle;
 mod compile;
 pub mod data;
+mod execution_inputs;
+mod naming_inputs;
 
 mod precompile_limits;
 mod prove;

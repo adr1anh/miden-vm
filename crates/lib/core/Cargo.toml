@@ -92,6 +92,8 @@ env_logger.workspace = true
 fs-err = { version = "3.1" }
 miden-assembly = { workspace = true, features = ["std"] }
 miden-assembly-syntax = { workspace = true, features = ["std"] }
+miden-core = { workspace = true, features = ["std"] }
+miden-mast-package = { workspace = true, features = ["std"] }
 miden-package-registry = { workspace = true, features = ["resolver"] }
 miden-core-lib-codegen = { workspace = true, features = ["std"] }
 

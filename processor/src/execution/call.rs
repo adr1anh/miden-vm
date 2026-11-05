@@ -24,7 +24,12 @@ where
     P: Processor,
     H: BaseHost,
 {
-    let stack = state.processor.stack().prepare_restore_context()?;
+    let stack = state.processor.stack().prepare_restore_context().map_err(|error| match error {
+        ExecutionError::OperationError { err, source_file: None, .. } => {
+            state.operation_error_with_current_context(err)
+        },
+        other => other,
+    })?;
     let system = state
         .processor
         .system()

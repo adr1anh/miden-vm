@@ -82,7 +82,10 @@ fn execution_replay_round_trip_preserves_replay_order() {
         .record_resolution(MastNodeId::from(2), MastForestId::from(1));
 
     let bytes = replay.to_bytes();
-    let mut restored = ExecutionReplay::read_from_bytes(&bytes).unwrap();
+    let mut reader = BudgetedReader::new(SliceReader::new(&bytes), bytes.len());
+    let mut budget = crate::test_utils::native_replay_budget();
+    let mut restored = ExecutionReplay::read_with_limits(&mut reader, &mut budget).unwrap();
+    assert!(!reader.has_more_bytes());
 
     assert_eq!(
         restored.block_stack.replay_node_start_parent_addr().unwrap(),
@@ -185,8 +188,17 @@ fn saved_fragment_replays_logical_addresses_after_round_trip() {
         initial_mast_forest_id: MastForestId::from(0u32),
     };
     let bytes = fragment.to_bytes();
-    let mut restored = CoreTraceFragmentContext::read_from_bytes(&bytes).unwrap();
-    assert_eq!(restored, fragment);
+    let mut reader = BudgetedReader::new(SliceReader::new(&bytes), bytes.len());
+    let mut budget = crate::test_utils::native_replay_budget();
+    let mut restored =
+        CoreTraceFragmentContext::read_with_limits(&mut reader, &mut budget).unwrap();
+    assert!(!reader.has_more_bytes());
+    assert_eq!(restored.state, fragment.state);
+    assert_eq!(restored.continuation, fragment.continuation);
+    assert_eq!(restored.initial_mast_forest_id, fragment.initial_mast_forest_id);
+    // Wire data never inherits native validation, even when the keyed queue is empty.
+    assert!(restored.replay.keyed.require_validated().is_err());
+    assert!(restored.replay.keyed.is_empty());
     assert_eq!(restored.to_bytes(), bytes);
     restored
         .state
@@ -219,14 +231,19 @@ fn saved_fragment_replays_logical_addresses_after_round_trip() {
 
     // After replay is consumed, this is a compact saved fragment with empty queues. Its Vec
     // allocation bound must follow the wire size rather than the larger in-memory address type.
-    assert_eq!(restored.replay, ExecutionReplay::default());
+    assert_eq!(restored.replay.to_bytes(), ExecutionReplay::default().to_bytes());
+    assert!(restored.replay.keyed.require_validated().is_err());
     let compact_fragments = vec![restored];
     let bytes = compact_fragments.to_bytes();
     let mut reader = BudgetedReader::new(SliceReader::new(&bytes), bytes.len());
-    assert_eq!(
-        Vec::<CoreTraceFragmentContext>::read_from(&mut reader).unwrap(),
-        compact_fragments
-    );
+    let count = reader.read_usize().unwrap();
+    assert_eq!(count, compact_fragments.len());
+    let mut budget = crate::test_utils::native_replay_budget();
+    let restored = (0..count)
+        .map(|_| CoreTraceFragmentContext::read_with_limits(&mut reader, &mut budget).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(restored, compact_fragments);
+    assert!(!reader.has_more_bytes());
 }
 
 #[test]

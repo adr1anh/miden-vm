@@ -508,6 +508,7 @@ fuzz-all: fuzz-seeds ## Run all fuzz targets (in sequence)
 	$(FUZZ_CARGO) fuzz run deferred_state_wire_deserialize --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run package_deserialize --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run package_semantic_deserialize --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
+	$(FUZZ_CARGO) fuzz run callable_inventory_codec --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run project_toml_parse --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run project_load --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run project_assemble --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \

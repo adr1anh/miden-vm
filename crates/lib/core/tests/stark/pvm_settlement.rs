@@ -18,8 +18,9 @@ use miden_precompiles_stark::recursive::{
     PvmRecursiveVerifierInputs, PvmRecursiveVerifierInputsError,
 };
 use miden_processor::{
-    BaseHost, DefaultHost, ExecutionOptions, ExecutionOutput, FastProcessor, FutureMaybeSend, Host,
-    LoadedMastForest, ProcessorState, StackInputs, SyncHost,
+    BaseHost, DefaultHost, EnvironmentSourceError, EnvironmentWitnessRequest, ExecutionOptions,
+    ExecutionOutput, FastProcessor, FutureMaybeSend, Host, LoadedMastForest, ProcessorState,
+    ResolutionWitness, StackInputs, SyncHost,
     advice::{AdviceInputs, AdviceMutation, AdviceStack},
     event::EventError,
 };
@@ -29,6 +30,7 @@ use miden_vm_stark::recursive::RecursiveVerifierInputs;
 
 use crate::{
     helpers::masm_push_word,
+    naming::{NamedProgram, assemble},
     support::ecdsa::{EcdsaFixture, valid_fixture},
 };
 
@@ -114,13 +116,16 @@ fn prove_signature_execution(
         masm_push_word(&fixture.message),
         masm_push_word(&fixture.public_key_commitment),
     );
-    let program = Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
-        .expect("core library must link")
-        .assemble_program("signature_deferred_settlement", source)
-        .expect("signature settlement fixture must assemble")
-        .unwrap_program();
+    let program = assemble(
+        Assembler::default()
+            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .expect("core library must link"),
+        "signature_deferred_settlement",
+        source,
+        &[core_lib.naming()],
+    );
     let mut host = DefaultHost::default()
+        .with_environment_source(program.environment.source())
         .with_library(core_lib)
         .expect("core library must load into the host");
     let mut advice_stack = AdviceStack::new();
@@ -131,10 +136,11 @@ fn prove_signature_execution(
     let witness = FastProcessor::new_with_options(
         stack_inputs,
         AdviceInputs::default().with_stack(advice_stack),
-        ExecutionOptions::default(),
+        ExecutionOptions::default()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
     )
     .expect("signature advice must fit provider limits")
-    .execute_for_proving_sync(&program, &mut host)
+    .execute_for_proving_sync(&program.program, program.environment.execution(), &mut host)
     .expect("signature execution must produce a proving witness");
     let claim = witness.claim();
     // The core library's recursive verifiers accept Eidos proofs.
@@ -174,11 +180,12 @@ async fn run_settlement_in_masm(
         .expect("claim commitment must fit the stack");
     let program = assemble_settlement_program(core_lib);
     let mut host = PvmSettlementHost::new(core_lib, vec![precompile_witness]);
+    host.inner = host.inner.with_environment_source(program.environment.source());
 
     let output =
         FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
             .expect("failed to construct FastProcessor")
-            .execute(&program, &mut host)
+            .execute(&program.program, program.environment.execution(), &mut host)
             .await?;
     let precompile_proof = host
         .precompile_proof
@@ -188,7 +195,7 @@ async fn run_settlement_in_masm(
     Ok(SettlementResult { output, precompile_proof })
 }
 
-fn assemble_settlement_program(core_lib: &CoreLibrary) -> miden_processor::Program {
+fn assemble_settlement_program(core_lib: &CoreLibrary) -> NamedProgram {
     let guide =
         include_str!("../../../../../docs/src/user_docs/core_lib/recursive_verification.md");
     let (_, example) = guide
@@ -196,12 +203,14 @@ fn assemble_settlement_program(core_lib: &CoreLibrary) -> miden_processor::Progr
         .expect("guide must contain the settlement example");
     let (source, _) = example.split_once("\n```").expect("settlement code block must be closed");
 
-    Assembler::default()
-        .with_package(core_lib.package(), Linkage::Dynamic)
-        .expect("core library must link")
-        .assemble_program("async_pvm_settlement", source)
-        .expect("async settlement program must assemble")
-        .unwrap_program()
+    assemble(
+        Assembler::default()
+            .with_package(core_lib.package(), Linkage::Dynamic, core_lib.naming().clone())
+            .expect("core library must link"),
+        "async_pvm_settlement",
+        source,
+        &[core_lib.naming()],
+    )
 }
 
 /// Generates a PVM proof from its witness when `pvm::request_proof` emits an event.
@@ -261,6 +270,14 @@ impl BaseHost for PvmSettlementHost {
 }
 
 impl Host for PvmSettlementHost {
+    fn get_environment_witness(
+        &mut self,
+        request: EnvironmentWitnessRequest,
+    ) -> impl FutureMaybeSend<Result<Option<ResolutionWitness>, EnvironmentSourceError>> {
+        let witness = SyncHost::get_environment_witness(&mut self.inner, request);
+        async move { witness }
+    }
+
     fn get_mast_forest(
         &self,
         node_digest: &Word,

@@ -1246,6 +1246,10 @@ static EXTENDED_INSTRUCTION_SPECS: &[ExtendedInstructionSpec] = &[
         kind: ExtendedInstructionKind::Invocation(Instruction::Exec),
     },
     ExtendedInstructionSpec {
+        keyword: "inline",
+        kind: ExtendedInstructionKind::Invocation(Instruction::Inline),
+    },
+    ExtendedInstructionSpec {
         keyword: "call",
         kind: ExtendedInstructionKind::Invocation(Instruction::Call),
     },
@@ -1341,7 +1345,7 @@ fn lower_push_instruction(
     lower_push_list(context, instruction_span, rest)
 }
 
-/// Lowers `exec`, `call`, `syscall`, and `procref` invocation forms.
+/// Lowers `exec`, `call`, `syscall`, `procref`, and `inline` invocation forms.
 fn lower_invocation_instruction(
     context: &mut LoweringContext<'_>,
     instruction_span: SourceSpan,

@@ -1,15 +1,18 @@
 use std::{array, fmt::Write as _, sync::Arc};
 
 use miden_air::vm::{MIDEN_AIR_COUNT, MidenAir, MidenMultiAir, config};
-use miden_assembly::{Assembler, testing::source_file};
+use miden_assembly::{
+    Assembler,
+    testing::{FixtureNamespace, source_file},
+};
 use miden_core::{
     Felt, WORD_SIZE, Word,
     field::{BasedVectorSpace, Field, PrimeCharacteristicRing, QuadFelt},
     program::{ExecutionClaim, KernelDescriptor, NUM_CLAIM_ELEMENTS},
     proof::HashFunction,
 };
-use miden_mast_package::Package;
-use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor, Program, ProgramInfo};
+use miden_mast_package::{Package, TargetType};
+use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor, ProgramInfo};
 use miden_stark::{Preprocessed, StarkConfig, air::Statement};
 use miden_utils_testing::{
     AdviceInputs, Prover,
@@ -44,6 +47,8 @@ mod vm_scatter_bench;
 mod vm_sigma_scatter;
 
 use verifier_stack::{CALLER_WORD, VERIFIER_RETURN, VerifierStack};
+
+use crate::naming::assemble;
 
 pub(crate) fn pvm_layout_const(name: &str) -> u32 {
     let source = include_str!("../../asm/sys/pvm/layout.masm");
@@ -640,40 +645,53 @@ pub fn generate_recursive_verifier_data(
             Some(kernel) => {
                 let context = miden_assembly::testing::TestContext::new();
                 let kernel = context.parse_kernel(source_file!(&context, kernel)).unwrap();
-                let kernel_lib = Assembler::new(context.source_manager())
-                    .assemble_kernel("kernel", kernel, None)
-                    .map(Arc::<Package>::from)
+                let assembler = Assembler::new(context.source_manager());
+                let mut fixture = FixtureNamespace::assembly_tests();
+                fixture.add_kernel_modules(&assembler, &[&kernel]).unwrap();
+                let product = fixture
+                    .configure(assembler, [&*kernel])
+                    .unwrap()
+                    .assemble_library_modules("kernel".into(), kernel, [], TargetType::Kernel)
                     .unwrap();
-                let assembler =
-                    Assembler::with_kernel(context.source_manager(), kernel_lib.clone()).unwrap();
-                let program: Program =
-                    assembler.assemble_program("program", source).unwrap().unwrap_program();
+                let kernel_naming = product.naming().clone();
+                let kernel_lib = product.into_artifact(false).map(Arc::<Package>::from).unwrap();
+                let assembler = Assembler::with_kernel(
+                    context.source_manager(),
+                    kernel_lib.clone(),
+                    kernel_naming.clone(),
+                )
+                .unwrap();
+                let program = assemble(assembler, "program", source, &[&kernel_naming]);
                 (program, Some(kernel_lib))
             },
             None => {
-                let program: Program = Assembler::default()
-                    .assemble_program("program", source)
-                    .unwrap()
-                    .unwrap_program();
+                let program = assemble(Assembler::default(), "program", source, &[]);
                 (program, None)
             },
         }
     };
     let stack_inputs = stack_inputs_from_ints(stack_inputs);
     let advice_inputs = AdviceInputs::default();
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(program.environment.source());
     if let Some(ref kernel_lib) = kernel_lib {
         host.load_library(kernel_lib.mast_forest()).unwrap();
     }
 
-    let processor =
-        FastProcessor::new_with_options(stack_inputs, advice_inputs, ExecutionOptions::default())
-            .unwrap();
-    let witness = processor.execute_for_proving_sync(&program, &mut host).unwrap();
+    let processor = FastProcessor::new_with_options(
+        stack_inputs,
+        advice_inputs,
+        ExecutionOptions::default()
+            .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+    )
+    .unwrap();
+    let witness = processor
+        .execute_for_proving_sync(&program.program, program.environment.execution(), &mut host)
+        .unwrap();
     let stack_outputs = *witness.claim().stack_outputs();
     let proof = Prover::new().with_hash_fn(HashFunction::Eidos).prove(witness).unwrap();
 
-    let program_info = ProgramInfo::from(program);
+    // The recursive adapter still consumes the legacy claim until the PR12 Core36 migration.
+    let program_info = ProgramInfo::from(program.program);
     let claim = ExecutionClaim::from_program_info(program_info, stack_inputs, stack_outputs);
 
     generate_advice_inputs(vm_verify_proof_root(), &proof, &claim).unwrap()

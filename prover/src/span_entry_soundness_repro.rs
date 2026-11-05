@@ -54,10 +54,9 @@ fn build_fixture() -> Fixture {
             nop
         end
     ";
-    let program = miden_assembly::Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
+    let fixture = crate::named_fixture::named_source(source);
+    let program = fixture.program;
+    let environment = fixture.environment;
 
     // Top of stack: the condition, then two distinct values so a SWAP is observable.
     let mut stack_values = vec![Felt::ZERO; 16];
@@ -66,10 +65,16 @@ fn build_fixture() -> Fixture {
     stack_values[2] = Felt::new_unchecked(3);
     let stack_inputs = StackInputs::new(&stack_values).unwrap();
 
-    let mut host = DefaultHost::default();
+    let mut host = DefaultHost::default().with_environment_source(environment.source());
     let (trace, precompile_witness) = FastProcessor::new(stack_inputs)
+        .with_options(
+            miden_processor::ExecutionOptions::default()
+                .with_environment_trace_limits(miden_utils_testing::librarytree::trace_limits()),
+        )
+        .unwrap()
         .execute_and_build_trace_sync(
             &program,
+            environment.execution(),
             &mut host,
             &miden_vm_stark::memory::default_budget(),
         )

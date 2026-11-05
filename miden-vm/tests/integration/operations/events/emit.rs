@@ -1,7 +1,6 @@
 use miden_assembly::Assembler;
-use miden_processor::{
-    ExecutionOptions, FastProcessor, Program, StackInputs, advice::AdviceInputs,
-};
+use miden_processor::{ExecutionOptions, FastProcessor, StackInputs, advice::AdviceInputs};
+use miden_utils_testing::librarytree::assemble_fixture_program;
 
 use super::TestHost;
 
@@ -19,18 +18,21 @@ fn test_event_handling() {
     end";
 
     // compile and execute program
-    let program: Program = Assembler::default()
-        .assemble_program("program", source)
-        .unwrap()
-        .unwrap_program();
     let mut host = TestHost::default();
+    let named = assemble_fixture_program(
+        Assembler::new(host.source_manager.clone()),
+        "program",
+        source,
+        &[],
+    );
+    host = host.with_environment_source(named.environment.source());
     FastProcessor::new_with_options(
         StackInputs::default(),
         AdviceInputs::default(),
         ExecutionOptions::default(),
     )
     .expect("failed to construct FastProcessor")
-    .execute_sync(&program, &mut host)
+    .execute_sync(&named.program, named.environment.execution(), &mut host)
     .unwrap();
 
     // make sure events were handled correctly

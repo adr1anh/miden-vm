@@ -13,6 +13,10 @@ use super::*;
 /// This struct provides important context about the current target being assembled to
 /// implementations of the [ProjectSourceProvider] trait.
 pub struct TargetAssemblyContext<'a> {
+    /// Parent's explicit source-target default-home request, supplied to the namespace-inputs
+    /// provider. Source hooks start without this request. This supplies no artifact ownership or
+    /// expected public-callable mapping; explicitly bound declarations remain separate inputs.
+    pub dependency_binding: Option<&'a miden_project::DependencyBinding>,
     /// The package manifest for the target being assembled
     pub package: Arc<ProjectPackage>,
     /// The resolved/canonicalized package manifest path
@@ -39,6 +43,57 @@ pub struct TargetAssemblyContext<'a> {
 }
 
 impl<'a> TargetAssemblyContext<'a> {
+    /// Context for caller-supplied ASTs, whose declared source path need not exist on disk.
+    pub(super) fn for_provided_sources(
+        package: &'a Arc<ProjectPackage>,
+        target: &'a Target,
+        profile: &'a Profile,
+        dependency_graph: &'a ProjectDependencyGraph,
+        package_registry: &'a dyn PackageRegistryAndProvider,
+        source_manager: Arc<dyn SourceManager>,
+    ) -> Result<Self, Report> {
+        let Some(manifest_path) = package.manifest_path() else {
+            return Self::new_virtual(
+                package.clone(),
+                target,
+                profile,
+                dependency_graph,
+                package_registry,
+                source_manager,
+            );
+        };
+        let project_root = manifest_path
+            .parent()
+            .ok_or_else(|| {
+                Report::msg(format!(
+                    "manifest '{}' has no parent directory",
+                    manifest_path.display()
+                ))
+            })?
+            .to_path_buf();
+        let target_path = target.path.to_path().ok_or_else(|| {
+            Report::msg(format!(
+                "invalid target '{}': '{}' is not a valid file path",
+                target.name.inner(),
+                target.path
+            ))
+        })?;
+        let root_path = project_root.join(target_path);
+        Ok(Self {
+            dependency_binding: None,
+            package: package.clone(),
+            manifest_path,
+            project_root: project_root.into(),
+            resolved_target_root: root_path.into_boxed_path(),
+            target,
+            profile,
+            dependency_graph,
+            source_manager,
+            package_registry,
+            warnings_as_errors: false,
+        })
+    }
+
     pub fn new(
         package: Arc<ProjectPackage>,
         manifest_path: &'a std::path::Path,
@@ -66,6 +121,7 @@ impl<'a> TargetAssemblyContext<'a> {
             ))
         })?;
         Ok(TargetAssemblyContext {
+            dependency_binding: None,
             package,
             manifest_path,
             project_root: project_root.into(),
@@ -101,6 +157,7 @@ impl<'a> TargetAssemblyContext<'a> {
             .map(std::path::Path::to_path_buf)
             .unwrap_or(PathBuf::from("."));
         Ok(TargetAssemblyContext {
+            dependency_binding: None,
             package,
             manifest_path: std::path::Path::new(""),
             project_root: project_root.into(),

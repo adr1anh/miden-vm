@@ -1,6 +1,7 @@
 use alloc::{
     boxed::Box,
     collections::{BTreeMap, BTreeSet},
+    string::ToString,
     sync::Arc,
     vec,
     vec::Vec,
@@ -16,7 +17,7 @@ use miden_core::{
     utils::range,
 };
 use miden_mast_package::{
-    Package,
+    Package, PackageNaming,
     debug_info::{DebugSourceNodeId, PackageDebugInfo},
 };
 
@@ -303,14 +304,25 @@ impl FastProcessor {
 
     /// Returns the resume context to be used with the first call to `step_sync()`.
     ///
-    /// This function asserts that `package` is of executable type - callers should ensure that it
-    /// is before calling.
+    /// Requires exact canonical naming retained by compilation or admitted with current policy.
+    /// The caller-authorized descriptor must select that explicit entry key; code and embedded
+    /// kernel packages never supply environment authority.
     pub fn get_initial_resume_context_for_package(
         &mut self,
         package: Arc<Package>,
+        naming: &PackageNaming,
         environment: ExecutionEnvironment,
     ) -> Result<ResumeContext, ExecutionError> {
-        let program = package.unwrap_program();
+        let program = package
+            .try_into_program(naming)
+            .map_err(|error| ExecutionError::InvalidPackageExecutable(error.to_string()))?;
+        let requested = environment.descriptor().entry_key();
+        if naming.entry_key() != Some(requested) {
+            return Err(ExecutionError::PackageEntryMismatch {
+                expected: naming.entry_key().expect("converted executable has an explicit entry"),
+                requested,
+            });
+        }
         let debug_info = package.debug_info()?.map(Arc::new);
         self.new_resume_context(&program, environment, debug_info, package.entrypoint_source_node())
     }

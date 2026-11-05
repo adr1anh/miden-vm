@@ -194,7 +194,7 @@ version = "1.0.0"
 description = "workspace defaults"
 
 [workspace.dependencies]
-shared = { version = "1.0.0" }
+shared = { version = "1.0.0", binding = { selection = "custom", home = [{text = "project-load-fixtures"}] } }
 "#,
     )?;
     write_file(&member_manifest, manifest)?;
@@ -223,10 +223,7 @@ description = { workspace = true }
 /// and description, so the ONLY source of the workspace's known values ("1.0.0",
 /// "workspace defaults") in the loaded package is the inheritance path. A regression that
 /// drops inheritance, resolves the wrong field, or substitutes a default fails here.
-fn check_inheritance_ground_truth(
-    tree: &TempProjectTree,
-    source_manager: &DefaultSourceManager,
-) {
+fn check_inheritance_ground_truth(tree: &TempProjectTree, source_manager: &DefaultSourceManager) {
     let gt_manifest = tree.path("inherited-workspace/gt/miden-project.toml");
     let source = source_manager.load_file(&gt_manifest).unwrap_or_else(|e| {
         panic!("loading the ground-truth member manifest {gt_manifest:?} failed: {e:?}")
@@ -241,13 +238,9 @@ fn check_inheritance_ground_truth(
         .expect("the ground-truth member must load within its workspace");
     // EXACT accessors, not Debug substring search: containment would accept a near-miss
     // description ("workspace defaults WRONG") or a prerelease version.
-    assert!(
-        *package.name().inner() == *"gt-member",
-        "the member name must be exact"
-    );
-    let expected_version: miden_project::SemVer = "1.0.0"
-        .parse()
-        .expect("the expected version literal must parse");
+    assert!(*package.name().inner() == *"gt-member", "the member name must be exact");
+    let expected_version: miden_project::SemVer =
+        "1.0.0".parse().expect("the expected version literal must parse");
     assert_eq!(
         *package.version().inner(),
         &expected_version,

@@ -2,6 +2,7 @@
 // ================================================================================================
 
 use super::*;
+use crate::testing::FixtureNamespace;
 
 /// Parses a single-procedure module that uses a local (so codegen emits the frame-pointer
 /// sequence), overrides the procedure's local count via the public AST API - bypassing the parser's
@@ -26,7 +27,11 @@ fn assemble_library_with_num_locals(
         proc.set_num_locals(num_locals);
     }
 
-    Assembler::new(context.source_manager()).assemble_library("test", module, None::<Box<Module>>)
+    let mut fixture = FixtureNamespace::assembly_tests();
+    fixture.add_module(&module)?;
+    fixture
+        .configure(Assembler::new(context.source_manager()), [&*module])?
+        .assemble_library("test", module, None::<Box<Module>>)
 }
 
 #[test]
@@ -97,5 +102,10 @@ fn test_entrypoint_with_locals_via_constructor_panics() {
         .define_procedure(main, context.source_manager())
         .expect("failed to define entrypoint");
 
-    let _ = Assembler::new(context.source_manager()).assemble_program("test", module);
+    let mut fixture = FixtureNamespace::assembly_tests();
+    fixture.add_module(&module).expect("failed to name entrypoint fixture");
+    let assembler = fixture
+        .configure(Assembler::new(context.source_manager()), [&module])
+        .expect("failed to configure entrypoint fixture");
+    let _ = assembler.assemble_program("test", module);
 }

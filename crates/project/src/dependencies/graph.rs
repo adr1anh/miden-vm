@@ -108,6 +108,8 @@ pub struct ProjectDependencyEdge {
     pub dependency: PackageId,
     /// The linkage requested by the dependent package
     pub linkage: Linkage,
+    /// Explicit requested home; absent only for low-level/raw or preassembled inputs.
+    pub binding: Option<crate::DependencyBinding>,
 }
 
 /// Represents provenance of a package in the [ProjectDependencyGraph], i.e. how it was obtained.
@@ -399,11 +401,18 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
         let mut edges = Vec::new();
         let mut solver_dependencies = BTreeMap::new();
         for dependency in package.package.dependencies() {
+            if dependency.binding().is_none() {
+                return Err(Report::msg(format!(
+                    "dependency '{}' requires an explicit Latest/Pinned binding or custom home",
+                    dependency.name()
+                )));
+            }
             let resolved = self.resolve_dependency(dependency, &package)?;
             let dependency_name = resolved.name();
             edges.push(ProjectDependencyEdge {
                 dependency: dependency_name.clone(),
                 linkage: dependency.linkage(),
+                binding: dependency.binding().cloned(),
             });
             solver_dependencies.insert(dependency_name, resolved.solver_requirement());
 
@@ -802,6 +811,7 @@ impl<'a, R: PackageRegistry + ?Sized> ProjectDependencyGraphBuilder<'a, R> {
             dependencies.push(ProjectDependencyEdge {
                 dependency: dependency.name.clone(),
                 linkage: Linkage::Dynamic,
+                binding: None,
             });
         }
 
@@ -1159,6 +1169,43 @@ mod tests {
         }
     }
 
+    fn fixture_dependency(
+        name: Span<Arc<str>>,
+        version: DependencyVersionScheme,
+        linkage: Linkage,
+    ) -> Dependency {
+        // An explicit graph-fixture choice, independent of package names, versions and bodies.
+        Dependency::new(name, version, linkage).with_binding(crate::DependencyBinding::Custom(
+            miden_mast_package::NamespacePlan::new(vec![
+                miden_core::program::CanonicalLabel::text("project-graph-fixtures").unwrap(),
+            ]),
+        ))
+    }
+
+    #[test]
+    fn programmatic_dependency_omission_rejects_before_resolution() {
+        let temp = TempDir::new().unwrap();
+        let registry = TestRegistry::default();
+        let package = crate::Package::new(
+            "root",
+            crate::Target::library(
+                Arc::<miden_assembly_syntax::Path>::from(miden_assembly_syntax::Path::new("root")),
+                Uri::new("mod.masm"),
+            ),
+        )
+        .with_dependencies([Dependency::new(
+            Span::unknown("missing".into()),
+            DependencyVersionScheme::Registry(VersionRequirement::from(crate::VersionReq::STAR)),
+            Linkage::Dynamic,
+        )]);
+        let error = builder(&registry, &temp.path().join("git")).build(package.into()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("requires an explicit Latest/Pinned binding or custom home")
+        );
+    }
+
     #[test]
     fn builds_path_dependency_graph() {
         let tempdir = TempDir::new().unwrap();
@@ -1171,7 +1218,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::new("../dep")),
@@ -1189,6 +1236,12 @@ mod tests {
         assert!(graph.get(&PackageId::from("root")).is_some());
         assert!(graph.get(&PackageId::from("dep")).is_some());
         assert_eq!(graph.get(&PackageId::from("root")).unwrap().dependencies.len(), 1);
+        assert_eq!(
+            graph.get(&PackageId::from("root")).unwrap().dependencies[0].binding,
+            Some(crate::DependencyBinding::Custom(miden_mast_package::NamespacePlan::new(vec![
+                miden_core::program::CanonicalLabel::text("project-graph-fixtures").unwrap(),
+            ])))
+        );
     }
 
     #[test]
@@ -1203,7 +1256,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::new("../dep")),
@@ -1234,7 +1287,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::new("../dep")),
@@ -1266,7 +1319,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::new("../dep")),
@@ -1298,7 +1351,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::new("../dep")),
@@ -1335,7 +1388,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::new("../workspace")),
@@ -1362,7 +1415,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Registry(VersionRequirement::Semantic(Span::unknown(
                     "^1.0.0".parse().unwrap(),
@@ -1392,7 +1445,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Registry(VersionRequirement::Digest(Span::unknown(
                     digest,
@@ -1421,7 +1474,7 @@ mod tests {
             "depa",
             "1.0.0",
             "export.call_shared\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("shared".into()),
                 DependencyVersionScheme::Registry(VersionRequirement::Semantic(Span::unknown(
                     "^1.0.0".parse().unwrap(),
@@ -1434,7 +1487,7 @@ mod tests {
             "depb",
             "1.0.0",
             "export.call_shared\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("shared".into()),
                 DependencyVersionScheme::Registry(VersionRequirement::Semantic(Span::unknown(
                     "=1.2.0".parse().unwrap(),
@@ -1450,7 +1503,7 @@ mod tests {
             "1.0.0",
             "export.entry\nend\n",
             [
-                Dependency::new(
+                fixture_dependency(
                     Span::unknown("depa".into()),
                     DependencyVersionScheme::Path {
                         path: Span::unknown(Uri::new("../depa")),
@@ -1458,7 +1511,7 @@ mod tests {
                     },
                     Linkage::Dynamic,
                 ),
-                Dependency::new(
+                fixture_dependency(
                     Span::unknown("depb".into()),
                     DependencyVersionScheme::Path {
                         path: Span::unknown(Uri::new("../depb")),
@@ -1496,7 +1549,7 @@ mod tests {
             "depa",
             "1.0.0",
             "export.call_shared\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("shared".into()),
                 DependencyVersionScheme::Registry(VersionRequirement::Semantic(Span::unknown(
                     "=1.0.0".parse().unwrap(),
@@ -1509,7 +1562,7 @@ mod tests {
             "depb",
             "1.0.0",
             "export.call_shared\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("shared".into()),
                 DependencyVersionScheme::Registry(VersionRequirement::Semantic(Span::unknown(
                     "=2.0.0".parse().unwrap(),
@@ -1525,7 +1578,7 @@ mod tests {
             "1.0.0",
             "export.entry\nend\n",
             [
-                Dependency::new(
+                fixture_dependency(
                     Span::unknown("depa".into()),
                     DependencyVersionScheme::Path {
                         path: Span::unknown(Uri::new("../depa")),
@@ -1533,7 +1586,7 @@ mod tests {
                     },
                     Linkage::Dynamic,
                 ),
-                Dependency::new(
+                fixture_dependency(
                     Span::unknown("depb".into()),
                     DependencyVersionScheme::Path {
                         path: Span::unknown(Uri::new("../depb")),
@@ -1571,7 +1624,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::from(package_path.as_path())),
@@ -1604,7 +1657,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::from(package_path.as_path())),
@@ -1661,7 +1714,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::from(dep_package_path.as_path())),
@@ -1690,6 +1743,7 @@ mod tests {
             vec![ProjectDependencyEdge {
                 dependency: PackageId::from("runtime"),
                 linkage: Linkage::Dynamic,
+                binding: None,
             }]
         );
         assert_matches!(
@@ -1735,6 +1789,7 @@ mod tests {
             vec![ProjectDependencyEdge {
                 dependency: PackageId::from("kernelpkg"),
                 linkage: Linkage::Dynamic,
+                binding: None,
             }]
         );
         assert_eq!(
@@ -1760,7 +1815,7 @@ mod tests {
             "root-ok",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::from(package_path.as_path())),
@@ -1783,7 +1838,7 @@ mod tests {
             "root-bad",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Path {
                     path: Span::unknown(Uri::from(package_path.as_path())),
@@ -1821,7 +1876,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Git {
                     repo: Span::unknown(Uri::from(repo_dir.as_path())),
@@ -1870,7 +1925,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Git {
                     repo: Span::unknown(Uri::from(repo_dir.as_path())),
@@ -1921,7 +1976,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Git {
                     repo: Span::unknown(Uri::from(repo_dir.as_path())),
@@ -1960,7 +2015,7 @@ mod tests {
             "root",
             "1.0.0",
             "export.foo\nend\n",
-            [Dependency::new(
+            [fixture_dependency(
                 Span::unknown("dep".into()),
                 DependencyVersionScheme::Git {
                     repo: Span::unknown(Uri::from(repo_dir.as_path())),
@@ -1989,7 +2044,7 @@ mod tests {
 
         write_file(
             &root_dir.join("miden-project.toml"),
-            "[workspace]\nmembers = [\"dep\", \"app\"]\n\n[workspace.dependencies]\ndep = { path = \"dep\" }\n",
+            "[workspace]\nmembers = [\"dep\", \"app\"]\n\n[workspace.dependencies]\ndep = { path = \"dep\", binding = { selection = \"custom\", home = [] } }\n",
         );
         write_file(
             &root_dir.join("dep").join("miden-project.toml"),
@@ -2024,7 +2079,7 @@ mod tests {
 
         write_file(
             &root_dir.join("miden-project.toml"),
-            "[workspace]\nmembers = [\"dep\", \"app\"]\n\n[workspace.dependencies]\ndep = { path = \"dep\", version = \"=0.1.0\" }\n",
+            "[workspace]\nmembers = [\"dep\", \"app\"]\n\n[workspace.dependencies]\ndep = { path = \"dep\", version = \"=0.1.0\", binding = { selection = \"custom\", home = [] } }\n",
         );
         write_file(
             &root_dir.join("dep").join("miden-project.toml"),
@@ -2055,7 +2110,7 @@ mod tests {
 
         write_file(
             &root_dir.join("miden-project.toml"),
-            "[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies]\ndep = { path = \"vendor/dep\" }\n",
+            "[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies]\ndep = { path = \"vendor/dep\", binding = { selection = \"custom\", home = [] } }\n",
         );
         write_package(&dep_dir, "dep", "0.3.0", "export.foo\nend\n", []);
         let app_manifest = app_dir.join("miden-project.toml");
@@ -2092,7 +2147,7 @@ mod tests {
 
         write_file(
             &root_dir.join("miden-project.toml"),
-            "[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies]\ndep = { path = \"artifacts/dep.masp\" }\n",
+            "[workspace]\nmembers = [\"app\"]\n\n[workspace.dependencies]\ndep = { path = \"artifacts/dep.masp\", binding = { selection = \"custom\", home = [] } }\n",
         );
         let dep_package = build_registry_test_package("dep", "1.0.0");
         let dep_package_path = artifacts_dir.join("dep.masp");

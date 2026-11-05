@@ -236,12 +236,6 @@ pub fn analyze(
                 {
                     analyzer.error(SemanticAnalysisError::UnexpectedExport { span: import.span() });
                 },
-                Import::Item(import)
-                    if import.visibility().is_public() && actual_kind == ModuleKind::Kernel =>
-                {
-                    analyzer
-                        .error(SemanticAnalysisError::ReexportFromKernel { span: import.span() });
-                },
                 _ => (),
             }
         }

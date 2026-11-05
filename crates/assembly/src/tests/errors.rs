@@ -455,10 +455,9 @@ begin
 end
 "#;
 
-    let program = Assembler::default()
-        .assemble_program("test", program_src)
-        .expect("program assembly must succeed")
-        .unwrap_program();
+    let program = TestContext::default()
+        .assemble(program_src)
+        .expect("program assembly must succeed");
 
     let entry = program.get_node_by_id(program.entrypoint()).expect("missing entrypoint node");
     let mast = format!("{}", entry.to_display(program.mast_forest()));

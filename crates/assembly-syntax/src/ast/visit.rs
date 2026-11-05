@@ -137,6 +137,9 @@ pub trait Visit<T = ()> {
     fn visit_exec(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
         visit_exec(self, target)
     }
+    fn visit_inline(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
+        visit_inline(self, target)
+    }
     fn visit_call(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
         visit_call(self, target)
     }
@@ -230,6 +233,9 @@ where
 
     fn visit_exec(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
         (**self).visit_exec(target)
+    }
+    fn visit_inline(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
+        (**self).visit_inline(target)
     }
     fn visit_call(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
         (**self).visit_call(target)
@@ -484,6 +490,7 @@ where
         },
         SysEvent(sys_event) => visitor.visit_system_event(Span::new(span, sys_event)),
         Exec(target) => visitor.visit_exec(target),
+        Inline(target) => visitor.visit_inline(target),
         Call(target) => visitor.visit_call(target),
         SysCall(target) => visitor.visit_syscall(target),
         ProcRef(target) => visitor.visit_procref(target),
@@ -525,6 +532,14 @@ where
 
 #[inline]
 pub fn visit_exec<V, T>(visitor: &mut V, target: &InvocationTarget) -> ControlFlow<T>
+where
+    V: ?Sized + Visit<T>,
+{
+    visitor.visit_invoke_target(target)
+}
+
+#[inline]
+pub fn visit_inline<V, T>(visitor: &mut V, target: &InvocationTarget) -> ControlFlow<T>
 where
     V: ?Sized + Visit<T>,
 {
@@ -704,6 +719,9 @@ pub trait VisitMut<T = ()> {
     fn visit_mut_exec(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
         visit_mut_exec(self, target)
     }
+    fn visit_mut_inline(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
+        visit_mut_inline(self, target)
+    }
     fn visit_mut_call(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
         visit_mut_call(self, target)
     }
@@ -797,6 +815,9 @@ where
 
     fn visit_mut_exec(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
         (**self).visit_mut_exec(target)
+    }
+    fn visit_mut_inline(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
+        (**self).visit_mut_inline(target)
     }
     fn visit_mut_call(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
         (**self).visit_mut_call(target)
@@ -1055,6 +1076,7 @@ where
         },
         SysEvent(sys_event) => visitor.visit_mut_system_event(Span::new(span, sys_event)),
         Exec(target) => visitor.visit_mut_exec(target),
+        Inline(target) => visitor.visit_mut_inline(target),
         Call(target) => visitor.visit_mut_call(target),
         SysCall(target) => visitor.visit_mut_syscall(target),
         ProcRef(target) => visitor.visit_mut_procref(target),
@@ -1099,6 +1121,14 @@ where
 
 #[inline]
 pub fn visit_mut_exec<V, T>(visitor: &mut V, target: &mut InvocationTarget) -> ControlFlow<T>
+where
+    V: ?Sized + VisitMut<T>,
+{
+    visitor.visit_mut_invoke_target(target)
+}
+
+#[inline]
+pub fn visit_mut_inline<V, T>(visitor: &mut V, target: &mut InvocationTarget) -> ControlFlow<T>
 where
     V: ?Sized + VisitMut<T>,
 {

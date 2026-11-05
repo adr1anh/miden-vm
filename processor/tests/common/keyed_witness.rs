@@ -68,7 +68,7 @@ pub fn execution_fixture_for_program(program: Program) -> ExecutionFixture {
         implementation: ImplementationRoot::new(program.hash()),
     };
     let environment = ExecutionEnvironment::new(
-        ExecutionDescriptor::new(entry, node.commitment().unwrap(), Namespace::initial()),
+        ExecutionDescriptor::new(entry, node.commitment().unwrap()),
         OpeningLimits {
             max_nodes: 1,
             max_depth: 0,

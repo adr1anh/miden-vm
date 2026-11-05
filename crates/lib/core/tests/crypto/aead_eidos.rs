@@ -129,8 +129,9 @@ fn decrypt_rejects_modified_authenticated_inputs_before_event() {
             ad.len(),
         );
         let calls = Arc::new(AtomicUsize::new(0));
+        let core_lib = CoreLibrary::default();
         let test = miden_utils_testing::build_test_by_mode!(false, source.as_str(), &[])
-            .with_library(CoreLibrary::default().package())
+            .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
             .with_event_handler(AEAD_EIDOS_DECRYPT_EVENT_NAME, CountingHandler(Arc::clone(&calls)));
         assert_aead_error(changed, &test, "AEAD tag mismatch");
         assert_eq!(calls.load(Ordering::SeqCst), 0, "{changed}");
@@ -200,8 +201,9 @@ fn authenticated_operations_reject_invalid_ad_before_event() {
                 end"
             );
             let calls = Arc::new(AtomicUsize::new(0));
+            let core_lib = CoreLibrary::default();
             let test = miden_utils_testing::build_test_by_mode!(false, source.as_str(), &[])
-                .with_library(CoreLibrary::default().package())
+                .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
                 .with_event_handler(
                     AEAD_EIDOS_DECRYPT_EVENT_NAME,
                     CountingHandler(Arc::clone(&calls)),
@@ -832,7 +834,7 @@ fn decrypt_empty_ad_rejects_forged_plaintext_advice() {
         );
 
         let mut test = miden_utils_testing::build_test_by_mode!(false, source.as_str(), &[])
-            .with_library(core_lib.package());
+            .with_library_and_naming(core_lib.package(), core_lib.naming().clone());
 
         // Each bit flip changes exactly one ciphertext limb under XOR encryption. Check both
         // limbs of every plaintext Felt, including each position in full batches and tails.
@@ -891,7 +893,7 @@ fn decrypt_empty_ad_rejects_forged_tag() {
 
     let core_lib = CoreLibrary::default();
     let test = miden_utils_testing::build_test_by_mode!(false, source.as_str(), &[])
-        .with_library(core_lib.package())
+        .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
         .with_event_handler(AEAD_EIDOS_DECRYPT_EVENT_NAME, PlaintextHandler(plaintext));
     assert_aead_error("forged tag", &test, "AEAD tag mismatch");
 }
@@ -1296,7 +1298,7 @@ fn assert_decrypt_rejected_before_event(
     let calls = Arc::new(AtomicUsize::new(0));
     let core_lib = CoreLibrary::default();
     let test = miden_utils_testing::build_test_by_mode!(false, source.as_str(), &[])
-        .with_library(core_lib.package())
+        .with_library_and_naming(core_lib.package(), core_lib.naming().clone())
         .with_event_handler(AEAD_EIDOS_DECRYPT_EVENT_NAME, CountingHandler(Arc::clone(&calls)));
 
     assert_aead_error(case, &test, expected_error);

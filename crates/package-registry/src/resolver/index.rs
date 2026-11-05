@@ -283,6 +283,15 @@ mod tests {
         dependencies: impl IntoIterator<Item = (&'a str, &'a str, TargetType, miden_core::Word)>,
     ) -> Arc<MastPackage> {
         let (mast, exports) = build_package_exports("test::pkg::entry");
+        let home = miden_mast_package::NamespacePlan::new(vec![
+            miden_core::program::CanonicalLabel::text("registry-fixtures").unwrap(),
+        ]);
+        let naming = miden_mast_package::arbitrary::fixture_naming(
+            home,
+            TargetType::Library,
+            &mast,
+            &exports,
+        );
         Arc::new(
             Package::create(
                 name.into(),
@@ -296,6 +305,7 @@ mod tests {
                     kind,
                     digest,
                 }),
+                &naming,
             )
             .expect("test package should be valid"),
         )

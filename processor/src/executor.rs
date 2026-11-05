@@ -108,17 +108,24 @@ impl ProgramExecutor for FastProcessor {
 
 #[cfg(test)]
 mod tests {
-    use miden_assembly::Assembler;
+    use miden_utils_testing::Test;
 
     use super::*;
-    use crate::{DefaultHost, StackInputs};
+    use crate::{DefaultHost, StackInputs, test_utils::native_fixture_environment};
 
     #[tokio::test(flavor = "current_thread")]
     async fn program_executor_default_impl_runs_via_trait() {
-        let program = Assembler::default()
-            .assemble_program("program", "begin push.3 swap drop end")
-            .unwrap()
-            .unwrap_program();
+        let test = Test::new(
+            "program_executor_default_impl_runs_via_trait",
+            "begin push.3 swap drop end",
+            false,
+        );
+        let (program, ..) = test.compile().unwrap();
+        let (environment, source) =
+            native_fixture_environment(&test.fixture_environment().unwrap());
+        let mut host = DefaultHost::default()
+            .with_source_manager(test.source_manager)
+            .with_environment_source(source);
 
         // Drive execution entirely through the trait, defaulting to `FastProcessor`.
         let processor = <FastProcessor as ProgramExecutor>::new(
@@ -130,7 +137,8 @@ mod tests {
         let output = <FastProcessor as ProgramExecutor>::execute(
             processor,
             &program,
-            &mut DefaultHost::default(),
+            environment,
+            &mut host,
         )
         .await
         .unwrap();
@@ -154,10 +162,17 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn program_executor_default_falls_back_when_no_source_node() {
-        let program = Assembler::default()
-            .assemble_program("program", "begin push.3 swap drop end")
-            .unwrap()
-            .unwrap_program();
+        let test = Test::new(
+            "program_executor_default_falls_back_when_no_source_node",
+            "begin push.3 swap drop end",
+            false,
+        );
+        let (program, ..) = test.compile().unwrap();
+        let (environment, source) =
+            native_fixture_environment(&test.fixture_environment().unwrap());
+        let mut host = DefaultHost::default()
+            .with_source_manager(test.source_manager)
+            .with_environment_source(source);
 
         // `execute_with_package_debug_info` overrides only to route to the package-debug path;
         // without an entrypoint node it still executes and returns the same stack.
@@ -174,7 +189,8 @@ mod tests {
         let output = <FastProcessor as ProgramExecutor>::execute(
             processor,
             &program,
-            &mut DefaultHost::default(),
+            environment,
+            &mut host,
         )
         .await
         .unwrap();

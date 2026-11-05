@@ -6,12 +6,38 @@ use miden_assembly_syntax::{
     diagnostics::Report,
 };
 use miden_core::Word;
+use miden_mast_package::CallableBinding;
 
 use super::{
     GlobalItemIndex,
     assembler::{MAX_PROC_LOCALS, error::AssemblerError},
     mast_forest_builder::{MastNodeRef, MastNodeUse, SourceNodeRef},
 };
+
+/// A callable declaration with no selected implementation root or body.
+///
+/// Declaration-only dependencies participate in the same linker namespace and visibility rules as
+/// compiled procedures. A retained invocation needs this identity even when no code is available.
+#[derive(Clone, Debug)]
+pub struct CallableDeclaration {
+    pub name: miden_assembly_syntax::ast::Ident,
+    pub binding: CallableBinding,
+    pub visibility: Visibility,
+    pub signature: Option<Arc<FunctionType>>,
+    pub attributes: AttributeSet,
+}
+
+impl CallableDeclaration {
+    pub fn new(name: miden_assembly_syntax::ast::Ident, binding: CallableBinding) -> Self {
+        Self {
+            name,
+            binding,
+            visibility: Visibility::Public,
+            signature: None,
+            attributes: AttributeSet::default(),
+        }
+    }
+}
 
 // PROCEDURE CONTEXT
 // ================================================================================================
@@ -28,6 +54,7 @@ pub struct ProcedureContext {
     visibility: Visibility,
     is_kernel: bool,
     num_locals: u16,
+    binding: Option<CallableBinding>,
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -53,6 +80,7 @@ impl ProcedureContext {
             attributes: Default::default(),
             is_kernel,
             num_locals: 0,
+            binding: None,
         }
     }
 
@@ -88,6 +116,12 @@ impl ProcedureContext {
         self.attributes = attributes;
         self
     }
+
+    /// Supplies the declaration identity before compiling any body instructions.
+    pub fn with_callable_binding(mut self, binding: CallableBinding) -> Self {
+        self.binding = Some(binding);
+        self
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -115,6 +149,10 @@ impl ProcedureContext {
 
     pub fn num_locals(&self) -> u16 {
         self.num_locals
+    }
+
+    pub fn callable_binding(&self) -> Option<&CallableBinding> {
+        self.binding.as_ref()
     }
 
     pub fn module(&self) -> &Path {
@@ -146,7 +184,7 @@ impl ProcedureContext {
     /// </div>
     pub(crate) fn into_procedure(self, mast_root: Word, body_node: MastNodeUse) -> Procedure {
         let is_syscall = self.is_kernel && self.visibility.is_public();
-        Procedure::new(
+        let mut procedure = Procedure::new(
             self.path,
             self.visibility,
             self.signature,
@@ -156,7 +194,9 @@ impl ProcedureContext {
             mast_root,
             body_node,
         )
-        .with_span(self.span)
+        .with_span(self.span);
+        procedure.binding = self.binding;
+        procedure
     }
 }
 
@@ -194,6 +234,7 @@ pub struct Procedure {
     body_node_ref: MastNodeRef,
     /// The exact source/debug occurrence for this procedure body.
     body_source_ref: SourceNodeRef,
+    binding: Option<CallableBinding>,
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -220,6 +261,7 @@ impl Procedure {
             mast_root,
             body_node_ref: body_node.node_ref(),
             body_source_ref: body_node.source_ref(),
+            binding: None,
         }
     }
 
@@ -232,6 +274,11 @@ impl Procedure {
 // ------------------------------------------------------------------------------------------------
 /// Public accessors
 impl Procedure {
+    /// Returns the declaration identity, separately from the implementation commitment.
+    pub fn callable_binding(&self) -> Option<&CallableBinding> {
+        self.binding.as_ref()
+    }
+
     /// Returns source span of this procedure.
     pub fn span(&self) -> &SourceSpan {
         &self.span

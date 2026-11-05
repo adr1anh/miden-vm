@@ -1,46 +1,11 @@
 ---
 source: crates/assembly/src/tests/misc_regressions.rs
+assertion_line: 30
 expression: program
 ---
 begin
-    basic_block
-        push(2147483648)
-        push(4294967294)
-        mstore
-        drop
-        push(4)
-        push(4294967294)
-        mload
-        add
-        push(4294967294)
-        mstore
-        drop
-        push(18446744069414584317)
-        noop
-        push(4294967294)
-        mload
-        add
-        push(18446744069414584317)
-        push(4294967294)
-        mload
-        add
-        push(18446744069414584317)
-        noop
-        push(4294967294)
-        mload
-        add
-        noop
-        drop
-        drop
-        drop
-        drop
-        noop
-        push(18446744069414584317)
-        push(4294967294)
-        mload
-        add
-        push(4294967294)
-        mstore
-        drop
+    join
+        basic_block push(2147483648) push(4294967294) mstore drop noop end
+        exec.0x7115200e2f5fa621a07b8539b75fa72a0bdec65cd338ac6614814970a9873874
     end
 end
