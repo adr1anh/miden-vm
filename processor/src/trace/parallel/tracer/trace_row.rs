@@ -123,10 +123,11 @@ impl DecoderRow {
         user_op_helpers: [Felt; NUM_USER_OP_HELPERS],
         layout: ChipletsLayout,
     ) -> Result<Self, ExecutionError> {
+        layout.validate_controller_address(parent_addr)?;
         let hasher_state: (Word, Word) = {
             let word1 = [
                 basic_block_ctx.current_op_group,
-                layout.controller_address(parent_addr)?.to_felt(),
+                parent_addr.to_felt(),
                 user_op_helpers[0],
                 user_op_helpers[1],
             ];
@@ -174,8 +175,8 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                 let node = super::get_node_in_forest(forest, *node_id)?;
                 let address = self.block_address_replay.peek_block_address()?;
                 let parent = self.block_stack_replay.peek_node_start_parent_addr()?;
-                self.layout.controller_address(address)?;
-                self.layout.controller_address(parent)?;
+                self.layout.validate_controller_address(address)?;
+                self.layout.validate_controller_address(parent)?;
                 let mut missing_child = false;
                 node.for_each_child(|child| {
                     missing_child |= forest.get_digest_by_id(child).is_none();
@@ -197,8 +198,8 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                 };
                 BasicBlockContext::new_at_op(block, *batch_index, *op_idx_in_batch)
                     .map_exec_err_no_ctx()?;
-                self.layout.controller_address(self.decoder_state.current_addr)?;
-                self.layout.controller_address(self.decoder_state.parent_addr)?;
+                self.layout.validate_controller_address(self.decoder_state.current_addr)?;
+                self.layout.validate_controller_address(self.decoder_state.parent_addr)?;
             },
             Respan { node_id, batch_index } => {
                 let MastNode::Block(block) = super::get_node_in_forest(forest, *node_id)? else {
@@ -207,7 +208,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                 let context = BasicBlockContext::new_at_batch_start(block, *batch_index)
                     .map_exec_err_no_ctx()?;
                 get_op_batch_encoding(context.group_count_in_block)?;
-                self.layout.controller_address(self.decoder_state.current_addr)?;
+                self.layout.validate_controller_address(self.decoder_state.current_addr)?;
                 self.decoder_state.current_addr.checked_advance(CONTROLLER_ROWS_PER_HASHER_OP)?;
             },
             FinishLoop(node_id) if processor.stack.get(0) == ONE => {
@@ -215,7 +216,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                     return Err(ExecutionError::Internal("core replay loop node is missing"));
                 };
                 get_digest_in_forest(forest, node.body())?;
-                self.layout.controller_address(self.decoder_state.current_addr)?;
+                self.layout.validate_controller_address(self.decoder_state.current_addr)?;
             },
             FinishJoin(node_id)
             | FinishSplit(node_id)
@@ -240,9 +241,9 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                 }
                 self.compute_end_block_flags(continuation, forest)?;
                 let end = self.block_stack_replay.peek_node_end()?;
-                self.layout.controller_address(end.ended_node_addr)?;
-                self.layout.controller_address(end.prev_addr)?;
-                self.layout.controller_address(end.prev_parent_addr)?;
+                self.layout.validate_controller_address(end.ended_node_addr)?;
+                self.layout.validate_controller_address(end.prev_addr)?;
+                self.layout.validate_controller_address(end.prev_parent_addr)?;
             },
             EnterForest { .. } | RootBoundary { .. } => {
                 return Err(ExecutionError::Internal("zero-cycle continuation cannot be traced"));
@@ -675,7 +676,8 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         layout: ChipletsLayout,
     ) -> Result<(), ExecutionError> {
         // Block address
-        decoder.addr = layout.controller_address(decoder_row.addr)?.to_felt();
+        layout.validate_controller_address(decoder_row.addr)?;
+        decoder.addr = decoder_row.addr.to_felt();
 
         // Decompose operation into bits
         let opcode = decoder_row.opcode;
@@ -880,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn physical_row_writer_maps_parent_and_typed_helpers_without_changing_vm_values() {
+    fn row_writer_preserves_parent_and_typed_helpers_without_changing_vm_values() {
         use crate::tracer::OperationHelperRegisters;
 
         let row_zero = LogicalControllerAddress::from_felt(ONE).unwrap();
@@ -929,7 +931,7 @@ mod tests {
                             &stack,
                             operation,
                             0,
-                            helper.to_physical_user_op_helpers(layout).unwrap(),
+                            helper.checked_user_op_helpers(layout).unwrap(),
                             &mut context,
                         )
                         .unwrap();
@@ -937,18 +939,16 @@ mod tests {
                     assert_eq!(tracer.decoder_state.parent_addr, parent);
                 }
                 let row: &CoreCols<Felt> = buffer.as_slice().borrow();
-                assert_eq!(row.decoder.addr, Felt::from_u8(9));
+                assert_eq!(row.decoder.addr, ONE);
                 assert_eq!(
                     row.decoder.hasher_state[1],
                     if parent == LogicalControllerAddress::ABSENT {
                         ZERO
                     } else {
-                        Felt::from_u8(9)
+                        ONE
                     }
                 );
-                let mut expected_helpers = helper.to_user_op_helpers();
-                expected_helpers[0] = Felt::from_u8(9);
-                assert_eq!(row.decoder.user_op_helpers(), expected_helpers);
+                assert_eq!(row.decoder.user_op_helpers(), helper.to_user_op_helpers());
                 assert_eq!(row.system.clk, expected_system.clk);
                 assert_eq!(row.system.ctx, expected_system.ctx);
                 assert_eq!(row.system.fn_hash, expected_system.fn_hash);

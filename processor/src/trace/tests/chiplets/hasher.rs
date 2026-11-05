@@ -16,11 +16,13 @@
 //! because nothing was registered) is caught structurally, not just by shape.
 
 use alloc::vec::Vec;
+use core::borrow::BorrowMut;
 
 use miden_air_definitions::vm::{
+    CoreCols,
     logup::{HasherMsg, SiblingBit, SiblingMsg},
     trace::{
-        MainTrace,
+        CHIPLETS_CLK_COL, MainTrace,
         chiplets::hasher::CONTROLLER_ROWS_PER_HASHER_OP_FELT,
         log_deferred::{
             HELPER_ADDR_IDX, HELPER_STATE_PREV_RANGE, STACK_STATE_NEW_RANGE, STACK_STMNT_RANGE,
@@ -34,6 +36,7 @@ use miden_core::{
     deferred::DEFERRED_AND_INIT_CV,
     mast::{BasicBlockNodeBuilder, MastForest, SplitNodeBuilder},
     operations::{Operation, opcodes},
+    utils::Matrix,
 };
 use miden_mast_package::CodePackage;
 use miden_utils_testing::{stack, stack_inputs_from_ints};
@@ -594,6 +597,101 @@ fn mrupdate_hasher_bus() {
     assert_eq!(mu_count, 1, "MRUPDATE: expected 1 mr_update_new_input add");
     assert_eq!(return_count, 3, "MRUPDATE: expected exactly 3 return-hash adds");
     log.assert_contains(&exp);
+}
+
+/// Forge only the decoder address consumed by a SPAN or END lookup. Each forged request must
+/// appear in the actual prover emitter, while the honest Controller response remains unmatched.
+#[test]
+fn forged_controller_request_addresses_leave_unbalanced_hasher_messages() {
+    let trace = build_trace_from_program(&single_block_program(vec![Operation::Noop]), &[]);
+    let main = trace.main_trace();
+    let span = (0..main.core_height())
+        .find(|&row| main.get_op_code(RowIndex::from(row)) == Felt::from_u8(opcodes::SPAN))
+        .unwrap();
+    let end = (0..main.core_height())
+        .find(|&row| main.get_op_code(RowIndex::from(row)) == Felt::from_u8(opcodes::END))
+        .unwrap();
+    let prefix = (0..main.chiplets_height())
+        .take_while(|&row| main.is_library_row(RowIndex::from(row)))
+        .count();
+    let block = block_from_hasher_state(main, RowIndex::from(span));
+    let digest = main.decoder_hasher_state_first_half(RowIndex::from(end)).into_elements();
+    assert_eq!(main.addr(RowIndex::from(span + 1)), ONE);
+    assert_eq!(main.addr(RowIndex::from(end)), ONE);
+    let (honest_core, chiplets, eidos, and8) = main.clone_air_matrices();
+    let honest_init =
+        HasherMsg::basic_block_init(ONE, &block, main.group_count(RowIndex::from(span)));
+    let honest_return = HasherMsg::return_hash(ONE, digest);
+    let honest_log = InteractionLog::new(&trace);
+    assert_eq!(honest_log.net_multiplicity(&honest_init), ZERO);
+    assert_eq!(honest_log.net_multiplicity(&honest_return), ZERO);
+
+    // Absent zero, a skipped local row, and the retired global prefix-shifted address.
+    for forged in [ZERO, Felt::from_u8(2), Felt::from_u32(prefix as u32 + 1)] {
+        for (request_row, address_row, is_return) in [(span, span + 1, false), (end, end, true)] {
+            let mut core = honest_core.clone();
+            let width = core.width();
+            let start = address_row * width;
+            let row: &mut CoreCols<Felt> = core.values[start..start + width].borrow_mut();
+            row.decoder.addr = forged;
+            let log = InteractionLog::from_air_matrices(&core, &chiplets, &eidos, &and8);
+            let forged_message = if is_return {
+                HasherMsg::return_hash(forged, digest)
+            } else {
+                HasherMsg::basic_block_init(forged, &block, main.group_count(RowIndex::from(span)))
+            };
+            let honest_message = if is_return { &honest_return } else { &honest_init };
+            let mut exp = Expectations::new(&log);
+            exp.remove(request_row, &forged_message);
+            assert_eq!(exp.count_removes(), 1);
+            log.assert_contains(&exp);
+            assert_eq!(log.net_multiplicity(&forged_message), -ONE);
+            assert_eq!(log.net_multiplicity(honest_message), ONE);
+        }
+    }
+}
+
+/// Changing c23 on a genuine Controller row changes both its init and return emissions. Neither
+/// forged response can balance the unchanged decoder request, including the former physical
+/// address.
+#[test]
+fn forged_controller_response_addresses_leave_unbalanced_hasher_messages() {
+    let trace = build_trace_from_program(&single_block_program(vec![Operation::Noop]), &[]);
+    let main = trace.main_trace();
+    let controller = (0..main.chiplets_height())
+        .find(|&row| main.is_hash_row(RowIndex::from(row)))
+        .unwrap();
+    let row = RowIndex::from(controller);
+    assert_eq!(main.chiplet_clk(row), ONE);
+    let state = main.chiplet_hasher_state(row);
+    let digest = return_digest_from_controller_row(main, row);
+    let honest_messages =
+        [HasherMsg::linear_hash_init(ONE, state), HasherMsg::return_hash(ONE, digest)];
+    let (core, honest_chiplets, eidos, and8) = main.clone_air_matrices();
+    let honest_log = InteractionLog::new(&trace);
+    for message in &honest_messages {
+        assert_eq!(honest_log.net_multiplicity(message), ZERO);
+    }
+    for forged in [ZERO, Felt::from_u8(2), Felt::from_u32(controller as u32 + 1)] {
+        let mut chiplets = honest_chiplets.clone();
+        let width = chiplets.width();
+        chiplets.values[controller * width + CHIPLETS_CLK_COL] = forged;
+        let log = InteractionLog::from_air_matrices(&core, &chiplets, &eidos, &and8);
+        let forged_messages = [
+            HasherMsg::linear_hash_init(forged, state),
+            HasherMsg::return_hash(forged, digest),
+        ];
+        let mut exp = Expectations::new(&log);
+        for message in &forged_messages {
+            exp.add(controller, message);
+        }
+        assert_eq!(exp.count_adds(), 2);
+        log.assert_contains(&exp);
+        for (forged, honest) in forged_messages.iter().zip(&honest_messages) {
+            assert_eq!(log.net_multiplicity(forged), ONE);
+            assert_eq!(log.net_multiplicity(honest), -ONE);
+        }
+    }
 }
 
 // HELPERS

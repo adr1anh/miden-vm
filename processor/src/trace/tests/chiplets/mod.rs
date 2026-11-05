@@ -11,5 +11,6 @@
 //! structurally rather than just by shape.
 
 mod bitwise;
+mod controller_counter;
 mod hasher;
 mod memory;

@@ -82,7 +82,8 @@ pub struct EidosCompressionTrace {
 /// from the immutable completed resolution session when this trace is materialized.
 ///
 /// Physical order is Library, Controller, AEAD, Memory, ACE, normal Bitwise, then global PAD.
-/// Each family owns only its packed selector prefix and payload; c[23] is the shared row clock.
+/// Each family owns its packed selector prefix and payload. Controller alone writes its local
+/// one-based address counter in c[23]; native rows outside Controller leave that cell zero.
 #[derive(Debug, Default)]
 pub struct Chiplets {
     pub hasher: Hasher,
@@ -205,13 +206,12 @@ impl Chiplets {
         let (ace_band, rest) = rest.split_at_mut(layout.ace().len() * W);
         let (bitwise_band, padding_band) = rest.split_at_mut(layout.bitwise().len() * W);
 
-        let mut hasher_fragment = ChipletTraceFragment::with_overheads(
+        let mut hasher_fragment = ChipletTraceFragment::with_controller_counter(
             hasher_band,
             W,
             CONTROLLER_COL_START,
             HASHER_WIDTH,
             layout.controller(),
-            &[],
         );
         let mut aead_fragment = ChipletTraceFragment::with_overheads(
             aead_band,
@@ -273,7 +273,7 @@ impl Chiplets {
                     Ace::fill_row_helpers(row.as_mut_slice().borrow_mut());
                 }
             });
-            s.spawn(move |_| fill_padding_rows(padding_band, padding));
+            s.spawn(move |_| fill_padding_rows(padding_band));
         });
         debug_assert_eq!(and8_counts.len(), bitwise_and8_counts.len());
         for (count, bitwise_count) in and8_counts.iter_mut().zip(bitwise_and8_counts) {
@@ -294,12 +294,11 @@ fn checked_trace_cells(width: usize, height: usize) -> Result<usize, ExecutionEr
     Ok(cells)
 }
 
-/// Global PAD owns c[3..6] = ONE and the shared physical clock.
-fn fill_padding_rows(band: &mut [Felt], physical_band: ChipletBand) {
+/// Global PAD owns c[3..6] = ONE and leaves the unused Controller counter zero.
+fn fill_padding_rows(band: &mut [Felt]) {
     const W: usize = CHIPLETS_WIDTH;
-    for (i, row) in band.as_chunks_mut::<W>().0.iter_mut().enumerate() {
+    for row in band.as_chunks_mut::<W>().0 {
         row[3..6].fill(ONE);
-        row[CHIPLETS_CLK_COL] = physical_band.clock_at(i);
     }
 }
 
@@ -405,7 +404,13 @@ mod helper_integration_tests {
 
             assert!(trace[..PREFIX_ROWS * W].iter().all(|&cell| cell == sentinel));
             for (index, row) in trace.as_chunks::<W>().0.iter().enumerate().skip(PREFIX_ROWS) {
-                assert_eq!(row[CHIPLETS_CLK_COL], Felt::from_u32(index as u32 + 1));
+                let controller = layout.controller();
+                let expected = if index < controller.start() + controller.len() {
+                    Felt::from_u32((index - controller.start()) as u32 + 1)
+                } else {
+                    ZERO
+                };
+                assert_eq!(row[CHIPLETS_CLK_COL], expected);
             }
             for index in 0..AEAD_STREAM_CYCLE_LEN {
                 let start = (layout.aead().start() + index) * W;

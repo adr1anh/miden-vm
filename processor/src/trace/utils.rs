@@ -63,7 +63,8 @@ impl<'a, E: Copy> RowMajorTraceWriter<'a, E> {
 ///
 /// A chiplet occupies a contiguous band of rows and a contiguous band of columns
 /// `[col_start, col_start + num_cols)`. [`Self::copy_rows_from`] also writes the per-row
-/// `prefix_one_cols` selectors and (when there's room) the trailing `chip_clk` column.
+/// `prefix_one_cols` selectors. Controller fragments additionally write their local one-based
+/// address counter in the trailing `chip_clk` column.
 pub struct ChipletTraceFragment<'a> {
     /// Contiguous `num_rows * stride` row-major slice (this chiplet's rows).
     band: &'a mut [Felt],
@@ -71,8 +72,8 @@ pub struct ChipletTraceFragment<'a> {
     col_start: usize,
     num_rows: usize,
     num_cols: usize,
-    /// Checked physical placement for the global `chip_clk`, absent in bare unit-test fragments.
-    physical_band: Option<ChipletBand>,
+    /// Only Controller owns the trailing address counter; other fragments leave it untouched.
+    write_controller_counter: bool,
     /// Columns `< col_start` to set to ONE on every row in this band.
     prefix_one_cols: &'static [usize],
 }
@@ -85,11 +86,10 @@ impl<'a> ChipletTraceFragment<'a> {
         col_start: usize,
         num_cols: usize,
     ) -> Self {
-        Self::new(band, stride, col_start, num_cols, None, &[])
+        Self::new(band, stride, col_start, num_cols, false, &[])
     }
 
-    /// Adds the chiplets-trace overheads: per-row ONEs at `prefix_one_cols` and `chip_clk` at
-    /// column `stride - 1` (when there's room), using the layout's checked physical band.
+    /// Adds per-row ONEs at `prefix_one_cols`, using the layout's checked physical band.
     pub(crate) fn with_overheads(
         band: &'a mut [Felt],
         stride: usize,
@@ -99,7 +99,21 @@ impl<'a> ChipletTraceFragment<'a> {
         prefix_one_cols: &'static [usize],
     ) -> Self {
         debug_assert_eq!(band.len() / stride, physical_band.len());
-        Self::new(band, stride, col_start, num_cols, Some(physical_band), prefix_one_cols)
+        Self::new(band, stride, col_start, num_cols, false, prefix_one_cols)
+    }
+
+    /// Writes Controller's local one-based address counter at column `stride - 1`. Its extent
+    /// has been admitted by the layout; the physical prefix does not affect the counter.
+    pub(crate) fn with_controller_counter(
+        band: &'a mut [Felt],
+        stride: usize,
+        col_start: usize,
+        num_cols: usize,
+        controller_band: ChipletBand,
+    ) -> Self {
+        debug_assert_eq!(band.len() / stride, controller_band.len());
+        debug_assert!(stride > col_start + num_cols, "Controller counter overlaps payload");
+        Self::new(band, stride, col_start, num_cols, true, &[])
     }
 
     fn new(
@@ -107,7 +121,7 @@ impl<'a> ChipletTraceFragment<'a> {
         stride: usize,
         col_start: usize,
         num_cols: usize,
-        physical_band: Option<ChipletBand>,
+        write_controller_counter: bool,
         prefix_one_cols: &'static [usize],
     ) -> Self {
         debug_assert_eq!(band.len() % stride, 0, "band length must be a multiple of stride");
@@ -123,7 +137,7 @@ impl<'a> ChipletTraceFragment<'a> {
             col_start,
             num_rows,
             num_cols,
-            physical_band,
+            write_controller_counter,
             prefix_one_cols,
         }
     }
@@ -152,14 +166,14 @@ impl<'a> ChipletTraceFragment<'a> {
     // --------------------------------------------------------------------------------------------
 
     /// Copies a chiplet's row-major buffer (`num_cols` cells per row) into this fragment's
-    /// band, fusing the per-row prefix-selector ONEs and trailing `chip_clk` when configured.
+    /// band, fusing the per-row prefix-selector ONEs and Controller counter when configured.
     pub fn copy_rows_from(&mut self, src: &[Felt]) {
         debug_assert_eq!(src.len(), self.num_rows * self.num_cols, "source buffer size mismatch");
         self.copy_rows_into(0, src);
     }
 
     /// Copies `src.len() / num_cols` rows starting at `row_offset` into this fragment's band,
-    /// fusing the per-row prefix-selector ONEs and trailing `chip_clk` when configured.
+    /// fusing the per-row prefix-selector ONEs and Controller counter when configured.
     pub fn copy_rows_into(&mut self, row_offset: usize, src: &[Felt]) {
         debug_assert_eq!(src.len() % self.num_cols, 0, "source buffer size not row-aligned");
         let chunk_rows = src.len() / self.num_cols;
@@ -167,8 +181,6 @@ impl<'a> ChipletTraceFragment<'a> {
             row_offset + chunk_rows <= self.num_rows,
             "chunk overruns fragment row range",
         );
-        let clock_band =
-            self.physical_band.filter(|_| self.stride > self.col_start + self.num_cols);
         let clk_col = self.stride - 1;
         for r in 0..chunk_rows {
             let dst_row = row_offset + r;
@@ -179,8 +191,8 @@ impl<'a> ChipletTraceFragment<'a> {
             }
             row[self.col_start..self.col_start + self.num_cols]
                 .copy_from_slice(&src[r * self.num_cols..(r + 1) * self.num_cols]);
-            if let Some(band) = clock_band {
-                row[clk_col] = band.clock_at(dst_row);
+            if self.write_controller_counter {
+                row[clk_col] = Felt::from_u32(dst_row as u32 + 1);
             }
         }
     }
@@ -242,4 +254,44 @@ pub(super) fn build_span_with_respan_ops() -> (Vec<Operation>, Vec<Felt>) {
         Operation::Drop,
     ];
     (ops, iv)
+}
+
+#[cfg(test)]
+mod chiplet_fragment_tests {
+    use miden_air_definitions::vm::trace::{CHIPLETS_CLK_COL, CHIPLETS_WIDTH};
+
+    use super::*;
+    use crate::{ZERO, trace::chiplets::layout::ChipletsLayout};
+
+    #[test]
+    fn only_controller_fragments_write_local_counters_across_chunks() {
+        const W: usize = CHIPLETS_WIDTH;
+        let layout = ChipletsLayout::new(16, 8, 8, 0, 0, 0).unwrap();
+        let payload = [ONE; 4];
+        let mut controller_rows = [ZERO; 8 * W];
+        let mut fragment = ChipletTraceFragment::with_controller_counter(
+            &mut controller_rows,
+            W,
+            3,
+            1,
+            layout.controller(),
+        );
+        fragment.copy_rows_into(4, &payload);
+        fragment.copy_rows_into(0, &payload);
+        for (index, row) in controller_rows.as_chunks::<W>().0.iter().enumerate() {
+            assert_eq!(row[CHIPLETS_CLK_COL], Felt::from_u32(index as u32 + 1));
+            assert_eq!(row[3], ONE);
+        }
+
+        let mut aead_rows = [ZERO; 8 * W];
+        let mut fragment =
+            ChipletTraceFragment::with_overheads(&mut aead_rows, W, 3, 1, layout.aead(), &[2]);
+        fragment.copy_rows_into(0, &payload);
+        fragment.copy_rows_into(4, &payload);
+        for row in aead_rows.as_chunks::<W>().0 {
+            assert_eq!(row[CHIPLETS_CLK_COL], ZERO);
+            assert_eq!(row[2], ONE);
+            assert_eq!(row[3], ONE);
+        }
+    }
 }

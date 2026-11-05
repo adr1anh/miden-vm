@@ -48,11 +48,19 @@ pub fn enforce_controller_constraints<AB>(
         chiplet.is_active.clone() * merkle_or_padding.clone() * controller_s0.not();
     let controller_merkle = chiplet.is_active.clone() * merkle_or_padding * controller_s0;
 
+    // Controller addresses are one-based within this section, including its padding rows.
+    // The cell is unused outside Controller, so neither the Library prefix nor the section exit
+    // participates in this increment.
+    builder
+        .when(chiplet.is_transition.clone())
+        .assert_eq(next.chip_clk.into(), local.chip_clk.into() + AB::Expr::ONE);
+
     // The first Controller follows the terminal Library PAD B row. Its complete operation
     // initialization belongs to that boundary, rather than to global trace row zero.
     {
         let builder = &mut builder.when(chiplet.next_is_first.clone());
         builder.assert_one(controller_next.clone());
+        builder.assert_one(next.chip_clk);
         builder.assert_one(cols_next.s0);
         builder.assert_zero(cols_next.merkle_or_padding::<AB::Expr>() * merkle_start_next.not());
         let first_mv_row =
@@ -231,7 +239,10 @@ mod tests {
 
     use crate::vm::{
         ChipletCols,
-        constraints::chiplets::selectors::{ChipletFlags, build_chiplet_selectors},
+        constraints::chiplets::{
+            columns::PeriodicCols,
+            selectors::{ChipletFlags, build_chiplet_selectors},
+        },
         trace::{AUX_TRACE_RAND_CHALLENGES, AUX_TRACE_WIDTH, CHIPLETS_DATA_WIDTH, CHIPLETS_WIDTH},
     };
 
@@ -253,6 +264,9 @@ mod tests {
         periodic_values: Vec<Felt>,
         preprocessed: RowWindow<'static, Felt>,
         evaluations: Vec<QuadFelt>,
+        is_first_row: Felt,
+        is_last_row: Felt,
+        is_transition: Felt,
     }
 
     impl ConstraintEvalBuilder {
@@ -268,7 +282,22 @@ mod tests {
                 periodic_values: Vec::new(),
                 preprocessed: RowWindow::from_two_rows(&[], &[]),
                 evaluations: Vec::new(),
+                is_first_row: Felt::ZERO,
+                is_last_row: Felt::ZERO,
+                is_transition: Felt::ONE,
             }
+        }
+
+        fn for_trace_row(row: usize, height: usize) -> Self {
+            let mut builder = Self::new();
+            builder.is_first_row = Felt::from_bool(row == 0);
+            builder.is_last_row = Felt::from_bool(row + 1 == height);
+            builder.is_transition = Felt::from_bool(row + 1 < height);
+            builder.periodic_values = PeriodicCols::periodic_columns()
+                .into_iter()
+                .map(|column| column[row % column.len()])
+                .collect();
+            builder
         }
     }
 
@@ -290,15 +319,15 @@ mod tests {
         }
 
         fn is_first_row(&self) -> Self::Expr {
-            Felt::ZERO
+            self.is_first_row
         }
 
         fn is_last_row(&self) -> Self::Expr {
-            Felt::ZERO
+            self.is_last_row
         }
 
         fn is_transition(&self) -> Self::Expr {
-            Felt::ONE
+            self.is_transition
         }
 
         fn is_transition_window(&self, size: usize) -> Self::Expr {
@@ -417,9 +446,188 @@ mod tests {
     fn valid_merkle_continuation_pair() -> (ChipletCols<Felt>, ChipletCols<Felt>) {
         let local = merkle_controller_row(MP_VERIFY_SELECTORS, 5, true, false);
         let mut next = merkle_controller_row(MP_VERIFY_SELECTORS, 2, false, true);
+        next.chip_clk = Felt::from_u8(2);
         next.chiplets[CTRL_ROW_DATA_BASE + 3] = Felt::ONE;
         set_block_lo(&mut next, merkle_digest(&local));
         (local, next)
+    }
+
+    // Evaluate the production MAIN entry point over a complete packed trace, including the
+    // periodic schedule and the noncyclic final-row boundary. Lookup authentication is exercised
+    // separately; these PAD Library rows isolate the address and physical section constraints.
+    fn counter_trace(library_height: usize) -> Vec<ChipletCols<Felt>> {
+        assert_eq!(library_height % 8, 0);
+        let height = (library_height + 8).next_power_of_two();
+        let mut trace = Vec::with_capacity(height);
+        for _ in 0..library_height {
+            let mut library_pad = non_controller_row();
+            library_pad.chiplets[0] = Felt::ONE;
+            library_pad.chip_clk = Felt::ZERO;
+            trace.push(library_pad);
+        }
+        let mut first = merkle_controller_row([1, 0, 0], 0, false, true);
+        first.chip_clk = Felt::ONE;
+        trace.push(first);
+        while trace.len() + 1 < height {
+            let mut padding = non_controller_row();
+            padding.chiplets[S_CTRL_COL] = Felt::ONE;
+            padding.chiplets[CTRL_BASE + 1] = Felt::ONE;
+            padding.chip_clk = Felt::from_usize(trace.len() - library_height + 1);
+            trace.push(padding);
+        }
+        let mut pad = non_controller_row();
+        pad.chiplets[3..6].fill(Felt::ONE);
+        pad.chip_clk = Felt::ZERO;
+        trace.push(pad);
+        trace
+    }
+
+    fn main_accepts(trace: &[ChipletCols<Felt>]) -> bool {
+        trace.iter().enumerate().all(|(row, local)| {
+            let next = &trace[(row + 1) % trace.len()];
+            let mut builder = ConstraintEvalBuilder::for_trace_row(row, trace.len());
+            let selectors = build_chiplet_selectors(&mut builder, local, next);
+            super::super::enforce_main(&mut builder, local, next, &selectors);
+            builder.evaluations.iter().all(|value| *value == QuadFelt::ZERO)
+        })
+    }
+
+    #[test]
+    fn controller_counter_main_anchors_after_each_aligned_library_prefix() {
+        for library_height in [8, 16] {
+            let trace = counter_trace(library_height);
+            assert!(main_accepts(&trace), "valid aligned prefix of {library_height} rows");
+            assert_eq!(trace[library_height].chip_clk, Felt::ONE);
+            for first_address in [0, 2, library_height + 1] {
+                let mut forged = trace.clone();
+                // Shift the whole Controller section, preserving every internal increment. Only
+                // the entry anchor can distinguish these from a valid local address sequence.
+                let shift = Felt::from_usize(first_address) - Felt::ONE;
+                for row in &mut forged[library_height..trace.len() - 1] {
+                    row.chip_clk += shift;
+                }
+                assert!(
+                    !main_accepts(&forged),
+                    "first Controller address {first_address} after prefix {library_height}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn controller_counter_main_increments_through_padding() {
+        let trace = counter_trace(8);
+        assert!(main_accepts(&trace));
+        for padding_row in 9..trace.len() - 1 {
+            for delta in [-Felt::ONE, Felt::ONE, -Felt::from_u8(2)] {
+                let mut forged = trace.clone();
+                forged[padding_row].chip_clk += delta;
+                assert!(
+                    !main_accepts(&forged),
+                    "padding row {padding_row} must reject duplicate, skipped, and decremented addresses",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn controller_counter_main_rejects_active_row_increment_forgeries() {
+        let mut trace = counter_trace(8);
+        for (index, row) in trace[8..11].iter_mut().enumerate() {
+            *row = merkle_controller_row([1, 0, 0], 0, false, true);
+            row.chip_clk = Felt::from_usize(index + 1);
+        }
+        assert!(main_accepts(&trace));
+        for address in [1, 3, 0] {
+            let mut forged = trace.clone();
+            forged[9].chip_clk = Felt::from_usize(address);
+            assert!(
+                !main_accepts(&forged),
+                "active row must reject duplicated, skipped, or decremented address {address}",
+            );
+        }
+    }
+
+    #[test]
+    fn controller_counter_main_leaves_other_sections_cell_unused() {
+        let mut trace = counter_trace(8);
+        for (index, row) in trace[..8].iter_mut().enumerate() {
+            row.chip_clk = Felt::from_usize(73 + index * 11);
+        }
+        trace.last_mut().unwrap().chip_clk = Felt::from_u8(41);
+        assert!(
+            main_accepts(&trace),
+            "Library and final PAD addresses must not affect Controller entry or exit",
+        );
+    }
+
+    #[test]
+    fn controller_counter_main_preserves_exit_and_no_reentry() {
+        let trace = counter_trace(8);
+        assert!(main_accepts(&trace));
+        let mut forged = trace.clone();
+        forged[8].chiplets[OP_FINAL_COL] = Felt::ZERO;
+        assert!(!main_accepts(&forged), "non-final operations must continue before padding");
+        let mut forged = trace.clone();
+        let mut pad = trace.last().unwrap().clone();
+        pad.chip_clk = Felt::from_u8(91);
+        forged[11] = pad.clone();
+        assert!(
+            !main_accepts(&forged),
+            "a Controller row cannot reenter after the section has exited into PAD",
+        );
+        // Ending Controller early is allowed after final work or Controller padding, and does
+        // not carry an address equation into the following PAD rows.
+        forged[12..].fill(pad.clone());
+        assert!(main_accepts(&forged), "Controller padding may exit with no counter carry");
+        forged[9..].fill(pad);
+        assert!(main_accepts(&forged), "a final operation may exit without Controller padding");
+        forged[8].chiplets[OP_FINAL_COL] = Felt::ZERO;
+        assert!(!main_accepts(&forged), "a non-final operation cannot exit Controller");
+    }
+
+    #[test]
+    fn controller_counter_main_preserves_library_boundary_controls() {
+        let trace = counter_trace(8);
+        assert!(main_accepts(&trace));
+        let mut forged = trace.clone();
+        for (index, row) in forged[..trace.len() - 1].iter_mut().enumerate() {
+            *row = trace[9].clone();
+            row.chip_clk = Felt::from_usize(index + 1);
+        }
+        forged[0] = trace[8].clone();
+        assert!(
+            !main_accepts(&forged),
+            "a valid Controller sequence at global row zero cannot replace the Library prefix",
+        );
+        for boundary in [6, 7] {
+            let mut forged = trace.clone();
+            // Move a completely valid Controller sequence to an invalid Library boundary:
+            // row 5 is B but not phase seven; row 6 is A and cannot end an A/B pair.
+            for (index, row) in forged.iter_mut().enumerate().take(trace.len() - 1).skip(boundary) {
+                *row = trace[9].clone();
+                row.chip_clk = Felt::from_usize(index - boundary + 1);
+            }
+            forged[boundary] = trace[8].clone();
+            assert!(
+                !main_accepts(&forged),
+                "Library cannot exit into Controller after row {}",
+                boundary - 1,
+            );
+        }
+        let mut forged = trace.clone();
+        // All four MERKLE A/B pairs have matching kinds and zero payloads, satisfying their
+        // local MAIN equations. Only the terminal non-PAD kind violates the Library exit rule.
+        for row in &mut forged[..8] {
+            row.chiplets[20] = Felt::ONE;
+        }
+        assert!(!main_accepts(&forged), "Library must exit through PAD B");
+        let mut forged = trace.clone();
+        forged[9] = trace[0].clone();
+        assert!(!main_accepts(&forged), "Library cannot reenter after Controller entry");
+        let mut forged = trace.clone();
+        forged[8] = trace.last().unwrap().clone();
+        assert!(!main_accepts(&forged), "Library must enter Controller before later sections");
     }
 
     #[test]
@@ -553,6 +761,7 @@ mod tests {
     fn hash_controller_preserves_continuation_cv() {
         let mut local = merkle_controller_row([1, 0, 0], 0, false, false);
         let mut next = merkle_controller_row([0, 0, 0], 0, false, true);
+        next.chip_clk = Felt::from_u8(2);
         for i in 0..4 {
             let value = Felt::from_usize(21 + i);
             local.chiplets[CTRL_ROW_DATA_BASE + i] = value;
@@ -585,6 +794,7 @@ mod tests {
     fn merkle_controller_rejects_continuation_after_final_row() {
         let local = merkle_controller_row(MP_VERIFY_SELECTORS, 1, true, true);
         let mut next = merkle_controller_row(MP_VERIFY_SELECTORS, 0, false, true);
+        next.chip_clk = Felt::from_u8(2);
         next.chiplets[CTRL_ROW_DATA_BASE + 3] = Felt::ONE;
         set_block_lo(&mut next, merkle_digest(&local));
         assert_rejects(&local, &next, "a Merkle continuation must follow a non-final row");

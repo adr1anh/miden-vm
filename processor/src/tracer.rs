@@ -635,23 +635,22 @@ pub enum OperationHelperRegisters {
 }
 
 impl OperationHelperRegisters {
-    /// Materializes only typed Controller-address helpers; all other helper roles retain their
-    /// operation semantics. The public helper codec remains logical for producers and replay.
-    pub(crate) fn to_physical_user_op_helpers(
+    /// Checks only typed Controller-address helpers against their materialized band. Helper
+    /// encodings are already final; producers, replay and the trace use the same logical values.
+    pub(crate) fn checked_user_op_helpers(
         &self,
         layout: ChipletsLayout,
     ) -> Result<[Felt; NUM_USER_OP_HELPERS], ExecutionError> {
-        let mut helpers = self.to_user_op_helpers();
         match self {
             Self::Compress { addr }
             | Self::MerklePath { addr, .. }
             | Self::LogDeferred { addr, .. } => {
                 let logical = LogicalControllerAddress::from_felt(*addr)?;
-                helpers[0] = layout.controller_address(logical)?.to_felt();
+                layout.validate_controller_address(logical)?;
             },
             _ => {},
         }
-        Ok(helpers)
+        Ok(self.to_user_op_helpers())
     }
 
     pub fn to_user_op_helpers(&self) -> [Felt; NUM_USER_OP_HELPERS] {
@@ -830,11 +829,11 @@ pub(crate) fn merkle_index_helper_values(index: Felt) -> (Felt, [u16; 4]) {
 }
 
 #[cfg(test)]
-mod physical_helper_tests {
+mod checked_helper_tests {
     use super::*;
 
     #[test]
-    fn physical_materialization_changes_only_controller_address_roles() {
+    fn checked_materialization_preserves_helper_values_across_library_prefixes() {
         let state_prev = [Felt::from_u8(1), Felt::from_u8(2), ZERO, Felt::from_u8(3)].into();
         let helpers = [
             OperationHelperRegisters::Compress { addr: Felt::from_u8(1) },
@@ -847,14 +846,14 @@ mod physical_helper_tests {
         for prefix in [0, 16] {
             let layout = ChipletsLayout::new(prefix, 8, 0, 0, 0, 0).unwrap();
             for helper in &helpers {
-                let logical = helper.to_user_op_helpers();
-                let physical = helper.to_physical_user_op_helpers(layout).unwrap();
-                assert_eq!(physical[0], logical[0] + Felt::from_u32(prefix as u32));
-                assert_eq!(physical[1..], logical[1..]);
+                assert_eq!(
+                    helper.checked_user_op_helpers(layout).unwrap(),
+                    helper.to_user_op_helpers()
+                );
             }
             let absent = OperationHelperRegisters::Compress { addr: ZERO };
             assert_eq!(
-                absent.to_physical_user_op_helpers(layout).unwrap(),
+                absent.checked_user_op_helpers(layout).unwrap(),
                 [ZERO; NUM_USER_OP_HELPERS]
             );
             for helper in [
@@ -867,11 +866,13 @@ mod physical_helper_tests {
                     lo: Felt::from_u8(1),
                     hi: Felt::from_u8(2),
                 },
-                OperationHelperRegisters::Expacc { acc_update_val: Felt::from_u8(1) },
+                OperationHelperRegisters::Expacc {
+                    acc_update_val: Felt::from_u64(u64::MAX - (1 << 32)),
+                },
                 OperationHelperRegisters::Empty,
             ] {
                 assert_eq!(
-                    helper.to_physical_user_op_helpers(layout).unwrap(),
+                    helper.checked_user_op_helpers(layout).unwrap(),
                     helper.to_user_op_helpers()
                 );
             }
@@ -879,14 +880,16 @@ mod physical_helper_tests {
     }
 
     #[test]
-    fn physical_helpers_reject_addresses_outside_the_controller_band() {
+    fn checked_helpers_reject_addresses_outside_the_controller_band() {
         let layout = ChipletsLayout::new(16, 8, 0, 0, 0, 0).unwrap();
         for addr in [Felt::from_u8(9), Felt::from_u64(u64::MAX - (1 << 32))] {
-            assert!(
-                OperationHelperRegisters::Compress { addr }
-                    .to_physical_user_op_helpers(layout)
-                    .is_err()
-            );
+            for helper in [
+                OperationHelperRegisters::Compress { addr },
+                OperationHelperRegisters::MerklePath { addr, index: Felt::from_u8(1) },
+                OperationHelperRegisters::LogDeferred { addr, state_prev: Word::default() },
+            ] {
+                assert!(helper.checked_user_op_helpers(layout).is_err());
+            }
         }
     }
 }

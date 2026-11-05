@@ -304,8 +304,8 @@ Keep `ProcedureKey`, `EnvironmentRoot` and `ExecutionClaim`. Keep package code a
 ### PR 15a Revisit AIR and Chiplets trace cleanup
 
 **Branch:** `adr1anh/librarytree-15a-air-cleanup`. **Git base:** PR 15. **Semantic dependencies:**
-03, 06–08 and functional/native/recursive/public integration through 12–15. Planned follow-up;
-do not create this branch or interrupt current implementation now.
+03, 06–08 and functional/native/recursive/public integration through 12–15. This cleanup follows
+PR15 and precedes PR16 qualification; the ledger records its implementation and acceptance.
 
 Revisit the AIR/trace choices from PRs 03/06–08 against the integrated system. The preferred
 direction is a Controller-owned one-based address counter: anchor it at Controller entry, increment
@@ -528,7 +528,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 13 Core library | implemented-awaiting-validation | Manifest `2b9de9e38`; inline `c14c1f3d4`; acceptance `5cec11f38`; AEAD `fb29f1455`; domains `f89bd4612`; measured costs `d7d6e4a8b`; base `56f44aa0f` | Independent reviews; focused18/18/full numeric matrix/three unchanged cost caps; ordinary baseline665/675 followed by all10 failures resolved through affected78 controls and four exact snapshot reruns; final four-crate all-target strict Clippy, generation/drift and root-stability policy checks pass | Remaining PR14 recursive qualification and inherited security/debug/guest/fuzz/performance/final qualification; no fresh whole675 rerun claimed |
 | 14 Recursive verifier | implemented-awaiting-validation | Request `cb779ece7`; fixture `2468fe2be`; profile `ff5596f90`; metadata `42c876e8d`; consumers `c6f56d808`/`9ec10c04c`; repro `0a3f97a8e`; principal `3f6593ea9`; snapshot `8bd316dbe`; syscall `1151e9ebe`; context `aae409c8e`; loop `9e4c7baec`; MRUPDATE `cf55ea5c7`; tag `739b716b1`; base `52e914a9a` | Independent reviews; prior273/scoped12; principal3/syscall5/context8/native/MASM; packed fixtures9; tag10+strengthened2; retained+disjoint prover scope50; capture20+corrected1; strict Clippy; production no_std5; VM/PVM generation/docs/sequential PVM fixture | Remaining guest/fuzz/performance/final gates and inherited qualification; scoped evidence is not a fresh whole-suite run; DYNCALL controls remain compound/rejection-only |
 | 15 API/CLI closure | implemented-awaiting-validation | Final source `a99264137`; checked links/CLI `ba651f64d`; review `8ba05fd00`; prior SHAs below; base `f4350360d` | Independent reviews; fresh combined runtime/CLI/witness/proof/flow3,179; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumers; six compiled doctests; standalone fuzz2 typechecks; earlier scoped evidence below | PR15 functional acceptance passes; PR15a/16 and inherited guest/security/fuzz/performance/final gates remain |
-| 15a AIR/Chiplets cleanup | planned | — | — | After functional integration through15; revisit Controller-local counter, region order and address/trace simplification; recapture/regenerate all affected relation assets before16 |
+| 15a AIR/Chiplets cleanup | implemented-awaiting-validation | Counter/rebinding `7d51bff1b`; review `cffb3f279`; base `1afb98f50` | Independent reviews; fresh combined3,615; MAIN/ext/lookup capture and generated/recursive parity; actual heights; strict14; production no_std10; clean post-commit generation/check; PVM constants/277756-byte fixture; root-stability policy | PR15a functional/artifact acceptance passes; inherited PR16 guest/security/fuzz/performance/final gates remain |
 | 16 Qualification | planned | — | — | Entire stack including15a final relation/identities and release gates |
 
 ## Implementation evidence
@@ -3561,3 +3561,70 @@ under inherited final gates and may advance linearly to PR15a. PR15a owns the ac
 counter/layout choice, captures and regeneration; PR16 owns final post-cleanup qualification.
 General goal/M1 remain active, with no waiver of guest/security/fuzz/performance/release checks.
 No GitHub PR, push or publication.
+
+
+### PR15a opening boundary, 4 November 2026
+
+Local branch `adr1anh/librarytree-15a-air-cleanup` starts from clean PR15 closeout `1afb98f50`.
+Two bounded source reviews favor retaining Library-first and current selectors while replacing
+c[23]'s global clock with a Controller-owned one-based counter. Current producers/replay already
+retain logical addresses; final layout adapters alone add the physical Library prefix. Existing
+Library exit/Controller-entry and within-Controller flags appear sufficient for anchoring and
+incrementing; all inspected address consumers are Controller-gated. Core/Memory/ACE clocks remain
+separate. This is a candidate, not measured soundness/degree/height or completed relation evidence.
+
+Validate actual counter/lookup/selector adversaries, absent-zero/bounds, padding/alignment and
+stopped/parallel replay. Compare height/order consequences and capture all measured degrees before
+recording the final layout choice. Rebind native/generated/MASM/recursive assets and identities;
+PVM artifacts change only if their emitted relation/code changes. All PR15a/16 and inherited
+acceptance remains. No PR or push.
+
+
+### PR15a Controller-local counter qualification, 4 November 2026
+
+Signed `7d51bff1b` selects Library-first/current selectors with Controller-owned one-based c[23].
+Entry anchors1; within-Controller increments include its padding and stop at exit. Removed physical
+prefix retagging, PhysicalControllerAddress and generic non-Controller clock writes. Checked layout,
+span, band, nullable0/present1/endcursor/alignment/admission bounds remain. Core/Memory/ACE clocks,
+statement/domain/resource/fixed-N0/claim40v2/replay6 contracts are unchanged. No wire bump or unused-
+cell zero constraint was added. Controller-first would require selector/Library-overlay changes,
+with no height gain for the same aligned band lengths; actual retained layout validates below.
+
+Fresh combined scope passes3,615/3,615 with1,237 outside-filter skips
+(`pr15a-runtime-proof-final.log`): source AIR, generated evaluators/captures, runtime/CLI/replay,
+all API/CLI transcript hashes, native/recursive complete/deferred proving and current profile/setup
+checks. The first full run passed3,573 and exposed42 old expectations:14 decoder fixtures sharing
+one prefix-aware expected base,27 trace snapshots and one Memory-row shared-clock assertion.
+Corrections preserve exact decoder relationships and all independent Memory helpers/clocks. Every
+snapshot was structurally audited: only Core FNV, Chiplets FNV and Chiplets nonzero counts change;
+nonzeros decrease56=height64−Controller8. Widths/heights/outputs/entry D/raw lengths and complete
+Eidos/And8 summaries remain byte-identical. The fresh whole scope passes after these updates.
+
+Actual authenticated List inventories yield Library/Controller/raw/padded rows8/8/17/64,
+16/8/25/64 and24/8/33/64; mixed Memory1/ACE2/Bitwise1 yields8/8/21/64. Direct native raw accounting
+is asserted, not inferred from padding. Counter forgeries, padding/exit/reentry/A-B/phase controls,
+actual request/response lookup tampering and stopped/parallel logical-address replay pass.
+Source AIR396 passed before pin rebinding (`pr15a-canonical-capture.log`). Captured MAIN/ext maxima
+remain9; exact symbolic lookup metadata/degree checks pass, packed24/4/four AIRs/nine periodics/
+[4,4,3,2] remain. Canonical circuit shape stays790/7676/7920; only circuit/relation identities change.
+No performance, cross-target or full forged-proof counter campaign is inferred from these facts.
+
+Normal generation succeeds (`pr15a-regenerate-constraints.log`). Independent canonical config/setup
+capture passes12 checks before expected old profile parity failure (`pr15a-identity-setup-capture.log`);
+both compatibility IDs are then rebound from actual full-core profiles and pass in the final scope.
+PVM relation artifacts remain unchanged; its profile changes through the shared mount. Makefile now
+uses the existing identity parity test. Independent AIR/native/test/binding reviews found no remaining
+material issue after strengthening two test oracles. Final strict14 all-target custom Clippy passes
+(`pr15a-final-clippy.log`); ten production no_std roots compile (`pr15a-no-std.log`), with unchanged
+feature/dependency graph and prior std-free normal graph audit. All24 changed Rust files pass pinned
+formatting; no unreviewed snapshot remains. Context commits are separate from implementation.
+
+Post-commit normal generation is idempotent with `git diff --exit-code` clean
+(`pr15a-regeneration-idempotence.log`); check mode exits0 (`pr15a-constraints-check.log`). Docs were
+rebuilt with MIDEN_BUILD_LIB_DOCS=1 and remain unchanged. PVM MASM artifacts are current
+(`pr15a-pvm-constants-check.log`). Required `make check-pvm-proof-fixture` passes in release mode;
+the fixture remains277756 bytes (`pr15a-pvm-proof-fixture.log`). `make test-masm-root-stability`
+passes its policy tests (`pr15a-root-stability-policy.log`). Final review description `cffb3f279`
+is committed separately. PR15a may advance linearly to PR16 while its ledger state retains the
+inherited final gates. General goal/M1 and PR16 guest/security/fuzz/performance/final qualification
+remain active. No PR, push or publication.

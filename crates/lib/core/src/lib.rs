@@ -723,12 +723,15 @@ mod tests {
         let compatibility = Verifier::proof_compatibility();
 
         assert_eq!(
-            compatibility.vm_verifier_identities().last(),
-            Some(&core_lib.vm_recursive_verifier_profile().unwrap().identity()),
-        );
-        assert_eq!(
-            compatibility.pvm_verifier_identities().last(),
-            Some(&core_lib.pvm_recursive_verifier_profile().unwrap().identity()),
+            [
+                compatibility.vm_verifier_identities().last().copied(),
+                compatibility.pvm_verifier_identities().last().copied(),
+            ],
+            [
+                Some(core_lib.vm_recursive_verifier_profile().unwrap().identity()),
+                Some(core_lib.pvm_recursive_verifier_profile().unwrap().identity()),
+            ],
+            "current VM/PVM compatibility identities must match both embedded profiles",
         );
     }
 }
