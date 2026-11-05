@@ -279,7 +279,11 @@ fn test_empty_felt_sequence_digest_matches_native_eidos() {
 
 #[test]
 fn test_hash_empty_words_in_domain() {
-    use miden_core::{Felt, chiplets::hasher, program};
+    use miden_core::{Felt, chiplets::hasher};
+    use miden_crypto::hash::eidos::{
+        EidosDomain,
+        domains::{GENERIC_FELT_SEQUENCE, GenericFeltSequenceDomain},
+    };
 
     const PTR: u64 = 1000;
     let source = format!(
@@ -294,15 +298,14 @@ fn test_hash_empty_words_in_domain() {
             swapw dropw
         end
         ",
-        domain = program::KERNEL_DOMAIN_TAG.as_canonical_u64(),
+        domain = GenericFeltSequenceDomain::TAG.as_felt().as_canonical_u64(),
     );
 
-    let expected: Vec<u64> =
-        hasher::hash_elements_in_domain(&[], program::domain::KERNEL_COMMITMENT)
-            .as_elements()
-            .iter()
-            .map(Felt::as_canonical_u64)
-            .collect();
+    let expected: Vec<u64> = hasher::hash_elements_in_domain(&[], GENERIC_FELT_SEQUENCE)
+        .as_elements()
+        .iter()
+        .map(Felt::as_canonical_u64)
+        .collect();
     build_test!(source.as_str(), &[]).expect_stack(&expected);
 }
 

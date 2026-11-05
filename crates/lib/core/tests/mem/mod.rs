@@ -424,26 +424,26 @@ fn pipe_words_to_memory_hashes_empty_input_canonically() {
 }
 
 /// The advice pipe, the memory-based hasher, and the native hasher must agree for empty, odd,
-/// even, and maximum-size inputs. A second domain checks that the pipe does not bake in the
-/// kernel tag.
+/// even, and large inputs. A second domain checks that the pipe does not bake in the
+/// generic Felt-sequence tag.
 #[test]
 fn pipe_words_to_memory_in_domain_matches_native_and_memory_hashes() {
-    use miden_core::{chiplets::eidos_compression, program::KERNEL_DOMAIN_TAG};
-    use miden_crypto::hash::eidos::Eidos;
+    use miden_core::chiplets::eidos_compression;
+    use miden_crypto::hash::eidos::{Eidos, EidosDomain, domains::GenericFeltSequenceDomain};
 
     const MEM_ADDR: u64 = 1000;
     const OTHER_DOMAIN: u64 = 42;
     const CANARY: [u64; 4] = [91, 92, 93, 94];
 
-    let kernel_domain = KERNEL_DOMAIN_TAG.as_canonical_u64();
+    let generic_domain = GenericFeltSequenceDomain::TAG.as_felt().as_canonical_u64();
     let cases = [
         (0, 0),
-        (0, kernel_domain),
-        (1, kernel_domain),
-        (2, kernel_domain),
-        (3, kernel_domain),
-        (4, kernel_domain),
-        (255, kernel_domain),
+        (0, generic_domain),
+        (1, generic_domain),
+        (2, generic_domain),
+        (3, generic_domain),
+        (4, generic_domain),
+        (255, generic_domain),
         (3, OTHER_DOMAIN),
     ];
 
@@ -605,7 +605,11 @@ fn pipe_double_words_preimage_to_memory_accepts_canonical_empty_hash() {
 
 #[test]
 fn test_pipe_double_words_preimage_to_memory_in_domain() {
-    use miden_core::{chiplets::hasher, program};
+    use miden_core::chiplets::hasher;
+    use miden_crypto::hash::eidos::{
+        EidosDomain,
+        domains::{GENERIC_FELT_SEQUENCE, GenericFeltSequenceDomain},
+    };
 
     const MEM_ADDR: u64 = 1000;
     const CANARY: [u64; 4] = [41, 42, 43, 44];
@@ -628,11 +632,10 @@ fn test_pipe_double_words_preimage_to_memory_in_domain() {
                 swap drop
             end
             ",
-            domain = program::KERNEL_DOMAIN_TAG.as_canonical_u64(),
+            domain = GenericFeltSequenceDomain::TAG.as_felt().as_canonical_u64(),
         );
 
-        let commitment =
-            hasher::hash_elements_in_domain(&felts, program::domain::KERNEL_COMMITMENT);
+        let commitment = hasher::hash_elements_in_domain(&felts, GENERIC_FELT_SEQUENCE);
         let advice_stack = advice_stack_from_hash_and_data(commitment, &data);
         let expected_memory: Vec<u64> = data.iter().copied().chain(CANARY).collect();
 

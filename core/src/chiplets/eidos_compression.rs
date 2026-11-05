@@ -116,14 +116,14 @@ mod tests {
     };
 
     use super::*;
-    use crate::{operations::opcodes, program::domain::KernelCommitmentDomain};
+    use crate::operations::opcodes;
 
     #[test]
     fn raw_initializers_match_canonical_framing() {
         for params in [[0; 3], [1, 2, 3], [u32::MAX; 3]] {
             assert_eq!(
-                init_chaining_word_with_params(KernelCommitmentDomain::TAG.as_u32(), params),
-                Eidos::init_chaining_word_with_tag(KernelCommitmentDomain::TAG, params),
+                init_chaining_word_with_params(GenericFeltSequenceDomain::TAG.as_u32(), params),
+                Eidos::init_chaining_word_with_tag(GenericFeltSequenceDomain::TAG, params),
             );
         }
 

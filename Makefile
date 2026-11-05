@@ -492,7 +492,6 @@ fuzz-all: fuzz-seeds ## Run all fuzz targets (in sequence)
 	$(FUZZ_CARGO) fuzz run mast_forest_wire_view_new --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run basic_block_data --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run debug_info --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
-	$(FUZZ_CARGO) fuzz run kernel_deserialize --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run stack_io_deserialize --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run advice_inputs_deserialize --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \
 	$(FUZZ_CARGO) fuzz run operation_deserialize --release --fuzz-dir tools/miden-core-fuzz -- -max_total_time=300 || FAILED=1; \

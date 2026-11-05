@@ -23,8 +23,5 @@ pub use verifier::{
     VerifierIdentity, VerifierMount,
 };
 
-mod kernel;
-pub use kernel::{KERNEL_DOMAIN_TAG, KernelDescriptor, KernelError};
-
 mod stack;
 pub use stack::{InputError, MIN_STACK_DEPTH, OutputError, StackInputs, StackOutputs};

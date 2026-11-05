@@ -33,7 +33,6 @@ fn params() -> MastForestParams {
         max_externals: 2,
         max_dyns: 4,
         mode: GenerationMode::Executable,
-        ..Default::default()
     }
 }
 

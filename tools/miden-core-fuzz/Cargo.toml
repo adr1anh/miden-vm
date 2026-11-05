@@ -104,13 +104,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "kernel_deserialize"
-path = "fuzz_targets/kernel_deserialize.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "stack_io_deserialize"
 path = "fuzz_targets/stack_io_deserialize.rs"
 test = false

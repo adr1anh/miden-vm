@@ -257,8 +257,8 @@ mod tests {
         );
         assert_ne!(
             commitment,
-            hasher::hash_elements_in_domain(&elements, domain::KERNEL_COMMITMENT),
-            "claim commitment must differ from a kernel-tagged hash of the same data"
+            hasher::hash_elements_in_domain(&elements, domain::ENV_LIST),
+            "claim commitment must differ from an environment-list hash of the same data"
         );
     }
 }

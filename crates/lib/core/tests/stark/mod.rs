@@ -8,7 +8,7 @@ use miden_assembly::{
 use miden_core::{
     Felt, WORD_SIZE, Word,
     field::{BasedVectorSpace, Field, PrimeCharacteristicRing, QuadFelt},
-    program::{ExecutionClaim, KernelDescriptor, NUM_CLAIM_ELEMENTS, Namespace, VerifierIdentity},
+    program::{ExecutionClaim, NUM_CLAIM_ELEMENTS, Namespace, VerifierIdentity},
     proof::HashFunction,
 };
 use miden_core_lib::{CoreLibrary, CoreVerifierProfile, CoreVerifierProfileError};
@@ -140,8 +140,8 @@ fn stark_verifier_e2f4_with_kernel_single() {
 }
 
 #[test]
-fn stark_verifier_e2f4_with_max_kernel() {
-    let kernel = max_kernel_source();
+fn stark_verifier_e2f4_with_large_kernel() {
+    let kernel = large_kernel_source();
     let data = generate_recursive_verifier_data(
         EXAMPLE_FIB_KERNEL_SMALL,
         fib_stack_inputs(),
@@ -1162,6 +1162,8 @@ fn each_security_parameter_is_transcript_bound() {
 /// unrelated to the proof, including lengths that the old protocol rejected.
 #[test]
 fn legacy_kernel_sidecars_have_no_authority() {
+    const UNRELATED_ADVICE_WORDS: usize = 256;
+
     let base = generate_recursive_verifier_data(
         EXAMPLE_FIB_KERNEL_SMALL,
         fib_stack_inputs(),
@@ -1177,10 +1179,7 @@ fn legacy_kernel_sidecars_have_no_authority() {
         ("missing", None),
         ("forged", Some(vec![Felt::ONE; WORD_SIZE])),
         ("misaligned", Some(vec![Felt::ONE; WORD_SIZE + 1])),
-        (
-            "oversized",
-            Some(vec![Felt::ZERO; (KernelDescriptor::MAX_NUM_PROCEDURES + 1) * WORD_SIZE]),
-        ),
+        ("oversized", Some(vec![Felt::ZERO; UNRELATED_ADVICE_WORDS * WORD_SIZE])),
     ] {
         let mut data = base.clone();
         if let Some(sidecar) = sidecar {
@@ -2206,9 +2205,11 @@ fn staged_fold_coefficients_fit_the_declared_ace_input_region() {
 // HELPERS
 // ===============================================================================================
 
-fn max_kernel_source() -> String {
+fn large_kernel_source() -> String {
+    const LARGE_KERNEL_PROCEDURE_COUNT: usize = 256;
+
     let mut source = KERNEL_SINGLE_PROC.to_owned();
-    for i in 1..KernelDescriptor::MAX_NUM_PROCEDURES {
+    for i in 1..LARGE_KERNEL_PROCEDURE_COUNT {
         write!(source, "\npub proc unused_{i}\n    push.{i} drop\nend").unwrap();
     }
     source
