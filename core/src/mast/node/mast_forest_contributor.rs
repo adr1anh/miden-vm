@@ -3,8 +3,8 @@ use alloc::vec::Vec;
 use miden_utils_core_derive::MastForestContributor;
 
 use super::{
-    BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder, ExternalNodeBuilder, JoinNodeBuilder,
-    LoopNodeBuilder, MastNodeExt, SplitNodeBuilder,
+    BasicBlockNodeBuilder, CallNodeBuilder, DynNodeBuilder, ExecNodeBuilder, ExternalNodeBuilder,
+    JoinNodeBuilder, LoopNodeBuilder, MastNodeExt, SplitNodeBuilder,
 };
 use crate::{
     Felt, Word,
@@ -94,6 +94,7 @@ pub enum MastNodeBuilder {
     BasicBlock(BasicBlockNodeBuilder),
     Call(CallNodeBuilder),
     Dyn(DynNodeBuilder),
+    Exec(ExecNodeBuilder),
     External(ExternalNodeBuilder),
     Join(JoinNodeBuilder),
     Loop(LoopNodeBuilder),
@@ -103,14 +104,14 @@ pub enum MastNodeBuilder {
 impl MastNodeBuilder {
     /// Build the node from this builder.
     ///
-    /// For nodes that depend on a MastForest (Call, Join, Loop, Split), the forest is required.
-    /// For nodes that don't depend on a MastForest (BasicBlock, Dyn, External), the forest is
-    /// ignored.
+    /// Join, Loop and Split require the context to retrieve structural children. BasicBlock,
+    /// Exec, Call, Dyn and External ignore the context.
     pub fn build(self, context: &impl MastNodeContext) -> Result<MastNode, MastForestError> {
         match self {
             MastNodeBuilder::BasicBlock(builder) => Ok(builder.build()?.into()),
-            MastNodeBuilder::Call(builder) => Ok(builder.build(context)?.into()),
+            MastNodeBuilder::Call(builder) => Ok(builder.build().into()),
             MastNodeBuilder::Dyn(builder) => Ok(builder.build().into()),
+            MastNodeBuilder::Exec(builder) => Ok(builder.build().into()),
             MastNodeBuilder::External(builder) => Ok(builder.build().into()),
             MastNodeBuilder::Join(builder) => Ok(builder.build(context)?.into()),
             MastNodeBuilder::Loop(builder) => Ok(builder.build(context)?.into()),
@@ -121,13 +122,14 @@ impl MastNodeBuilder {
     /// Build a node whose child IDs have already been remapped into final forest positions.
     ///
     /// This path is used by finalizers that materialize nodes in topological order before a
-    /// complete [`MastForest`] exists. Control-node builders must carry their already-computed
-    /// digest on this path.
+    /// complete [`MastForest`] exists. Structural control-node builders must carry their
+    /// already-computed digest on this path.
     pub fn build_linked(self) -> Result<MastNode, MastForestError> {
         match self {
             MastNodeBuilder::BasicBlock(builder) => Ok(builder.build()?.into()),
-            MastNodeBuilder::Call(builder) => Ok(builder.build_linked()?.into()),
+            MastNodeBuilder::Call(builder) => Ok(builder.build().into()),
             MastNodeBuilder::Dyn(builder) => Ok(builder.build().into()),
+            MastNodeBuilder::Exec(builder) => Ok(builder.build().into()),
             MastNodeBuilder::External(builder) => Ok(builder.build().into()),
             MastNodeBuilder::Join(builder) => Ok(builder.build_linked()?.into()),
             MastNodeBuilder::Loop(builder) => Ok(builder.build_linked()?.into()),
@@ -148,6 +150,7 @@ impl proptest::prelude::Arbitrary for MastNodeBuilder {
             any::<BasicBlockNodeBuilder>().prop_map(MastNodeBuilder::BasicBlock),
             any::<CallNodeBuilder>().prop_map(MastNodeBuilder::Call),
             any::<DynNodeBuilder>().prop_map(MastNodeBuilder::Dyn),
+            any::<ExecNodeBuilder>().prop_map(MastNodeBuilder::Exec),
             any::<ExternalNodeBuilder>().prop_map(MastNodeBuilder::External),
             any::<JoinNodeBuilder>().prop_map(MastNodeBuilder::Join),
             any::<LoopNodeBuilder>().prop_map(MastNodeBuilder::Loop),

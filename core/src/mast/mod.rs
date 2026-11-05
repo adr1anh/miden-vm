@@ -58,9 +58,9 @@ pub use node::arbitrary;
 pub(crate) use node::collect_immediate_placements;
 pub use node::{
     BasicBlockNode, BasicBlockNodeBuilder, CallNode, CallNodeBuilder, DynNode, DynNodeBuilder,
-    ExternalNode, ExternalNodeBuilder, JoinNode, JoinNodeBuilder, LoopNode, LoopNodeBuilder,
-    MastForestContributor, MastNode, MastNodeBuilder, MastNodeContext, MastNodeExt, OP_BATCH_SIZE,
-    OP_GROUP_SIZE, OpBatch, SplitNode, SplitNodeBuilder,
+    ExecNode, ExecNodeBuilder, ExternalNode, ExternalNodeBuilder, JoinNode, JoinNodeBuilder,
+    LoopNode, LoopNodeBuilder, MastForestContributor, MastNode, MastNodeBuilder, MastNodeContext,
+    MastNodeExt, OP_BATCH_SIZE, OP_GROUP_SIZE, OpBatch, SplitNode, SplitNodeBuilder,
 };
 
 use crate::{
@@ -337,16 +337,16 @@ impl MastForest {
     /// If we merge another forest into it:
     ///
     /// ```text
-    /// [Block(bar), Call(0)]
+    /// [Block(bar), Loop(0)]
     /// ```
     ///
     /// then we would expect this forest:
     ///
     /// ```text
-    /// [Block(foo), Block(bar), Call(1)]
+    /// [Block(foo), Block(bar), Loop(1)]
     /// ```
     ///
-    /// - The `Call` to the `bar` block was remapped to its new index (now 1, previously 0).
+    /// - The `Loop` body was remapped to the `bar` block's new index (now 1, previously 0).
     /// - The `Block(bar)` was deduplicated any only exists once in the merged forest.
     ///
     /// The function also returns a vector of [`MastForestRootMap`]s, whose length equals the number
@@ -361,7 +361,7 @@ impl MastForest {
     ///
     /// - The root locations of the original forest are unchanged.
     /// - For the second forest, the `bar` block has moved from index 0 to index 1 in the merged
-    ///   forest, and the `Call` has moved from index 1 to 2.
+    ///   forest, and the `Loop` has moved from index 1 to 2.
     ///
     /// If any forest being merged contains an `External(qux)` node and another forest contains a
     /// node whose digest is `qux`, then the external node will be replaced with the `qux` node,
@@ -787,18 +787,8 @@ impl MastForest {
                     let body_digest = computed_hashes[body_id.0 as usize];
                     hasher::merge_in_mast_domain(&[body_digest, Word::default()], LoopNode::DOMAIN)
                 },
-                MastNode::Call(call) => {
-                    let callee_id = call.callee();
-                    check_no_forward_ref(node_id, callee_id)?;
-
-                    let callee_digest = computed_hashes[callee_id.0 as usize];
-                    let domain = if call.is_syscall() {
-                        CallNode::SYSCALL_DOMAIN
-                    } else {
-                        CallNode::CALL_DOMAIN
-                    };
-                    hasher::merge_in_mast_domain(&[callee_digest, Word::default()], domain)
-                },
+                MastNode::Call(call) => node::invocation_digest(call.target(), call.domain()),
+                MastNode::Exec(exec) => node::invocation_digest(exec.target(), ExecNode::DOMAIN),
                 MastNode::Dyn(dyn_node) => {
                     if dyn_node.is_dyncall() {
                         DynNode::DYNCALL_DEFAULT_DIGEST

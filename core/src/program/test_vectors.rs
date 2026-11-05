@@ -4,7 +4,7 @@ use alloc::{collections::BTreeSet, vec::Vec};
 
 const SOURCE: &str = include_str!("../../tests/fixtures/librarytree-vectors.txt");
 
-pub(super) struct Vector {
+pub(crate) struct Vector {
     pub id: &'static str,
     pub domain_tag: u32,
     pub bytes: Option<Vec<u8>>,
@@ -12,7 +12,7 @@ pub(super) struct Vector {
     pub digest: [u64; 4],
 }
 
-pub(super) fn vector(id: &str) -> Vector {
+pub(crate) fn vector(id: &str) -> Vector {
     vectors()
         .into_iter()
         .find(|vector| vector.id == id)

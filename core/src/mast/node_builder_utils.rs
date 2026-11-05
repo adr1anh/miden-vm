@@ -36,8 +36,12 @@ where
             MastNodeBuilder::Loop(builder)
         },
         MastNode::Call(call_node) => {
-            let builder = call_node.to_builder(source_forest).remap_children(node_remapping);
+            let builder = call_node.to_builder(source_forest);
             MastNodeBuilder::Call(builder)
+        },
+        MastNode::Exec(exec_node) => {
+            let builder = exec_node.to_builder(source_forest);
+            MastNodeBuilder::Exec(builder)
         },
         MastNode::Block(basic_block_node) => {
             // Preserve stored batches so copied blocks do not turn padding operations into raw

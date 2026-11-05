@@ -16,6 +16,9 @@ pub use call_node::{CallNode, CallNodeBuilder};
 mod dyn_node;
 pub use dyn_node::{DynNode, DynNodeBuilder};
 
+mod exec_node;
+pub use exec_node::{ExecNode, ExecNodeBuilder};
+
 mod external;
 pub use external::{ExternalNode, ExternalNodeBuilder};
 
@@ -36,7 +39,16 @@ mod mast_forest_contributor;
 pub(super) use mast_forest_contributor::fingerprint_with_child_fingerprints;
 pub use mast_forest_contributor::{MastForestContributor, MastNodeBuilder, MastNodeContext};
 
-use crate::mast::{MastForest, MastNodeId};
+use crate::{
+    chiplets::hasher,
+    mast::{MastForest, MastNodeId},
+    program::ProcedureKey,
+};
+
+/// Commits to an immediate invocation's key and mode, independently of its implementation.
+pub(super) fn invocation_digest(target: ProcedureKey, domain: Felt) -> Word {
+    hasher::merge_in_mast_domain(&[target.into_word(), Word::default()], domain)
+}
 
 pub trait MastNodeExt {
     /// Returns a commitment/hash of the node.
@@ -85,6 +97,7 @@ pub enum MastNode {
     Join(JoinNode),
     Split(SplitNode),
     Loop(LoopNode),
+    Exec(ExecNode),
     Call(CallNode),
     Dyn(DynNode),
     External(ExternalNode),
@@ -184,6 +197,17 @@ impl MastNode {
         }
     }
 
+    /// Unwraps the inner exec node if the [`MastNode`] wraps an [`ExecNode`]; panics otherwise.
+    ///
+    /// # Panics
+    /// - if the [`MastNode`] does not wrap an [`ExecNode`].
+    pub fn unwrap_exec(&self) -> &ExecNode {
+        match self {
+            Self::Exec(exec_node) => exec_node,
+            other => unwrap_failed(other, "exec"),
+        }
+    }
+
     /// Unwraps the inner dynamic node if the [`MastNode`] wraps a [`DynNode`]; panics otherwise.
     ///
     /// # Panics
@@ -222,9 +246,202 @@ fn unwrap_failed(node: &MastNode, expected: &str) -> ! {
         MastNode::Join(_) => "join",
         MastNode::Split(_) => "split",
         MastNode::Loop(_) => "loop",
+        MastNode::Exec(_) => "exec",
         MastNode::Call(_) => "call",
         MastNode::Dyn(_) => "dynamic",
         MastNode::External(_) => "external",
     };
     panic!("tried to unwrap {expected} node, but got {actual}");
+}
+
+#[cfg(test)]
+mod keyed_recursion_tests;
+
+#[cfg(test)]
+mod keyed_invocation_tests {
+    use miden_formatting::hex::ToHex;
+
+    use super::*;
+    use crate::{
+        advice::AdviceMap,
+        mast::{
+            DenseMastForestBuilder, ExecutableMastForest, MastForestError, SparseMastForest,
+            node_builder_utils::build_node_with_remapped_ids,
+        },
+        program::test_vectors,
+        utils::LookupByIdx,
+    };
+
+    fn word(values: [u64; 4]) -> Word {
+        Word::new(values.map(Felt::new_unchecked))
+    }
+
+    fn builders(target: ProcedureKey) -> [MastNodeBuilder; 3] {
+        [
+            ExecNodeBuilder::new(target).into(),
+            CallNodeBuilder::new(target).into(),
+            CallNodeBuilder::new_syscall(target).into(),
+        ]
+    }
+
+    fn target(node: &MastNode) -> ProcedureKey {
+        match node {
+            MastNode::Exec(node) => node.target(),
+            MastNode::Call(node) => node.target(),
+            _ => panic!("expected a keyed invocation"),
+        }
+    }
+
+    // Any structural lookup, including a fingerprint or ID remapping lookup, fails the test.
+    struct NoChildren;
+
+    impl MastNodeContext for NoChildren {
+        fn node_count(&self) -> usize {
+            panic!("keyed invocations must not consult a node context")
+        }
+
+        fn get_node_by_id(&self, _node_id: MastNodeId) -> Option<&MastNode> {
+            panic!("keyed invocations must not retrieve target code")
+        }
+    }
+
+    impl<T> LookupByIdx<MastNodeId, T> for NoChildren {
+        fn get(&self, _node_id: MastNodeId) -> Option<&T> {
+            panic!("keyed invocations must not look up child fingerprints or remappings")
+        }
+    }
+
+    #[test]
+    fn keyed_invocation_hashes_commit_key_order_and_mode() {
+        let key = ProcedureKey::new(word([1, 2, 3, 4]));
+        let fixtures = ["mast_exec_key", "mast_call_key", "mast_syscall_key"];
+        let mut digests = Vec::new();
+        for ((builder, fixture_id), opcode) in
+            builders(key).into_iter().zip(fixtures).zip([95, 108, 104])
+        {
+            let fixture = test_vectors::vector(fixture_id);
+            assert_eq!(fixture.domain_tag, opcode);
+            assert_eq!(fixture.payload, [1, 2, 3, 4, 0, 0, 0, 0]);
+            let node = builder.build(&NoChildren).unwrap();
+            let expected = word(fixture.digest);
+            assert_eq!(node.digest(), expected, "{fixture_id}");
+            assert_eq!(node.domain(), Felt::new_unchecked(opcode.into()));
+            assert_eq!(target(&node), key);
+            assert_ne!(
+                expected,
+                hasher::merge_in_mast_domain(
+                    &[Word::default(), key.into_word()],
+                    Felt::new_unchecked(opcode.into()),
+                ),
+                "the key must be the first word",
+            );
+            digests.push(expected);
+        }
+        assert_ne!(digests[0], digests[1]);
+        assert_ne!(digests[0], digests[2]);
+        assert_ne!(digests[1], digests[2]);
+
+        for limb in 0..4 {
+            let mut values = [1, 2, 3, 4];
+            values[limb] += 1;
+            for (builder, original) in
+                builders(ProcedureKey::new(word(values))).into_iter().zip(&digests)
+            {
+                assert_ne!(builder.build(&NoChildren).unwrap().digest(), *original);
+            }
+        }
+    }
+
+    #[test]
+    fn keyed_invocations_have_no_structural_dependencies() {
+        let key = ProcedureKey::new(word([1, 2, 3, 4]));
+        let forest = MastForest::new();
+        let sentinel = MastNodeId::new_unchecked(7);
+
+        for forced_digest in [None, Some(word([9, 10, 11, 12]))] {
+            for builder in builders(key) {
+                let builder = if let Some(digest) = forced_digest {
+                    builder.with_digest(digest)
+                } else {
+                    builder
+                };
+                let fingerprint = builder.fingerprint_for_node(&NoChildren, &NoChildren).unwrap();
+                let node = builder.remap_children(&NoChildren).build(&NoChildren).unwrap();
+                assert_eq!(fingerprint, node.digest());
+                assert_eq!(target(&node), key);
+                if let Some(digest) = forced_digest {
+                    assert_eq!(node.digest(), digest);
+                }
+                assert!(!node.has_children());
+                let mut children = vec![sentinel];
+                node.append_children_to(&mut children);
+                assert_eq!(children, [sentinel]);
+                node.for_each_child(|_| panic!("invocation target is not a structural child"));
+
+                let rebuilt = node.clone().to_builder(&forest).build_linked().unwrap();
+                assert_eq!(rebuilt, node);
+                let copied =
+                    build_node_with_remapped_ids(sentinel, node.clone(), &forest, &NoChildren)
+                        .unwrap()
+                        .build_linked()
+                        .unwrap();
+                assert_eq!(copied, node);
+            }
+        }
+    }
+
+    #[test]
+    fn keyed_invocations_display_keys_without_target_code() {
+        let key = ProcedureKey::new(word([1, 2, 3, 4]));
+        let forest = MastForest::new();
+        for (builder, mode) in builders(key).into_iter().zip(["exec", "call", "syscall"]) {
+            let node = builder.build(&NoChildren).unwrap();
+            assert_eq!(
+                format!("{}", node.to_display(&forest)),
+                format!("{mode}.{}", key.as_word().as_bytes().to_hex_with_prefix()),
+            );
+        }
+    }
+
+    #[test]
+    fn keyed_invocations_validate_without_target_code() {
+        let key = ProcedureKey::new(word([1, 2, 3, 4]));
+        let mut dense = DenseMastForestBuilder::new();
+        for builder in builders(key) {
+            let id = dense.push_node(builder).unwrap();
+            dense.mark_root(id);
+        }
+        let forest = dense.build().unwrap();
+        assert_eq!(forest.nodes().len(), 3);
+
+        // A sparse replay needs neither full target code nor a digest-only entry for the key.
+        let nodes = forest
+            .nodes()
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, node)| (MastNodeId::new_unchecked(index as u32), node))
+            .collect();
+        let sparse = SparseMastForest::from_serialized_parts(
+            nodes,
+            vec![],
+            forest.procedure_roots().to_vec(),
+            AdviceMap::default(),
+        )
+        .unwrap();
+        for &root in forest.procedure_roots() {
+            assert_eq!(sparse.get_node_by_id(root), Some(&forest[root]));
+        }
+    }
+
+    #[test]
+    fn keyed_invocation_validation_recomputes_the_commitment() {
+        let key = ProcedureKey::new(word([1, 2, 3, 4]));
+        for builder in builders(key) {
+            let mut dense = DenseMastForestBuilder::new();
+            let id = dense.push_node(builder.with_digest(Word::default())).unwrap();
+            dense.mark_root(id);
+            assert!(matches!(dense.build(), Err(MastForestError::HashMismatch { .. })));
+        }
+    }
 }

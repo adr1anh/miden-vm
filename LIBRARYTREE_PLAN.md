@@ -109,11 +109,11 @@ Separate canonical declarations and optional body availability; add validated Na
 
 **Branch:** `adr1anh/librarytree-05-keyed-execution`. **Git base:** PR 04. **Semantic dependencies:** 01, 02; agree resolver/Resolve ledger schema with PRs 06–07.
 
-**Existing files:** `processor/src/execution/{mod,call,dyn,external}.rs`, `processor/src/fast/{mod,operation,execution_api,step}.rs`, processor/executor/options/errors/continuation stack, host/default/forest store and public exports. **New:** small shared resolver/EXEC modules and bounded environment witness provider; focused `processor/src/fast/tests/environment.rs`.
+**Existing files:** `processor/src/execution/{mod,call,dyn,external}.rs`, `processor/src/fast/{mod,operation,execution_api,step}.rs`, processor/executor/options/errors/continuation stack, host/default/forest store and public exports. **New:** small shared resolver/EXEC modules and bounded environment witness provider; focused `processor/src/fast/tests/environment.rs`. Extend the core arbitrary fixture with an authenticated environment and migrate `processor/src/fast/tests/arbitrary_forest.rs` so executable generation covers actual keyed invocations again.
 
 Resolve `(R_E,K)->(N,D,opening)` before typed D-indexed code loading. Share prepare/commit transitions across pure/source-aware and sync/async execution; authenticate before state changes and make retries idempotent. Implement ENTRY/all runtime modes, requested-key caller/principals, context/FMP/overflow/return behavior and checked budgets. Remove kernel-ROM/digest dispatch authority. Cache bindings by `(R_E,K)`, code by D, and preserve code-root checks/advice merge-once.
 
-**Acceptance:** complete mode/context/principal/local/host-loaded matrix; same-D aliases distinct; no fallback; wrong syscall namespace/descendant rejects; unknown key versus unavailable/bad D differ; cache/root/limit boundaries and failures/retries do not double-pop/save/charge. **Checks:** `cargo test -p miden-processor --lib environment`; `cargo test -p miden-processor --lib fast::tests`; focused existing source-debug/cache/aggregate-stack regressions. Runtime success alone is not proof acceptance.
+**Acceptance:** complete mode/context/principal/local/host-loaded matrix; same-D aliases distinct; no fallback; wrong syscall namespace/descendant rejects; unknown key versus unavailable/bad D differ; cache/root/limit boundaries and failures/retries do not double-pop/save/charge. **Checks:** `cargo test -p miden-processor --lib environment`; `cargo test -p miden-processor --lib fast::tests`; focused existing source-debug/cache/aggregate-stack regressions. The environment-aware executable generator must exercise retained keyed invocations with valid bindings and bounded terminating call graphs, rather than leaving the temporary PR 02 structural-only restriction in place. Runtime success alone is not proof acceptance.
 
 ### PR 06 Packed Library witness and authenticated lookup
 
@@ -245,13 +245,15 @@ by child words. Decoding requires exact input and a caller-supplied resource bud
 header/count encoding does not change the selected node hashes. Implement and test this codec
 separately from hash-only constructors. Protocol-specific codecs remain outside this decision.
 
-**D2 Existing MASM compatibility, clarified with the user on 2 November 2026:** existing MASM
-programs must keep working after rebuilding; serialized MAST files may use the new format.
-Preserve existing invocation/procref syntax, interpreting digest-shaped target words as keys.
-The new keyed execution semantics and optional explicit inline opt-in still apply. Do not retain
-runtime digest dispatch or infer an authenticated binding from code availability. Source syntax
-compatibility does not require preserving old child-ID nodes, serialized layouts or digest-based
-implementation lookup. Include existing source regressions in PRs 04/09 and final qualification.
+**D2 Existing MASM compatibility, clarified with the user on 2 November 2026:** preserve existing
+MASM syntax and stack/memory calling conventions. Recompilation and new serialized MAST formats
+are allowed. Callable references and `caller` use ProcedureKeys; `exec` becomes a same-context
+runtime invocation. Migration may update hardcoded digest identities and hash/cycle-count
+expectations without requiring new syntax for existing programs. Existing digest-shaped target
+words use the key interpretation. Optional inline syntax remains an extension. Do not retain
+runtime digest dispatch or infer an authenticated binding from code availability. This does not
+require preserving child-ID invocation nodes, old serialized layouts or digest-based implementation
+lookup. Include existing source and stack/memory regressions in PRs 04/05/09 and final qualification.
 
 ## Open decisions and external gates
 
@@ -276,7 +278,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | planned | — | — | Depends on 01 |
+| 02 MAST | in-progress | Latest `9ebac7cc1`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, core seed generation, public API and full-feature Clippy pass | Final audit: add explicit structural-cycle/keyed-recursion cases. Processor witness checks await 05/09; fuzz smoke at 16. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
@@ -479,3 +481,129 @@ Passed after successful AC/heavy-work guards:
 
 PR 01 acceptance is complete. D2 governs the following MAST/toolchain work; its source-compatibility
 regressions remain PRs 04/09/final gates rather than an unimplemented PR 01 runtime claim.
+
+### PR 02 EXEC opcode reservation
+
+Commit `66c94030b` reserves control opcode 0x5f without adding a basic Operation or activating
+runtime/AIR behavior. Independent review found no issue. After successful AC/heavy-work guards,
+`CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib operations` passed thirteen tests,
+including the deterministic pin/rejection, control strategy and exhaustive wire sweep. Core Clippy
+(`--lib --tests -- -D warnings`), pinned-nightly formatting and staged whitespace checks passed.
+
+The following node/API refactor intentionally precedes codec/test migration. Any observed
+intermediate failure must be recorded before deferring its closure to the next PR 02 slice;
+processor/assembler semantic migration remains PRs 05/09. No old digest authority is retained.
+
+### PR 02 Childless keyed invocation nodes
+
+Commit `7be0e06c0` directly replaces Call/SysCall child IDs with ProcedureKey targets, adds Exec,
+and shares opcode-domain K||0 hashing. Traversal/remapping/fingerprints, forest recomputation and
+sparse structural validation no longer treat invocations as structural edges. External(D) remains
+structural. Independent review found no actionable issue; three calibrated frozen mode vectors
+join the shared fixture (39 rows total). Five focused node tests are present but not yet runnable.
+
+Pinned-nightly core formatting and staged whitespace checks passed. After successful AC/heavy-work
+guards, `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --lib` failed with eight errors
+in `serialization/info.rs` (old callee accessor/constructor types) and `serialization/sparse.rs`
+(old callee accessor/constructor/build_linked). Raw log is uncommitted at
+`.scratch/librarytree/logs/pr02-keyed-node-check.log`; short findings are separate.
+
+This is intentional intermediate breakage allowed by the workflow, not passed acceptance. Complete
+these codecs next in PR 02; then migrate old core tests/arbitrary constructors and run the pending
+node/MAST/serialization checks and Clippy. Processor/assembler semantic consumers remain PRs 05/09.
+
+### PR 02 Dense and sparse keyed codec closure
+
+Commit `85171ecad` writes canonical key payloads for sparse Call/SysCall/Exec, adds sparse tag9,
+and requires ExecutionWitness v3 before reading replay payloads. Direct sparse encoding remains
+trusted/version-local; independent containment review found no other persisted sparse envelope.
+Commit `9d80e8eaf` implements dense v0.0.6 with one shared layout scanner, canonical per-invocation
+slots, separate target/external sections, hashless key retention and key-aware metadata/views.
+The writer, materialization and bulk metadata are linear; wire target access is O(1). In-memory
+single-entry metadata retains its documented existing prefix-scan tradeoff. Independent reviews
+found no actionable issue. Seven sparse and thirteen dense tests are authored but not yet runnable.
+
+Passed on the integrated codec working tree after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --lib`.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly formatting and staged whitespace checks.
+
+`CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --no-run` fails with 42 errors
+in legacy constructor/callee-ID fixtures: basic_block_node/arbitrary.rs (7), serialization/tests.rs
+(7), merger/tests.rs (23), multi_forest_node_iterator.rs (4), mast/tests.rs (1). Full compiler log
+is uncommitted at `.scratch/librarytree/logs/pr02-core-test-compilation.log`. Migrate those next,
+then run the pending focused tests and test-inclusive Clippy. The earlier eight production codec
+errors are resolved. Processor witness tests remain deferred until PRs 05/09 close downstream
+invocation consumers; no processor test pass is claimed.
+
+### Executable arbitrary-fixture integration obligation
+
+The PR 02 generator migration preserves GenerationMode::Executable's runtime guarantee by
+excluding unresolved immediate keyed invocations from that mode during the staged cutover.
+StructureOnly continues to generate all keyed invocation modes with independent keys and explicit
+retained code roots; it makes no executable-environment promise. The existing D-only KernelDescriptor
+is metadata, not key authority. Do not weaken the executable guarantee to caller-supplied bindings.
+PR 05 must supply an environment-aware executable fixture and update its sole processor consumer,
+`processor/src/fast/tests/arbitrary_forest.rs`, restoring meaningful executable invocation coverage.
+This is not a final testing or runtime scope reduction.
+
+### PR 02 Fixture and generator migration validated
+
+Commit `91d52f92c` migrates merger/traversal fixtures to independent symbolic keys and explicit
+body roots, preserves structural replacement/error-code/ordering coverage, and adds all keyed
+modes to structural generation. The executable-mode restriction and PR 05 restoration obligation
+remain as documented above. Commit `90ef69d6d` migrates canonical v0.0.6 serialization expectations,
+including malformed overflow/lazy-digest regressions, sparse keys and old-version rejection.
+Independent review found no concrete issue. The previous 42 test-compilation errors are resolved.
+
+After successful AC/heavy-work guards,
+`CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib mast` passed 198 tests; one manual
+fuzz-seed generator is intentionally ignored. This runs the five keyed-node, thirteen dense and
+seven sparse tests for the first time, alongside existing MAST regressions. Test-inclusive Clippy
+(`CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`),
+pinned-nightly core formatting and staged whitespace checks passed. Full test log stays separate
+at uncommitted `.scratch/librarytree/logs/pr02-mast-tests.log`.
+
+### PR 02 Fuzz source and full-core qualification
+
+Commit `9ebac7cc1` adds pre-serialization expected-key/mode oracles and full/hashless keyed seeds,
+preserving the existing root-order and large-ID checks. Independent bounded review found no issue.
+After successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --features arbitrary`: 398 passed,
+  one manual seed test ignored.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --features arbitrary generate_fuzz_seeds -- --ignored --nocapture`: one passed. Generated MAST corpus stays local; two tracked Program seeds rewritten by the helper were restored, and final cross-stack corpus regeneration remains PR 16.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests --features arbitrary -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --test public_api`: all three fixtures passed.
+- Pinned formatting and staged whitespace checks.
+
+Full test/seed logs stay separate under uncommitted `.scratch/librarytree/logs/`. Fuzz target
+compilation/execution and processor witness tests are not claimed: their dependency graph still
+contains downstream processor/assembler consumers owned by PRs 05/09, with bounded fuzz smoke at 16.
+The final bounded acceptance audit found two evidence gaps to close now: explicit structural
+self/two-node cycle rejection, and a self/mutually-recursive key binding fixture. Existing childless
+tests support these by inference; add dedicated cases rather than claim those gates passed.
+
+### PR 02 Explicit cycles and deferred integration disposition
+
+Commit `364fbb35c` closes both final audit gaps with four test-only cases. Valid-ID corrupted
+structural self/two-node loops reject with the exact cycle error, without claiming a real
+cryptographic hash cycle. Self Call/Exec and mutual keyed recursion derive N/L/K before D,
+construct complete bounded K→D environments and round-trip both wire modes without execution.
+Independent review found no actionable issue.
+
+After successful AC/heavy-work guards, both focused commands passed two tests each:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --features arbitrary canonicalization_rejects_structural`.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib --features arbitrary keyed_recursion_tests`.
+
+Full-feature test-inclusive Clippy and pinned formatting/staged whitespace checks passed again.
+The earlier 398-test full-core pass predates these four added cases; no rerun is claimed.
+PR 02 core acceptance is closed, but its row remains implemented-awaiting-validation until the
+required cross-graph checks run. After PRs 05/09 close old invocation consumers, run the authored
+`CARGO_NET_OFFLINE=true cargo test --locked -p miden-processor --lib trace::tests::witness_wire_rejects_unsupported_version`
+and related witness round trips. `tools/miden-core-fuzz/Cargo.toml` directly depends on that
+processor and assembly graph, so its build/smoke remains PR 16, not a claimed current pass.
+The local stack may continue under the workflow's intentional intermediate-build allowance.

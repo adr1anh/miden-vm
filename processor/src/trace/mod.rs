@@ -138,8 +138,10 @@ const EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER: usize = 4;
 /// Current wire format version for [`ExecutionWitness`] serialization.
 ///
 /// The version is written as the first byte of every serialized witness. Deserialization only
-/// accepts this exact value; older formats are intentionally unsupported.
-const EXECUTION_WITNESS_WIRE_VERSION: u8 = 2;
+/// accepts this exact value; older formats are intentionally unsupported. Version 3 changes sparse
+/// CALL/SYSCALL targets from callee node IDs to procedure keys and adds keyed EXEC nodes. This
+/// replay version is separate from proof transport and execution-claim versions.
+const EXECUTION_WITNESS_WIRE_VERSION: u8 = 3;
 
 impl Serializable for ExecutionWitness {
     fn write_into<W: ByteWriter>(&self, target: &mut W) {
@@ -364,14 +366,18 @@ mod wire_tests {
     fn witness_wire_rejects_unsupported_version() {
         let mut bytes = deferred_witness_bytes();
         assert!(ExecutionWitness::read_from_bytes(&bytes).is_ok());
-        assert_eq!(bytes[0], 2, "Eidos witnesses must use wire version 2");
+        assert_eq!(bytes[0], 3, "keyed replay witnesses must use wire version 3");
 
         // Rejected versions are checked before decoding replay or witness payloads.
-        for version in [0, 1, super::EXECUTION_WITNESS_WIRE_VERSION + 1] {
+        for version in [0, 1, 2, super::EXECUTION_WITNESS_WIRE_VERSION + 1] {
             bytes[0] = version;
             let err = ExecutionWitness::read_from_bytes(&bytes)
                 .expect_err("unsupported witness format must be rejected");
             assert!(format!("{err:?}").contains("unsupported execution witness wire version"));
+            assert!(
+                ExecutionWitness::read_from_bytes_trusted(&bytes).is_err(),
+                "trusted decoding must also reject legacy replay formats"
+            );
         }
     }
 

@@ -115,6 +115,7 @@ pub mod opcodes {
     pub const DYNCALL: u8        = 0b0101_1100;
     pub const EVALCIRCUIT: u8    = 0b0101_1101;
     pub const LOGDEFERRED: u8  = 0b0101_1110;
+    pub const EXEC: u8           = 0b0101_1111;
 
     pub const MRUPDATE: u8       = 0b0110_0000;
     pub const CRYPTOSTREAM: u8   = 0b0110_0100;

@@ -9,9 +9,8 @@ use crate::{
     advice::AdviceMap,
     chiplets::hasher,
     mast::{
-        BasicBlockNodeBuilder, CallNodeBuilder, DynNode, DynNodeBuilder, ExternalNodeBuilder,
-        JoinNodeBuilder, MastForest, MastForestContributor, MastForestError, MastNodeExt,
-        MastNodeId,
+        BasicBlockNodeBuilder, DynNode, DynNodeBuilder, ExternalNodeBuilder, JoinNodeBuilder,
+        MastForest, MastForestContributor, MastForestError, MastNodeExt, MastNodeId,
     },
     operations::Operation,
     program::{KernelDescriptor, ProgramInfo},
@@ -249,7 +248,7 @@ fn remove_nodes_rejects_nodes_referenced_by_retained_parents() {
     let child = BasicBlockNodeBuilder::new(vec![Operation::Add])
         .add_to_forest(&mut forest)
         .unwrap();
-    let parent = CallNodeBuilder::new(child).add_to_forest(&mut forest).unwrap();
+    let parent = JoinNodeBuilder::new([child, child]).add_to_forest(&mut forest).unwrap();
     forest.make_root(parent);
 
     let mut nodes_to_remove = BTreeSet::new();

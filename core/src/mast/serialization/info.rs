@@ -3,6 +3,7 @@ use super::{NodeDataOffset, basic_blocks::BasicBlockDataDecoder};
 use crate::mast::node::MastNodeExt;
 use crate::{
     mast::{MastForestContributor, MastNode, MastNodeId, Word, node::MastNodeBuilder},
+    program::ProcedureKey,
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
 };
 
@@ -18,6 +19,7 @@ const SYSCALL: u8 = 5;
 const DYN: u8 = 6;
 const DYNCALL: u8 = 7;
 const EXTERNAL: u8 = 8;
+const EXEC: u8 = 9;
 
 // MAST NODE ENTRIES
 // ================================================================================================
@@ -27,8 +29,8 @@ const EXTERNAL: u8 = 8;
 /// This is the random-access portion of the node table. Digests are intentionally modeled
 /// separately so the wire format can move them into dedicated sections.
 ///
-/// Child indices for `Join`, `Split`, `Loop`, `Call`, and `SysCall` are stored inline so random
-/// access does not need any extra pointer chasing.
+/// Structural child indices are stored inline. Immediate invocations instead store an index
+/// into the separate procedure-key section; the key is never a structural child.
 ///
 /// The serialized representation is always 8 bytes, which keeps the node-entry table fixed-width
 /// on the wire.
@@ -55,14 +57,17 @@ pub enum MastNodeEntry {
         ops_offset: u32,
     } = BLOCK,
     Call {
-        callee_id: u32,
+        target_slot: u32,
     } = CALL,
     SysCall {
-        callee_id: u32,
+        target_slot: u32,
     } = SYSCALL,
     Dyn = DYN,
     Dyncall = DYNCALL,
     External = EXTERNAL,
+    Exec {
+        target_slot: u32,
+    } = EXEC,
 }
 
 /// Constructors
@@ -70,8 +75,14 @@ impl MastNodeEntry {
     /// Serialized byte size of one fixed-width MAST node entry.
     pub const SERIALIZED_SIZE: usize = 8;
 
-    /// Constructs a new [`MastNodeEntry`] from a [`MastNode`].
-    pub fn new(mast_node: &MastNode, ops_offset: NodeDataOffset) -> Self {
+    /// Constructs a fixed entry from a node and its serialization indices.
+    ///
+    /// `target_slot` must be present for immediate invocations. The forest writer assigns these
+    /// slots in node order; they do not identify structural children.
+    ///
+    /// # Panics
+    /// Panics if an immediate invocation has no target slot.
+    pub fn new(mast_node: &MastNode, ops_offset: NodeDataOffset, target_slot: Option<u32>) -> Self {
         use MastNode::*;
 
         if !matches!(mast_node, &Block(_)) {
@@ -91,10 +102,17 @@ impl MastNodeEntry {
             Loop(loop_node) => Self::Loop { body_id: loop_node.body().0 },
             Call(call_node) => {
                 if call_node.is_syscall() {
-                    Self::SysCall { callee_id: call_node.callee().0 }
+                    Self::SysCall {
+                        target_slot: target_slot.expect("invocation requires a target slot"),
+                    }
                 } else {
-                    Self::Call { callee_id: call_node.callee().0 }
+                    Self::Call {
+                        target_slot: target_slot.expect("invocation requires a target slot"),
+                    }
                 }
+            },
+            Exec(_) => Self::Exec {
+                target_slot: target_slot.expect("invocation requires a target slot"),
             },
             Dyn(dyn_node) => {
                 if dyn_node.is_dyncall() {
@@ -107,6 +125,16 @@ impl MastNodeEntry {
         }
     }
 
+    /// Returns the procedure-key slot for an immediate invocation.
+    pub fn target_slot(self) -> Option<u32> {
+        match self {
+            Self::Call { target_slot }
+            | Self::SysCall { target_slot }
+            | Self::Exec { target_slot } => Some(target_slot),
+            _ => None,
+        }
+    }
+
     /// Attempts to convert this [`MastNodeEntry`] into a [`MastNodeBuilder`].
     ///
     /// The `node_count` is the total expected number of nodes in the
@@ -116,7 +144,13 @@ impl MastNodeEntry {
         node_count: usize,
         basic_block_data_decoder: &BasicBlockDataDecoder,
         digest: Word,
+        target: Option<ProcedureKey>,
     ) -> Result<MastNodeBuilder, DeserializationError> {
+        if self.target_slot().is_some() != target.is_some() {
+            return Err(DeserializationError::InvalidValue(
+                "node entry and invocation target presence do not match".into(),
+            ));
+        }
         match self {
             Self::Block { ops_offset } => {
                 let op_batches = basic_block_data_decoder.decode_operations(ops_offset)?;
@@ -143,17 +177,25 @@ impl MastNodeEntry {
                 let builder = crate::mast::node::LoopNodeBuilder::new(body_id).with_digest(digest);
                 Ok(MastNodeBuilder::Loop(builder))
             },
-            Self::Call { callee_id } => {
-                let callee_id = MastNodeId::from_u32_with_node_count(callee_id, node_count)?;
-                let builder =
-                    crate::mast::node::CallNodeBuilder::new(callee_id).with_digest(digest);
+            Self::Call { .. } | Self::SysCall { .. } => {
+                let target = target.ok_or_else(|| {
+                    DeserializationError::InvalidValue("missing invocation target".into())
+                })?;
+                let builder = if matches!(self, Self::SysCall { .. }) {
+                    crate::mast::node::CallNodeBuilder::new_syscall(target)
+                } else {
+                    crate::mast::node::CallNodeBuilder::new(target)
+                }
+                .with_digest(digest);
                 Ok(MastNodeBuilder::Call(builder))
             },
-            Self::SysCall { callee_id } => {
-                let callee_id = MastNodeId::from_u32_with_node_count(callee_id, node_count)?;
-                let builder =
-                    crate::mast::node::CallNodeBuilder::new_syscall(callee_id).with_digest(digest);
-                Ok(MastNodeBuilder::Call(builder))
+            Self::Exec { .. } => {
+                let target = target.ok_or_else(|| {
+                    DeserializationError::InvalidValue("missing invocation target".into())
+                })?;
+                Ok(MastNodeBuilder::Exec(
+                    crate::mast::node::ExecNodeBuilder::new(target).with_digest(digest),
+                ))
             },
             Self::Dyn => Ok(MastNodeBuilder::Dyn(
                 crate::mast::node::DynNodeBuilder::new_dyn().with_digest(digest),
@@ -184,8 +226,9 @@ impl Serializable for MastNodeEntry {
             } => Self::encode_u32_pair(if_branch, else_branch),
             Self::Loop { body_id: body } => Self::encode_u32_payload(body),
             Self::Block { ops_offset } => Self::encode_u32_payload(ops_offset),
-            Self::Call { callee_id } => Self::encode_u32_payload(callee_id),
-            Self::SysCall { callee_id } => Self::encode_u32_payload(callee_id),
+            Self::Call { target_slot }
+            | Self::SysCall { target_slot }
+            | Self::Exec { target_slot } => Self::encode_u32_payload(target_slot),
             Self::Dyn | Self::Dyncall | Self::External => 0,
         };
 
@@ -223,16 +266,29 @@ impl Deserializable for MastNodeEntry {
                 Ok(Self::Block { ops_offset })
             },
             CALL => {
-                let callee_id = Self::decode_u32_payload(payload)?;
-                Ok(Self::Call { callee_id })
+                let target_slot = Self::decode_u32_payload(payload)?;
+                Ok(Self::Call { target_slot })
             },
             SYSCALL => {
-                let callee_id = Self::decode_u32_payload(payload)?;
-                Ok(Self::SysCall { callee_id })
+                let target_slot = Self::decode_u32_payload(payload)?;
+                Ok(Self::SysCall { target_slot })
             },
-            DYN => Ok(Self::Dyn),
-            DYNCALL => Ok(Self::Dyncall),
-            EXTERNAL => Ok(Self::External),
+            EXEC => {
+                let target_slot = Self::decode_u32_payload(payload)?;
+                Ok(Self::Exec { target_slot })
+            },
+            DYN | DYNCALL | EXTERNAL => {
+                if payload != 0 {
+                    return Err(DeserializationError::InvalidValue(
+                        "unused MAST node payload bits must be zero".into(),
+                    ));
+                }
+                Ok(match discriminant {
+                    DYN => Self::Dyn,
+                    DYNCALL => Self::Dyncall,
+                    _ => Self::External,
+                })
+            },
             _ => Err(DeserializationError::InvalidValue(format!(
                 "Invalid tag for MAST node: {discriminant}"
             ))),
@@ -300,12 +356,21 @@ impl MastNodeEntry {
     }
 }
 
+/// Returns an immediate invocation's semantic target without resolving an implementation.
+pub(super) fn invocation_target(node: &MastNode) -> Option<ProcedureKey> {
+    match node {
+        MastNode::Call(node) => Some(node.target()),
+        MastNode::Exec(node) => Some(node.target()),
+        _ => None,
+    }
+}
+
 // MAST NODE INFO
 // ================================================================================================
 
-/// Logical node metadata combining fixed-width structure and a digest value.
+/// Logical node metadata combining fixed-width structure, digest, and an invocation target.
 ///
-/// This is a convenience type for APIs that want both pieces together. The wire format does not
+/// This is a convenience type for APIs that want these pieces together. The wire format does not
 /// require `MastNodeInfo` to appear as one contiguous fixed-width section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(
@@ -315,6 +380,7 @@ impl MastNodeEntry {
 pub struct MastNodeInfo {
     entry: MastNodeEntry,
     digest: Word,
+    target: Option<ProcedureKey>,
 }
 
 impl MastNodeInfo {
@@ -322,10 +388,15 @@ impl MastNodeInfo {
     ///
     /// For non-basic block nodes, `ops_offset` is ignored, and should be set to 0.
     #[cfg(test)]
-    pub(super) fn new(mast_node: &MastNode, ops_offset: NodeDataOffset) -> Self {
+    pub(super) fn new(
+        mast_node: &MastNode,
+        ops_offset: NodeDataOffset,
+        target_slot: Option<u32>,
+    ) -> Self {
         Self {
-            entry: MastNodeEntry::new(mast_node, ops_offset),
+            entry: MastNodeEntry::new(mast_node, ops_offset, target_slot),
             digest: mast_node.digest(),
+            target: invocation_target(mast_node),
         }
     }
 
@@ -340,8 +411,22 @@ impl MastNodeInfo {
     }
 
     /// Builds node metadata directly from serialized components.
-    pub(crate) fn from_entry(entry: MastNodeEntry, digest: Word) -> Self {
-        Self { entry, digest }
+    pub(crate) fn from_entry(
+        entry: MastNodeEntry,
+        digest: Word,
+        target: Option<ProcedureKey>,
+    ) -> Result<Self, DeserializationError> {
+        if entry.target_slot().is_some() != target.is_some() {
+            return Err(DeserializationError::InvalidValue(
+                "node entry and invocation target presence do not match".into(),
+            ));
+        }
+        Ok(Self { entry, digest, target })
+    }
+
+    /// Returns the procedure key for an immediate invocation, if any.
+    pub fn target(&self) -> Option<ProcedureKey> {
+        self.target
     }
 }
 
@@ -350,6 +435,9 @@ impl Serializable for MastNodeInfo {
     fn write_into<W: ByteWriter>(&self, target: &mut W) {
         self.entry.write_into(target);
         self.digest.write_into(target);
+        if let Some(key) = self.target {
+            key.write_into(target);
+        }
     }
 }
 
@@ -358,7 +446,8 @@ impl Deserializable for MastNodeInfo {
     fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
         let entry = MastNodeEntry::read_from(source)?;
         let digest = Word::read_from(source)?;
-        Ok(Self { entry, digest })
+        let target = entry.target_slot().map(|_| ProcedureKey::read_from(source)).transpose()?;
+        Ok(Self { entry, digest, target })
     }
 
     /// Returns the minimum serialized size: 8 bytes for `MastNodeEntry` + 32 bytes for `Word`.
@@ -375,7 +464,7 @@ mod arbitrary {
     use proptest::prelude::*;
 
     use super::{MastNodeEntry, MastNodeInfo};
-    use crate::Word;
+    use crate::{Word, program::ProcedureKey};
 
     impl Arbitrary for MastNodeEntry {
         type Parameters = ();
@@ -406,8 +495,9 @@ mod arbitrary {
                     .boxed(),
                 any::<u32>().prop_map(|body| Self::Loop { body_id: body }).boxed(),
                 any::<u32>().prop_map(|offset| Self::Block { ops_offset: offset }).boxed(),
-                any::<u32>().prop_map(|callee| Self::Call { callee_id: callee }).boxed(),
-                any::<u32>().prop_map(|callee| Self::SysCall { callee_id: callee }).boxed(),
+                any::<u32>().prop_map(|callee| Self::Call { target_slot: callee }).boxed(),
+                any::<u32>().prop_map(|callee| Self::SysCall { target_slot: callee }).boxed(),
+                any::<u32>().prop_map(|target_slot| Self::Exec { target_slot }).boxed(),
                 Just(Self::Dyn),
                 Just(Self::Dyncall),
                 Just(Self::External),
@@ -421,10 +511,13 @@ mod arbitrary {
         type Strategy = BoxedStrategy<Self>;
 
         fn arbitrary_with(_args: Self::Parameters) -> Self::Strategy {
-            // Entry and digest are independent on the wire; both components are valid for any
-            // value, so no construction invariant exists.
-            (any::<MastNodeEntry>(), any::<Word>())
-                .prop_map(|(entry, digest)| Self::from_entry(entry, digest))
+            // Immediate entries need a semantic target as well as the serialization slot.
+            (any::<MastNodeEntry>(), any::<Word>(), any::<Word>())
+                .prop_map(|(entry, digest, key)| {
+                    let target = entry.target_slot().map(|_| ProcedureKey::new(key));
+                    Self::from_entry(entry, digest, target)
+                        .expect("arbitrary metadata has a matching target")
+                })
                 .boxed()
         }
     }
