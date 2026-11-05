@@ -281,36 +281,49 @@ impl TraceLenSummary {
 // CHIPLET LENGTHS
 // ================================================================================================
 
-/// Contains trace lengths of all chiplets: hash, bitwise, memory, ACE, and kernel ROM.
+/// Physical band lengths of the packed Chiplets trace, including the complete Library prefix.
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChipletsLengths {
+    library_len: usize,
     hash_chiplet_len: usize,
-    bitwise_chiplet_len: usize,
+    aead_len: usize,
     memory_chiplet_len: usize,
     ace_chiplet_len: usize,
-    kernel_rom_len: usize,
+    bitwise_chiplet_len: usize,
 }
 
 impl ChipletsLengths {
     pub fn from_parts(
+        library_len: usize,
         hash_len: usize,
-        bitwise_len: usize,
+        aead_len: usize,
         memory_len: usize,
         ace_len: usize,
-        kernel_len: usize,
+        bitwise_len: usize,
     ) -> Self {
         ChipletsLengths {
+            library_len,
             hash_chiplet_len: hash_len,
-            bitwise_chiplet_len: bitwise_len,
+            aead_len,
             memory_chiplet_len: memory_len,
             ace_chiplet_len: ace_len,
-            kernel_rom_len: kernel_len,
+            bitwise_chiplet_len: bitwise_len,
         }
     }
 
-    /// Returns the length of the hash chiplet trace.
+    /// Returns the aligned Library prefix length, including its terminal PAD pairs.
+    pub fn library_len(&self) -> usize {
+        self.library_len
+    }
+
+    /// Returns the length of the hash Controller band, including its alignment rows.
     pub fn hash_chiplet_len(&self) -> usize {
         self.hash_chiplet_len
+    }
+
+    /// Returns the length of the separate AEAD stream band.
+    pub fn aead_len(&self) -> usize {
+        self.aead_len
     }
 
     /// Returns the length of the bitwise trace.
@@ -328,20 +341,16 @@ impl ChipletsLengths {
         self.ace_chiplet_len
     }
 
-    /// Returns the length of the kernel ROM trace.
-    pub fn kernel_rom_len(&self) -> usize {
-        self.kernel_rom_len
-    }
-
     /// Returns the length of the trace required to accommodate chiplet components and 1
     /// mandatory padding row required for ensuring sufficient trace length for auxiliary connector
     /// columns that rely on the memory chiplet.
     pub fn trace_len(&self) -> usize {
-        self.hash_chiplet_len()
-            + self.bitwise_chiplet_len()
+        self.library_len()
+            + self.hash_chiplet_len()
+            + self.aead_len()
             + self.memory_chiplet_len()
             + self.ace_chiplet_len()
-            + self.kernel_rom_len()
+            + self.bitwise_chiplet_len()
             + 1
     }
 }
@@ -374,7 +383,7 @@ mod tests {
         let heights = [MIN_TRACE_LEN, 2 * MIN_TRACE_LEN, 4 * MIN_TRACE_LEN, 1 << 16];
         let summary = TraceLenSummary::new(
             17,
-            ChipletsLengths::from_parts(19, 0, 0, 0, 0),
+            ChipletsLengths::from_parts(0, 19, 0, 0, 0, 0),
             3 * EIDOS_COMPRESSION_CYCLE_LEN,
             1 << 16,
             heights,

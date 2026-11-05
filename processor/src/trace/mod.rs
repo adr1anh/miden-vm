@@ -21,7 +21,7 @@ pub mod chiplets;
 pub(crate) mod execution_tracer;
 pub(crate) mod keyed;
 pub(crate) mod limits;
-pub use keyed::ReplayReadLimits;
+pub use keyed::{KeyedReplayError, ReplayReadLimits, ReplayResource};
 
 mod block_stack;
 mod parallel;

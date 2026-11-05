@@ -48,8 +48,9 @@ pub struct ReplayReadLimits {
     pub max_validation_peak_bytes: usize,
 }
 
+/// An explicit resource bounded during keyed capture or replay validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReplayResource {
+pub enum ReplayResource {
     Events,
     RetainedBytes,
     PreparePeakBytes,
@@ -58,8 +59,9 @@ pub(crate) enum ReplayResource {
     WireBytes,
 }
 
+/// Failure while preparing keyed trace data or revalidating an execution witness.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum KeyedReplayError {
+pub enum KeyedReplayError {
     #[error("invalid keyed replay: {0}")]
     Invalid(&'static str),
     #[error("keyed replay {resource:?} limit {limit} is below requested {requested}")]
@@ -171,12 +173,17 @@ pub(crate) struct EnvironmentReplay {
 pub(crate) struct PreparedEnvironmentReplay {
     replay: EnvironmentReplay,
     retained_bytes: usize,
+    native_retained_bytes: usize,
     validation_work: usize,
 }
 
 impl PreparedEnvironmentReplay {
     pub(crate) const fn retained_bytes(&self) -> usize {
         self.retained_bytes
+    }
+
+    pub(crate) const fn native_retained_bytes(&self) -> usize {
+        self.native_retained_bytes
     }
 
     pub(crate) const fn validation_work(&self) -> usize {
@@ -207,6 +214,29 @@ impl EnvironmentReplay {
         } else {
             Err(KeyedReplayError::Invalid("environment has not been natively revalidated"))
         }
+    }
+
+    /// Checks the retained native input without decoding a second authority or copying its ledger.
+    pub(crate) fn require_completed_session(
+        &self,
+        session: &ResolutionSession,
+    ) -> Result<(), KeyedReplayError> {
+        self.require_validated()?;
+        session.finalize()?;
+        let entry = session
+            .bindings()
+            .first()
+            .copied()
+            .ok_or(KeyedReplayError::Invalid("session entry is absent"))?;
+        if session.descriptor() != self.descriptor
+            || entry.procedure_key() != self.descriptor.entry_key()
+            || ReplayEntry::from_binding(entry) != self.entry
+        {
+            return Err(KeyedReplayError::Invalid(
+                "completed native session differs from environment replay",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn retained_bytes(&self) -> Result<usize, KeyedReplayError> {
@@ -247,6 +277,10 @@ impl EnvironmentReplay {
         {
             return Err(KeyedReplayError::Invalid("capture entry differs from the native session"));
         }
+        // Root-END preparation reserves no new native buffers. These exact capacities are also
+        // retained after the original completed session moves into TraceReplay.
+        let native_retained_bytes = session.counters().retained_bytes;
+        let other_retained_bytes = add(other_retained_bytes, native_retained_bytes)?;
         let count = session.ledger().occurrences().len();
         let inline_bytes = add(size_of::<ExecutionDescriptor>(), size_of::<ReplayEntry>())?;
         let requested = add(inline_bytes, array_bytes::<ReplayOccurrence>(count)?)?;
@@ -289,6 +323,7 @@ impl EnvironmentReplay {
                 validated: false,
             },
             retained_bytes: retained,
+            native_retained_bytes,
             validation_work: work.used,
         })
     }
@@ -377,7 +412,7 @@ impl EnvironmentReplay {
         policies: EnvironmentTraceLimits,
         read: ReplayReadLimits,
         fragment_size: usize,
-    ) -> Result<(), KeyedReplayError> {
+    ) -> Result<ResolutionSession, KeyedReplayError> {
         self.validated = false;
         // Nonabortable trust revocation is security cleanup, before fallible accounting. It
         // visits only context headers, never event queues. Subsequent validation scans are
@@ -410,16 +445,20 @@ impl EnvironmentReplay {
         limit(ReplayResource::RetainedBytes, raw_bytes, policies.max_retained_bytes)?;
         limit(ReplayResource::ValidationPeakBytes, raw_bytes, read.max_validation_peak_bytes)?;
         validate_fragment_rows(contexts, fragment_size, events, &mut work)?;
-        let available = read.max_validation_peak_bytes - raw_bytes;
-        // These policies are clamped before *any* native allocation. Native preparation includes
-        // the consumed input path, its complete Lists, old native buffers and staged replacements.
+        let peak_available = read.max_validation_peak_bytes - raw_bytes;
+        let retained_available = policies.max_retained_bytes - raw_bytes;
+        // Clamp before any native allocation: the native owner survives validation and must fit
+        // both retained and peak allowance. Temporary paths/replacement buffers consume peak only.
+        // Native preparation includes full Lists, old native buffers and staged replacements.
         let mut session_limits = environment.session_limits();
         session_limits.max_prepare_peak_bytes =
-            session_limits.max_prepare_peak_bytes.min(available);
-        session_limits.max_retained_bytes = session_limits.max_retained_bytes.min(available);
+            session_limits.max_prepare_peak_bytes.min(peak_available);
+        session_limits.max_retained_bytes =
+            session_limits.max_retained_bytes.min(retained_available).min(peak_available);
         let mut ledger_limits = environment.ledger_limits();
-        ledger_limits.max_peak_bytes = ledger_limits.max_peak_bytes.min(available);
-        ledger_limits.max_retained_bytes = ledger_limits.max_retained_bytes.min(available);
+        ledger_limits.max_peak_bytes = ledger_limits.max_peak_bytes.min(peak_available);
+        ledger_limits.max_retained_bytes =
+            ledger_limits.max_retained_bytes.min(retained_available).min(peak_available);
         let mut session = ResolutionSession::new(self.descriptor, ledger_limits, session_limits);
         let binding = self.resolve_path(
             self.entry.opening,
@@ -497,18 +536,29 @@ impl EnvironmentReplay {
         if session.uses().count() != events {
             return Err(KeyedReplayError::Invalid("unused native invocation uses"));
         }
-        // The completed session's own use queue is staging. No authority is copied into records
-        // until every event, final occurrence and completion check has succeeded.
-        let mut uses = session.uses();
-        for context in contexts.iter_mut() {
-            for record in &mut context.replay.keyed.records {
-                record.native_use = Some(*uses.next().expect("validated native use count"));
+        // The original completed native owner will be retained with the replay. Admit its actual
+        // capacities before publishing any native uses or validation flags.
+        let retained_bytes = add(raw_bytes, session.counters().retained_bytes)?;
+        limit(ReplayResource::RetainedBytes, retained_bytes, policies.max_retained_bytes)?;
+        limit(
+            ReplayResource::ValidationPeakBytes,
+            retained_bytes,
+            read.max_validation_peak_bytes,
+        )?;
+        // No authority is copied into records until every event, final occurrence, completion
+        // and retained-storage check has succeeded.
+        {
+            let mut uses = session.uses();
+            for context in contexts.iter_mut() {
+                for record in &mut context.replay.keyed.records {
+                    record.native_use = Some(*uses.next().expect("validated native use count"));
+                }
+                context.replay.keyed.validated = true;
             }
-            context.replay.keyed.validated = true;
+            debug_assert!(uses.next().is_none());
         }
-        debug_assert!(uses.next().is_none());
         self.validated = true;
-        Ok(())
+        Ok(session)
     }
 
     fn resolve_path(
@@ -966,6 +1016,8 @@ impl KeyedReplay {
         Ok(record)
     }
 
+    /// `retained_bytes` separates trace-owned storage from the retained native owner, so native
+    /// capacities enter retained admission without changing the trace-only preparation-peak cap.
     pub(crate) fn prepare_record(
         &mut self,
         event: KeyedEvent,
@@ -973,7 +1025,7 @@ impl KeyedReplay {
         root: MastNodeId,
         policies: EnvironmentTraceLimits,
         total_events: usize,
-        total_retained_bytes: usize,
+        retained_bytes: (usize, usize),
     ) -> Result<PreparedKeyedRecord, KeyedReplayError> {
         if self.invalidated {
             return Err(KeyedReplayError::Invalid("keyed queue was terminally invalidated"));
@@ -1000,6 +1052,8 @@ impl KeyedReplay {
         record.check_mode()?;
         let event_count = add(total_events, 1)?;
         limit(ReplayResource::Events, event_count, policies.max_events)?;
+        let (total_retained_bytes, native_retained_bytes) = retained_bytes;
+        let combined_retained_bytes = add(total_retained_bytes, native_retained_bytes)?;
         let old_bytes = self.retained_bytes()?;
         let mut replacement = None;
         let mut retained_bytes_delta = 0;
@@ -1015,7 +1069,7 @@ impl KeyedReplay {
             )?;
             limit(
                 ReplayResource::RetainedBytes,
-                add(total_retained_bytes, requested - old_bytes)?,
+                add(combined_retained_bytes, requested - old_bytes)?,
                 policies.max_retained_bytes,
             )?;
             let mut buffer = VecDeque::new();
@@ -1032,7 +1086,7 @@ impl KeyedReplay {
                 bytes.checked_sub(old_bytes).ok_or(KeyedReplayError::LengthOverflow)?;
             limit(
                 ReplayResource::RetainedBytes,
-                add(total_retained_bytes, retained_bytes_delta)?,
+                add(combined_retained_bytes, retained_bytes_delta)?,
                 policies.max_retained_bytes,
             )?;
             buffer.extend(self.records.iter().copied());
@@ -1045,7 +1099,7 @@ impl KeyedReplay {
             )?;
             limit(
                 ReplayResource::RetainedBytes,
-                total_retained_bytes,
+                combined_retained_bytes,
                 policies.max_retained_bytes,
             )?;
         }

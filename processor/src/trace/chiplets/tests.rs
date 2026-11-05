@@ -1,10 +1,9 @@
 use alloc::vec::Vec;
 
 use miden_air_definitions::vm::trace::{
-    CHIPLETS_CLK_COL, CHIPLETS_MODE_COL, CHIPLETS_WIDTH, TRACE_WIDTH,
+    CHIPLETS_CLK_COL, CHIPLETS_WIDTH, TRACE_WIDTH,
     chiplets::{
-        KERNEL_ROM_TRACE_WIDTH, NUM_BITWISE_SELECTORS, NUM_KERNEL_ROM_SELECTORS,
-        NUM_MEMORY_SELECTORS,
+        NUM_BITWISE_SELECTORS, NUM_MEMORY_SELECTORS,
         bitwise::{self, BITWISE_XOR, OP_CYCLE_LEN},
         hasher::{CONTROLLER_ROWS_PER_HASHER_OP, CONTROLLER_TRACE_ALIGNMENT, LINEAR_HASH},
         memory,
@@ -65,7 +64,7 @@ fn bitwise_chiplet_trace() {
     let hasher_len = hasher_trace_len(controller_rows);
     assert_eq!(hasher_len, CONTROLLER_TRACE_ALIGNMENT);
 
-    let bitwise_start = hasher_len;
+    let bitwise_start = library_prefix_len(&chiplets_trace) + hasher_len;
     let bitwise_end = bitwise_start + OP_CYCLE_LEN;
     validate_bitwise_trace(&chiplets_trace, bitwise_start, bitwise_end);
 }
@@ -83,7 +82,7 @@ fn memory_chiplet_trace() {
     let hasher_len = hasher_trace_len(controller_rows);
     assert_eq!(hasher_len, CONTROLLER_TRACE_ALIGNMENT);
 
-    let memory_start = hasher_len;
+    let memory_start = library_prefix_len(&chiplets_trace) + hasher_len;
     validate_memory_trace(&chiplets_trace, memory_start, memory_start + 1);
 }
 
@@ -113,22 +112,15 @@ fn stacked_chiplet_trace() {
     // Validate hasher region
     validate_hasher_trace(&chiplets_trace, hasher_len, controller_rows);
 
-    // Bitwise starts right after hasher
-    let bitwise_start = hasher_len;
+    // Memory precedes normal Bitwise in the packed physical layout.
+    let memory_start = library_prefix_len(&chiplets_trace) + hasher_len;
+    validate_memory_trace(&chiplets_trace, memory_start, memory_start + 1);
+    let bitwise_start = memory_start + 1;
     let bitwise_end = bitwise_start + OP_CYCLE_LEN;
     validate_bitwise_trace(&chiplets_trace, bitwise_start, bitwise_end);
 
-    // Memory starts right after bitwise
-    let memory_start = bitwise_end;
-    validate_memory_trace(&chiplets_trace, memory_start, memory_start + 1);
-
-    // After memory comes kernel ROM (2 entries from build_kernel) then padding
-    let kernel_rom_start = memory_start + 1;
-    let kernel_rom_end = kernel_rom_start + 2; // 2 kernel procedures
-    validate_kernel_rom_trace(&chiplets_trace, kernel_rom_start, kernel_rom_end);
-
-    // Padding fills the remainder
-    let padding_start = kernel_rom_end;
+    // Kernel descriptors carry no physical authority band. Global padding follows Bitwise.
+    let padding_start = bitwise_end;
     let trace_rows = chiplets_trace[0].len();
     validate_padding(&chiplets_trace, padding_start, trace_rows);
 }
@@ -210,53 +202,33 @@ fn build_trace(
 // VALIDATION FUNCTIONS
 // ================================================================================================
 
-/// Validates the hasher region of the chiplets trace.
-///
-/// Checks:
-/// - s_ctrl (column 0) = 1 on controller rows
-/// - Controller rows have the correct selectors for operation type and boundary flags
-/// - Padding rows: selectors [0, 1, 0], zero data columns except the controller discriminator
+/// Counts the actual materialized Library prefix, including its mandatory complete PAD pairs.
+fn library_prefix_len(trace: &ChipletsTrace) -> usize {
+    let prefix = trace[0].iter().take_while(|&&selector| selector == ONE).count();
+    assert!(prefix >= 8 && prefix.is_multiple_of(8));
+    prefix
+}
+
+/// Validates the Controller band after the actual Library prefix.
 fn validate_hasher_trace(trace: &ChipletsTrace, expected_len: usize, controller_rows: usize) {
-    // Column indices within chiplets trace.
-    // Column 0 = s_ctrl. Hasher internal columns start at column 1.
-    let s0_col = 1; // hasher selector s0
-    let s1_col = 2; // hasher selector s1
-    let s2_col = 3; // hasher selector s2
-
+    let prefix = library_prefix_len(trace);
+    let s0_col = 2;
+    let s1_col = 3;
+    let s2_col = 4;
     let controller_padded = hasher_trace_len(controller_rows);
-
     assert_eq!(expected_len, controller_padded);
-
-    // Controller rows (including padding): s_ctrl=1.
-    for row in 0..controller_padded {
-        assert_eq!(trace[0][row], ONE, "s_ctrl should be 1 for controller row {row}");
+    for row in prefix..prefix + controller_padded {
+        assert_eq!(trace[0][row], ZERO);
+        assert_eq!(trace[1][row], ONE);
     }
-
-    // --- Check controller rows ---
-    // Each controller row carries one compression request.
-    for row in 0..controller_rows {
-        assert_eq!(
-            trace[s0_col][row], LINEAR_HASH[0],
-            "controller row {row}: s0 should be {} (LINEAR_HASH)",
-            LINEAR_HASH[0]
-        );
+    for row in prefix..prefix + controller_rows {
+        assert_eq!(trace[s0_col][row], LINEAR_HASH[0]);
     }
-
-    for row in controller_rows..controller_padded {
-        assert_eq!(trace[s0_col][row], ZERO, "padding row {row}: s0 should be 0");
-        assert_eq!(trace[s1_col][row], ONE, "padding row {row}: s1 should be 1");
-        assert_eq!(trace[s2_col][row], ZERO, "padding row {row}: s2 should be 0");
-
-        // Non-selector hasher columns should be zero on padding rows, except the shared
-        // controller discriminator. Controller constraints bind this cell to one on padding rows.
-        // The trailing column (chip_clk, CHIPLETS_WIDTH - 1) is the chiplet-trace row counter
-        // and is non-zero on every row by design; see
-        // `crates/air/source/src/vm/constraints/chiplets/mod.rs`.
-        for col in 4..CHIPLETS_WIDTH - 1 {
-            if col == CHIPLETS_MODE_COL {
-                assert_eq!(trace[col][row], ONE, "padding row {row}: mode cell should be 1");
-                continue;
-            }
+    for row in prefix + controller_rows..prefix + controller_padded {
+        assert_eq!(trace[s0_col][row], ZERO);
+        assert_eq!(trace[s1_col][row], ONE);
+        assert_eq!(trace[s2_col][row], ZERO);
+        for col in 5..CHIPLETS_WIDTH - 1 {
             assert_eq!(trace[col][row], ZERO, "padding row {row}, col {col} should be zero");
         }
     }
@@ -265,18 +237,20 @@ fn validate_hasher_trace(trace: &ChipletsTrace, expected_len: usize, controller_
 /// Validates the bitwise region of the chiplets trace.
 ///
 /// Checks:
-/// - Chiplet selectors: s_ctrl=0, s1=0, stream_mode=0
+/// - Packed section selectors: [0, 0, 0, 1, 1, 0]
 /// - Bitwise operation selector = XOR
 /// - Columns beyond bitwise trace width + selectors are zero
 fn validate_bitwise_trace(trace: &ChipletsTrace, start: usize, end: usize) {
-    // Bitwise uses NUM_BITWISE_SELECTORS (2) chiplet selector columns + bitwise::TRACE_WIDTH (13)
-    // internal columns = 15 columns total. Columns 15..CHIPLETS_WIDTH should be zero.
+    // Six selectors precede the thirteen normal Bitwise payload cells.
     let bitwise_used_cols = NUM_BITWISE_SELECTORS + bitwise::TRACE_WIDTH;
 
     for row in start..end {
-        // Chiplet selectors: s_ctrl=0, s1=0 (active via virtual s0 * !s1)
-        assert_eq!(ZERO, trace[0][row], "bitwise s_ctrl at row {row}");
-        assert_eq!(ZERO, trace[1][row], "bitwise s1 at row {row}");
+        for col in 0..3 {
+            assert_eq!(trace[col][row], ZERO);
+        }
+        assert_eq!(trace[3][row], ONE);
+        assert_eq!(trace[4][row], ONE);
+        assert_eq!(trace[5][row], ZERO);
 
         // Internal bitwise operation selector (XOR)
         assert_eq!(BITWISE_XOR, trace[NUM_BITWISE_SELECTORS][row], "bitwise op at row {row}");
@@ -294,18 +268,16 @@ fn validate_bitwise_trace(trace: &ChipletsTrace, start: usize, end: usize) {
 /// Validates the memory region of the chiplets trace.
 ///
 /// Checks:
-/// - Chiplet selectors: s_ctrl=0, s1=1, s2=0, stream_mode=0
+/// - Packed section selectors: [0, 0, 0, 0]
 /// - Column beyond memory trace width + selectors is zero
 fn validate_memory_trace(trace: &ChipletsTrace, start: usize, end: usize) {
-    // Memory uses NUM_MEMORY_SELECTORS (3) chiplet selector columns + memory::TRACE_WIDTH (17)
-    // internal columns = 20 columns total. Column 20 should be zero.
+    // Four selectors precede the seventeen compact Memory payload/address-limb cells.
     let memory_used_cols = NUM_MEMORY_SELECTORS + memory::TRACE_WIDTH;
 
     for row in start..end {
-        // Chiplet selectors: s_ctrl=0, s1=1, s2=0 (active via virtual s0 * s1 * !s2)
-        assert_eq!(ZERO, trace[0][row], "memory s_ctrl at row {row}");
-        assert_eq!(ONE, trace[1][row], "memory s1 at row {row}");
-        assert_eq!(ZERO, trace[2][row], "memory s2 at row {row}");
+        for col in 0..NUM_MEMORY_SELECTORS {
+            assert_eq!(trace[col][row], ZERO);
+        }
 
         // Columns beyond memory trace should be zero (chip_clk excluded; see chip_clk.rs).
         for col in memory_used_cols..CHIPLETS_WIDTH - 1 {
@@ -317,50 +289,21 @@ fn validate_memory_trace(trace: &ChipletsTrace, start: usize, end: usize) {
     }
 }
 
-/// Validates the kernel ROM region of the chiplets trace.
-///
-/// Checks:
-/// - Chiplet selectors: s_ctrl=0, s1=1, s2=1, s3=1, s4=0, stream_mode=0
-/// - Columns beyond kernel ROM trace width + selectors are zero
-fn validate_kernel_rom_trace(trace: &ChipletsTrace, start: usize, end: usize) {
-    // Kernel ROM uses NUM_KERNEL_ROM_SELECTORS (5) chiplet selector columns +
-    // KERNEL_ROM_TRACE_WIDTH (5) internal columns = 10 columns total.
-    let kernel_rom_used_cols = NUM_KERNEL_ROM_SELECTORS + KERNEL_ROM_TRACE_WIDTH;
-
-    for row in start..end {
-        // Chiplet selectors: s_ctrl=0, s1=1, s2=1, s3=1, s4=0
-        // (active via virtual s0 * s1 * s2 * s3 * !s4)
-        assert_eq!(ZERO, trace[0][row], "kernel_rom s_ctrl at row {row}");
-        assert_eq!(ONE, trace[1][row], "kernel_rom s1 at row {row}");
-        assert_eq!(ONE, trace[2][row], "kernel_rom s2 at row {row}");
-        assert_eq!(ONE, trace[3][row], "kernel_rom s3 at row {row}");
-        assert_eq!(ZERO, trace[4][row], "kernel_rom s4 at row {row}");
-
-        // Columns beyond kernel ROM trace should be zero (chip_clk excluded; see chip_clk.rs).
-        for col in kernel_rom_used_cols..CHIPLETS_WIDTH - 1 {
-            assert_eq!(
-                trace[col][row], ZERO,
-                "kernel_rom padding col {col} at row {row} should be zero"
-            );
-        }
-    }
-}
-
 /// Validates the padding region at the end of the chiplets trace.
 ///
 /// Checks:
-/// - s_ctrl (column 0) = 0, s1..s4 (columns 1-4) = 1
+/// - Packed global PAD selectors: [0, 0, 0, 1, 1, 1]
 /// - payload columns are zero
 fn validate_padding(trace: &ChipletsTrace, start: usize, end: usize) {
     for row in start..end {
-        // s_ctrl = 0 on padding rows
-        assert_eq!(ZERO, trace[0][row], "padding s_ctrl at row {row}");
-        // s1..s4 = 1 on padding rows
-        for col in 1..5 {
+        for col in 0..3 {
+            assert_eq!(ZERO, trace[col][row]);
+        }
+        for col in 3..6 {
             assert_eq!(ONE, trace[col][row], "padding s{col} at row {row}");
         }
         // chip_clk at CHIPLETS_WIDTH - 1 is non-zero by design.
-        for col in 5..CHIPLETS_WIDTH - 1 {
+        for col in 6..CHIPLETS_WIDTH - 1 {
             assert_eq!(ZERO, trace[col][row], "padding data col {col} at row {row} should be zero");
         }
         assert_ne!(ZERO, trace[CHIPLETS_CLK_COL][row], "padding chip_clk at row {row}");

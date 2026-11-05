@@ -22,7 +22,6 @@ const IS_START_COL_IDX: usize = 17;
 const LEVEL_COL_IDX: usize = 18;
 const OP_FINAL_COL_IDX: usize = 19;
 const MRUPDATE_ID_COL_IDX: usize = 20;
-const CONTROLLER_MERKLE_OR_PADDING_COL_IDX: usize = TRACE_WIDTH - 1;
 const TEST_TRACE_WIDTH: usize = NUM_EIDOS_COMPRESSION_COLS;
 
 fn controller_len(controller_rows: usize) -> usize {
@@ -203,8 +202,9 @@ fn hasher_update_merkle_root() {
         assert_eq!(trace[OP_FINAL_COL_IDX][row], ZERO, "padding op_final at row {row}");
         assert_eq!(trace[MRUPDATE_ID_COL_IDX][row], ONE, "padding mrupdate_id at row {row}");
         assert_eq!(
-            trace[CONTROLLER_MERKLE_OR_PADDING_COL_IDX][row], ONE,
-            "padding discriminator at row {row}"
+            controller_merkle_or_padding(&trace, row),
+            ONE,
+            "selector-derived padding mode at row {row}"
         );
     }
 }
@@ -561,9 +561,16 @@ fn build_trace(hasher: Hasher) -> Vec<Vec<Felt>> {
             .copy_from_slice(&eidos_compression_trace[src..src + NUM_EIDOS_COMPRESSION_COLS]);
     }
 
-    (0..TEST_TRACE_WIDTH)
+    let trace: Vec<Vec<Felt>> = (0..TEST_TRACE_WIDTH)
         .map(|c| (0..trace_len).map(|r| band[r * TEST_TRACE_WIDTH + c]).collect())
-        .collect()
+        .collect();
+    for (col, values) in trace.iter().enumerate().skip(TRACE_WIDTH) {
+        assert!(
+            values[..controller_len].iter().all(|&value| value == ZERO),
+            "unused controller tail col {col} must be zero"
+        );
+    }
+    trace
 }
 
 /// Checks one controller row.
@@ -622,9 +629,9 @@ fn check_controller_row(
     assert_eq!(trace[MRUPDATE_ID_COL_IDX][row], mrupdate_id, "mrupdate_id at row {row}");
     assert_eq!(trace[OP_FINAL_COL_IDX][row], op_final, "op_final at row {row}");
     assert_eq!(
-        trace[CONTROLLER_MERKLE_OR_PADDING_COL_IDX][row],
+        controller_merkle_or_padding(trace, row),
         if is_merkle_selector(selectors) { ONE } else { ZERO },
-        "controller discriminator at row {row}"
+        "selector-derived controller mode at row {row}"
     );
 }
 
@@ -675,9 +682,16 @@ fn check_merkle_controller_row(
         "op_final at Merkle row {row}"
     );
     assert_eq!(
-        trace[CONTROLLER_MERKLE_OR_PADDING_COL_IDX][row], ONE,
-        "controller discriminator at Merkle row {row}"
+        controller_merkle_or_padding(trace, row),
+        ONE,
+        "selector-derived controller mode at Merkle row {row}"
     );
+}
+
+fn controller_merkle_or_padding(trace: &[Vec<Felt>], row: usize) -> Felt {
+    let s1 = trace[1][row];
+    let s2 = trace[2][row];
+    s1 + s2 - s1 * s2
 }
 
 fn is_merkle_selector(selectors: Selectors) -> bool {
@@ -804,7 +818,6 @@ fn check_memoized_trace(trace: &[Vec<Felt>], original: Range<usize>, copied: Ran
             .clone()
             .chain(ROW_DATA_COL_RANGE.clone())
             .chain(core::iter::once(OP_FINAL_COL_IDX))
-            .chain(core::iter::once(CONTROLLER_MERKLE_OR_PADDING_COL_IDX))
         {
             assert_eq!(
                 trace[col][orig_row], trace[col][copy_row],

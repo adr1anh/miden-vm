@@ -4,7 +4,7 @@ use core::{mem::size_of, ops::Range};
 use miden_air_definitions::vm::trace::chiplets::bitwise::{
     BITWISE_AND, BITWISE_XOR, OP_CYCLE_LEN, TRACE_WIDTH,
 };
-use miden_core::{ONE, chiplets::eidos_compression, field::PrimeCharacteristicRing};
+use miden_core::{chiplets::eidos_compression, field::PrimeCharacteristicRing};
 
 use super::{Bitwise, ChipletTraceFragment, Felt};
 
@@ -21,9 +21,9 @@ fn bitwise_init() {
 }
 
 #[test]
-fn entry_does_not_inline_the_aead_stream_payload() {
+fn normal_operations_have_a_separate_compact_buffer() {
     assert!(
-        size_of::<super::Entry>() < size_of::<super::AeadStreamOp>(),
+        size_of::<super::BitwiseOp>() < size_of::<super::AeadStreamOp>(),
         "ordinary bitwise entries must not pay for the inline AEAD stream payload",
     );
 }
@@ -119,10 +119,6 @@ fn aead_stream_trace() {
         build_trace_with_width_and_counts(bitwise, 8, super::AEAD_STREAM_FRAGMENT_WIDTH);
     assert_eq!(and8_counts.iter().sum::<u64>(), 32);
 
-    for row in 0..8 {
-        assert_eq!(trace[super::STREAM_MODE_OFFSET][row], ONE);
-    }
-
     // r0: read + low limb for plaintext[0].
     assert_eq!(trace[0][0], ctx);
     assert_eq!(trace[1][0], clk);
@@ -158,10 +154,6 @@ fn aead_stream_is_phase_aligned_after_bitwise_op() {
         build_trace_with_width_and_counts(bitwise, num_rows, super::AEAD_STREAM_FRAGMENT_WIDTH);
 
     assert_eq!(and8_counts.iter().sum::<u64>(), 36);
-    for row in 0..super::AEAD_STREAM_CYCLE_LEN {
-        assert_eq!(trace[super::STREAM_MODE_OFFSET][row], ONE);
-    }
-    assert_eq!(trace[super::STREAM_MODE_OFFSET][super::AEAD_STREAM_CYCLE_LEN], Felt::ZERO);
     check_bitwise_row(&trace, super::AEAD_STREAM_CYCLE_LEN, BITWISE_AND, a, b, result);
 }
 
@@ -182,12 +174,8 @@ fn aead_stream_is_phase_aligned_after_seven_bitwise_ops() {
         build_trace_with_width_and_counts(bitwise, num_rows, super::AEAD_STREAM_FRAGMENT_WIDTH);
 
     assert_eq!(and8_counts.iter().sum::<u64>(), 60);
-    for row in 0..super::AEAD_STREAM_CYCLE_LEN {
-        assert_eq!(trace[super::STREAM_MODE_OFFSET][row], ONE);
-    }
     for (idx, (a, b, result)) in expected.into_iter().enumerate() {
         let row = super::AEAD_STREAM_CYCLE_LEN + idx;
-        assert_eq!(trace[super::STREAM_MODE_OFFSET][row], Felt::ZERO);
         check_bitwise_row(&trace, row, BITWISE_XOR, a, b, result);
     }
 }
@@ -201,8 +189,15 @@ fn build_trace_with_width_and_counts(
     width: usize,
 ) -> (Vec<Vec<Felt>>, Vec<u64>) {
     let mut band = Felt::zero_vec(width * num_rows);
-    let mut fragment = ChipletTraceFragment::row_major(&mut band, width, 0, width);
-    let and8_counts = bitwise.fill_trace(&mut fragment);
+    assert_eq!(num_rows, bitwise.trace_len());
+    let aead_rows = bitwise.aead_trace_len();
+    let normal_rows = bitwise.normal_trace_len();
+    assert_eq!(aead_rows % super::AEAD_STREAM_CYCLE_LEN, 0);
+    let (aead_band, normal_band) = band.split_at_mut(aead_rows * width);
+    let mut aead = ChipletTraceFragment::row_major(aead_band, width, 0, width);
+    let mut normal = ChipletTraceFragment::row_major(normal_band, width, 0, width);
+    assert_eq!(normal.len(), normal_rows);
+    let and8_counts = bitwise.fill_trace(&mut aead, &mut normal);
 
     let trace = (0..width)
         .map(|c| (0..num_rows).map(|r| band[r * width + c]).collect())

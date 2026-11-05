@@ -9,6 +9,7 @@ use core::{
 use miden_core::{Felt, WORD_SIZE, field::PrimeCharacteristicRing};
 
 use super::super::{columns::indices_arr, ext_field::QuadFeltExpr};
+pub use super::library::columns::LibraryCols;
 use crate::vm::trace::chiplets::{
     bitwise::NUM_U32_BYTES,
     hasher::{DIGEST_LEN, STATE_WIDTH},
@@ -43,13 +44,13 @@ macro_rules! impl_borrow_for_chiplet_cols {
 // CONTROLLER COLUMNS
 // ================================================================================================
 
-/// Controller chiplet columns (19 columns), viewed from `chiplets[1..20]`.
+/// Controller chiplet columns (19 columns), viewed from `chiplets[2..21]`.
 ///
-/// Logical overlay for controller rows (`s_ctrl = 1`). The `s0/s1/s2` columns select the
+/// Logical overlay for Controller rows. The `s0/s1/s2` columns select the
 /// controller row kind; see `hasher_control::flags` for the encoding.
 ///
-/// `s_ctrl` (= `chiplets[0]`) and the shared mode cell are not part of this overlay. Controller
-/// code reads that shared cell through `ChipletCols::controller_merkle_or_padding()`.
+/// `C` (= `chiplets[1]`) is not part of this overlay. Controller mode is derived from the
+/// row-kind selectors by [`Self::merkle_or_padding`].
 ///
 /// The controller uses a row-kind-dependent overlay to fit one compression request in one row:
 ///
@@ -82,6 +83,20 @@ pub struct ControllerCols<T> {
 }
 
 impl<T: Copy> ControllerCols<T> {
+    /// Derived Merkle-or-padding mode: `s1 + s2 - s1 * s2`.
+    ///
+    /// On valid Controller row kinds this is one for Merkle and padding rows, and zero for
+    /// hash rows. This expression has no chiplet scope; callers must scope its use to Controller
+    /// rows and enforce the row-kind validity constraints there.
+    pub fn merkle_or_padding<E: PrimeCharacteristicRing>(&self) -> E
+    where
+        T: Into<E>,
+    {
+        let s1: E = self.s1.into();
+        let s2: E = self.s2.into();
+        s1.clone() + s2.clone() - s1 * s2
+    }
+
     /// Returns the state tail (`state[8..12]`).
     ///
     /// On hash rows this is the input CV. On Merkle rows this is the output digest.
@@ -135,7 +150,7 @@ impl<T: Copy> ControllerCols<T> {
 // BITWISE COLUMNS
 // ================================================================================================
 
-/// Bitwise chiplet columns (13 columns), viewed from `chiplets[2..15]`.
+/// Bitwise chiplet columns (13 columns), viewed from `chiplets[6..19]`.
 ///
 /// Normal bitwise rows store one full u32 operation. The byte arrays are little-endian:
 /// `value = b0 + 2^8*b1 + 2^16*b2 + 2^24*b3`.
@@ -152,7 +167,7 @@ pub struct BitwiseCols<T> {
     pub and_bytes: [T; NUM_U32_BYTES],
 }
 
-/// AEAD stream overlay (20 columns), viewed from `chiplets[2..22]`.
+/// AEAD stream overlay (20 columns), viewed from `chiplets[3..23]`.
 ///
 /// One stream entry spans eight rows. Each row proves one u32 XOR as four AND8 byte lookups;
 /// row-specific overlays define the remaining cells.
@@ -264,7 +279,7 @@ pub struct AeadStreamHighSecondCols<T> {
 // MEMORY COLUMNS
 // ================================================================================================
 
-/// Memory chiplet columns (15 columns), viewed from `chiplets[3..18]`.
+/// Memory chiplet columns (15 columns), viewed from `chiplets[4..19]`.
 ///
 /// When reading from a new word address (first access to a context/addr pair), the
 /// `values` are initialized to zero.
@@ -300,7 +315,7 @@ pub struct MemoryCols<T> {
 // ACE COLUMNS
 // ================================================================================================
 
-/// ACE chiplet columns (16 columns), viewed from `chiplets[4..20]`.
+/// ACE chiplet columns (16 columns), viewed from `chiplets[5..21]`.
 ///
 /// The ACE (Arithmetic Circuit Evaluator) chiplet evaluates arithmetic circuits over
 /// quadratic extension field elements. Each circuit evaluation consists of two phases:
@@ -454,19 +469,6 @@ const _: () = {
     assert!(ACE_READ_COL_MAP.m_1 == ACE_EVAL_COL_MAP.v_2.1);
 };
 
-// KERNEL ROM COLUMNS
-// ================================================================================================
-
-/// Kernel ROM chiplet columns (5 columns), viewed from `chiplets[5..10]`.
-#[repr(C)]
-#[derive(Clone, Debug)]
-pub struct KernelRomCols<T> {
-    /// Number of SYSCALLs to this procedure (CALL-label multiplicity).
-    pub multiplicity: T,
-    /// Kernel procedure root digest.
-    pub root: [T; WORD_SIZE],
-}
-
 // PERIODIC COLUMNS
 // ================================================================================================
 
@@ -476,6 +478,8 @@ pub struct KernelRomCols<T> {
 pub struct PeriodicCols<T> {
     /// AEAD stream phase columns.
     pub aead_stream: AeadStreamPeriodicCols<T>,
+    /// Library A/B phase, fixed to `[0, 1]`.
+    pub library_phase: T,
 }
 
 /// AEAD stream periodic columns (8 columns, period = 8 rows).
@@ -506,7 +510,9 @@ impl AeadStreamPeriodicCols<Vec<Felt>> {
 impl PeriodicCols<Vec<Felt>> {
     /// Returns chiplet periodic columns in `PeriodicCols` layout order.
     pub fn periodic_columns() -> Vec<Vec<Felt>> {
-        AeadStreamPeriodicCols::new().phases.into_iter().collect()
+        let mut columns: Vec<_> = AeadStreamPeriodicCols::new().phases.into_iter().collect();
+        columns.push(vec![Felt::ZERO, Felt::ONE]);
+        columns
     }
 }
 
@@ -523,7 +529,7 @@ impl<T> Borrow<PeriodicCols<T>> for [T] {
 }
 
 const _: () = {
-    assert!(size_of::<PeriodicCols<u8>>() == 8);
+    assert!(size_of::<PeriodicCols<u8>>() == 9);
     assert!(size_of::<AeadStreamPeriodicCols<u8>>() == 8);
 
     assert!(size_of::<ControllerCols<u8>>() == 19);
@@ -543,6 +549,7 @@ const _: () = {
 // `crate::vm::constraints::columns` module.
 
 impl_borrow_for_chiplet_cols!(ControllerCols);
+impl_borrow_for_chiplet_cols!(LibraryCols);
 impl_borrow_for_chiplet_cols!(BitwiseCols);
 impl_borrow_for_chiplet_cols!(AeadStreamCols);
 impl_borrow_for_chiplet_cols!(AeadStreamReadCols);
@@ -553,7 +560,6 @@ impl_borrow_for_chiplet_cols!(MemoryCols);
 impl_borrow_for_chiplet_cols!(AceCols);
 impl_borrow_for_chiplet_cols!(AceReadCols);
 impl_borrow_for_chiplet_cols!(AceEvalCols);
-impl_borrow_for_chiplet_cols!(KernelRomCols);
 
 #[cfg(test)]
 mod tests {
@@ -564,9 +570,8 @@ mod tests {
         let cols = PeriodicCols::periodic_columns();
         assert_eq!(cols.len(), NUM_PERIODIC_COLUMNS);
 
-        for col in &cols {
-            assert_eq!(col.len(), 8);
-        }
+        assert!(cols[..8].iter().all(|col| col.len() == 8));
+        assert_eq!(cols[8], vec![Felt::ZERO, Felt::ONE]);
     }
 
     #[test]

@@ -1,6 +1,9 @@
 use alloc::collections::BTreeMap;
 
-use miden_air_definitions::vm::trace::{RowIndex, chiplets::ace::ACE_CHIPLET_NUM_COLS};
+use miden_air_definitions::vm::{
+    ChipletCols,
+    trace::{RowIndex, chiplets::ace::ACE_CHIPLET_NUM_COLS},
+};
 use miden_core::{Felt, field::PrimeCharacteristicRing};
 
 use crate::trace::ChipletTraceFragment;
@@ -40,6 +43,20 @@ pub struct Ace {
 }
 
 impl Ace {
+    /// Completes helpers after an ACE payload has been scattered into its shared trace row.
+    ///
+    /// The caller supplies only ACE rows. READ payload does not encode an arithmetic operation,
+    /// so its unused helper is written canonically as zero.
+    pub(crate) fn fill_row_helpers(row: &mut ChipletCols<Felt>) {
+        let ace = row.ace();
+        let op_squared = if ace.s_block == Felt::ONE {
+            ace.eval_op.square()
+        } else {
+            Felt::ZERO
+        };
+        *row.ace_op_squared_mut() = op_squared;
+    }
+
     /// Gets the total trace length of the ACE chiplet.
     pub(crate) fn trace_len(&self) -> usize {
         self.circuit_evaluations.values().map(CircuitEvaluation::num_rows).sum()

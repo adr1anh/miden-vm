@@ -13,8 +13,8 @@ use miden_core::{
 use super::{
     block_stack::{BlockInfo, BlockStack, ExecutionContextInfo},
     keyed::{
-        EnvironmentReplay, KeyedReplay, PreparedEnvironmentReplay, PreparedKeyedRecord,
-        ReplayReadBudget, ReplayReadLimits,
+        EnvironmentReplay, KeyedReplay, KeyedReplayError, PreparedEnvironmentReplay,
+        PreparedKeyedRecord, ReplayReadBudget, ReplayReadLimits, ReplayResource,
     },
     stack::{OverflowTable, PreparedOverflowRestore},
     trace_state::{
@@ -68,6 +68,8 @@ struct StateSnapshot {
 #[derive(Debug)]
 pub(crate) struct TraceReplay {
     pub(crate) environment: EnvironmentReplay,
+    /// The original completed native input; native completion does not establish proof completion.
+    pub(crate) resolution_session: ResolutionSession,
     /// The list of trace fragment contexts built during execution.
     pub(crate) core_trace_contexts: Vec<CoreTraceFragmentContext>,
 
@@ -117,6 +119,11 @@ impl TraceReplay {
         let mut bytes = self
             .environment
             .retained_bytes()
+            .and_then(|bytes| {
+                bytes
+                    .checked_add(self.resolution_session.counters().retained_bytes)
+                    .ok_or(super::keyed::KeyedReplayError::LengthOverflow)
+            })
             .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?;
         let mut events = 0usize;
         for fragment in &self.core_trace_contexts {
@@ -207,38 +214,57 @@ impl TraceReplay {
             core_trace_contexts
                 .push(CoreTraceFragmentContext::read_with_limits(source, &mut budget)?);
         }
-        let mut context = Self {
-            environment: environment_replay,
-            mast_forest_store,
-            core_trace_contexts,
-            range_checker_replay: RangeCheckerReplay::read_from(source)?,
-            memory_writes: MemoryWritesReplay::read_from(source)?,
-            bitwise_replay: BitwiseReplay::read_from(source)?,
-            hasher_for_chiplet: HasherRequestReplay::read_from(source)?,
-            kernel_replay: KernelReplay::read_from(source)?,
-            ace_replay: AceReplay::read_from(source)?,
-            fragment_size: usize::read_from(source)?,
-            max_stack_depth: usize::read_from(source)?,
-        };
-        validate_trace_generation_context_invariants(&context)?;
-        validate_trace_generation_context_forest_ids(&context)?;
-        context
-            .environment
+        // Keep decoded fields local until structure and native authority are fully validated.
+        let range_checker_replay = RangeCheckerReplay::read_from(source)?;
+        let memory_writes = MemoryWritesReplay::read_from(source)?;
+        let bitwise_replay = BitwiseReplay::read_from(source)?;
+        let hasher_for_chiplet = HasherRequestReplay::read_from(source)?;
+        let kernel_replay = KernelReplay::read_from(source)?;
+        let ace_replay = AceReplay::read_from(source)?;
+        let fragment_size = usize::read_from(source)?;
+        let max_stack_depth = usize::read_from(source)?;
+        validate_trace_generation_context_invariants(
+            fragment_size,
+            max_stack_depth,
+            &core_trace_contexts,
+        )?;
+        validate_trace_generation_context_forest_ids(
+            mast_forest_store.len(),
+            &core_trace_contexts,
+            &hasher_for_chiplet,
+        )?;
+        let mut environment_replay = environment_replay;
+        let resolution_session = environment_replay
             .revalidate(
                 environment,
-                &mut context.core_trace_contexts,
+                &mut core_trace_contexts,
                 trace_limits,
                 read_limits,
-                context.fragment_size,
+                fragment_size,
             )
             .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?;
-        Ok(context)
+        Ok(Self {
+            environment: environment_replay,
+            resolution_session,
+            mast_forest_store,
+            core_trace_contexts,
+            range_checker_replay,
+            memory_writes,
+            bitwise_replay,
+            hasher_for_chiplet,
+            kernel_replay,
+            ace_replay,
+            fragment_size,
+            max_stack_depth,
+        })
     }
 }
 
 impl TraceReplay {
     pub(crate) fn require_validated(&self) -> Result<(), ExecutionError> {
-        self.environment.require_validated().map_err(keyed_error)?;
+        self.environment
+            .require_completed_session(&self.resolution_session)
+            .map_err(keyed_error)?;
         for context in &self.core_trace_contexts {
             context.replay.keyed.require_validated().map_err(keyed_error)?;
         }
@@ -253,25 +279,27 @@ impl TraceReplay {
 }
 
 fn validate_trace_generation_context_invariants(
-    context: &TraceReplay,
+    fragment_size: usize,
+    max_stack_depth: usize,
+    core_trace_contexts: &[CoreTraceFragmentContext],
 ) -> Result<(), DeserializationError> {
-    if context.fragment_size == 0 {
+    if fragment_size == 0 {
         return Err(DeserializationError::InvalidValue(
             "trace generation fragment_size must be non-zero".into(),
         ));
     }
-    if context.max_stack_depth < MIN_STACK_DEPTH {
+    if max_stack_depth < MIN_STACK_DEPTH {
         return Err(DeserializationError::InvalidValue(format!(
             "trace generation max_stack_depth {} is below minimum {MIN_STACK_DEPTH}",
-            context.max_stack_depth
+            max_stack_depth
         )));
     }
-    for (fragment_index, fragment) in context.core_trace_contexts.iter().enumerate() {
+    for (fragment_index, fragment) in core_trace_contexts.iter().enumerate() {
         let stack_depth = fragment.state.stack.stack_depth();
-        if stack_depth > context.max_stack_depth {
+        if stack_depth > max_stack_depth {
             return Err(DeserializationError::InvalidValue(format!(
                 "fragment {fragment_index}: stack depth {stack_depth} exceeds max_stack_depth {}",
-                context.max_stack_depth
+                max_stack_depth
             )));
         }
     }
@@ -279,10 +307,11 @@ fn validate_trace_generation_context_invariants(
 }
 
 fn validate_trace_generation_context_forest_ids(
-    context: &TraceReplay,
+    store_len: usize,
+    core_trace_contexts: &[CoreTraceFragmentContext],
+    hasher_for_chiplet: &HasherRequestReplay,
 ) -> Result<(), DeserializationError> {
-    let store_len = context.mast_forest_store.len();
-    for (fragment_index, fragment) in context.core_trace_contexts.iter().enumerate() {
+    for (fragment_index, fragment) in core_trace_contexts.iter().enumerate() {
         validate_mast_forest_id(
             fragment.initial_mast_forest_id,
             store_len,
@@ -310,7 +339,7 @@ fn validate_trace_generation_context_forest_ids(
         }
     }
 
-    for forest_id in context.hasher_for_chiplet.iter_hash_basic_block_forest_ids() {
+    for forest_id in hasher_for_chiplet.iter_hash_basic_block_forest_ids() {
         validate_mast_forest_id(forest_id, store_len, "hasher HashBasicBlock replay")?;
     }
 
@@ -594,8 +623,12 @@ impl ExecutionTracer {
     /// Converts the `ExecutionTracer` into a [`TraceReplay`] using the data accumulated during
     /// execution.
     #[inline(always)]
-    pub(crate) fn into_trace_replay(mut self) -> Result<TraceReplay, ExecutionError> {
+    pub(crate) fn into_trace_replay(
+        mut self,
+        resolution_session: ResolutionSession,
+    ) -> Result<TraceReplay, ExecutionError> {
         if self.pending_keyed.is_some()
+            || self.pending_environment.is_some()
             || self.keyed_reservation_pending
             || self.keyed_invalidated
             || self.pending_address_error.is_some()
@@ -608,6 +641,11 @@ impl ExecutionTracer {
         {
             return Err(ExecutionError::InvalidExecutionState);
         }
+        self.environment
+            .as_ref()
+            .ok_or(ExecutionError::InvalidExecutionState)?
+            .require_completed_session(&resolution_session)
+            .map_err(keyed_error)?;
         // If there is an ongoing trace state being built, finish it
         self.finish_current_fragment_context();
 
@@ -621,12 +659,12 @@ impl ExecutionTracer {
             .collect();
 
         let environment = self.environment.take().ok_or(ExecutionError::InvalidExecutionState)?;
-        environment.require_validated().map_err(keyed_error)?;
         for fragment in &self.fragment_contexts {
             fragment.replay.keyed.require_validated().map_err(keyed_error)?;
         }
         Ok(TraceReplay {
             environment,
+            resolution_session,
             core_trace_contexts: self.fragment_contexts,
             mast_forest_store,
             range_checker_replay: self.range_checker,
@@ -951,8 +989,8 @@ enum ExecutionTraceReservationKind {
     },
 }
 
-fn keyed_error(_: super::keyed::KeyedReplayError) -> ExecutionError {
-    ExecutionError::Internal("keyed trace preparation or validation failed")
+fn keyed_error(error: super::keyed::KeyedReplayError) -> ExecutionError {
+    ExecutionError::KeyedTrace(error)
 }
 
 impl Tracer for ExecutionTracer {
@@ -971,10 +1009,17 @@ impl Tracer for ExecutionTracer {
         let bytes = size_of::<miden_core::program::ExecutionDescriptor>()
             .checked_add(size_of::<SessionBinding>())
             .ok_or(ExecutionError::InvalidExecutionState)?;
-        if bytes > self.trace_limits.max_retained_bytes
-            || bytes > self.trace_limits.max_prepare_peak_bytes
-        {
-            return Err(ExecutionError::Internal("keyed entry metadata exceeds trace limits"));
+        for (resource, limit) in [
+            (ReplayResource::RetainedBytes, self.trace_limits.max_retained_bytes),
+            (ReplayResource::PreparePeakBytes, self.trace_limits.max_prepare_peak_bytes),
+        ] {
+            if bytes > limit {
+                return Err(keyed_error(KeyedReplayError::LimitExceeded {
+                    resource,
+                    limit,
+                    requested: bytes,
+                }));
+            }
         }
         Ok(ExecutionTraceReservation(ExecutionTraceReservationKind::Entry(
             *descriptor,
@@ -1090,6 +1135,8 @@ impl Tracer for ExecutionTracer {
             (id, Some((id, SparseMastForestBuilder::new(target.forest.clone()))))
         };
         let staged_bytes = self.pending_environment.as_ref().map_or(0, |p| p.retained_bytes());
+        let native_retained_bytes =
+            self.pending_environment.as_ref().map_or(0, |p| p.native_retained_bytes());
         let total_bytes = self
             .keyed_retained_bytes
             .checked_add(staged_bytes)
@@ -1107,7 +1154,7 @@ impl Tracer for ExecutionTracer {
                 target.root,
                 self.trace_limits,
                 self.keyed_events,
-                total_bytes,
+                (total_bytes, native_retained_bytes),
             )
             .map_err(keyed_error)?;
         reservation.check_queue(queue).map_err(keyed_error)?;
@@ -2207,75 +2254,49 @@ mod controller_address_tests {
 
 #[cfg(test)]
 mod serialization_tests {
+    use miden_core::serde::SliceReader;
+
     use super::*;
+    use crate as processor;
     use crate::mast::BasicBlockNodeBuilder;
 
+    #[allow(dead_code)]
+    mod common {
+        include!("../../tests/common/keyed_witness.rs");
+    }
+    use common::{execution_fixture, execution_witness, read_limits, trace_limits};
+
+    fn read_context(context: &TraceReplay) -> Result<TraceReplay, DeserializationError> {
+        let mut payload = Vec::new();
+        context.write_payload(&mut payload);
+        let environment = execution_fixture(vec![Operation::Noop]).environment;
+        TraceReplay::read_with_limits(
+            &mut SliceReader::new(&payload),
+            &environment,
+            trace_limits(),
+            read_limits(),
+        )
+    }
+
     fn empty_trace_generation_context(fragment_size: usize, max_stack_depth: usize) -> TraceReplay {
-        TraceReplay {
-            mast_forest_store: Vec::new(),
-            core_trace_contexts: Vec::new(),
-            range_checker_replay: RangeCheckerReplay::default(),
-            memory_writes: MemoryWritesReplay::default(),
-            bitwise_replay: BitwiseReplay::default(),
-            hasher_for_chiplet: HasherRequestReplay::default(),
-            kernel_replay: KernelReplay::default(),
-            ace_replay: AceReplay::default(),
-            fragment_size,
-            max_stack_depth,
-        }
-    }
-
-    fn one_node_sparse_forest() -> Arc<SparseMastForest> {
-        let mut forest = MastForest::new();
-        let root = BasicBlockNodeBuilder::new(vec![Operation::Noop])
-            .add_to_forest(&mut forest)
-            .unwrap();
-        forest.make_root(root);
-
-        let forest = Arc::new(forest);
-        let mut builder = SparseMastForestBuilder::new(Arc::clone(&forest));
-        builder.record_visit(root, VisitKind::FullVisit);
-        Arc::new(builder.finalize())
-    }
-
-    fn core_trace_state() -> CoreTraceState {
-        CoreTraceState {
-            system: SystemState {
-                clk: RowIndex::from(0u32),
-                ctx: ContextId::root(),
-                fn_hash: Word::default(),
-                deferred_root: Word::default(),
-            },
-            decoder: DecoderState {
-                current_addr: LogicalControllerAddress::ABSENT,
-                parent_addr: LogicalControllerAddress::ABSENT,
-            },
-            stack: StackState::new([ZERO; MIN_STACK_DEPTH], MIN_STACK_DEPTH, ZERO),
-        }
+        let mut context = valid_trace_generation_context();
+        context.mast_forest_store.clear();
+        context.core_trace_contexts.clear();
+        context.fragment_size = fragment_size;
+        context.max_stack_depth = max_stack_depth;
+        context
     }
 
     fn valid_trace_generation_context() -> TraceReplay {
-        TraceReplay {
-            mast_forest_store: vec![one_node_sparse_forest()],
-            core_trace_contexts: vec![CoreTraceFragmentContext {
-                state: core_trace_state(),
-                replay: ExecutionReplay::default(),
-                continuation: ContinuationStack::default(),
-                initial_mast_forest_id: MastForestId::from(0u32),
-            }],
-            range_checker_replay: RangeCheckerReplay::default(),
-            memory_writes: MemoryWritesReplay::default(),
-            bitwise_replay: BitwiseReplay::default(),
-            hasher_for_chiplet: HasherRequestReplay::default(),
-            kernel_replay: KernelReplay::default(),
-            ace_replay: AceReplay::default(),
-            fragment_size: 1,
-            max_stack_depth: MIN_STACK_DEPTH,
-        }
+        execution_witness(vec![Operation::Noop], crate::StackInputs::default())
+            .witness
+            .into_parts()
+            .0
+            .trace
     }
 
     fn assert_context_read_rejects_bad_forest_id(context: TraceReplay, expected_label: &str) {
-        let err = TraceReplay::read_from_bytes(&context.to_bytes()).unwrap_err();
+        let err = read_context(&context).unwrap_err();
         let DeserializationError::InvalidValue(message) = err else {
             panic!("expected invalid forest id error");
         };
@@ -2284,10 +2305,166 @@ mod serialization_tests {
     }
 
     #[test]
+    fn bounded_read_retains_completed_native_input_and_exact_entry_frequency() {
+        let original = valid_trace_generation_context();
+        let restored = read_context(&original).unwrap();
+        restored.require_validated().unwrap();
+        let live = &original.resolution_session;
+        let read = &restored.resolution_session;
+        assert_eq!(read.phase(), crate::SessionPhase::Completed);
+        assert_eq!(read.descriptor(), live.descriptor());
+        assert_eq!(read.finalize().unwrap(), live.finalize().unwrap());
+        assert_eq!(read.bindings(), live.bindings());
+        assert_eq!(
+            read.uses().copied().collect::<Vec<_>>(),
+            live.uses().copied().collect::<Vec<_>>()
+        );
+        assert_eq!(read.bindings()[0].counts().normal, 1);
+        assert_eq!(read.bindings()[0].counts().syscall, 0);
+        assert_eq!(read.ledger().occurrences().len(), live.ledger().occurrences().len());
+        for (actual, expected) in
+            read.ledger().occurrences().iter().zip(live.ledger().occurrences())
+        {
+            assert_eq!(actual.node(), expected.node());
+            assert_eq!(actual.parent(), expected.parent());
+        }
+    }
+
+    #[test]
+    fn validated_replay_requires_matching_completed_native_owner() {
+        let mut trace = valid_trace_generation_context();
+        let environment = execution_fixture(vec![Operation::Noop]).environment;
+        trace.resolution_session = ResolutionSession::new(
+            environment.descriptor(),
+            environment.ledger_limits(),
+            environment.session_limits(),
+        );
+        assert!(trace.require_validated().is_err());
+
+        trace.resolution_session = execution_witness(
+            vec![Operation::Push(ONE), Operation::Drop],
+            crate::StackInputs::default(),
+        )
+        .witness
+        .into_parts()
+        .0
+        .trace
+        .resolution_session;
+        assert!(trace.require_validated().is_err());
+    }
+
+    #[test]
+    fn root_end_retains_native_capacities_and_admits_its_keyed_record_before_commit() {
+        let original = valid_trace_generation_context();
+        let environment = execution_fixture(vec![Operation::Noop]).environment;
+        let descriptor = environment.descriptor();
+        let binding = crate::ResolutionWitness {
+            path: vec![crate::OpeningStep {
+                node: original.resolution_session.ledger().occurrences()[0].node().clone(),
+                selected_child: None,
+            }],
+        }
+        .verify(
+            descriptor.environment_root(),
+            descriptor.entry_key(),
+            environment.opening_limits(),
+        )
+        .unwrap();
+        let mut session = ResolutionSession::new(
+            descriptor,
+            environment.ledger_limits(),
+            environment.session_limits(),
+        );
+        session.prepare_entry(binding).unwrap().commit();
+        let before = session.counters();
+        let staged = EnvironmentReplay::prepare_capture(
+            &session,
+            session.bindings()[0],
+            trace_limits(),
+            0,
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(staged.native_retained_bytes(), before.retained_bytes);
+        let implementation = session.bindings()[0].implementation_root();
+        let prepared = session.prepare_root_end(implementation, RowIndex::from(0u32)).unwrap();
+        assert_eq!(prepared.counters().retained_bytes, before.retained_bytes);
+        let event = KeyedEvent {
+            kind: KeyedEventKind::RootEnd,
+            use_record: prepared.use_record(),
+            principal_before: descriptor.entry_key(),
+            principal_after: descriptor.entry_key(),
+        };
+        let mut limits = trace_limits();
+        // The environment and moved native capacities fit exactly; the root-END queue still
+        // needs its own retained allocation, which must reject before either native commit.
+        limits.max_retained_bytes = staged.retained_bytes() + before.retained_bytes;
+        let mut queue = KeyedReplay::default();
+        let error = queue
+            .prepare_record(
+                event,
+                MastForestId::from(0u32),
+                MastNodeId::from(0),
+                limits,
+                0,
+                (staged.retained_bytes(), before.retained_bytes),
+            )
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            super::super::keyed::KeyedReplayError::LimitExceeded {
+                resource: super::super::keyed::ReplayResource::RetainedBytes,
+                ..
+            }
+        ));
+        assert_eq!(queue.len(), 0);
+        assert_eq!(queue.retained_bytes().unwrap(), 0);
+        drop(prepared);
+        drop(staged);
+        assert_eq!(session.phase(), crate::SessionPhase::PendingEntry);
+        assert_eq!(session.counters(), before);
+        assert_eq!(session.bindings()[0].counts().normal, 0);
+        assert!(session.uses().next().is_none());
+        session.prepare_root_end(implementation, RowIndex::from(0u32)).unwrap().commit();
+        assert_eq!(session.finalize().unwrap().retained_bytes, before.retained_bytes);
+        assert_eq!(session.bindings()[0].counts().normal, 1);
+    }
+
+    #[test]
+    fn retained_native_read_rejection_revokes_replay_trust() {
+        let mut trace = valid_trace_generation_context();
+        let environment = execution_fixture(vec![Operation::Noop]).environment;
+        let mut raw = trace.environment.retained_bytes().unwrap();
+        for fragment in &trace.core_trace_contexts {
+            raw += fragment.replay.keyed.retained_bytes().unwrap();
+        }
+        let mut limits = trace_limits();
+        limits.max_retained_bytes = raw;
+        assert!(
+            trace
+                .environment
+                .revalidate(
+                    &environment,
+                    &mut trace.core_trace_contexts,
+                    limits,
+                    read_limits(),
+                    trace.fragment_size,
+                )
+                .is_err()
+        );
+        assert!(trace.require_validated().is_err());
+        assert!(trace.environment.require_validated().is_err());
+        for fragment in &trace.core_trace_contexts {
+            assert!(fragment.replay.keyed.require_validated().is_err());
+        }
+    }
+
+    #[test]
     fn trace_generation_context_read_rejects_zero_fragment_size() {
         let context = empty_trace_generation_context(0, MIN_STACK_DEPTH);
 
-        let err = TraceReplay::read_from_bytes(&context.to_bytes()).unwrap_err();
+        let err = read_context(&context).unwrap_err();
         let DeserializationError::InvalidValue(message) = err else {
             panic!("expected invalid fragment size error");
         };
@@ -2298,7 +2475,7 @@ mod serialization_tests {
     fn trace_generation_context_read_rejects_max_stack_depth_below_minimum() {
         let context = empty_trace_generation_context(1, MIN_STACK_DEPTH - 1);
 
-        let err = TraceReplay::read_from_bytes(&context.to_bytes()).unwrap_err();
+        let err = read_context(&context).unwrap_err();
         let DeserializationError::InvalidValue(message) = err else {
             panic!("expected invalid max stack depth error");
         };

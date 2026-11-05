@@ -55,6 +55,8 @@ pub enum ExecutionError {
     MissingEnvironmentTraceLimits,
     #[error("environment resolution session failed: {0}")]
     EnvironmentSession(#[source] SessionError),
+    #[error("keyed trace preparation or validation failed: {0}")]
+    KeyedTrace(#[source] crate::trace::KeyedReplayError),
     /// No candidate was supplied; this does not establish authenticated nonmembership.
     #[error("environment witness unavailable for key {key:?} under root {root:?}")]
     EnvironmentWitnessUnavailable { root: EnvironmentRoot, key: ProcedureKey },

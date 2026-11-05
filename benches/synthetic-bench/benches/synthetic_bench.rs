@@ -194,19 +194,18 @@ fn bench_one_scenario(
         snapshot.trace.padded_total(),
     );
     println!(
-        "    shape:   hasher={} bitwise={} memory={} kernel_rom={} ace={}",
+        "    shape:   library={} controller={} aead={} memory={} ace={} bitwise={}",
+        snapshot.shape.library_rows,
         snapshot.shape.hasher_rows,
-        snapshot.shape.bitwise_rows,
+        snapshot.shape.aead_rows,
         snapshot.shape.memory_rows,
-        snapshot.shape.kernel_rom_rows,
         snapshot.shape.ace_rows,
+        snapshot.shape.bitwise_rows,
     );
     if snapshot.shape.substituted_rows() > 0 {
         println!(
-            "    note:    {} rows (ace={} + kernel_rom={}) combined with advisory memory rows",
+            "    note:    {} ACE rows combined with advisory memory rows",
             snapshot.shape.substituted_rows(),
-            snapshot.shape.ace_rows,
-            snapshot.shape.kernel_rom_rows,
         );
     }
 

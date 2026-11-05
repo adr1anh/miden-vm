@@ -1,6 +1,6 @@
 //! Decoder-side chiplet and U32DIV range-check requests.
 //!
-//! This column carries requests for the hasher, bitwise, memory, ACE init, and kernel ROM chiplets,
+//! This column carries requests for the hasher, bitwise, memory, and ACE init chiplets,
 //! plus `BusId::RangeCheck` requests for the final two U32DIV helper limbs.
 //! The U32DIV range-check batch shares this column because its opcode is disjoint from every
 //! chiplet-request branch and its degree fits the column bound.
@@ -16,7 +16,7 @@ use super::super::operations::{aead_stream, merkle};
 use crate::vm::{
     constraints::lookup::{
         main_air::{MainBusContext, MainLookupBuilder},
-        messages::{AceInitMsg, BitwiseMsg, HasherMsg, KernelRomMsg, MemoryMsg, RangeMsg},
+        messages::{AceInitMsg, BitwiseMsg, HasherMsg, MemoryMsg, RangeMsg},
     },
     trace::{
         chiplets::hasher::{BLOCK_LEN, CONTROLLER_ROWS_PER_HASHER_OP, CV_LEN},
@@ -133,26 +133,17 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_requests<LB>(
                         Deg { v: 5, u: 6 }, // (V, U) = (1 + 4, 2 + 4)
                     );
 
-                    // SYSCALL: control-block remove + kernel-ROM call with the h[0..4] digest.
-                    g.batch(
-                        "syscall",
+                    // SYSCALL retains its structural control-block request. The authenticated
+                    // Library Resolve demand is the coordinated PR07 invocation obligation.
+                    g.remove(
+                        "syscall_ctrl_block",
                         op_flags.syscall(),
-                        move |b| {
+                        move || {
                             let parent = addr_next.into();
-                            let digest = array::from_fn(|i| h[i].into());
                             let h = h.map(LB::Expr::from);
-                            b.remove(
-                                "syscall_ctrl_block",
-                                HasherMsg::control_block(parent, &h, opcodes::SYSCALL),
-                                Deg { v: 4, u: 5 },
-                            );
-                            b.remove(
-                                "syscall_kernel_rom",
-                                KernelRomMsg::call(digest),
-                                Deg { v: 4, u: 5 },
-                            );
+                            HasherMsg::control_block(parent, &h, opcodes::SYSCALL)
                         },
-                        Deg { v: 5, u: 6 }, // (V, U) = (1 + 4, 2 + 4)
+                        Deg { v: 4, u: 5 },
                     );
 
                     // --- RESPAN ---

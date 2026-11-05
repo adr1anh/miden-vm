@@ -34,7 +34,6 @@ use super::selectors::ChipletFlags;
 use crate::vm::{
     ChipletCols, MidenAirBuilder,
     constraints::{
-        chiplets::columns::MemoryCols,
         constants::{F_4, TWO_POW_16},
         utils::BoolNot,
     },
@@ -62,7 +61,7 @@ pub fn enforce_memory_constraints<AB>(
     let cols_next = next.memory();
 
     // ==========================================================================
-    // BINARY CONSTRAINTS (all rows)
+    // ROW CONSTRAINTS (all rows)
     // ==========================================================================
     // Selectors and indices must be binary.
     {
@@ -71,6 +70,13 @@ pub fn enforce_memory_constraints<AB>(
         builder.assert_bool(cols.is_word);
         builder.assert_bool(cols.idx0);
         builder.assert_bool(cols.idx1);
+
+        // Element-write helpers are shared-row witnesses, outside the compact memory payload.
+        // They let initialization and value consistency select the write target at degree two.
+        let [e0, e1] = local.memory_write_helpers();
+        let is_element_write = (AB::Expr::ONE - cols.is_read) * (AB::Expr::ONE - cols.is_word);
+        builder.assert_eq(e0, is_element_write.clone() * (AB::Expr::ONE - cols.idx0));
+        builder.assert_eq(e1, is_element_write * cols.idx0);
 
         let word_addr_lo = local.memory_word_addr_lo();
         let word_addr_hi = local.memory_word_addr_hi();
@@ -87,7 +93,7 @@ pub fn enforce_memory_constraints<AB>(
 
     // not_written[i] = 1 when v'[i] is NOT being written and must be constrained.
     // Computed once, shared between first-row initialization and value consistency.
-    let not_written = compute_not_written_flags::<AB>(cols_next);
+    let not_written = compute_not_written_flags::<AB>(next);
 
     // ==========================================================================
     // FIRST-ROW INITIALIZATION
@@ -95,8 +101,8 @@ pub fn enforce_memory_constraints<AB>(
     // On the first row of the memory section, every value that is not being written must be zero,
     // so that a read of a never-written cell returns zero. `next_is_first` marks the row before the
     // first memory row and is derived from the section boundary directly, so this holds whether the
-    // memory section follows a bitwise section or, when bitwise is empty, follows the controller
-    // directly. (See `next_is_memory_first` in `selectors.rs`.)
+    // memory section follows AEAD or, when AEAD is empty, follows the controller directly.
+    // (See `next_is_memory_first` in `selectors.rs`.)
     {
         let builder = &mut builder.when(flags.next_is_first.clone());
         for (i, nw) in not_written.iter().enumerate() {
@@ -214,35 +220,21 @@ pub fn enforce_memory_constraints<AB>(
 /// - **Element write** (`is_word=0, is_read=0`): flag = 0 for the selected element, 1 for the other
 ///   three
 ///
-/// Corresponds to `c_i` in the docs, with `selected[i]` ≡ `f_i`.
-///
-/// Formula: `not_written[i] = is_read + is_write * is_element * !selected[i]`
-fn compute_not_written_flags<AB>(cols: &MemoryCols<AB::Var>) -> [AB::Expr; 4]
+/// The row's bound helpers select the low index bit of an element write; multiplying by the
+/// selected high index bit completes the one-hot selection. Each returned expression has degree
+/// two: `not_written[i] = 1 - (1-is_read)*is_word - e_low*h_high`.
+fn compute_not_written_flags<AB>(row: &ChipletCols<AB::Var>) -> [AB::Expr; 4]
 where
     AB: MidenAirBuilder,
 {
-    let is_read = cols.is_read;
-    let is_write = is_read.into().not();
-
-    let is_word = cols.is_word;
-    let is_element = is_word.into().not();
-
-    // One-hot element selection: selected[i] = 1 when idx = 2*idx1 + idx0 equals i.
-    let idx0 = cols.idx0;
+    let cols = row.memory();
+    let is_word_write = (AB::Expr::ONE - cols.is_read) * cols.is_word;
+    let [e0, e1] = row.memory_write_helpers();
     let idx1 = cols.idx1;
-    let not_idx0 = idx0.into().not();
-    let not_idx1 = idx1.into().not();
+    let not_idx1 = AB::Expr::ONE - idx1;
+    let element_writes = [e0 * not_idx1.clone(), e1 * not_idx1, e0 * idx1, e1 * idx1];
 
-    let selected = [
-        not_idx1.clone() * not_idx0.clone(), // element 0: idx = 0b00
-        not_idx1 * idx0,                     // element 1: idx = 0b01
-        idx1 * not_idx0,                     // element 2: idx = 0b10
-        idx1 * idx0,                         // element 3: idx = 0b11
-    ];
-
-    // not_written[i] = is_read + is_write * is_element * !selected[i]
-    let is_element_write = is_write * is_element;
-    selected.map(|s_i| is_read + is_element_write.clone() * s_i.not())
+    element_writes.map(|element_write| AB::Expr::ONE - is_word_write.clone() - element_write)
 }
 
 #[cfg(test)]
@@ -257,14 +249,11 @@ mod tests {
     use miden_stark::air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder, RowWindow};
     use p3_matrix::dense::RowMajorMatrix;
 
-    use super::enforce_memory_constraints;
+    use super::{compute_not_written_flags, enforce_memory_constraints};
     use crate::vm::{
         ChipletCols, MemoryCols,
         constraints::chiplets::selectors::{ChipletFlags, build_chiplet_selectors},
-        trace::{
-            AUX_TRACE_RAND_CHALLENGES, AUX_TRACE_WIDTH, CHIPLETS_DATA_WIDTH, CHIPLETS_MODE_COL,
-            TRACE_WIDTH,
-        },
+        trace::{AUX_TRACE_RAND_CHALLENGES, AUX_TRACE_WIDTH, CHIPLETS_DATA_WIDTH, TRACE_WIDTH},
     };
 
     struct ConstraintEvalBuilder {
@@ -382,19 +371,28 @@ mod tests {
     }
 
     fn memory_row() -> ChipletCols<Felt> {
-        ChipletCols {
+        let mut row = ChipletCols {
             chip_clk: Felt::ONE,
             chiplets: [Felt::ZERO; CHIPLETS_DATA_WIDTH],
-        }
+        };
+        recompute_write_helpers(&mut row);
+        row
     }
 
     fn memory_cols(row: &mut ChipletCols<Felt>) -> &mut MemoryCols<Felt> {
-        row.chiplets[3..18].borrow_mut()
+        row.chiplets[4..19].borrow_mut()
     }
 
     fn set_word_addr_limbs(row: &mut ChipletCols<Felt>, lo: u64, hi: u64) {
-        row.chiplets[18] = Felt::new_unchecked(lo);
-        row.chiplets[19] = Felt::new_unchecked(hi);
+        row.chiplets[19] = Felt::new_unchecked(lo);
+        row.chiplets[20] = Felt::new_unchecked(hi);
+    }
+
+    fn recompute_write_helpers(row: &mut ChipletCols<Felt>) {
+        let cols = row.memory();
+        let is_element_write = (Felt::ONE - cols.is_read) * (Felt::ONE - cols.is_word);
+        let helpers = [is_element_write * (Felt::ONE - cols.idx0), is_element_write * cols.idx0];
+        *row.memory_write_helpers_mut() = helpers;
     }
 
     fn eval_memory_window(
@@ -438,6 +436,7 @@ mod tests {
             cols.word_addr = Felt::new_unchecked(4 * (7 + (3 << 16)));
         }
         set_word_addr_limbs(&mut valid, 7, 3);
+        recompute_write_helpers(&mut valid);
         assert_constraints_accept(&valid);
 
         let mut invalid = valid.clone();
@@ -484,6 +483,7 @@ mod tests {
                 cols.idx1 = Felt::ZERO;
             },
         }
+        recompute_write_helpers(row);
     }
 
     fn same_key_memory_rows(
@@ -512,6 +512,8 @@ mod tests {
         // word_addr = 4 * (w0 + 2^16 * w1), with (w0, w1) = (1, 0).
         set_word_addr_limbs(&mut local, 1, 0);
         set_word_addr_limbs(&mut next, 1, 0);
+        recompute_write_helpers(&mut local);
+        recompute_write_helpers(&mut next);
 
         (local, next)
     }
@@ -527,6 +529,303 @@ mod tests {
             next_is_first: Felt::ZERO,
         };
         eval_memory_window(local, next, &flags)
+    }
+
+    fn all_access_sizes() -> [AccessSize; 5] {
+        [
+            AccessSize::Word,
+            AccessSize::Element(0),
+            AccessSize::Element(1),
+            AccessSize::Element(2),
+            AccessSize::Element(3),
+        ]
+    }
+
+    fn is_written(access: AccessType, size: AccessSize, slot: usize) -> bool {
+        matches!(access, AccessType::Write)
+            && match size {
+                AccessSize::Word => true,
+                AccessSize::Element(index) => usize::from(index) == slot,
+            }
+    }
+
+    /// Collects both the shared selector equations and Memory equations for every window. Each
+    /// memory row must appear as a local row so its helpers are bound, including helpers first
+    /// consumed by the preceding window's initialization or value-consistency constraints.
+    fn eval_shared_memory_sequence(rows: &[&ChipletCols<Felt>]) -> Vec<QuadFelt> {
+        let mut builder = ConstraintEvalBuilder::new();
+        for window in rows.windows(2) {
+            let flags = build_chiplet_selectors(&mut builder, window[0], window[1]).memory;
+            enforce_memory_constraints(&mut builder, window[0], window[1], &flags);
+        }
+        builder.evaluations
+    }
+
+    #[test]
+    fn memory_write_helpers_coexist_with_shared_selector_constraints() {
+        let controller = row_with_selectors([0, 1, 0, 0, 0, 0]);
+        let pad = row_with_selectors([0, 0, 0, 1, 1, 1]);
+
+        for access in [AccessType::Read, AccessType::Write] {
+            for size in all_access_sizes() {
+                let (mut first, mut next) = same_key_memory_rows(access, AccessType::Read);
+                set_access_size(&mut first, size);
+                memory_cols(&mut first).values = core::array::from_fn(|slot| {
+                    if is_written(access, size, slot) {
+                        Felt::new_unchecked(9)
+                    } else {
+                        Felt::ZERO
+                    }
+                });
+                let values = first.memory().values;
+                {
+                    let cols = memory_cols(&mut next);
+                    cols.values = values;
+                    cols.clk += Felt::ONE;
+                    cols.d0 = Felt::ONE;
+                    cols.d_inv = Felt::ONE;
+                }
+
+                let expected_helpers = match (access, size) {
+                    (AccessType::Write, AccessSize::Element(index)) => {
+                        if index & 1 == 0 {
+                            [Felt::ONE, Felt::ZERO]
+                        } else {
+                            [Felt::ZERO, Felt::ONE]
+                        }
+                    },
+                    _ => [Felt::ZERO; 2],
+                };
+                assert_eq!(first.memory_write_helpers(), expected_helpers, "{access:?}/{size:?}");
+                assert_eq!(first.chiplets[22], expected_helpers[1]);
+
+                let evals = eval_shared_memory_sequence(&[&controller, &first, &next, &pad, &pad]);
+                assert!(
+                    evals.iter().all(|value| *value == QuadFelt::ZERO),
+                    "shared selectors and Memory must accept {access:?}/{size:?}; got {evals:?}",
+                );
+
+                for helper in 0..2 {
+                    let mut forged = first.clone();
+                    let value = forged.memory_write_helpers()[helper];
+                    forged.memory_write_helpers_mut()[helper] = Felt::ONE - value;
+                    let evals =
+                        eval_shared_memory_sequence(&[&controller, &forged, &next, &pad, &pad]);
+                    assert!(
+                        evals.iter().any(|value| *value != QuadFelt::ZERO),
+                        "forged helper {helper} must reject {access:?}/{size:?}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shared_selector_sequence_binds_helpers_consumed_by_memory_entry() {
+        let controller = row_with_selectors([0, 1, 0, 0, 0, 0]);
+        let pad = row_with_selectors([0, 0, 0, 1, 1, 1]);
+
+        for helper in 0..2 {
+            let mut forged = row_with_selectors([0, 0, 0, 0, 0, 0]);
+            memory_cols(&mut forged).is_read = Felt::ONE;
+            recompute_write_helpers(&mut forged);
+            memory_cols(&mut forged).values[helper] = Felt::new_unchecked(42);
+            forged.memory_write_helpers_mut()[helper] = Felt::ONE;
+
+            // The forged Boolean helper masks the fresh read at entry. The production flags and
+            // active equations on the next window must still reject its false helper binding.
+            let entry_evals = eval_shared_memory_sequence(&[&controller, &forged]);
+            assert!(entry_evals.iter().all(|value| *value == QuadFelt::ZERO));
+            let evals = eval_shared_memory_sequence(&[&controller, &forged, &pad, &pad]);
+            assert!(evals.iter().any(|value| *value != QuadFelt::ZERO));
+        }
+    }
+
+    #[test]
+    fn shared_memory_helpers_leave_earlier_section_payload_free() {
+        for prefix in [&[1][..], &[0, 1][..], &[0, 0, 1][..]] {
+            let mut row = row_with_selectors([0; 6]);
+            row.chiplets.fill(Felt::from_u8(17));
+            for (slot, value) in row.chiplets.iter_mut().zip(prefix) {
+                *slot = Felt::new_unchecked(*value);
+            }
+            let mut builder = ConstraintEvalBuilder::new();
+            let flags = build_chiplet_selectors(&mut builder, &row, &row);
+            assert!(builder.evaluations.iter().all(|value| *value == QuadFelt::ZERO));
+            assert_eq!(flags.memory.is_active, Felt::ZERO);
+        }
+        for selectors in [[0, 0, 0, 1, 0, 0], [0, 0, 0, 1, 1, 0], [0, 0, 0, 1, 1, 1]] {
+            let row = row_with_selectors(selectors);
+            let evals = eval_shared_memory_sequence(&[&row, &row]);
+            assert!(evals.iter().all(|value| *value == QuadFelt::ZERO));
+            let mut forged = row;
+            forged.chiplets[22] = Felt::ONE;
+            let evals = eval_shared_memory_sequence(&[&forged, &forged]);
+            assert!(evals.iter().any(|value| *value != QuadFelt::ZERO));
+        }
+    }
+
+    #[test]
+    fn memory_write_helpers_bind_all_access_modes_and_element_slots() {
+        for access in [AccessType::Read, AccessType::Write] {
+            for size in all_access_sizes() {
+                let mut row = memory_row();
+                memory_cols(&mut row).is_read = access.is_read();
+                set_access_size(&mut row, size);
+                assert_constraints_accept(&row);
+
+                let not_written = compute_not_written_flags::<ConstraintEvalBuilder>(&row);
+                for (slot, flag) in not_written.into_iter().enumerate() {
+                    let expected = if is_written(access, size, slot) {
+                        Felt::ZERO
+                    } else {
+                        Felt::ONE
+                    };
+                    assert_eq!(flag, expected, "{access:?}/{size:?}, slot {slot}");
+                }
+
+                // Each helper is independently bound on the row that supplies the memory payload.
+                for helper in 0..2 {
+                    let mut forged = row.clone();
+                    forged.memory_write_helpers_mut()[helper] += Felt::ONE;
+                    assert_constraints_reject(&forged);
+                    recompute_write_helpers(&mut forged);
+                    assert_constraints_accept(&forged);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn memory_first_entry_preserves_zero_initialization_with_recomputed_helpers() {
+        let previous = memory_row();
+        let flags = ChipletFlags {
+            is_active: Felt::ZERO,
+            is_transition: Felt::ZERO,
+            is_last: Felt::ZERO,
+            next_is_first: Felt::ONE,
+        };
+
+        for access in [AccessType::Read, AccessType::Write] {
+            for size in all_access_sizes() {
+                let mut first = memory_row();
+                memory_cols(&mut first).is_read = access.is_read();
+                set_access_size(&mut first, size);
+                for slot in 0..4 {
+                    if is_written(access, size, slot) {
+                        memory_cols(&mut first).values[slot] = Felt::new_unchecked(9);
+                    }
+                }
+                assert_constraints_accept(&first);
+                let evals = eval_memory_window(&previous, &first, &flags);
+                assert!(evals.iter().all(|value| *value == QuadFelt::ZERO));
+
+                // Helper forgery is rejected by the first row's own active equations, even when
+                // the predecessor's initialization equations accept a resulting zero mask.
+                for helper in 0..2 {
+                    let mut forged = first.clone();
+                    forged.memory_write_helpers_mut()[helper] += Felt::ONE;
+                    assert_constraints_reject(&forged);
+                }
+
+                for slot in 0..4 {
+                    let mut forged = first.clone();
+                    memory_cols(&mut forged).values[slot] += Felt::ONE;
+                    recompute_write_helpers(&mut forged);
+                    assert_constraints_accept(&forged);
+                    let evals = eval_memory_window(&previous, &forged, &flags);
+                    let accepts = evals.iter().all(|value| *value == QuadFelt::ZERO);
+                    assert_eq!(
+                        accepts,
+                        is_written(access, size, slot),
+                        "{access:?}/{size:?}, slot {slot}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn memory_first_entry_cannot_use_forged_helpers_to_hide_fresh_read() {
+        let previous = memory_row();
+        let flags = ChipletFlags {
+            is_active: Felt::ZERO,
+            is_transition: Felt::ZERO,
+            is_last: Felt::ZERO,
+            next_is_first: Felt::ONE,
+        };
+        for helper in 0..2 {
+            let mut first = memory_row();
+            memory_cols(&mut first).is_read = Felt::ONE;
+            recompute_write_helpers(&mut first);
+            memory_cols(&mut first).values[helper] = Felt::new_unchecked(42);
+            first.memory_write_helpers_mut()[helper] = Felt::ONE;
+
+            // The forged helper hides the fresh read from the predecessor's initialization.
+            let evals = eval_memory_window(&previous, &first, &flags);
+            assert!(evals.iter().all(|value| *value == QuadFelt::ZERO));
+            // Its binding on the first memory row still rejects the complete row sequence.
+            assert_constraints_reject(&first);
+            recompute_write_helpers(&mut first);
+            assert_constraints_accept(&first);
+            let evals = eval_memory_window(&previous, &first, &flags);
+            assert!(evals.iter().any(|value| *value != QuadFelt::ZERO));
+        }
+    }
+
+    #[test]
+    fn memory_transitions_preserve_untouched_slots_with_recomputed_helpers() {
+        for access in [AccessType::Read, AccessType::Write] {
+            for size in all_access_sizes() {
+                let (local, mut next) = same_key_memory_rows(AccessType::Read, access);
+                set_access_size(&mut next, size);
+                {
+                    let cols = memory_cols(&mut next);
+                    cols.clk += Felt::ONE;
+                    cols.d0 = Felt::ONE;
+                    cols.d_inv = Felt::ONE;
+                    for slot in 0..4 {
+                        if is_written(access, size, slot) {
+                            cols.values[slot] += Felt::new_unchecked(9);
+                        }
+                    }
+                }
+                assert_constraints_accept(&local);
+                assert_constraints_accept(&next);
+                let evals = eval_memory_transition(&local, &next);
+                assert!(evals.iter().all(|value| *value == QuadFelt::ZERO));
+
+                for slot in 0..4 {
+                    let mut forged = next.clone();
+                    memory_cols(&mut forged).values[slot] += Felt::ONE;
+                    recompute_write_helpers(&mut forged);
+                    assert_constraints_accept(&forged);
+                    let evals = eval_memory_transition(&local, &forged);
+                    let accepts = evals.iter().all(|value| *value == QuadFelt::ZERO);
+                    assert_eq!(
+                        accepts,
+                        is_written(access, size, slot),
+                        "{access:?}/{size:?}, slot {slot}",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn memory_helpers_leave_unrelated_family_rows_unconstrained() {
+        let mut local = memory_row();
+        let mut next = memory_row();
+        local.chiplets.fill(Felt::new_unchecked(2));
+        next.chiplets.fill(Felt::new_unchecked(3));
+        let flags = ChipletFlags {
+            is_active: Felt::ZERO,
+            is_transition: Felt::ZERO,
+            is_last: Felt::ZERO,
+            next_is_first: Felt::ZERO,
+        };
+        let evals = eval_memory_window(&local, &next, &flags);
+        assert!(evals.iter().all(|value| *value == QuadFelt::ZERO));
     }
 
     /// Reference polynomials from before the inverse/selected-delta refactor. The remaining
@@ -777,26 +1076,23 @@ mod tests {
 
     // EMPTY-SECTION BOUNDARY REGRESSION TESTS
     // ============================================================================================
-    // The memory chiplet's first-row initialization ("values not being written must be zero") is
-    // gated by `next_is_first`. That flag must fire on the row preceding the first memory row even
-    // when the bitwise section is empty, which is the case for any program that touches memory but
-    // performs no `u32and`/`u32xor` operations. The earlier definition gated it on a non-empty
-    // bitwise section, so an empty bitwise section skipped the initialization and let a malicious
-    // prover forge a read of never-written memory.
+    // Memory may directly follow Controller when AEAD is empty. Its first-row initialization
+    // must fire on either preceding section, independent of Memory payload cells.
 
-    /// Builds a `ChipletCols` row with `[s_ctrl, stream_mode, s1, s2, s3, s4]`.
     fn row_with_selectors(selectors: [u64; 6]) -> ChipletCols<Felt> {
-        let mut row = memory_row();
-        let [s_ctrl, stream_mode, s1, s2, s3, s4] = selectors;
-        for (slot, value) in row.chiplets[..5].iter_mut().zip([s_ctrl, s1, s2, s3, s4]) {
+        let mut row = ChipletCols {
+            chip_clk: Felt::ONE,
+            chiplets: [Felt::ZERO; CHIPLETS_DATA_WIDTH],
+        };
+        for (slot, value) in row.chiplets[..6].iter_mut().zip(selectors) {
             *slot = Felt::new_unchecked(value);
         }
-        row.chiplets[CHIPLETS_MODE_COL] = Felt::new_unchecked(stream_mode);
+        if selectors[..4] == [0, 0, 0, 0] {
+            recompute_write_helpers(&mut row);
+        }
         row
     }
 
-    /// Runs `build_chiplet_selectors` over the `(local, next)` window and returns the memory flags
-    /// the AIR would actually derive for that boundary.
     fn memory_flags_for_window(
         local: &ChipletCols<Felt>,
         next: &ChipletCols<Felt>,
@@ -806,50 +1102,31 @@ mod tests {
     }
 
     #[test]
-    fn memory_first_row_init_enforced_when_bitwise_empty() {
-        // Empty-bitwise layout: the memory section begins directly after a controller row, so the
-        // first memory row is entered at a controller -> memory boundary.
-        let controller = row_with_selectors([1, 0, 0, 0, 0, 0]);
-        let mut first_memory = row_with_selectors([0, 0, 1, 0, 0, 0]);
-        memory_cols(&mut first_memory).is_read = Felt::ONE; // fresh read: every value must be zero
+    fn memory_first_row_init_enforced_with_or_without_aead() {
+        for predecessor in [[0, 1, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0]] {
+            let previous = row_with_selectors(predecessor);
+            let mut first_memory = row_with_selectors([0, 0, 0, 0, 0, 0]);
+            memory_cols(&mut first_memory).is_read = Felt::ONE;
+            recompute_write_helpers(&mut first_memory);
+            let flags = memory_flags_for_window(&previous, &first_memory);
+            assert_eq!(flags.next_is_first, Felt::ONE);
 
-        let flags = memory_flags_for_window(&controller, &first_memory);
-        assert_eq!(
-            flags.next_is_first,
-            Felt::ONE,
-            "controller -> memory boundary (empty bitwise) must mark the next row as first memory",
-        );
-
-        // A forged fresh read of a never-written cell must be rejected.
-        let mut forged = first_memory.clone();
-        memory_cols(&mut forged).values[0] = Felt::new_unchecked(42);
-        let evals = eval_memory_window(&controller, &forged, &flags);
-        assert!(
-            evals.iter().any(|value| *value != QuadFelt::ZERO),
-            "forged fresh read must be rejected at the empty-bitwise memory boundary",
-        );
-
-        // The honest zero-initialized fresh read is accepted.
-        let evals = eval_memory_window(&controller, &first_memory, &flags);
-        assert!(
-            evals.iter().all(|value| *value == QuadFelt::ZERO),
-            "zero-initialized fresh read must be accepted; got {evals:?}",
-        );
+            let mut forged = first_memory.clone();
+            memory_cols(&mut forged).values[0] = Felt::new_unchecked(42);
+            let evals = eval_memory_window(&previous, &forged, &flags);
+            assert!(evals.iter().any(|value| *value != QuadFelt::ZERO));
+            let evals = eval_memory_window(&previous, &first_memory, &flags);
+            assert!(evals.iter().all(|value| *value == QuadFelt::ZERO));
+        }
     }
 
     #[test]
     fn memory_next_is_first_marks_only_the_entry_row() {
-        // Non-empty bitwise: the bitwise -> memory boundary still fires.
-        let bitwise = row_with_selectors([0, 0, 0, 0, 0, 0]);
-        let memory = row_with_selectors([0, 0, 1, 0, 0, 0]);
-        assert_eq!(memory_flags_for_window(&bitwise, &memory).next_is_first, Felt::ONE);
-
-        // An interior memory -> memory transition is not a section start.
-        let memory_next = row_with_selectors([0, 0, 1, 0, 0, 0]);
-        assert_eq!(memory_flags_for_window(&memory, &memory_next).next_is_first, Felt::ZERO);
-
-        // A memory -> ACE transition is not a memory section start.
-        let ace = row_with_selectors([0, 0, 1, 1, 0, 0]);
+        let aead = row_with_selectors([0, 0, 1, 0, 0, 0]);
+        let memory = row_with_selectors([0, 0, 0, 0, 0, 0]);
+        assert_eq!(memory_flags_for_window(&aead, &memory).next_is_first, Felt::ONE);
+        assert_eq!(memory_flags_for_window(&memory, &memory).next_is_first, Felt::ZERO);
+        let ace = row_with_selectors([0, 0, 0, 1, 0, 0]);
         assert_eq!(memory_flags_for_window(&memory, &ace).next_is_first, Felt::ZERO);
     }
 }

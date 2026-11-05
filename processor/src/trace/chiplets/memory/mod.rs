@@ -2,7 +2,7 @@ use alloc::{collections::BTreeMap, vec::Vec};
 use core::{borrow::BorrowMut, fmt::Debug};
 
 use miden_air_definitions::vm::{
-    MemoryCols,
+    ChipletCols, MemoryCols,
     trace::{
         RowIndex,
         chiplets::memory::{
@@ -401,6 +401,14 @@ impl Memory {
 
     // HELPER METHODS
     // --------------------------------------------------------------------------------------------
+
+    /// Completes the element-write helpers after the compact payload is in its shared trace row.
+    pub(crate) fn fill_row_helpers(row: &mut ChipletCols<Felt>) {
+        let cols = row.memory();
+        let is_element_write = (ONE - cols.is_read) * (ONE - cols.is_word);
+        let helpers = [is_element_write * (ONE - cols.idx0), is_element_write * cols.idx0];
+        *row.memory_write_helpers_mut() = helpers;
+    }
 
     /// Returns the context, address, and clock cycle of the first trace row, or None if the trace
     /// is empty.

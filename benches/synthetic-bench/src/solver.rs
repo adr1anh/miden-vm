@@ -127,10 +127,11 @@ mod tests {
         memory: u64,
     ) -> TraceShape {
         let breakdown = TraceBreakdown {
+            library_rows: 0,
             hasher_rows: controller_hasher,
+            aead_rows: 0,
             bitwise_rows: bitwise,
             memory_rows: memory,
-            kernel_rom_rows: 0,
             ace_rows: 0,
         };
         let totals = TraceTotals {

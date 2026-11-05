@@ -330,7 +330,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
-| 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
+| 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
@@ -1252,3 +1252,229 @@ implemented-awaiting-validation, not complete: normal processor/legacy/parallel/
 private mutation checks remain deferred through the recorded assembly/trace migrations; fuzz smoke
 is at 16. Keep every PR 05 acceptance gate. Continue the linear stack to PR06; native resolution
 and trace reconstruction do not establish the packed AIR or statement relation.
+
+
+### PR 06 Opening boundary
+
+PR05 final review-description commit `53acb4837` is the exact linear base of
+`adr1anh/librarytree-06-packed-library`; no PR or push was created. Start with the one shared
+Library22 view, canonical kind encoding and pure local predicates, reusing existing borrow/field
+conventions. Two independent source reviews agree that the active selector switch must instead
+coordinate both selector implementations, views/writers, Controller mode/boundaries and periodic
+consumers. This first slice does not activate a partial AIR or add another committed matrix.
+All PR06 acceptance gates above remain required; PR05 inherited checks remain open.
+
+
+### PR 06 Shared schema/local expressions checkpoint
+
+`441bacb95` defines the shared 22-cell Library overlay, canonical kind bits and zero-copy accessor.
+`487a2a51a` separately adds cubic kind flags, explicit Library/phase scope and compact sigma
+selection/validity expressions. No live section selector, writer, periodic layout, lookup or AIR
+evaluation is activated by these commits. Independent implementation review found no actionable
+issue.
+
+After AC/heavy guards, `cargo test --locked -p miden-air-definitions --lib library` passed all seven
+layout/mutation/truth-table tests. Strict library/test Clippy and no-default-features library check
+passed. Production-only `expect(dead_code)` is limited to the new Library module while its
+expressions await consumers; remove it during constraint integration. Logs: `pr06-library-schema-*`.
+These local checks do not establish integrated degree, group capacity or soundness. Next simplify
+Controller mode/scoping, then coordinate packed selectors/views/writers/boundaries and Library
+witness/buses. Every PR06 acceptance gate and inherited validation remains open.
+
+
+### PR 06 Controller mode/scoping refactor checkpoint
+
+`5c7c9ce26` derives Controller mode from hs1/hs2, removes the physical getter and off-Controller
+zero shortcut, scopes all generic Merkle equations/lookups, and simplifies the three init gates.
+Unused cubic Controller flag compositions are removed. `59b36d0ec` removes the mode write and
+reduces Controller width from22 to21 without changing rows/alignment/addresses. Independent review
+found a stale mutation-test row locator using sharedc22; it now selects MP/MU by their kind bits.
+`4e2158717` adds actual Chiplets shape/base-extension-degree capture and refactors the existing
+lookup validator to derive its layout from production APIs. Duplicate validation was consolidated.
+`87267f9a3` separately updates the processor trace overview.
+
+After AC/heavy guards the full handwritten AIR suite passed308 tests; exact lookup group/column
+annotations validate and current captured degrees are≤9 at24main/fouraux/fourAIR. Five public
+witness/native trace reconstruction tests passed. Strict AIR library/test and processor library
+Clippy and no-default-features processor checks passed. Logs: `pr06-controller-*`. Processor-only
+materialization/Merkle mutation tests remain authored but unrun behind the existing assembly
+dev-graph blocker; no normal processor-suite or generated-proof pass is claimed.
+
+Next coordinate Memory/ACE helpers and packed views/writers/selectors/prefix/boundaries. Existing
+Controller global-first initialization and physical next-selector dependencies remain legacy until
+that migration. Current degree checks do not clear the full packed, public-input, lookup-capacity,
+forged-matrix or generated/native/recursive gates. All PR06 and inherited acceptance remain open.
+
+
+### PR 06 Memory/ACE helpers and family-band witness completion
+
+`67390876a` exposes scoped helper views. `3b07ee656` binds Memory e0/e1 and ACE z, reducing
+not-written/arithmetic degrees while retaining all conditional-inverse, value, read-only and
+ternary-validity rules. Review found an actual integration conflict: the legacy stream-mode zero
+gate and Memory classifier still treated c22 as mode outside Bitwise. Both now respect Memory e1,
+with full production-selector sequence regressions including forged entry reads.
+
+`57c6f9426` completes only materialized Memory/ACE bands after scatter, with no new allocations,
+compact-buffer holes, offsets, messages or selector-order changes. Private fixtures test absent/
+present bands and preserved payload/clocks/AEAD cells; normal processor execution of those fixtures
+remains deferred behind assembly. `43b2824f8` supplies public native materialization evidence for
+ten scalar/word accesses, exact helper/payload/clock semantics and replay-matrix equality.
+
+After AC/heavy guards AIR321 and all six public witness tests passed, including measured current
+degree≤9/exact lookup validation. Strict AIR/test, processor/lib and public-test Clippy and
+no-default-features processor checks passed. Clippy's fixed-size chunk suggestion was adopted
+without new allowances. Logs: `pr06-memory-ace-*`. These checks do not activate Library or clear
+packed/public/lookup-capacity/generated/recursive gates. Next implement complete scoped Library
+constraints and existing-group lookup entry points; public8/periodic9/validated boundary inputs
+and packed production dispatch remain coordinated integration.
+
+
+### PR 06 Scoped Library relation and genuine compression providers
+
+`40887c022` extracts canonical symbolic Eidos framing without changing the transcript formula.
+`7a184a8ca` adds explicitly scoped Library MAIN constraints: proper prefix/pairs/PAD, complete reverse
+Lists, routing and four per-supplier SYS namespace equations. `ab18cccc4` adds unit rooted Open,
+normal/syscall Resolve and compression emissions into an existing group, plus an explicit public
+R_E seed with canonical initial namespace; no production dispatch or additional column is activated.
+`800f6d75d` tests the same entry points with genuine Eidos MAIN/lookup providers, fresh auxiliaries,
+fixed Resolve demands and both challenge encodings. Negatives rehash incomplete Lists/padding and
+exercise unit provenance and weighted SYS cancellation. Acceptance uses the actual rational lookup
+correction; exact multiset equality is diagnostic. Independent reviews found and resolved a test
+oracle issue, and a previously unused MAIN reexport was removed after strict Clippy caught it.
+
+After AC/heavy guards the full AIR suite passed347; the strengthened combined subset passed all
+seven tests again. Strict AIR library/test Clippy, no-default-features processor and all six public
+witness reconstruction tests passed. Logs: `pr06-library-relation-*`. Isolated exact lookup metadata
+and MAIN/auxiliary degree≤9 do not establish integrated packed acceptance. Full Range/And8 closure,
+public8/periodic9/validated boundary propagation, both selectors, native writers/prefix relocation,
+Controller entry, `[4,4,3,2]` redistribution and generated/native/recursive/security gates remain open.
+
+Next reuse the authenticated occurrence ledger and existing compression interner for native Library
+prefix planning/writing. D3's Page-defined identity/full-closure correction is committed separately
+as `a477732bc`, with profile Rustdoc in `71bf65973`; it supersedes opaque-assignment history without
+waiving any external Protocol input or acceptance gate. No GitHub PR or push was created.
+
+
+### PR 06 Native writer and checked shared compression admission
+
+`0c619b145` exposes the existing shared LibraryCols view to native consumers. `414647cca` routes
+Controller, AEAD and direct packed requests through one checked interner. Entry/summed multiplicities
+and unique-state cycle growth are checked before registration; direct requests append no Controller
+rows. Review caught an admitted duplicate AEAD state/clock that the materializer requires to have
+unit multiplicity; admission now rejects duplicate/nonunit AEAD without mutation. New single-row
+Controller requests preflight both row capacity and registration before append. Memoized replay can
+already have copied its full row span when registration fails; that materialization failure is
+explicitly terminal and requires discarding the hasher. The raw public external helper remains an
+unchecked separate admission gate, not the native Library path.
+
+`11114a250` adds a borrowed completed-session writer with no allocated row matrix/request vector.
+It reuses ledger counters, validates occurrence/binding associations, writes the caller's exact
+aligned prefix, streams canonical requests, preserves separate normal/SYS frequencies, and computes
+List CVs forward directly into reverse pair destinations. The caller must admit combined height/PCS/
+proving memory before allocation; callback failure leaves disposable partial buffers, never changed
+native authority. Independent reviews found no remaining issue. Library production dispatch remains
+inactive.
+
+After AC/heavy guards all five exact-source writer tests and six public witness tests passed.
+Strict processor library and exact-source/public-test Clippy, plus no-default-features processor,
+passed. Initial import errors and fixed-chunk/parity Clippy suggestions were corrected without new
+dependencies or allowances. The fresh normal private-test attempt stops in miden-assembly at exactly
+three existing keyed-constructor/Exec migration errors; six private interner tests are authored but
+unrun. Logs: `pr06-native-library-*`. No normal processor-suite or proof pass is claimed.
+
+Next relay the existing owned completed session through execution-witness capture and replay
+revalidation, account its actual retained storage, and share one pair/request walker for registration
+before exact admission and final writing afterward. Production packed/public/boundary/Controller/
+lookup/security/generated/recursive gates and all inherited checks remain open; PR06 stays in progress.
+
+
+### PR 06 Completed native owner relay and shared pre-admission walk
+
+`de1e70117` factors one fixed-stack pair/request traversal. Pre-admission visits stream compression
+requests without prefix storage; final writing uses the same canonical implementation without
+registering requests again. `a1691533b` preserves typed keyed-trace/resource errors without formatting
+or allocating on failure. Review caught threshold probes accepting every error as an expected
+retained-limit rejection; all probes now reject unrelated failures, including entry metadata's
+previously erased budget errors. `f34e805d4` separately factors the actual shared test fixture.
+
+`cf08681dc` moves the original completed ResolutionSession through every full proving/source/async/
+streamed path into required native TraceReplay storage. Public execute APIs discard the returned
+owner; stopped/resumable contexts keep theirs. Bounded reads retain the completed session already
+built by native revalidation. No cloned ledger, optional/default authority, new encoded field or
+wire-version change is introduced. Capture/root-END queue preparation, read and export account exact
+native retained capacities, including the final keyed-record delta. Trace preparation peak remains
+explicitly separate from native preparation; read allowances are clamped before native allocation,
+and final retained checks precede use/validation publication. Fixture budgets remain unchanged.
+
+`c35c3c5e2` adds private original-owner/entry-frequency/retention/drop/trust tests and migrates six
+stale replay serialization fixtures. These are reviewed but unrun behind the existing three assembly
+migration errors; inherited Controller address fixtures still need constructor migration. `d39735bbe`
+adds public mode/wire/claim/descriptor/full-matrix parity and independently measured exact capture,
+read, live-export and restored-export retained boundaries. Capacity differences do not imply equal
+thresholds. Neither private source review nor public replay parity establishes a proof relation.
+
+After AC/heavy guards: seven exact-source walker tests, eight public witness tests with both default
+and testing/source-async configurations, and sixteen public execution tests including all40 native
+mode/API cases passed. Strict processor library and source/public-test Clippy in both configurations,
+plus no-default-features processor, passed. Logs: `pr06-session-relay-*`. The isolated harness lock was
+refreshed offline for its real testing feature; no repository dependency/default changed.
+
+Next coordinate packed selectors, physical views/bands/writers, Controller entry/address relocation,
+periodic9 and `[4,4,3,2]` lookup redistribution with required public8/boundary inputs. The current
+materializer still discards the retained owner and uses a zero prefix. Production Library dispatch,
+Core Resolve/root-END/statement activation, full Range/And8 closure and all measured/generated/
+recursive/security gates remain open. PR06 stays in progress; no GitHub PR or push was created.
+
+
+### PR 06 Coordinated packed cutover ownership
+
+Proceed jointly with MAIN/schema/periodic migration, matching lookup dispatch/redistribution, and
+native band/buffer/materialization migration. Introduce mandatory Chiplets8 public inputs and pass
+them explicitly to MAIN and the Open boundary; unconverted producers must reject missing inputs,
+without zero defaults or legacy-aux inference. Root owns public-count/boundary propagation and
+statement shape validation. Core Resolve/root-END and canonical claim/transport/recursive activation
+remain PR07/12 obligations. Intermediate consumers may break during this selected cutover; that is
+not permission to accept a partial proof relation or clear any inherited/final gate. Exact degree,
+lookup multiset/capacity, prefix/boundary, public-binding and generated/security checks remain required.
+
+
+### PR 06 Packed relation/materialization checkpoint
+
+`b9db78846` selects the shared packed overlays, matching prefix-gated MAIN selectors, periodic9,
+complete Library exit into Controller and relocated Controller initialization. `d5245be2e` migrates
+lookup activity, keeps Library inside the existing hash-kernel group and redistributes AND8 2+2 and
+Memory ranges4+1 without changing raw tuple/frequency multisets. Retired KernelRom messages are
+removed; bus slots0/3 remain reserved, preserving COUNT41 and message width16. `4bbba1e34` requires
+explicit Chiplets8 in MAIN/boundary propagation, validates every AIR public slice before indexing,
+rejects missing/malformed shapes and removes absent-input defaults. Core's old fixed prefix and
+canonical legacy claim carrier remain explicit until PR07/12; they no longer seed kernel authority.
+
+`668f581c4` consumes the retained completed session, registers Library requests into the same checked
+Hasher before Eidos/range/height/memory admission, then writes into the final allocated prefix only.
+It uses six checked bands, separate typed AEAD/Bitwise buffers, Controller c1, checked cell layouts
+and one typed Controller-address relocation. Obsolete native KernelRom files/band/builder are removed.
+`013573703` migrates private band fixtures without claiming their execution. `8ddf89e49` checks real
+Mast/entry frequency1, prefix8, physical Controller address9, three unit compression footers, exact
+budget rejection and live/read/source/async matrix equality.
+
+`c53ea3cc7` migrates CLI/benchmark reports and required measured-breakdown fields to six bands while
+retaining the five calibration dimensions and checked sum+1. Benchmark documentation `a1f94df23`
+identifies pre-cutover metrics as historical. Measured JSON/provenance remain untouched; enabled
+`committed_snapshots_load` still requires genuine producer recapture and updated height pins. Small
+synthetic schema fixtures do not claim new measured results. Reporting/bench checks remain unrun.
+
+After AC/heavy guards all360 AIR tests passed, capturing actual whole MAIN/extension degree≤9,
+public8, periodic9, four AIRs, exact [4,4,3,2] metadata and moved lookup fractions. Nine public witness
+tests passed in default/testing configurations and all16 public execution tests (40-case matrix)
+passed. Strict AIR library/test, processor library and source/public-test Clippy in both configurations
+and no-default-features processor passed. Logs: `pr06-packed-*`. Review/compile/lint found and fixed
+stale imports/width names, a test mutating the newly reserved Controller selector, explicit-public
+fixtures, and fixed-chunk iterator lints. No gate or degree bound was relaxed.
+
+PR06 is implemented-awaiting-validation, not complete. Normal processor/parallel/lookup/streamed and
+old fixture migrations remain behind three assembly errors and deferred toolchain work. Full active
+production forged matrices, complete Range/And8/global Resolve closure, source/generated drift,
+native/MASM/recursive/security and qualification gates remain. Old prove/verify/recursive producers
+omit Chiplets8 and reject at statement construction; their legacy carrier cannot enable the selected
+proof. Proceed to PR07 Core binding, then PR12 canonical claim/public/transport activation without
+defaults or old-authority adapters. No GitHub PR or push was created.

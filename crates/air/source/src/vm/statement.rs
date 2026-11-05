@@ -11,7 +11,7 @@ use miden_core::{
     program::{KernelDescriptor, NUM_CLAIM_ELEMENTS},
 };
 use miden_stark::{
-    air::{LiftedAir, ReductionError},
+    air::{BaseAir, LiftedAir, ReductionError},
     lookup::Challenges,
 };
 use p3_challenger::CanObserve;
@@ -48,6 +48,10 @@ pub fn observe<C: CanObserve<Felt>>(
     aux_inputs: &[Felt],
     _log_trace_heights: &[u8],
 ) {
+    assert_eq!(air_inputs.len(), AIRS.len(), "unexpected AIR public-input count");
+    for (air, public) in AIRS.iter().zip(air_inputs) {
+        assert_eq!(public.len(), air.num_public_values(), "unexpected AIR public-value count");
+    }
     let core_inputs = &air_inputs[0];
     assert_eq!(core_inputs.len(), NUM_PUBLIC_VALUES, "unexpected public-value count");
     assert!(
@@ -84,6 +88,25 @@ pub fn eval_external<EF: ExtensionField<Felt>>(
     aux_values: &[&[EF]],
     log_trace_heights: &[u8],
 ) -> Result<Vec<EF>, ReductionError> {
+    if air_inputs.len() != AIRS.len() {
+        return Err(format!(
+            "expected public inputs for {} AIRs, got {}",
+            AIRS.len(),
+            air_inputs.len()
+        )
+        .into());
+    }
+    for (air, public) in AIRS.iter().zip(air_inputs) {
+        let expected = air.num_public_values();
+        if public.len() != expected {
+            return Err(format!(
+                "{} expects {expected} public values, got {}",
+                air.name(),
+                public.len()
+            )
+            .into());
+        }
+    }
     if aux_values.len() != AIRS.len() {
         return Err(format!(
             "expected aux values for {} AIRs, got {}",
@@ -122,6 +145,11 @@ pub fn eval_external<EF: ExtensionField<Felt>>(
         )
         .into());
     }
+    // Keep the legacy claim carrier canonical until PR12 removes its kernel fields. These
+    // fields no longer seed a Chiplets authorization table.
+    if !(aux_inputs.len() - AUX_KERNEL_DIGESTS).is_multiple_of(WORD_SIZE) {
+        return Err("legacy kernel digest inputs must contain whole words".into());
+    }
     let max_aux_inputs = max_aux_inputs();
     if aux_inputs.len() > max_aux_inputs {
         return Err(format!(
@@ -135,10 +163,14 @@ pub fn eval_external<EF: ExtensionField<Felt>>(
 
     let mut weighted_aux_sum = EF::ZERO;
     let mut boundary_correction = EF::ZERO;
-    for ((air, values), &log_height) in
-        AIRS.iter().copied().zip(aux_values.iter()).zip(log_trace_heights)
+    for (((air, public), values), &log_height) in AIRS
+        .iter()
+        .copied()
+        .zip(air_inputs)
+        .zip(aux_values.iter())
+        .zip(log_trace_heights)
     {
-        boundary_correction += air.boundary_correction(&challenges, aux_inputs)?;
+        boundary_correction += air.boundary_correction(&challenges, public, aux_inputs)?;
         let expected = <MidenAir as LiftedAir<Felt, EF>>::num_aux_values(&air);
         if values.len() != expected {
             return Err(format!(

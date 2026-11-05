@@ -7,6 +7,7 @@
 
 pub(crate) mod algebra;
 pub(crate) mod constraints;
+pub(crate) mod framing;
 #[doc(hidden)]
 pub mod layout;
 pub(crate) mod lookup;

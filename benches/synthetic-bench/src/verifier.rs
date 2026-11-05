@@ -79,9 +79,21 @@ impl VerificationReport {
         ];
         let breakdown_rows: &[(&'static str, u64, u64, DeltaStatus)] = &[
             (
+                "library",
+                target.breakdown.library_rows,
+                actual.breakdown.library_rows,
+                DeltaStatus::Informational,
+            ),
+            (
                 "controller_hasher",
                 target.breakdown.hasher_rows,
                 actual.breakdown.hasher_rows,
+                DeltaStatus::Informational,
+            ),
+            (
+                "aead",
+                target.breakdown.aead_rows,
+                actual.breakdown.aead_rows,
                 DeltaStatus::Informational,
             ),
             (
@@ -236,10 +248,11 @@ mod tests {
 
     fn shape(core: u64, hasher: u64, memory: u64) -> TraceShape {
         let breakdown = TraceBreakdown {
+            library_rows: 0,
             hasher_rows: hasher,
+            aead_rows: 0,
             bitwise_rows: 0,
             memory_rows: memory,
-            kernel_rom_rows: 0,
             ace_rows: 0,
         };
         let totals = TraceTotals {

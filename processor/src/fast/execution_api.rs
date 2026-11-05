@@ -264,13 +264,18 @@ impl FastProcessor {
             });
 
             let execution_output =
-                self.execute_with_tracer_sync(program, environment, host, &mut tracer);
+                self.execute_with_tracer_and_session_sync(program, environment, host, &mut tracer);
 
             match execution_output {
-                Ok(output) => {
-                    let (mut vm_witness, precompiles_witness) =
-                        Self::execution_witness_from_parts(program, stack_inputs, output, tracer)?
-                            .into_parts();
+                Ok((output, session)) => {
+                    let (mut vm_witness, precompiles_witness) = Self::execution_witness_from_parts(
+                        program,
+                        stack_inputs,
+                        output,
+                        session,
+                        tracer,
+                    )?
+                    .into_parts();
                     // End the stream before this scope waits for the builder.
                     drop(vm_witness.take_hasher_replay());
                     Ok((vm_witness, precompiles_witness))
@@ -346,9 +351,9 @@ impl FastProcessor {
             self.options.max_stack_depth(),
             trace_limits,
         )?;
-        let execution_output =
-            self.execute_with_tracer_sync(program, environment, host, &mut tracer)?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, tracer)
+        let (execution_output, session) =
+            self.execute_with_tracer_and_session_sync(program, environment, host, &mut tracer)?;
+        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
     }
 
     /// Executes the given program synchronously with package-owned source/debug context and returns
@@ -371,15 +376,16 @@ impl FastProcessor {
             self.options.max_stack_depth(),
             trace_limits,
         )?;
-        let execution_output = self.execute_with_package_debug_info_and_tracer_sync(
-            program,
-            environment,
-            package_debug_info,
-            None,
-            host,
-            &mut tracer,
-        )?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, tracer)
+        let (execution_output, session) = self
+            .execute_with_package_debug_info_and_tracer_and_session_sync(
+                program,
+                environment,
+                package_debug_info,
+                None,
+                host,
+                &mut tracer,
+            )?;
+        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
     }
 
     /// Executes the given program synchronously with package-owned source/debug context rooted at
@@ -406,15 +412,16 @@ impl FastProcessor {
             self.options.max_stack_depth(),
             trace_limits,
         )?;
-        let execution_output = self.execute_with_package_debug_info_and_tracer_sync(
-            program,
-            environment,
-            package_debug_info,
-            Some(entrypoint_source_node_id),
-            host,
-            &mut tracer,
-        )?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, tracer)
+        let (execution_output, session) = self
+            .execute_with_package_debug_info_and_tracer_and_session_sync(
+                program,
+                environment,
+                package_debug_info,
+                Some(entrypoint_source_node_id),
+                host,
+                &mut tracer,
+            )?;
+        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
     }
 
     /// Async variant of [`Self::execute_for_proving_sync`] for async hosts.
@@ -436,9 +443,10 @@ impl FastProcessor {
             self.options.max_stack_depth(),
             trace_limits,
         )?;
-        let execution_output =
-            self.execute_with_tracer(program, environment, host, &mut tracer).await?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, tracer)
+        let (execution_output, session) = self
+            .execute_with_tracer_and_session(program, environment, host, &mut tracer)
+            .await?;
+        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
     }
 
     /// Async variant of [`Self::execute_for_proving_with_package_debug_info_sync`].
@@ -462,8 +470,8 @@ impl FastProcessor {
             self.options.max_stack_depth(),
             trace_limits,
         )?;
-        let execution_output = self
-            .execute_with_package_debug_info_and_tracer(
+        let (execution_output, session) = self
+            .execute_with_package_debug_info_and_tracer_and_session(
                 program,
                 environment,
                 package_debug_info,
@@ -472,7 +480,7 @@ impl FastProcessor {
                 &mut tracer,
             )
             .await?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, tracer)
+        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
     }
 
     /// Async variant of
@@ -498,8 +506,8 @@ impl FastProcessor {
             self.options.max_stack_depth(),
             trace_limits,
         )?;
-        let execution_output = self
-            .execute_with_package_debug_info_and_tracer(
+        let (execution_output, session) = self
+            .execute_with_package_debug_info_and_tracer_and_session(
                 program,
                 environment,
                 package_debug_info,
@@ -508,12 +516,12 @@ impl FastProcessor {
                 &mut tracer,
             )
             .await?;
-        Self::execution_witness_from_parts(program, stack_inputs, execution_output, tracer)
+        Self::execution_witness_from_parts(program, stack_inputs, execution_output, session, tracer)
     }
 
     /// Executes the given program with the provided tracer using an async host.
     pub async fn execute_with_tracer<T>(
-        mut self,
+        self,
         program: &Program,
         environment: crate::ExecutionEnvironment,
         host: &mut impl Host,
@@ -522,18 +530,13 @@ impl FastProcessor {
     where
         T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
     {
-        let mut resume = self.new_resume_context(program, environment, None, None)?;
-        if !self.drive_async(host, tracer, &NeverStopper, &mut resume).await? {
-            return Err(ExecutionError::Internal("full execution stopped unexpectedly"));
-        }
-        let stack = self.current_stack_outputs()?;
-        self.into_execution_output(stack)
+        self.execute_with_tracer_and_session(program, environment, host, tracer)
+            .await
+            .map(|(output, _)| output)
     }
 
-    /// Executes the given program with package-owned source/debug context and the provided tracer
-    /// using an async host.
     async fn execute_with_package_debug_info_and_tracer<T>(
-        mut self,
+        self,
         program: &Program,
         environment: crate::ExecutionEnvironment,
         package_debug_info: &PackageDebugInfo,
@@ -544,22 +547,21 @@ impl FastProcessor {
     where
         T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
     {
-        let mut resume = self.new_resume_context(
+        self.execute_with_package_debug_info_and_tracer_and_session(
             program,
             environment,
-            Some(Arc::new(package_debug_info.clone())),
+            package_debug_info,
             entrypoint_source_node_id,
-        )?;
-        if !self.drive_async(host, tracer, &NeverStopper, &mut resume).await? {
-            return Err(ExecutionError::Internal("full execution stopped unexpectedly"));
-        }
-        let stack = self.current_stack_outputs()?;
-        self.into_execution_output(stack)
+            host,
+            tracer,
+        )
+        .await
+        .map(|(output, _)| output)
     }
 
     /// Executes the given program with the provided tracer using a sync host.
     pub fn execute_with_tracer_sync<T>(
-        mut self,
+        self,
         program: &Program,
         environment: crate::ExecutionEnvironment,
         host: &mut impl SyncHost,
@@ -568,18 +570,12 @@ impl FastProcessor {
     where
         T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
     {
-        let mut resume = self.new_resume_context(program, environment, None, None)?;
-        if !self.drive_sync(host, tracer, &NeverStopper, &mut resume)? {
-            return Err(ExecutionError::Internal("full execution stopped unexpectedly"));
-        }
-        let stack = self.current_stack_outputs()?;
-        self.into_execution_output(stack)
+        self.execute_with_tracer_and_session_sync(program, environment, host, tracer)
+            .map(|(output, _)| output)
     }
 
-    /// Executes the given program with package-owned source/debug context and the provided tracer
-    /// using a sync host.
     fn execute_with_package_debug_info_and_tracer_sync<T>(
-        mut self,
+        self,
         program: &Program,
         environment: crate::ExecutionEnvironment,
         package_debug_info: &PackageDebugInfo,
@@ -587,6 +583,99 @@ impl FastProcessor {
         host: &mut impl SyncHost,
         tracer: &mut T,
     ) -> Result<ExecutionOutput, ExecutionError>
+    where
+        T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
+    {
+        self.execute_with_package_debug_info_and_tracer_and_session_sync(
+            program,
+            environment,
+            package_debug_info,
+            entrypoint_source_node_id,
+            host,
+            tracer,
+        )
+        .map(|(output, _)| output)
+    }
+
+    /// Executes the given program with the provided tracer using an async host.
+    async fn execute_with_tracer_and_session<T>(
+        mut self,
+        program: &Program,
+        environment: crate::ExecutionEnvironment,
+        host: &mut impl Host,
+        tracer: &mut T,
+    ) -> Result<(ExecutionOutput, crate::ResolutionSession), ExecutionError>
+    where
+        T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
+    {
+        let mut resume = self.new_resume_context(program, environment, None, None)?;
+        if !self.drive_async(host, tracer, &NeverStopper, &mut resume).await? {
+            return Err(ExecutionError::Internal("full execution stopped unexpectedly"));
+        }
+        let stack = self.current_stack_outputs()?;
+        let output = self.into_execution_output(stack)?;
+        Ok((output, resume.session))
+    }
+
+    /// Executes the given program with package-owned source/debug context and the provided tracer
+    /// using an async host.
+    async fn execute_with_package_debug_info_and_tracer_and_session<T>(
+        mut self,
+        program: &Program,
+        environment: crate::ExecutionEnvironment,
+        package_debug_info: &PackageDebugInfo,
+        entrypoint_source_node_id: Option<DebugSourceNodeId>,
+        host: &mut impl Host,
+        tracer: &mut T,
+    ) -> Result<(ExecutionOutput, crate::ResolutionSession), ExecutionError>
+    where
+        T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
+    {
+        let mut resume = self.new_resume_context(
+            program,
+            environment,
+            Some(Arc::new(package_debug_info.clone())),
+            entrypoint_source_node_id,
+        )?;
+        if !self.drive_async(host, tracer, &NeverStopper, &mut resume).await? {
+            return Err(ExecutionError::Internal("full execution stopped unexpectedly"));
+        }
+        let stack = self.current_stack_outputs()?;
+        let output = self.into_execution_output(stack)?;
+        Ok((output, resume.session))
+    }
+
+    /// Executes the given program with the provided tracer using a sync host.
+    fn execute_with_tracer_and_session_sync<T>(
+        mut self,
+        program: &Program,
+        environment: crate::ExecutionEnvironment,
+        host: &mut impl SyncHost,
+        tracer: &mut T,
+    ) -> Result<(ExecutionOutput, crate::ResolutionSession), ExecutionError>
+    where
+        T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
+    {
+        let mut resume = self.new_resume_context(program, environment, None, None)?;
+        if !self.drive_sync(host, tracer, &NeverStopper, &mut resume)? {
+            return Err(ExecutionError::Internal("full execution stopped unexpectedly"));
+        }
+        let stack = self.current_stack_outputs()?;
+        let output = self.into_execution_output(stack)?;
+        Ok((output, resume.session))
+    }
+
+    /// Executes the given program with package-owned source/debug context and the provided tracer
+    /// using a sync host.
+    fn execute_with_package_debug_info_and_tracer_and_session_sync<T>(
+        mut self,
+        program: &Program,
+        environment: crate::ExecutionEnvironment,
+        package_debug_info: &PackageDebugInfo,
+        entrypoint_source_node_id: Option<DebugSourceNodeId>,
+        host: &mut impl SyncHost,
+        tracer: &mut T,
+    ) -> Result<(ExecutionOutput, crate::ResolutionSession), ExecutionError>
     where
         T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
     {
@@ -600,7 +689,8 @@ impl FastProcessor {
             return Err(ExecutionError::Internal("full execution stopped unexpectedly"));
         }
         let stack = self.current_stack_outputs()?;
-        self.into_execution_output(stack)
+        let output = self.into_execution_output(stack)?;
+        Ok((output, resume.session))
     }
 
     /// Executes a single clock cycle synchronously.
@@ -673,9 +763,10 @@ impl FastProcessor {
         program: &Program,
         stack_inputs: StackInputs,
         execution_output: ExecutionOutput,
+        session: crate::ResolutionSession,
         tracer: ExecutionTracer,
     ) -> Result<ExecutionWitness, ExecutionError> {
-        let trace = tracer.into_trace_replay()?;
+        let trace = tracer.into_trace_replay(session)?;
         // Until the statement cutover, legacy transport metadata names the authenticated body.
         // The original Program remains a code-supply hint, never execution authority.
         let program_info = miden_core::program::ProgramInfo::new(
@@ -1089,5 +1180,50 @@ mod tests {
             .build()
             .unwrap()
             .install(|| assert!(FastProcessor::rayon_has_no_parallel_worker()));
+    }
+}
+
+#[cfg(test)]
+mod completed_session_tests {
+    use super::*;
+    use crate as processor;
+    use crate::{ExecutionOptions, SessionPhase};
+
+    #[allow(dead_code)]
+    mod common {
+        include!("../../tests/common/keyed_witness.rs");
+    }
+
+    #[test]
+    fn full_execution_moves_the_original_completed_native_owner_into_replay() {
+        let common::ExecutionFixture { program, environment, mut host } =
+            common::execution_fixture(vec![miden_core::operations::Operation::Noop]);
+        let processor = FastProcessor::new(StackInputs::default())
+            .with_options(
+                ExecutionOptions::default().with_environment_trace_limits(common::trace_limits()),
+            )
+            .unwrap();
+        let mut tracer = ExecutionTracer::new(64, MIN_STACK_DEPTH, common::trace_limits()).unwrap();
+        let (_, session) = processor
+            .execute_with_tracer_and_session_sync(&program, environment, &mut host, &mut tracer)
+            .unwrap();
+        assert_eq!(session.phase(), SessionPhase::Completed);
+        let counters = session.finalize().unwrap();
+        let occurrences = session.ledger().occurrences().as_ptr();
+        let bindings = session.bindings().as_ptr();
+        let root_use = session.uses().next().unwrap() as *const crate::InvocationUse;
+        assert_eq!(session.bindings()[0].counts().normal, 1);
+        assert_eq!(session.bindings()[0].counts().syscall, 0);
+        assert_eq!(counters.committed_requests, 1);
+        assert_eq!(counters.reserved_requests, 0);
+
+        let trace = tracer.into_trace_replay(session).unwrap();
+        trace.require_validated().unwrap();
+        let retained = &trace.resolution_session;
+        assert_eq!(retained.finalize().unwrap(), counters);
+        assert_eq!(retained.ledger().occurrences().as_ptr(), occurrences);
+        assert_eq!(retained.bindings().as_ptr(), bindings);
+        assert_eq!(retained.uses().next().unwrap() as *const crate::InvocationUse, root_use);
+        assert_eq!(retained.bindings()[0].counts().normal, 1);
     }
 }

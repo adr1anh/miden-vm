@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
-use miden_core::{Felt, WORD_SIZE, field::ExtensionField};
+use miden_core::{Felt, field::ExtensionField};
 use miden_stark::{
     air::{ReductionError, WindowAccess},
     lookup::{BoundaryBuilder, Challenges, ConstraintLookupBuilder},
@@ -11,6 +11,7 @@ use miden_stark::{
 
 use super::{MidenAir, MidenAirBuilder, boundary::ReduceBoundaryBuilder};
 use crate::vm::{
+    NUM_CHIPLETS_PUBLIC_VALUES,
     constraints::{self, columns::ChipletCols, lookup::chiplet_air::ChipletLookupBuilder},
     logup::{BusId, MIDEN_MAX_MESSAGE_WIDTH},
 };
@@ -40,8 +41,7 @@ impl ChipletsAir {
 
     /// LogUp boundary correction for the chiplets trace.
     ///
-    /// The boundary input slice contains the kernel-procedure digests; these statement values
-    /// close the kernel-ROM bus.
+    /// The sole boundary slice is the mandatory eight public Felts `R_E || N_kernel`.
     pub(super) fn boundary_correction<EF: ExtensionField<Felt>>(
         self,
         challenges: &Challenges<EF>,
@@ -54,11 +54,11 @@ impl ChipletsAir {
             )
             .into());
         }
-        if !boundary_inputs[0].len().is_multiple_of(WORD_SIZE) {
+        if boundary_inputs[0].len() != NUM_CHIPLETS_PUBLIC_VALUES {
             return Err(format!(
-                "kernel digest felts length {} is not a multiple of {}",
-                boundary_inputs[0].len(),
-                WORD_SIZE
+                "ChipletsAir expects {} public Felts R_E || N_kernel, got {}",
+                NUM_CHIPLETS_PUBLIC_VALUES,
+                boundary_inputs[0].len()
             )
             .into());
         }
@@ -81,7 +81,12 @@ impl ChipletsAir {
         let selectors =
             constraints::chiplets::selectors::build_chiplet_selectors(builder, local, next);
 
-        constraints::enforce_chiplets(builder, local, next, &selectors);
+        let public_values: [AB::PublicVar; NUM_CHIPLETS_PUBLIC_VALUES] = builder
+            .public_values()
+            .try_into()
+            .expect("ChipletsAir requires exactly 8 public Felts R_E || N_kernel");
+        let kernel = core::array::from_fn(|i| public_values[4 + i].into());
+        constraints::enforce_chiplets(builder, local, next, &selectors, &kernel);
 
         let mut lb = ConstraintLookupBuilder::new(builder, &MidenAir::Chiplets);
         self.lookup_eval(&mut lb);
@@ -108,7 +113,48 @@ impl ChipletsAir {
         constraints::lookup::chiplet_air::emit_chiplet_lookup_columns(builder, local, next);
     }
 
-    pub(super) fn lookup_eval_boundary<B: BoundaryBuilder>(self, boundary: &mut B) {
+    pub(super) fn lookup_eval_boundary<B: BoundaryBuilder<F = Felt>>(self, boundary: &mut B) {
         constraints::lookup::miden_air::emit_chiplets_boundary(boundary);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_core::field::{PrimeCharacteristicRing, QuadFelt};
+
+    use super::*;
+
+    fn challenges() -> Challenges<QuadFelt> {
+        Challenges::new(
+            QuadFelt::from_u8(7),
+            QuadFelt::from_u8(11),
+            MIDEN_MAX_MESSAGE_WIDTH,
+            BusId::COUNT,
+        )
+    }
+
+    #[test]
+    fn packed_boundary_requires_exactly_eight_public_felts() {
+        let challenges = challenges();
+        assert!(ChipletsAir.boundary_correction(&challenges, &[]).is_err());
+        for len in [0, 4, 7, 9, 12] {
+            let values = alloc::vec![Felt::ONE; len];
+            assert!(ChipletsAir.boundary_correction(&challenges, &[&values]).is_err());
+        }
+        let values = [Felt::ONE; NUM_CHIPLETS_PUBLIC_VALUES];
+        assert!(ChipletsAir.boundary_correction(&challenges, &[&values, &values]).is_err());
+        assert!(ChipletsAir.boundary_correction(&challenges, &[&values]).is_ok());
+    }
+
+    #[test]
+    fn packed_boundary_open_seed_binds_every_environment_root_coordinate() {
+        let challenges = challenges();
+        let public_values = [Felt::ONE; NUM_CHIPLETS_PUBLIC_VALUES];
+        let expected = ChipletsAir.boundary_correction(&challenges, &[&public_values]).unwrap();
+        for coordinate in 0..4 {
+            let mut forged = public_values;
+            forged[coordinate] += Felt::ONE;
+            assert_ne!(ChipletsAir.boundary_correction(&challenges, &[&forged]).unwrap(), expected,);
+        }
     }
 }

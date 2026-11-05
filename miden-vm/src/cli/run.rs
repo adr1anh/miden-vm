@@ -132,10 +132,12 @@ impl RunCmd {
             "VM trace rows:
 ├── Core rows: {} extended to {} ({}% padding)
 ├── Chiplets rows: {} extended to {} ({}% padding)
-    ├── Hash chiplet rows: {}
-    ├── Bitwise chiplet rows: {}
+    ├── Library rows: {}
+    ├── Controller rows: {}
+    ├── AEAD rows: {}
     ├── Memory chiplet rows: {}
-    └── Kernel ROM rows: {}
+    ├── ACE chiplet rows: {}
+    └── Bitwise chiplet rows: {}
 ├── Eidos compression rows: {} extended to {} ({}% padding)
 └── Byte-pair lookup rows: {} (fixed table)",
             summary.core_rows(),
@@ -144,10 +146,12 @@ impl RunCmd {
             summary.chiplets_rows(),
             summary.chiplets_height(),
             padding_percentage(summary.chiplets_rows(), summary.chiplets_height()),
+            chiplets.library_len(),
             chiplets.hash_chiplet_len(),
-            chiplets.bitwise_chiplet_len(),
+            chiplets.aead_len(),
             chiplets.memory_chiplet_len(),
-            chiplets.kernel_rom_len(),
+            chiplets.ace_chiplet_len(),
+            chiplets.bitwise_chiplet_len(),
             summary.eidos_compression_rows(),
             summary.eidos_compression_height(),
             padding_percentage(

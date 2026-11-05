@@ -58,15 +58,16 @@ const _: () = assert!(
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum BusId {
     // --- Out-of-circuit (boundary correction / reduced_aux_values) ---
-    /// Kernel ROM init: kernel procedure digests from variable-length public inputs.
-    KernelRomInit = 0,
+    /// Retired Kernel ROM initialization slot. No interaction is emitted on this bus.
+    ReservedKernelRomInit = 0,
     /// Block hash table (decoder p2): root program hash boundary correction.
     BlockHashTable = 1,
     /// Log-deferred state: initial/final deferred-root boundary correction.
     LogDeferredRoot = 2,
 
     // --- In-circuit buses ---
-    KernelRomCall = 3,
+    /// Retired digest-based kernel call slot. No interaction is emitted on this bus.
+    ReservedKernelRomCall = 3,
     HasherLinearHashInit = 4,
     /// Reserved hasher bus id. One-row controller rows use `HasherReturnHash`.
     ReservedHasherBus5 = 5,
@@ -127,12 +128,16 @@ pub enum BusId {
     AeadEidosCompressionInput = 37,
     /// AEAD-XOF Eidos compression output pair: `[clk, first_lane_idx, value0, value1]`.
     AeadEidosCompressionOutputPair = 38,
+    /// Rooted Library authentication: `[depth, commitment[4], namespace[4]]`.
+    LibraryOpen = 39,
+    /// Authenticated callable binding: `[requires_syscall, key[4], implementation[4]]`.
+    LibraryResolve = 40,
 }
 
 impl BusId {
     /// Number of bus-prefix slots through the highest assigned discriminant. Reserved slots remain
     /// part of this prefix layout.
-    pub const COUNT: usize = Self::AeadEidosCompressionOutputPair as usize + 1;
+    pub const COUNT: usize = Self::LibraryResolve as usize + 1;
 }
 
 // Per-variant discriminant locks. `BusId::COUNT` records only the high watermark; a reorder below
@@ -141,10 +146,10 @@ impl BusId {
 //
 // If a new bus is added: append it after the current tail and add a matching assert for the new
 // variant. Renumbering existing entries is a protocol change and requires regenerated bindings.
-const _: () = assert!(BusId::KernelRomInit as usize == 0);
+const _: () = assert!(BusId::ReservedKernelRomInit as usize == 0);
 const _: () = assert!(BusId::BlockHashTable as usize == 1);
 const _: () = assert!(BusId::LogDeferredRoot as usize == 2);
-const _: () = assert!(BusId::KernelRomCall as usize == 3);
+const _: () = assert!(BusId::ReservedKernelRomCall as usize == 3);
 const _: () = assert!(BusId::HasherLinearHashInit as usize == 4);
 const _: () = assert!(BusId::ReservedHasherBus5 as usize == 5);
 const _: () = assert!(BusId::HasherAbsorption as usize == 6);
@@ -180,6 +185,64 @@ const _: () = assert!(BusId::EidosCompressionMessageWord as usize == 35);
 const _: () = assert!(BusId::AeadStreamRequest as usize == 36);
 const _: () = assert!(BusId::AeadEidosCompressionInput as usize == 37);
 const _: () = assert!(BusId::AeadEidosCompressionOutputPair as usize == 38);
+const _: () = assert!(BusId::LibraryOpen as usize == 39);
+const _: () = assert!(BusId::LibraryResolve as usize == 40);
+const _: () = assert!(BusId::COUNT == 41);
+
+// LIBRARY MESSAGES
+// ================================================================================================
+
+/// A rooted authentication token for one Library opening instance.
+///
+/// Headers consume one token; a selected child supplies one token at the next depth. Open
+/// multiplicities are unit events, never arbitrary witness frequencies.
+#[derive(Clone, Debug)]
+pub struct LibraryOpenMsg<E> {
+    pub depth: E,
+    pub commitment: WordFields<E>,
+    pub namespace: WordFields<E>,
+}
+
+/// A callable binding authenticated by a Mast opening and namespace-qualified key derivation.
+///
+/// `requires_syscall` is a literal zero or one at each emission site. Only these bindings use
+/// arbitrary normal/syscall witness frequencies.
+#[derive(Clone, Debug)]
+pub struct LibraryResolveMsg<E> {
+    pub requires_syscall: E,
+    pub key: WordFields<E>,
+    pub implementation: WordFields<E>,
+}
+
+impl<E, EF> LookupMessage<E, EF> for LibraryOpenMsg<E>
+where
+    E: PrimeCharacteristicRing + Clone,
+    EF: PrimeCharacteristicRing + Clone + Algebra<E>,
+{
+    fn encode(&self, challenges: &Challenges<EF>) -> EF {
+        let payload = core::array::from_fn::<_, 9, _>(|i| match i {
+            0 => self.depth.clone(),
+            1..=4 => self.commitment[i - 1].clone(),
+            _ => self.namespace[i - 5].clone(),
+        });
+        challenges.encode(BusId::LibraryOpen as usize, payload)
+    }
+}
+
+impl<E, EF> LookupMessage<E, EF> for LibraryResolveMsg<E>
+where
+    E: PrimeCharacteristicRing + Clone,
+    EF: PrimeCharacteristicRing + Clone + Algebra<E>,
+{
+    fn encode(&self, challenges: &Challenges<EF>) -> EF {
+        let payload = core::array::from_fn::<_, 9, _>(|i| match i {
+            0 => self.requires_syscall.clone(),
+            1..=4 => self.key[i - 1].clone(),
+            _ => self.implementation[i - 5].clone(),
+        });
+        challenges.encode(BusId::LibraryResolve as usize, payload)
+    }
+}
 
 // HASHER MESSAGES
 // ================================================================================================
@@ -675,32 +738,6 @@ pub struct AeadEidosCompressionOutputPairMsg<E> {
     pub value1: E,
 }
 
-// KERNEL ROM MESSAGE
-// ================================================================================================
-
-/// Kernel ROM message (4 elements): `bus_prefix[bus] + [digest[4]]`.
-///
-/// Two bus domains: INIT (one remove per declared procedure, balanced by the boundary
-/// correction from public inputs) and CALL (one insert per SYSCALL, carrying the
-/// multiplicity from kernel ROM column 0; balanced by decoder-emitted SYSCALL removes).
-#[derive(Clone, Debug)]
-pub struct KernelRomMsg<E> {
-    bus: BusId,
-    pub digest: WordFields<E>,
-}
-
-impl<E: PrimeCharacteristicRing + Clone> KernelRomMsg<E> {
-    /// Kernel procedure call message (SYSCALL request side + chiplet CALL response).
-    pub fn call(digest: WordFields<E>) -> Self {
-        Self { bus: BusId::KernelRomCall, digest }
-    }
-
-    /// Kernel procedure init message (public-input boundary + chiplet INIT response).
-    pub fn init(digest: WordFields<E>) -> Self {
-        Self { bus: BusId::KernelRomInit, digest }
-    }
-}
-
 // ACE MESSAGE
 // ================================================================================================
 
@@ -1039,18 +1076,6 @@ where
             BusId::StackOverflowTable as usize,
             [self.clk.clone(), self.val.clone(), self.prev.clone()],
         )
-    }
-}
-
-// --- KernelRomMsg --------------------------------------------------------------------------------
-
-impl<E, EF> LookupMessage<E, EF> for KernelRomMsg<E>
-where
-    E: PrimeCharacteristicRing + Clone,
-    EF: PrimeCharacteristicRing + Clone + Algebra<E>,
-{
-    fn encode(&self, challenges: &Challenges<EF>) -> EF {
-        challenges.encode(self.bus as usize, self.digest.clone())
     }
 }
 

@@ -23,13 +23,18 @@ use super::{
     ChipletTraceFragment, Felt, HasherState, MerklePath, MerkleRootUpdate, ONE, OpBatch,
     RangeChecker, Word as Digest, ZERO,
 };
-use crate::{ContextId, ExecutionError, RowIndex, trace::chiplets::layout::ControllerRow};
+use crate::{
+    ContextId, ExecutionError, RowIndex,
+    trace::{chiplets::layout::ControllerRow, limits::MAX_TRACE_LEN},
+};
 
 mod trace;
 use trace::HasherTrace;
 mod and8_trace;
 pub(crate) use and8_trace::build_and8_lookup_trace;
 
+#[cfg(test)]
+mod request_tests;
 #[cfg(test)]
 mod tests;
 
@@ -76,11 +81,11 @@ fn key_to_state(key: &StateKey) -> HasherState {
 
 /// Hash chiplet for the VM.
 ///
-/// The controller records one row per compression request. Hash rows carry
+/// The controller records one row per VM hash or Merkle compression request. Hash rows carry
 /// `block[8] || cv_in[4]` in the state columns and `cv_out[4]` in row data; Merkle rows carry
 /// `block[8] || cv_out[4]` plus their path-index data. The standalone Eidos compression
-/// AIR executes one block per unique input state, with multiplicity tracked by the
-/// compression-link bus.
+/// AIR executes one block per unique (input state, output shape), with multiplicity tracked by
+/// the compression-link bus. Direct packed and AEAD requests do not append Controller rows.
 #[derive(Debug, Default)]
 pub struct Hasher {
     trace: HasherTrace,
@@ -91,7 +96,10 @@ pub struct Hasher {
     memoized_trace_map: BTreeMap<DigestKey, (usize, usize)>,
     /// Maps (input state, output shape) -> multiplicity for compression deduplication.
     /// During trace generation, one standalone Eidos compression block is emitted per entry.
+    /// Admission bounds both its summed multiplicity and its cycle count by `MAX_TRACE_LEN`.
     compression_request_map: BTreeMap<CompressionRequestKey, u64>,
+    /// Total host multiplicity admitted to `compression_request_map`, before interning.
+    compression_request_count: u64,
     /// Monotonically increasing counter for MRUPDATE domain separation.
     mrupdate_id: Felt,
     /// Whether the controller trace has been finalized.
@@ -135,6 +143,7 @@ impl Hasher {
         if self.finalized {
             0
         } else {
+            // The checked recorder bounds this product before admitting each new map entry.
             self.compression_request_map.len() * EIDOS_COMPRESSION_CYCLE_LEN
         }
     }
@@ -191,12 +200,13 @@ impl Hasher {
         _ctx: ContextId,
         clk: RowIndex,
         state: HasherState,
-    ) -> [Felt; 16] {
+    ) -> Result<[Felt; 16], ExecutionError> {
         self.record_compression_request(
             &state,
             CompressionOutput::AeadXof { clk: Felt::from(clk) },
-        );
-        eidos_compression::compress_raw_xof_lanes(&state).map(Felt::from_u32)
+            1,
+        )?;
+        Ok(eidos_compression::compress_raw_xof_lanes(&state).map(Felt::from_u32))
     }
 
     /// Computes hash(h1, h2) for a control block and returns the result.
@@ -332,6 +342,7 @@ impl Hasher {
             );
         }
         let compression_requests = core::mem::take(&mut self.compression_request_map);
+        self.compression_request_count = 0;
         self.trace.fill_trace(trace);
         fill_eidos_compression_trace(compression_requests, eidos_compression_trace)
     }
@@ -358,6 +369,7 @@ impl Hasher {
         is_final: bool,
     ) -> Result<HasherState, ExecutionError> {
         self.trace.check_rows(1)?;
+        self.record_packed_compression_request(&state, 1)?;
         let mut compressed = state;
         compress_state(&mut compressed);
 
@@ -365,8 +377,6 @@ impl Hasher {
         let op_final = if is_final { ONE } else { ZERO };
         self.trace
             .append_controller_row(selectors, &state, digest, op_final, self.mrupdate_id)?;
-
-        self.record_compression_request(&state, CompressionOutput::Packed);
 
         Ok(compressed)
     }
@@ -383,6 +393,7 @@ impl Hasher {
         is_final: bool,
     ) -> Result<HasherState, ExecutionError> {
         self.trace.check_rows(1)?;
+        self.record_packed_compression_request(&input_state, 1)?;
         let mut compressed = input_state;
         compress_state(&mut compressed);
 
@@ -402,8 +413,6 @@ impl Hasher {
             op_final,
             self.mrupdate_id,
         )?;
-
-        self.record_compression_request(&input_state, CompressionOutput::Packed);
 
         Ok(compressed)
     }
@@ -452,10 +461,56 @@ impl Hasher {
     // COMPRESSION DEDUPLICATION
     // --------------------------------------------------------------------------------------------
 
-    /// Records an Eidos compression request keyed by input state and output shape.
-    fn record_compression_request(&mut self, state: &HasherState, output: CompressionOutput) {
+    /// Records packed compression demand without appending a Controller row.
+    ///
+    /// Direct requests share the Controller/AEAD interner and must be recorded before sizing the
+    /// compression trace or collecting its range checks. A rejected registration leaves the map
+    /// and its total multiplicity unchanged. Multirow callers can retain earlier successful
+    /// registrations on error; such materialization errors are terminal for that hasher.
+    pub(crate) fn record_packed_compression_request(
+        &mut self,
+        state: &HasherState,
+        multiplicity: u64,
+    ) -> Result<(), ExecutionError> {
+        self.record_compression_request(state, CompressionOutput::Packed, multiplicity)
+    }
+
+    /// Records checked Eidos demand keyed by input state and output shape.
+    fn record_compression_request(
+        &mut self,
+        state: &HasherState,
+        output: CompressionOutput,
+        multiplicity: u64,
+    ) -> Result<(), ExecutionError> {
+        self.check_compression_recording()?;
         let key = CompressionRequestKey { state: state_to_key(state), output };
-        *self.compression_request_map.entry(key).or_insert(0) += 1;
+        let current_entry = self.compression_request_map.get(&key).copied();
+        if matches!(output, CompressionOutput::AeadXof { .. })
+            && (multiplicity != 1 || current_entry.is_some())
+        {
+            return Err(ExecutionError::Internal("duplicate or nonunit AEAD compression request"));
+        }
+        if multiplicity == 0 {
+            return Ok(());
+        }
+
+        let (entry_count, total_count) = checked_compression_request_counts(
+            current_entry,
+            self.compression_request_count,
+            self.compression_request_map.len(),
+            multiplicity,
+        )?;
+        self.compression_request_map.insert(key, entry_count);
+        self.compression_request_count = total_count;
+        Ok(())
+    }
+
+    fn check_compression_recording(&self) -> Result<(), ExecutionError> {
+        if self.finalized {
+            Err(ExecutionError::Internal("compression request after hasher finalization"))
+        } else {
+            Ok(())
+        }
     }
 
     // MEMOIZATION
@@ -466,6 +521,9 @@ impl Hasher {
     /// If a memoized trace exists, re-pushes the source ops with the current `mrupdate_id`,
     /// re-registers compression requests from copied controller rows, and returns
     /// `Some((addr, digest))`. Otherwise returns `None`.
+    ///
+    /// A registration failure can occur after the complete copied row span was appended. Such
+    /// materialization errors are terminal: discard the hasher, including those copied rows.
     fn replay_memoized_trace(
         &mut self,
         expected_hash: Digest,
@@ -474,13 +532,14 @@ impl Hasher {
             Some(&(s, e)) => (s, e),
             None => return Ok(None),
         };
+        self.check_compression_recording()?;
 
         let addr = self.trace.next_row_addr()?;
         let (last_state, input_states) =
             self.trace.replay_ops_range(op_start..op_end, self.mrupdate_id)?;
 
         for input_state in input_states {
-            self.record_compression_request(&input_state, CompressionOutput::Packed);
+            self.record_packed_compression_request(&input_state, 1)?;
         }
 
         let result = get_digest(&last_state);
@@ -497,6 +556,27 @@ impl Hasher {
         let op_end = self.trace.next_op_index();
         self.memoized_trace_map.insert(digest_to_key(hash), (op_start, op_end));
     }
+}
+
+/// Checks one interner update before either the entry or its aggregate count is published.
+fn checked_compression_request_counts(
+    current_entry: Option<u64>,
+    current_total: u64,
+    unique_requests: usize,
+    multiplicity: u64,
+) -> Result<(u64, u64), ExecutionError> {
+    let overflow = || ExecutionError::TraceLenExceeded(MAX_TRACE_LEN);
+    let entry_count = current_entry.unwrap_or(0).checked_add(multiplicity).ok_or_else(overflow)?;
+    let total_count = current_total
+        .checked_add(multiplicity)
+        .filter(|&count| count <= MAX_TRACE_LEN as u64)
+        .ok_or_else(overflow)?;
+    unique_requests
+        .checked_add(usize::from(current_entry.is_none()))
+        .and_then(|count| count.checked_mul(EIDOS_COMPRESSION_CYCLE_LEN))
+        .filter(|&rows| rows <= MAX_TRACE_LEN)
+        .ok_or_else(overflow)?;
+    Ok((entry_count, total_count))
 }
 
 fn fill_eidos_compression_trace(
@@ -696,6 +776,10 @@ fn fill_ordered_eidos_compression_trace(requests: &[StateKey], trace: &mut [Felt
 /// row carries the summed multiplicity. The companion byte-lookup trace includes both
 /// Eidos compression's byte-operation demand and the message-row range checks required by the
 /// standalone compression AIR.
+///
+/// This external helper does not enforce the VM recorder's trace-length and total-multiplicity
+/// bounds. Its callers must admit their requests separately; native Library requests instead
+/// belong in the shared checked hasher recorder before trace sizing.
 pub fn build_external_eidos_compression_traces(
     requests: impl IntoIterator<Item = ([Felt; STATE_WIDTH], u64)>,
 ) -> (RowMajorMatrix<Felt>, RowMajorMatrix<Felt>) {

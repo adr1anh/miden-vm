@@ -79,7 +79,8 @@ fn hasher_response_rows(main: &MainTrace) -> Vec<(RowIndex, HasherResponseKind)>
         let Some(hs2) = as_bit(main.chiplet_selector_3(idx)) else {
             continue;
         };
-        let Some(merkle_or_padding) = as_bit(main.chiplet_cols(idx).controller_merkle_or_padding())
+        let Some(merkle_or_padding) =
+            as_bit(main.chiplet_cols(idx).controller().merkle_or_padding::<Felt>())
         else {
             continue;
         };
@@ -613,7 +614,7 @@ fn block_from_hasher_state(main: &MainTrace, row: RowIndex) -> [Felt; 8] {
 
 fn return_digest_from_controller_row(main: &MainTrace, row: RowIndex) -> [Felt; 4] {
     let ctrl = main.chiplet_cols(row).controller();
-    if main.chiplet_cols(row).controller_merkle_or_padding() == ONE {
+    if ctrl.merkle_or_padding::<Felt>() == ONE {
         ctrl.merkle_digest()
     } else {
         ctrl.hash_cv()

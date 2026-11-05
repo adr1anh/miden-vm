@@ -57,14 +57,16 @@ impl ExecutionEnvironment {
 
 /// Explicit policies for keyed trace capture and replay validation. No defaults are provided.
 ///
-/// These account new keyed trace storage, separately from the native opening/session policies.
+/// These account keyed trace storage and the completed native session retained by a witness.
+/// Native opening/session preparation policies still apply independently.
 /// They do not bound allocator metadata, fixed stack storage, process RSS or prior host
 /// allocations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EnvironmentTraceLimits {
     /// Total invocation and root-END records; zero-cycle entry metadata is separate.
     pub max_events: usize,
-    /// Accounted capacities of keyed queues, entry metadata and the compact occurrence snapshot.
+    /// Accounted capacities of keyed queues, entry metadata, the compact occurrence snapshot and
+    /// the completed native session retained by the replay.
     pub max_retained_bytes: usize,
     /// Trace-owned preparation peak, including old and staged keyed buffers and node encodings.
     ///

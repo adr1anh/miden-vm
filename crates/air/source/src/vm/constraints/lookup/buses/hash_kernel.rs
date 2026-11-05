@@ -1,6 +1,6 @@
 //! Hash-kernel virtual table bus.
 //!
-//! Combines five row-disjoint interaction families on a single LogUp column:
+//! Combines row-disjoint Library and legacy interaction families on one LogUp column:
 //!
 //! 1. **Sibling table** (`BusId::SiblingTable`) - Merkle update siblings on controller rows; see
 //!    [`super::super::operations::merkle`].
@@ -9,13 +9,12 @@
 //!    chiplets bus.
 //! 3. **AEAD stream memory I/O** (`BusId::{MemoryReadWord, MemoryWriteWord}`) - on stream rows; see
 //!    [`super::super::operations::aead_stream`].
-//! 4. **Normal bitwise AND8 checks** (`BusId::And8Lookup`) - on normal bitwise rows, four removes
-//!    bind the bytewise `a & b` witnesses to the shared AND8 lookup table.
-//! 5. **Memory-side range checks** (`BusId::RangeCheck`) - on memory chiplet rows, a five-remove
-//!    batch consumes the two delta limbs `d0`/`d1` and the three word-address decomposition values
-//!    `w0`, `w1`, and `4·w1`. Together these enforce `d0, d1, w0, w1 ∈ [0, 2^16)` plus `w1 ∈ [0,
-//!    2^14)` (via the `4·w1` check), which bounds `word_addr = 4·(w0 + 2^16·w1)` to the 32-bit
-//!    memory address space.
+//! 4. **Normal bitwise AND8 checks** (`BusId::And8Lookup`) - the first two byte checks; the
+//!    remaining two live in the hasher-returns column.
+//! 5. **Memory-side range checks** (`BusId::RangeCheck`) - a four-remove batch consumes `d0`, `d1`,
+//!    `w0`, and `w1`. The hasher-returns column consumes `4·w1`. Together these enforce `d0, d1,
+//!    w0, w1 ∈ [0, 2^16)` plus `w1 ∈ [0, 2^14)` (via the `4·w1` check), which bounds `word_addr =
+//!    4·(w0 + 2^16·w1)` to the 32-bit memory address space.
 //!
 //! Per-chiplet gating flows through [`ChipletBusContext::chiplet_active`]: the controller
 //! gate is `chiplet_active.controller`, the ACE row gate is `chiplet_active.ace`, stream rows
@@ -25,7 +24,7 @@
 //! memory delta limbs come from
 //! [`local.memory()`](crate::vm::constraints::columns::ChipletCols::memory).
 //! `w0` / `w1` are not in the typed `MemoryCols` view (their physical columns live in
-//! `chiplets[18..20]`, past the end of the memory overlay, shared with the ACE chiplet
+//! `chiplets[19..21]`, past the end of the memory overlay, shared with the ACE chiplet
 //! column space), so they are read directly from the raw chiplet slice.
 
 use core::borrow::Borrow;
@@ -33,7 +32,10 @@ use core::borrow::Borrow;
 use miden_core::field::PrimeCharacteristicRing;
 use miden_stark::lookup::{Deg, LookupBatch, LookupColumn, LookupGroup};
 
-use super::super::operations::{aead_stream, merkle};
+use super::{
+    super::operations::{aead_stream, merkle},
+    library,
+};
 use crate::vm::{
     constraints::{
         chiplets::columns::PeriodicCols,
@@ -48,7 +50,8 @@ use crate::vm::{
 
 /// Upper bound on fractions this emitter pushes into its column per row.
 ///
-/// Five row-type-disjoint interaction sets, mutually exclusive via chiplet active flags:
+/// Row-type-disjoint interaction sets, mutually exclusive via chiplet active flags:
+/// - **Library**: at most three simultaneous interactions on Mast B rows.
 /// - **Sibling-table** on hasher controller rows (`chiplet_active.controller`): the MV/MU split is
 ///   mutually exclusive (`s2` vs `1-s2`) and the direction bit cuts within each side, so at most
 ///   one of the four fires per row -> 1 fraction.
@@ -56,15 +59,13 @@ use crate::vm::{
 ///   mutually exclusive via `block_sel` -> 1 fraction.
 /// - **AEAD stream memory I/O** on stream rows: one memory interaction on each of phases 0, 3, 4,
 ///   and 7, so this contributes at most 1 fraction per row.
-/// - **Normal bitwise AND8 checks** on normal bitwise rows: a 4-remove batch fires once per one-row
-///   bitwise operation -> 4 fractions.
-/// - **Memory-side range checks** on memory rows (`chiplet_active.memory`): a 5-remove batch (`d0`,
-///   `d1`, `w0`, `w1`, `4 * w1`) fires unconditionally when the outer batch flag is active -> 5
-///   fractions.
+/// - **Normal bitwise AND8 checks** on normal bitwise rows: a 2-remove batch -> 2 fractions.
+/// - **Memory-side range checks** on memory rows (`chiplet_active.memory`): a 4-remove batch (`d0`,
+///   `d1`, `w0`, `w1`) fires unconditionally when the outer batch flag is active -> 4 fractions.
 ///
 /// Row-type disjointness means only one set fires per row, so the per-row max is
-/// `max(1, 1, 1, 4, 5) = 5`.
-pub(in crate::vm::constraints::lookup) const MAX_INTERACTIONS_PER_ROW: usize = 5;
+/// `max(3, 1, 1, 1, 2, 4) = 4`.
+pub(in crate::vm::constraints::lookup) const MAX_INTERACTIONS_PER_ROW: usize = 4;
 
 /// Emit the hash-kernel virtual table bus.
 pub(in crate::vm::constraints::lookup) fn emit_hash_kernel_table<LB>(
@@ -114,6 +115,10 @@ pub(in crate::vm::constraints::lookup) fn emit_hash_kernel_table<LB>(
             col.group(
                 "sibling_ace_memory",
                 |g| {
+                    // Library is a branch of this same exclusive group, so its denominators
+                    // do not multiply those of the later physical sections.
+                    library::emit_library(g, local.library(), ctx.next.library(), &ctx.library);
+
                     merkle::emit_siblings::<LB, _>(g, ctx);
 
                     // --- ACE MEMORY READS ---
@@ -133,7 +138,7 @@ pub(in crate::vm::constraints::lookup) fn emit_hash_kernel_table<LB>(
                             ];
                             MemoryMsg::read_word(ctx, addr, clk, word)
                         },
-                        Deg { v: 5, u: 6 },
+                        Deg { v: 6, u: 7 },
                     );
 
                     // Element read on EVAL rows.
@@ -153,21 +158,19 @@ pub(in crate::vm::constraints::lookup) fn emit_hash_kernel_table<LB>(
                                     * LB::Expr::from(ACE_INSTRUCTION_ID2_OFFSET);
                             MemoryMsg::read_element(ctx, addr, clk, element)
                         },
-                        Deg { v: 5, u: 6 },
+                        Deg { v: 6, u: 7 },
                     );
 
                     aead_stream::emit_memory_io::<LB, _>(g, ctx, &aead_phase);
 
                     // --- NORMAL BITWISE AND8 CHECKS (BusId::And8Lookup) ---
                     //
-                    // The response column emits `BitwiseMsg`. This column carries the four AND8
-                    // removals, reusing row-disjoint capacity instead of widening the chiplet
-                    // lookup shape.
+                    // Keep byte indices 0/1 here and indices 2/3 in hasher_returns.
                     g.batch(
                         "bitwise_and8_lookups",
                         normal_bitwise_gate,
                         |b| {
-                            for idx in 0..4 {
+                            for idx in 0..2 {
                                 b.remove(
                                     "bitwise_and8_byte",
                                     BytePairLookupMsg::from_and(
@@ -175,20 +178,19 @@ pub(in crate::vm::constraints::lookup) fn emit_hash_kernel_table<LB>(
                                         bitwise.b_bytes[idx].into(),
                                         bitwise.and_bytes[idx].into(),
                                     ),
-                                    Deg { v: 2, u: 3 },
+                                    Deg { v: 6, u: 7 },
                                 );
                             }
                         },
-                        Deg { v: 5, u: 6 },
+                        Deg { v: 7, u: 8 },
                     );
 
                     // --- MEMORY-SIDE RANGE CHECKS (BusId::RangeCheck) ---
-                    // Five removes per memory-active row:
+                    // Four removes per memory-active row:
                     // - `d0`, `d1` — the two 16-bit delta limbs used by the memory chiplet's
                     //   sorted-access constraints.
-                    // - `w0`, `w1`, `4·w1` — the word-address decomposition limbs. The `4·w1` check
-                    //   additionally enforces `w1 ∈ [0, 2^14)`, which bounds `word_addr = 4·(w0 +
-                    //   2^16·w1) < 2^32`.
+                    // - `w0`, `w1` — the word-address decomposition limbs. The `4·w1` check remains
+                    //   in hasher_returns to enforce the original 32-bit bound.
                     g.batch(
                         "memory_range_checks",
                         mem_active,
@@ -196,30 +198,24 @@ pub(in crate::vm::constraints::lookup) fn emit_hash_kernel_table<LB>(
                             b.remove(
                                 "mem_d0",
                                 RangeMsg { value: mem_d0.into() },
-                                Deg { v: 3, u: 4 },
+                                Deg { v: 4, u: 5 },
                             );
                             b.remove(
                                 "mem_d1",
                                 RangeMsg { value: mem_d1.into() },
-                                Deg { v: 3, u: 4 },
+                                Deg { v: 4, u: 5 },
                             );
                             let w0: LB::Expr = mem_w0.into();
                             let w1: LB::Expr = mem_w1.into();
-                            let w1_mul4 = w1.clone() * LB::Expr::from_u16(4);
-                            b.remove("mem_w0", RangeMsg { value: w0 }, Deg { v: 3, u: 4 });
-                            b.remove("mem_w1", RangeMsg { value: w1 }, Deg { v: 3, u: 4 });
-                            b.remove(
-                                "mem_w1_mul4",
-                                RangeMsg { value: w1_mul4 },
-                                Deg { v: 3, u: 4 },
-                            );
+                            b.remove("mem_w0", RangeMsg { value: w0 }, Deg { v: 4, u: 5 });
+                            b.remove("mem_w1", RangeMsg { value: w1 }, Deg { v: 4, u: 5 });
                         },
-                        Deg { v: 7, u: 8 }, // (V, U) = (4 + 3, 5 + 3); mem_active flag deg 3
+                        Deg { v: 7, u: 8 }, // Four linear denominators, Memory gate degree four.
                     );
                 },
-                Deg { v: 7, u: 8 },
+                Deg { v: 9, u: 8 },
             );
         },
-        Deg { v: 7, u: 8 },
+        Deg { v: 9, u: 8 },
     );
 }
