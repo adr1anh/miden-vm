@@ -8,7 +8,6 @@ fn vm_parameters(height: u32) -> security::ProofSecurityParameters {
     security::proof_security_parameters(
         &config::pcs_params(),
         height,
-        0,
         COMMITMENT_ALIGNMENT,
         HashFunction::Eidos,
     )

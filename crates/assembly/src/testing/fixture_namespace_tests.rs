@@ -30,7 +30,7 @@ fn fixture_identity_preserves_typed_homes_and_ignores_bodies() -> Result<(), Rep
     let second = context.parse_module("namespace fixture pub proc run push.99 end")?;
     let home = vec![
         CanonicalLabel::text("fixture-owner").unwrap(),
-        CanonicalLabel::library_id(miden_core::Word::default()),
+        CanonicalLabel::library_id(Word::default()),
         CanonicalLabel::revision(NonZeroU32::new(7).unwrap()),
         CanonicalLabel::text("nested").unwrap(),
     ];

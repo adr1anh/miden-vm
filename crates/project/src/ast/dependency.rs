@@ -46,13 +46,13 @@ pub struct DependencySpec {
     pub rev: Option<Span<Arc<str>>>,
     /// Explicit default-home selection; independent of source version and linkage.
     #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Option::is_none"))]
-    pub binding: Option<Span<super::DependencyBindingSpec>>,
+    pub binding: Option<Span<DependencyBindingSpec>>,
     /// Independently expected exact visible paths and complete defining callable bindings.
     #[cfg_attr(
         feature = "serde",
         serde(rename = "expected-callables", default, skip_serializing_if = "Option::is_none")
     )]
-    pub expected_callables: Option<Span<Vec<super::ExpectedCallableSpec>>>,
+    pub expected_callables: Option<Span<Vec<ExpectedCallableSpec>>>,
     /// Explicit package/source prefixes, independent of runtime naming and artifact expectations.
     #[cfg_attr(
         feature = "serde",

@@ -1,8 +1,11 @@
-//! Property-test generation for VM public inputs.
+//! Property-test generation for complete VM public inputs.
 
 use miden_core::{
     Felt, WORD_SIZE, Word,
-    program::{KernelDescriptor, MIN_STACK_DEPTH, ProgramInfo, StackInputs, StackOutputs},
+    program::{
+        EnvironmentRoot, ExecutionDescriptor, MIN_STACK_DEPTH, ProcedureKey, StackInputs,
+        StackOutputs,
+    },
 };
 use proptest::prelude::*;
 
@@ -16,21 +19,19 @@ impl Arbitrary for PublicInputs {
         fn felt_strategy() -> impl Strategy<Value = Felt> {
             any::<u32>().prop_map(Felt::from)
         }
-
         fn word_strategy() -> impl Strategy<Value = Word> {
             any::<[u32; WORD_SIZE]>().prop_map(|values| Word::new(values.map(Felt::from)))
         }
-
-        let program_info = word_strategy()
-            .prop_map(|program_hash| ProgramInfo::new(program_hash, KernelDescriptor::default()));
+        let descriptor = (word_strategy(), word_strategy()).prop_map(|(entry, root)| {
+            ExecutionDescriptor::new(ProcedureKey::new(entry), EnvironmentRoot::new(root))
+        });
         let stack_inputs = proptest::collection::vec(felt_strategy(), 0..=MIN_STACK_DEPTH)
             .prop_map(|values| StackInputs::new(&values).expect("generated stack inputs fit"));
         let stack_outputs = proptest::collection::vec(felt_strategy(), 0..=MIN_STACK_DEPTH)
             .prop_map(|values| StackOutputs::new(&values).expect("generated stack outputs fit"));
-
-        (program_info, stack_inputs, stack_outputs, word_strategy())
-            .prop_map(|(program_info, stack_inputs, stack_outputs, deferred_root)| {
-                Self::new(program_info, stack_inputs, stack_outputs, deferred_root)
+        (descriptor, stack_inputs, stack_outputs, word_strategy())
+            .prop_map(|(descriptor, inputs, outputs, root)| {
+                Self::new(descriptor, inputs, outputs, root)
             })
             .boxed()
     }

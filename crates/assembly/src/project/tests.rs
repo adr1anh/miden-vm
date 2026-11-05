@@ -3926,7 +3926,7 @@ fn allow_root_fixture_bindings(
     assembler.with_package_naming_provider(move |package| {
         let mut homes = vec![FixtureNamespace::assembly_tests().namespace_plan().clone()];
         if artifacts.contains(&package.commitment()) {
-            homes.push(miden_mast_package::NamespacePlan::new(vec![]));
+            homes.push(NamespacePlan::new(vec![]));
         }
         crate::testing::admit_fixture_package(package, &homes)
     });
@@ -3946,7 +3946,7 @@ fn cache_test_project(directory: &FsPath, source_path: &str) -> PathBuf {
 fn cache_test_inputs(
     context: &TargetAssemblyContext<'_>,
     sources: &ProjectSourceInputs,
-    home: miden_mast_package::NamespacePlan,
+    home: NamespacePlan,
 ) -> Result<NamespaceInputs, Report> {
     let mut fixture = FixtureNamespace::new(home);
     let modules = core::iter::once(sources.root.as_ref())
@@ -3976,7 +3976,7 @@ fn source_cache_selects_current_naming_before_reuse_and_rejects_changed_home() {
         move |context, sources, _base| {
             calls.set(calls.get() + 1);
             let home = if changed_home.get() {
-                miden_mast_package::NamespacePlan::new(vec![
+                NamespacePlan::new(vec![
                     miden_core::program::CanonicalLabel::text("changed-caller").unwrap(),
                 ])
             } else {
@@ -4256,9 +4256,7 @@ fn standard_dependency_bindings_match_compiled_homes_and_reject_changed_requests
         write_file(&manifest, &config("owner"));
         write_file(&app.join("mod.masm"), "use dep pub proc entry exec.dep::run end");
         let import = LibraryImport::new(
-            miden_mast_package::NamespacePlan::new(vec![
-                miden_core::program::CanonicalLabel::text("owner").unwrap(),
-            ]),
+            NamespacePlan::new(vec![miden_core::program::CanonicalLabel::text("owner").unwrap()]),
             miden_core::Word::try_from(id).unwrap(),
             selection,
         );
@@ -4335,7 +4333,7 @@ fn standard_artifact_selection_requires_explicit_callable_expectations() {
     let temp = TempDir::new().unwrap();
     let artifact = debug_bearing_static_package("dep", "dep::run", "dep::run", "x", None);
     let path = temp.path().join("dep.masp");
-    std::fs::write(&path, artifact.to_bytes()).unwrap();
+    fs::write(&path, artifact.to_bytes()).unwrap();
     let manifest = temp.path().join("miden-project.toml");
     write_file(
         &manifest,

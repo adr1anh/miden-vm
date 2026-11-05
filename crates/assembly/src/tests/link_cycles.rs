@@ -156,7 +156,7 @@ fn public_helpers_and_address_taken_roots_survive_retention() {
             MastNode::Block(block) => Some(block),
             _ => None,
         })
-        .flat_map(|block| block.operations())
+        .flat_map(miden_core::mast::BasicBlockNode::operations)
         .filter_map(|op| match op {
             Operation::Push(value) => Some(value.as_canonical_u64()),
             _ => None,

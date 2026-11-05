@@ -418,7 +418,7 @@ fn staged_embedding_defers_policy_until_later_fields_have_been_preflighted() {
     assert!(budget.records::<&str>(1).is_err());
     assert_no_policy(&profile);
 
-    let mut embedded = bytes.clone();
+    let mut embedded = bytes;
     embedded.extend_from_slice(&[1, 0, 0, 0]);
     let mut budget = Budget::new(CodecLimits::new(
         embedded.len() as u32,

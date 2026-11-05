@@ -209,7 +209,7 @@ fn preparation_resolves_actual_package_root_and_keeps_ambiguous_source_optional(
 fn advice_conflicts_and_budgets_leave_cache_map_and_merge_markers_unchanged() {
     let existing_key = Word::from([ONE; 4]);
     let new_key = Word::from([ZERO; 4]);
-    let entry_bytes = Word::SERIALIZED_SIZE + core::mem::size_of::<Felt>();
+    let entry_bytes = Word::SERIALIZED_SIZE + size_of::<Felt>();
     let base_bytes = MerkleStore::default().num_internal_nodes() * 3 * Word::SERIALIZED_SIZE;
 
     for budget_failure in [false, true] {

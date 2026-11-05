@@ -49,10 +49,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
     use std::sync::Arc;
 
-    use miden_air::vm::{NUM_PUBLIC_VALUES, config as air_config};
+    use miden_air::vm::config as air_config;
     use miden_stark::pcs::PcsParams;
 
     use super::*;
@@ -60,12 +59,7 @@ mod tests {
 
     #[test]
     fn concurrent_calls_share_setup_but_distinct_blowups_do_not() {
-        let statement = Statement::new(
-            MidenMultiAir::new(),
-            vec![(0, vec![Felt::ZERO; NUM_PUBLIC_VALUES])],
-            vec![],
-        )
-        .unwrap();
+        let statement = crate::setup::canonical_setup_statement();
         let params = air_config::pcs_params();
         let config = eidos_config(params, air_config::RELATION_DIGEST);
         let cached = std::thread::scope(|scope| {

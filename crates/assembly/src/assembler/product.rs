@@ -372,7 +372,7 @@ mod tests {
         let exact_kernel = kernel.to_dependency();
         let mut ordinary_supply = exact_kernel.clone();
         ordinary_supply.kind = TargetType::Library;
-        ordinary_supply.digest = miden_core::Word::from([1_u32, 2, 3, 4]);
+        ordinary_supply.digest = Word::from([1_u32, 2, 3, 4]);
 
         for requirements in [
             vec![ordinary_supply.clone()],
@@ -399,10 +399,9 @@ mod tests {
         let mut conflicting_kernel = exact_kernel.clone();
         conflicting_kernel.version = miden_mast_package::Version::new(2, 0, 0);
 
-        for requirements in [
-            vec![conflicting_kernel.clone()],
-            vec![exact_kernel.clone(), conflicting_kernel.clone()],
-        ] {
+        for requirements in
+            [vec![conflicting_kernel.clone()], vec![exact_kernel, conflicting_kernel]]
+        {
             let mut product = executable_product(&context);
             product.kernel_package = Some(kernel.clone());
             product.extend_dependencies(requirements).unwrap();

@@ -31,7 +31,7 @@ use miden_processor::{
 };
 use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
 use miden_vm::{
-    Assembler, ExecutionProof, HashFunction, Program, ProgramInfo, Prover, StackOutputs, Verifier,
+    Assembler, ExecutionProof, HashFunction, Program, Prover, StackOutputs, Verifier,
     assembly::DefaultSourceManager, prove_sync,
 };
 use miden_vm_synthetic_bench::{
@@ -358,8 +358,8 @@ fn bench_one_scenario(
             AdviceInputs::default(),
             &mut host,
         );
-        let claim = ExecutionClaim::from_program_info(
-            ProgramInfo::from(fixture.program.clone()),
+        let claim = ExecutionClaim::new(
+            fixture.environment.execution().descriptor(),
             StackInputs::default(),
             stack_outputs,
         );

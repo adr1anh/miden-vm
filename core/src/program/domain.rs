@@ -28,12 +28,14 @@ miden_crypto::eidos_domain_registry! {
                 description: "Miden VM kernel commitment.",
                 schema: "param0 = number of Felts; param1 = 0; param2 = 0; payload = procedure digests in canonical order",
             }
+            // Version 1 committed a program root and kernel commitment. Its tag is retired;
+            // the environment-bound statement uses a distinct v2 commitment at the same length.
             pub EXECUTION_CLAIM: ExecutionClaimDomain {
                 local_id: 0x0001,
-                version: DomainVersion::numbered(1),
+                version: DomainVersion::numbered(2),
                 encoding: FeltSequence,
                 description: "Miden VM execution-claim commitment.",
-                schema: "param0 = 40; param1 = 0; param2 = 0; payload = program root || kernel commitment || stack inputs || stack outputs",
+                schema: "param0 = 40; param1 = 0; param2 = 0; payload = entry procedure key || environment root || stack inputs || stack outputs",
             }
             pub PROOF_REQUEST: ProofRequestDomain {
                 local_id: 0x0002,

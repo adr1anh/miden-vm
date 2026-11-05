@@ -228,14 +228,13 @@ impl fmt::Display for Program {
 // PROGRAM INFO
 // ===============================================================================================
 
-/// A program information set consisting of its MAST root and set of kernel procedure roots used
-/// for its compilation.
+/// Implementation and compilation metadata consisting of a program's MAST root and the kernel
+/// procedure roots used for its compilation.
 ///
-/// This will be used as public inputs of the proof so we bind its verification to the kernel and
-/// root used to execute the program. This way, we extend the correctness of the proof to the
-/// security guarantees provided by the kernel. We also allow the user to easily prove the
-/// membership of a given kernel procedure for a given proof, without compromising its
-/// zero-knowledge properties.
+/// This metadata supports code inspection and debugging. The authenticated execution identities
+/// belong to [`ExecutionDescriptor`] and the public statement belongs to [`ExecutionClaim`]. A
+/// caller must independently authorize the descriptor's environment and its bindings; this
+/// metadata does not grant syscall authority.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(
     all(feature = "arbitrary", test),
@@ -269,8 +268,8 @@ impl ProgramInfo {
 
     /// Returns the canonical commitment to the kernel used during the compilation.
     ///
-    /// This is the fixed-size identifier the recursive verifier observes in place of the raw
-    /// kernel-procedure digest list. See [`KernelDescriptor::commitment`].
+    /// This identifies the compilation metadata's kernel-procedure digest list. See
+    /// [`KernelDescriptor::commitment`].
     pub fn kernel_commitment(&self) -> Word {
         self.kernel.commitment()
     }
@@ -316,9 +315,7 @@ impl ToElements for ProgramInfo {
         let num_kernel_proc_elements = self.kernel.proc_hashes().len() * WORD_SIZE;
         let mut result = Vec::with_capacity(2 * WORD_SIZE + num_kernel_proc_elements);
 
-        // append program hash elements where we pad with zero so as to make the fixed length
-        // public inputs section of the public inputs of length a multiple of 8 i.e., double-word
-        // aligned
+        // Preserve the metadata encoding's program-hash prefix and double-word alignment.
         result.extend_from_slice(self.program_hash.as_elements());
         result.extend_from_slice(&[Felt::ZERO; 4]);
 

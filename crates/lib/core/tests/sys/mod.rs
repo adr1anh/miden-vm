@@ -38,29 +38,26 @@ proptest! {
 #[test]
 fn masm_claim_commitment_matches_native() {
     use miden_core::{
-        Felt, Word,
-        program::{ExecutionClaim, KernelDescriptor, ProgramInfo, StackInputs, StackOutputs},
+        Felt,
+        program::{ExecutionClaim, StackInputs, StackOutputs},
     };
 
-    let word = |a: u64, b: u64, c: u64, d: u64| -> Word {
-        [
-            Felt::new_unchecked(a),
-            Felt::new_unchecked(b),
-            Felt::new_unchecked(c),
-            Felt::new_unchecked(d),
-        ]
-        .into()
-    };
-
-    let kernel =
-        KernelDescriptor::from_hashes(vec![word(11, 12, 13, 14), word(21, 22, 23, 24)]).unwrap();
-    let program_info = ProgramInfo::new(word(1, 2, 3, 4), kernel);
+    let fixture = crate::naming::assemble(
+        miden_assembly::Assembler::default(),
+        "claim_fixture",
+        "begin nop end",
+        &[],
+    );
     let stack_inputs =
         StackInputs::new(&[Felt::new_unchecked(5), Felt::new_unchecked(6), Felt::new_unchecked(7)])
             .unwrap();
     let stack_outputs =
         StackOutputs::new(&[Felt::new_unchecked(8), Felt::new_unchecked(9)]).unwrap();
-    let claim = ExecutionClaim::from_program_info(program_info, stack_inputs, stack_outputs);
+    let claim = ExecutionClaim::new(
+        fixture.environment.execution().descriptor(),
+        stack_inputs,
+        stack_outputs,
+    );
 
     // stage the canonical 40-felt encoding into a claim region at CLAIM_PTR
     const CLAIM_PTR: u64 = 1000;

@@ -46,7 +46,7 @@ impl Workspace {
             ));
             match fs::create_dir(&directory) {
                 Ok(()) => return Self(directory),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
                 Err(error) => panic!("failed to create project fixture: {error}"),
             }
         }

@@ -887,7 +887,7 @@ fn num_basic_block_hash_groups(op_batches: &[OpBatch]) -> Result<u32, ExecutionE
         .checked_mul(BLOCK_LEN)
         .and_then(|prefix_groups| prefix_groups.checked_add(last.num_groups().next_power_of_two()))
         .and_then(|groups| u32::try_from(groups).ok())
-        .ok_or(ExecutionError::TraceLenExceeded(crate::trace::parallel::MAX_TRACE_LEN))
+        .ok_or(ExecutionError::TraceLenExceeded(MAX_TRACE_LEN))
 }
 
 fn write_eidos_compression_block(

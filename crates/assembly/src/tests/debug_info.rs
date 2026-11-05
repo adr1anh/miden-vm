@@ -196,9 +196,9 @@ fn replace_nops_with_named_inline_call_markers(
 }
 
 fn reachable_source_nodes(
-    debug_info: &miden_mast_package::debug_info::PackageDebugInfo,
-    root: miden_mast_package::debug_info::DebugSourceNodeId,
-) -> BTreeSet<miden_mast_package::debug_info::DebugSourceNodeId> {
+    debug_info: &PackageDebugInfo,
+    root: DebugSourceNodeId,
+) -> BTreeSet<DebugSourceNodeId> {
     let mut reachable = BTreeSet::new();
     let mut worklist = vec![root];
     while let Some(source_node_id) = worklist.pop() {

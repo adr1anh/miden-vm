@@ -9,15 +9,13 @@ use miden_assembly::{
     Assembler, DefaultSourceManager, NamespaceInputs, Path as LibraryPath, SourceManager,
     ast::{Module, ModuleKind},
     diagnostics::{Report, WrapErr},
-    serde::Deserializable,
 };
 use miden_core::{Felt, field::QuotientMap, serde::read_file_bounded};
 use miden_core_lib::CoreLibrary;
 use miden_mast_package::Package;
 use miden_vm::{
-    ExecutionProof, StackOutputs, Word,
+    ExecutionProof, StackOutputs,
     internal::naming_inputs::{LoadedPackage, NamingInputs, NamingRole},
-    serde::SliceReader,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{field::Empty, instrument};
@@ -262,11 +260,6 @@ where
     pub fn source_manager(&self) -> &Arc<S> {
         &self.source_manager
     }
-
-    /// Returns a reference to the AST module.
-    pub fn ast(&self) -> &Module {
-        &self.ast
-    }
 }
 
 // PROOF FILE
@@ -325,30 +318,6 @@ impl ProofFile {
     }
 }
 
-// PROGRAM HASH
-// ================================================================================================
-
-pub struct ProgramHash;
-
-/// Helper method to parse program hash from hex
-impl ProgramHash {
-    #[instrument(name = "read_program_hash", skip_all)]
-    pub fn read(hash_hex_string: &str) -> Result<Word, String> {
-        // decode hex to bytes
-        let program_hash_bytes = hex::decode(hash_hex_string)
-            .map_err(|err| format!("Failed to convert program hash to bytes {err}"))?;
-
-        // create slice reader from bytes
-        let mut program_hash_slice = SliceReader::new(&program_hash_bytes);
-
-        // create hash digest from slice
-        let program_hash = Word::read_from(&mut program_hash_slice)
-            .map_err(|err| format!("Failed to deserialize program hash from bytes - {err}"))?;
-
-        Ok(program_hash)
-    }
-}
-
 // LIBRARY FILE
 // ================================================================================================
 pub struct Libraries {
@@ -369,7 +338,7 @@ impl Libraries {
             let path_str = path.as_ref().to_string_lossy().into_owned();
 
             let library = Package::deserialize_from_file(path).map(Arc::new).map_err(|err| {
-                Report::msg(format!("Failed to read package from file `{}`: {}", path_str, err))
+                Report::msg(format!("Failed to read package from file `{path_str}`: {err}"))
             })?;
 
             libraries.push(naming.admit(NamingRole::Library(index), library)?);

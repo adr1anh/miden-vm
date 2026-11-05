@@ -24,12 +24,9 @@ use {
 ###
 ### The VM control frame occupies the half-open range 3223322776..3223323864, immediately
 ### after the generic verifier frame. It contains relation metadata, the authenticated claim,
-### boundary inputs, and the maximum 255-word kernel witness.
+### boundary inputs, and reserved control-frame capacity.
 
-### Number of kernel procedures in the authenticated witness.
-const NUM_KERNEL_PROCEDURES_PTR = 3223322776
-
-### CONTROL_ALIGNMENT_PADDING_PTR: 3 felts at 3223322777..3223322780.
+### CONTROL_ALIGNMENT_PADDING_PTR: 4 felts at 3223322776..3223322780.
 
 ### gamma = beta^MAX_MESSAGE_WIDTH for per-bus domain separation.
 ### Stored as [gamma0, gamma1, 0, 0] (one extension field element, word-aligned).
@@ -45,16 +42,16 @@ const C_TOTAL_PTR = 3223322784
 ### Caller-provided claim commitment. The verifier checks the advice-supplied preimage against it.
 const CLAIM_COMMITMENT_PTR = 3223322788
 
-### Verifier-owned claim preimage (40 felts: P | K | I | O).
+### Verifier-owned claim preimage (40 felts: K_entry | R_E | I | O).
 const CLAIM_PTR = 3223322792
 
 ### BOUNDARY_ANCHOR_PADDING_PTR: 4 felts at 3223322832..3223322836.
 
-### Boundary block [program_digest | deferred_root].
+### Internal staging block [environment_root | deferred_root]. Only the second word is aux input;
+### the environment root is copied from the authenticated claim and is also Chiplets public data.
 const BOUNDARY_INPUTS_PTR = 3223322836
 
-### Kernel digest witness (up to 255 word-aligned procedure digests).
-const KERNEL_WITNESS_PTR = 3223322844
+### CONTROL_RESERVED_PTR: 1020 felts at 3223322844..3223323864.
 
 ### Out-of-domain ingest scatter table and proof-order maps, after the VM control frame.
 ### Regeneration checks the reservation; `parameters.masm` describes its size and internal offsets.
@@ -62,14 +59,14 @@ const OOD_SCATTER_TABLE_PTR = 3223323864
 
 ## VM ACE READ section
 ##
-## Stack I/O public values occupy the region immediately before AUX_RAND_ELEM_PTR. The relation's
-## statement block is stored separately, outside ACE READ. Each ACE input slot stores a quadratic
-## extension element (two base felts); base-field public values occupy (value, 0) slots.
+## Core36 (I | O | K_entry) followed by Chiplets4 (R_E) occupy the region before AUX_RAND_ELEM_PTR.
+## The relation's statement block is stored separately, outside ACE READ. Each ACE input slot stores
+## a quadratic extension element (two base felts); base-field public values occupy (value, 0) slots.
 ## The fixed public-value count and its storage size are recorded in `parameters.masm`.
 ##
 ## Memory order, from low to high addresses:
 ##
-##   pi_ptr                   --> [ stack I/O public inputs                  ]
+##   pi_ptr                   --> [ Core36 | Chiplets4 public inputs        ]
 ##   AUX_RAND_ELEM_PTR        --> [ lookup randomness: beta, alpha           ]
 ##                                [ alignment padding                        ]
 ##   OOD_EVALUATIONS_PTR      --> [ current OOD row                          ]
@@ -194,12 +191,4 @@ end
 
 pub proc claim_ptr() -> types::Address
     push.CLAIM_PTR
-end
-
-pub proc num_kernel_procedures_ptr() -> types::Address
-    push.NUM_KERNEL_PROCEDURES_PTR
-end
-
-pub proc kernel_witness_ptr() -> types::Address
-    push.KERNEL_WITNESS_PTR
 end

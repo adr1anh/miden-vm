@@ -158,6 +158,7 @@ fn non_empty_execution_witness_splits_with_matching_precompile_root() {
     .execute_for_proving_sync(&program, fixture.environment, &mut host)
     .unwrap();
     let claim = execution_witness.claim();
+    assert_eq!(claim.execution_descriptor(), fixture.environment.descriptor());
     let (vm_witness, precompile_witness) = execution_witness.into_parts();
     let precompile_root = vm_witness.precompile_root;
     assert_ne!(precompile_root, TRUE_DIGEST);
@@ -172,6 +173,8 @@ fn non_empty_execution_witness_splits_with_matching_precompile_root() {
 
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap();
     assert_eq!(trace.precompile_root(), precompile_root);
+    assert_eq!(trace.execution_descriptor(), claim.execution_descriptor());
+    assert_eq!(trace.public_inputs(), PublicInputs::from_claim(&claim, precompile_root));
 }
 
 #[test]
@@ -196,14 +199,10 @@ fn empty_execution_witness_splits_and_replays_with_explicit_stack_inputs() {
     .unwrap();
 
     let claim = execution_witness.claim();
-    assert_eq!(claim.to_program_info(), program.to_info());
+    assert_eq!(claim.execution_descriptor(), fixture.environment.descriptor());
+    assert_ne!(claim.entry_key().as_word(), &program.hash());
     assert_eq!(claim.stack_inputs(), &stack_inputs);
-    let expected_public_inputs = PublicInputs::new(
-        claim.to_program_info(),
-        *claim.stack_inputs(),
-        *claim.stack_outputs(),
-        TRUE_DIGEST,
-    );
+    let expected_public_inputs = PublicInputs::from_claim(&claim, TRUE_DIGEST);
 
     let (vm_witness, precompile_witness) = execution_witness.into_parts();
     assert_eq!(vm_witness.claim(), claim);
@@ -216,6 +215,8 @@ fn empty_execution_witness_splits_and_replays_with_explicit_stack_inputs() {
     assert!(output.precompile_witness.is_none());
 
     let trace = build_trace(vm_witness, &miden_vm_stark::memory::default_budget()).unwrap();
+    assert_eq!(trace.program_info(), &program.to_info());
+    assert_eq!(trace.execution_descriptor(), fixture.environment.descriptor());
     assert_eq!(trace.init_stack_state(), stack_inputs);
     assert_eq!(trace.precompile_root(), TRUE_DIGEST);
     assert_eq!(trace.to_public_values(), expected_public_inputs.to_elements());

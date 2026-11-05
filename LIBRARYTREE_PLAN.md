@@ -496,8 +496,8 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate now compiles and runs: 1,866 pass/24 legacy-public-statement failures/one existing ignore; 49 integrations and 69 concurrent replay tests pass. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
 | 09 Assembly/packages | implemented-awaiting-validation | Final review `0ec317994`; CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | implemented-awaiting-validation | Native `82e671c01`; assembly `e151d65c5`; instances `116a2d736`; supply `049d9ea68`; prior SHAs below; base `0ec317994` | Independent reviews; project90, assembly598/six existing skips, supply379/one existing skip and native3 pass; mast-package/both registries/project/assembly all-target strict Clippy, native-target Clippy and four shared no_std checks pass | Inherited public-statement/proof/recursive/security and final qualification remain; selected publication-profile behavior is not claimed |
-| 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; base `eefae17e7` | Independent reviews; 7/8 actual-loader tests pass, all 33 malformed cases pass independently; renderer/package transport tests and scoped strict Clippy pass | VM valid control embeds 7920 versus wrapper 6992; generation refuses stale pinned ACE digest. Coherent PR12/14 qualification and all inherited gates remain; optional profiles deferred |
-| 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
+| 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; coherent relation `14c946a6b`; base `eefae17e7` | All eight actual-loader controls and malformed cases pass after coherent PR12 regeneration; prior transport/renderer evidence below | Full recursive/identity and inherited qualification remain; optional profiles deferred |
+| 12 Native statement | implemented-awaiting-validation | Claim `bb4a3c370`; projection `68a0b163a`; relation `14c946a6b`; native `6a10f407a`; CLI `cdb0f313d`; fixtures `2eacca06f`; MASM tests `35d82b08c`; base `10bc8a5f0` | Independent reviews; core/AIR378, processor1891/one existing ignore; final affected1641/1659; 14-crate all-target strict Clippy, five no_std and deterministic generation/check pass | Fifteen request K/D failures at PR14, three preserved cost gates at PR13; inherited counterfactual/security/guest/fuzz/performance/final qualification |
 | 13 Core library | planned | — | — | Depends on 09–12 and supported ABI |
 | 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
@@ -2987,3 +2987,51 @@ because the pinned VM ACE digest is stale. No identity/proof constants were refr
 renderer and final transport tests pass; core-lib test-target and ACE/package all-target strict
 Clippy pass. Independent reviews/signatures pass. PR11 remains implemented-awaiting-validation;
 coherent PR12/14 generation/proof qualification and every inherited gate remain open.
+
+
+### PR12 statement and relation checkpoint, 3 November 2026
+
+`bb4a3c370` commits explicit descriptor claim40/domain2 and proof3 with version-first rejection;
+signature verified. Remaining processor/public projection/native/CLI/MASM/generator/fixture changes
+are uncommitted. Central guarded checks passed core/AIR378 and processor1891/one existing ignore.
+Authoritative regeneration plus `--check` passed: VM protocol5, 790 inputs, 7676 gates, 990 blocks,
+7920 felts. ACE/relation pins were accepted only after regeneration; all three unchanged preprocessing
+pins pass. The fresh Eidos fixture was generated from owner-selected descriptor/public I/O and
+native-verified before writing. Compatibility-root whitelists remain untouched.
+
+The combined test-dev run passed464/473: all40 native claim-coordinate mutations, claim/transcript
+and boundary MASM hooks, recursive advice packaging and all eight resource-loader controls, closing
+PR11's stale VM valid-control failure. Nine failures remain: four CLI fixture/oracle expectations,
+layout numeric-constant resolution, and four memory/security snapshots. Logs:
+`.scratch/librarytree/pr12-{generation-write,generation-check,fixture-generation,combined-checks}.log`.
+Independent scoped reviews pass. The default target cache disappeared; subsequent checks use one
+isolated scratch cache. Full lint/no_std, recursive/adversarial/security/guest/fuzz/performance and
+final gates remain open. No PR12/M1/overall completion is claimed.
+
+
+### PR12 downstream checkpoint, 3 November 2026
+
+Source is committed through `35d82b08c`: projection `68a0b163a`, coherent VM protocol5/MASM
+relation `14c946a6b`, native/security/fresh proof `6a10f407a`, CLI `cdb0f313d`, consumers
+`2eacca06f`, bridge tests `35d82b08c`; mechanical lint fixes `1c8f4b057`/`c932d22fd`.
+All signatures verify. The nine earlier fixture/layout/snapshot failures are resolved, unignored.
+
+Central guarded affected run passes1641/1659: AIR390, assembly596, mast-package320, project90,
+verifier10, native35, core-library160 and CLI/proving40. All CLI cases, native40-coordinate
+mutations, direct MASM proofs, claim/transcript/boundaries and resource controls pass. Fourteen
+changed/dependent crates, including both benchmark consumers, pass all-target Clippy with the
+repository's complete custom lint set and warnings denied. Five no-default-feature surfaces pass.
+The freshly linked generator's `--check` and committed generated-file drift check pass without a
+new compilation. Logs: `.scratch/librarytree/pr12-{integration-checks,clippy,no-std,generation-final-check}.log`.
+This supersedes the legacy public-projection failures recorded at PR05–08, not their remaining gates.
+
+Eighteen failures remain enabled. Fifteen request paths register H(C||D) but `procref` consumers
+fetch H(C||K); PR14 already owns typed verifier/configuration identities, requestv2, settlement
+expectations and final compatibility qualification. The three cost gates remain VMscatter1461>1300,
+PVMscatter3713>3200 and security peak2270>=2250. Fixed-leaf runtime calls are concrete PR13 inline
+candidates; do not raise caps. The security gate precedes its numeric matrix, so that matrix is not
+yet qualified. No D==K fallback, duplicate proof registration or whitelist update was introduced.
+
+PR12 is implemented-awaiting-validation. Continue PR13 explicit source packaging and deliberate
+inline choices, then PR14 identity/request closure. All counterfactual/principal, full recursive,
+security/guest/fuzz/performance/final gates and the general goal/M1 remain open. No PRs or pushes.

@@ -55,4 +55,3 @@ pub use miden_stark::{
     pcs::PcsParams,
 };
 pub use proof_order::{AIRS, MIDEN_AIR_COUNT};
-pub use statement::hash_kernel_digests;

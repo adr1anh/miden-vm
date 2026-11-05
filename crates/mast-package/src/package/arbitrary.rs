@@ -28,7 +28,7 @@ pub fn fixture_naming(
     let mut seen_paths = BTreeSet::new();
     let mut entry = None;
     for export in exports.iter().filter_map(PackageExport::as_procedure) {
-        let Ok(path) = super::naming::callable_path_from_manifest(&export.path) else {
+        let Ok(path) = naming::callable_path_from_manifest(&export.path) else {
             continue;
         };
         if !seen_paths.insert(path.clone()) {

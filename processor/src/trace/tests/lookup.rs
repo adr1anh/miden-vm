@@ -864,7 +864,7 @@ pub(super) fn assert_trace_constraints_reject(
     let (public_values, aux_inputs) = trace.public_inputs().to_air_inputs();
     let statement = Statement::<Felt, QuadFelt, _>::new(
         MidenMultiAir::new(),
-        vec![(0, public_values)],
+        public_values.into_iter().enumerate().collect(),
         aux_inputs,
     )
     .expect("valid statement inputs");

@@ -371,7 +371,7 @@ fn explicit_parent_source_selection_overrides_target_fallback_without_changing_s
             let mut cache = BTreeMap::new();
             let resolved =
                 assemble_source(&mut assembler, InterruptedTargetRole::Root, &mut cache).unwrap();
-            let root = assembler.dependency_graph.get(assembler.dependency_graph.root()).unwrap();
+            let root = assembler.dependency_graph.get(*assembler.dependency_graph.root()).unwrap();
             let instance = root
                 .dependencies
                 .iter()

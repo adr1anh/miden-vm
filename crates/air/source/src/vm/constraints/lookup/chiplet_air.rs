@@ -134,7 +134,7 @@ mod tests {
     use miden_stark::{
         air::{
             AirBuilder, WindowAccess,
-            symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression},
+            symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpr, SymbolicExpression},
         },
         lookup::{
             Challenges, ConstraintLookupBuilder, LookupAir, LookupFractions, LookupMessage,
@@ -245,7 +245,7 @@ mod tests {
         let degrees: Vec<_> = symbolic
             .extension_constraints()
             .iter()
-            .map(|constraint| constraint.degree_multiple())
+            .map(SymbolicExpr::degree_multiple)
             .collect();
         assert_eq!(degrees.iter().copied().max(), Some(9));
         assert!(degrees.iter().all(|degree| *degree <= 9), "{degrees:?}");

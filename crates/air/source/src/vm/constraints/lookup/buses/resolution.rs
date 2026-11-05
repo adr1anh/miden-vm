@@ -108,7 +108,7 @@ mod tests {
     }
 
     fn word(start: u32) -> [Felt; 4] {
-        core::array::from_fn(|i| Felt::from_u32(start + i as u32))
+        array::from_fn(|i| Felt::from_u32(start + i as u32))
     }
 
     fn row(opcode: u8) -> CoreCols<Felt> {
@@ -325,7 +325,7 @@ mod tests {
             let mut next = row(opcodes::SPAN);
             next.decoder.addr = Felt::from_u8(17);
             let actual = fractions(&[local, next]);
-            let input = core::array::from_fn(|i| if i < 4 { word(101)[i] } else { Felt::ZERO });
+            let input = array::from_fn(|i| if i < 4 { word(101)[i] } else { Felt::ZERO });
             let expected = encode(HasherMsg::control_block(Felt::from_u8(17), &input, opcode));
             assert!(at(&actual, 0, 2).contains(&(-Felt::ONE, expected)), "opcode {opcode}");
         }

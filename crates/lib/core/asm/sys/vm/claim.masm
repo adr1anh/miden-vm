@@ -8,15 +8,15 @@ use miden::core::mem
 # The execution claim is the statement a Miden VM proof attests, encoded as a canonical 40-felt
 # memory region:
 #
-#   claim_ptr + 0   P   program_digest              (1 word)
-#   claim_ptr + 4   K   kernel_commitment           (1 word)
+#   claim_ptr + 0   K_entry   entry procedure key   (1 word)
+#   claim_ptr + 4   R_E       environment root      (1 word)
 #   claim_ptr + 8   I   stack_inputs                (16 felts, canonical zero-padded)
 #   claim_ptr + 24  O   stack_outputs               (16 felts, canonical zero-padded)
 #
 # The deferred root D is not part of the claim: it is the obligation a verified claim hands back.
 #
 # The claim commitment is the domain-tagged sequential hash of the region. 40 felts is exactly
-# five Eidos blocks, so no padding block is absorbed and the (P, K) prefix state after block 1 is
+# five Eidos blocks, so no padding block is absorbed and the (K_entry, R_E) prefix after block 1 is
 # resumable by callsites that pin those fields. Mirrors
 # miden_core::program::ExecutionClaim::commitment (enforced by cross-tests).
 
@@ -24,8 +24,9 @@ use miden::core::mem
 const NUM_CLAIM_ELEMENTS = 40
 
 # Initial CV for the claim commitment:
-# init(EXECUTION_CLAIM = 0x01000101, [40, 0, 0]).
-const CLAIM_INIT_CV = [13503953893964382465, 11912009168875159592, 11170449401267093504, 6620516959492505600]
+# init(EXECUTION_CLAIM v2 = 0x01000102, [40, 0, 0]). The fixed lanes match
+# core/src/program/claim.rs::commitment_uses_v2_domain_length_40_and_exactly_five_payload_blocks.
+const CLAIM_INIT_CV = [13503953893964382466, 11912009168875159592, 11170449401267093504, 6620516959492505600]
 
 #! Fetches a claim preimage from the advice map, copies it into memory, and checks its commitment.
 #!
@@ -59,7 +60,7 @@ end
 
 #! Computes the canonical claim commitment (CLAIM_HASH) over a claim region.
 #!
-#! The region must hold the fully populated 40-felt claim encoding P ‖ K ‖ I ‖ O. The commitment
+#! The region must hold the fully populated 40-felt encoding K_entry ‖ R_E ‖ I ‖ O. The commitment
 #! names the claim: it forms proof-request keys and binds verified claims into a consumer's own
 #! statement. The procedure verifies nothing.
 #!

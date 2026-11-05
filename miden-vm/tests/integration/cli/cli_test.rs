@@ -233,7 +233,7 @@ fn cli_bundle_debug() {
 }
 
 #[test]
-fn rejects_oversized_kernel_packages_in_run_prove_and_verify() {
+fn rejects_oversized_kernel_packages_in_run_and_prove_without_verifier_artifact_authority() {
     let working_dir = TempDir::new().unwrap();
     let program_path = working_dir.path().join("program.masm");
     let kernel_path = working_dir.path().join("kernel.masp");
@@ -262,23 +262,12 @@ fn rejects_oversized_kernel_packages_in_run_prove_and_verify() {
     // Exercise both loaders successfully with a valid kernel before checking their size limits.
     let mut cmd = inputs.command(working_dir.path(), "prove", &program_path);
     cmd.arg("--kernel").arg(&kernel_path);
-    let stdout = String::from_utf8(cmd.assert().success().get_output().stdout.clone()).unwrap();
-    let program_hash = stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("Proving program with hash "))
-        .and_then(|line| line.strip_suffix("..."))
-        .expect("prove prints the program hash");
-
-    // PR12 debt: this legacy program-hash/kernel verifier path needs an expected statement.
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("verify")
-        .arg("--proof")
-        .arg(program_path.with_extension("proof"))
-        .arg("--program-hash")
-        .arg(program_hash)
-        .arg("--kernel")
-        .arg(&kernel_path);
     cmd.assert().success();
+
+    inputs
+        .verify_command(working_dir.path(), program_path.with_extension("proof"))
+        .assert()
+        .success();
 
     fs::OpenOptions::new()
         .write(true)
@@ -300,16 +289,84 @@ fn rejects_oversized_kernel_packages_in_run_prove_and_verify() {
         cmd.assert().failure().stderr(predicate::function(oversized_error));
     }
 
-    // PR12 debt: this legacy program-hash/kernel verifier path needs an expected statement.
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("verify")
-        .arg("--proof")
-        .arg(program_path.with_extension("proof"))
-        .arg("--program-hash")
-        .arg(program_hash)
-        .arg("--kernel")
-        .arg(&kernel_path);
-    cmd.assert().failure().stderr(predicate::function(oversized_error));
+    // Verification uses the caller's descriptor and public I/O without reading kernel code.
+    inputs
+        .verify_command(working_dir.path(), program_path.with_extension("proof"))
+        .assert()
+        .success();
+}
+
+#[test]
+fn cli_verify_binds_caller_descriptor_and_public_io_without_execution_evidence() {
+    let working_dir = TempDir::new().unwrap();
+    let program_path = working_dir.path().join("program.masm");
+    fs::write(&program_path, "begin adv_push add end").unwrap();
+    fs::write(
+        program_path.with_extension("inputs"),
+        r#"{"operand_stack":[],"advice_stack":["7"]}"#,
+    )
+    .unwrap();
+    let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
+    inputs.command(working_dir.path(), "prove", &program_path).assert().success();
+
+    // The caller fixed K_entry/R_E before proving. Verification needs neither the source nor
+    // the private advice or execution-only naming, opening and resource-policy files.
+    fs::remove_file(&program_path).unwrap();
+    fs::remove_dir_all(working_dir.path().join(".cli-inputs")).unwrap();
+    fs::write(program_path.with_extension("inputs"), r#"{"operand_stack":[]}"#).unwrap();
+    inputs
+        .verify_command(working_dir.path(), "program.proof")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Proof status: complete"));
+
+    let proof_path = program_path.with_extension("proof");
+    let mut proof_bytes = fs::read(&proof_path).unwrap();
+    assert_eq!(proof_bytes[0], 3);
+    proof_bytes[0] = 2;
+    fs::write(&proof_path, &proof_bytes).unwrap();
+    let unsupported_format = inputs
+        .verify_command(working_dir.path(), "program.proof")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Proof status:").not());
+    assert_wrapped_diagnostic(
+        &unsupported_format.get_output().stderr,
+        "unsupported execution proof format 2",
+    );
+    proof_bytes[0] = 3;
+    fs::write(&proof_path, proof_bytes).unwrap();
+
+    for index in [1, 3] {
+        let mut args = inputs.descriptor_args();
+        let one = "0x0100000000000000000000000000000000000000000000000000000000000000";
+        let two = "0x0200000000000000000000000000000000000000000000000000000000000000";
+        args[index] = if args[index] == one { two } else { one }.to_owned();
+        bin_under_test(working_dir.path())
+            .args(["verify", "--proof", "program.proof"])
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("Program failed verification!"))
+            .stdout(predicate::str::contains("Proof status:").not());
+    }
+
+    fs::write(program_path.with_extension("inputs"), r#"{"operand_stack":["1"]}"#).unwrap();
+    inputs
+        .verify_command(working_dir.path(), "program.proof")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Program failed verification!"))
+        .stdout(predicate::str::contains("Proof status:").not());
+
+    fs::write(program_path.with_extension("inputs"), r#"{"operand_stack":[]}"#).unwrap();
+    fs::write(program_path.with_extension("outputs"), r#"{"stack":["8"]}"#).unwrap();
+    inputs
+        .verify_command(working_dir.path(), "program.proof")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Program failed verification!"))
+        .stdout(predicate::str::contains("Proof status:").not());
 }
 
 #[cfg(unix)]
@@ -327,12 +384,7 @@ fn atomic_artifact_writes_preserve_existing_files_on_io_failure() {
     let inputs = ProgramFixture::new(working_dir.path(), &program_path, None, &[]);
     // Bare filenames exercise temporary-file creation in the current directory.
     let mut cmd = inputs.command(working_dir.path(), "prove", "program.masm");
-    let stdout = String::from_utf8(cmd.assert().success().get_output().stdout.clone()).unwrap();
-    let program_hash = stdout
-        .lines()
-        .find_map(|line| line.strip_prefix("Proving program with hash "))
-        .and_then(|line| line.strip_suffix("..."))
-        .expect("prove prints the program hash");
+    cmd.assert().success();
     let previous_proof = fs::read(&proof_path).unwrap();
     let previous_outputs = fs::read(&outputs_path).unwrap();
     let previous_files = fs::read_dir(working_dir.path()).unwrap().count();
@@ -364,14 +416,7 @@ fn atomic_artifact_writes_preserve_existing_files_on_io_failure() {
     }
 
     // The old artifacts remain usable after both write failures.
-    // PR12 debt: retain this legacy verifier oracle until expected-statement migration.
-    let mut cmd = bin_under_test(working_dir.path());
-    cmd.arg("verify")
-        .arg("--proof")
-        .arg("program.proof")
-        .arg("--program-hash")
-        .arg(program_hash);
-    cmd.assert().success();
+    inputs.verify_command(working_dir.path(), "program.proof").assert().success();
 }
 
 #[test]
@@ -548,21 +593,42 @@ fn cli_bundle_version() {
 #[test]
 fn cli_bundle_no_exports() {
     let working_dir = TempDir::new().unwrap();
-    let naming = bundle_inputs(
-        working_dir.path(),
-        &fixture("tests/integration/cli/data/lib_noexports/mod.masm"),
-        false,
-        Some("lib"),
-    );
+    let source = fixture("tests/integration/cli/data/lib_noexports/mod.masm");
+    let output_file = working_dir.path().join("cli_bundle_no_exports.masp");
+    let expected = LibraryFixture::new(&source, false, Some("lib"));
+    let naming = bundle_inputs(working_dir.path(), &source, false, Some("lib"));
     let mut cmd = bin_under_test(working_dir.path());
     cmd.arg("bundle")
         .arg("--namespace")
         .arg("lib")
-        .arg(fixture("tests/integration/cli/data/lib_noexports/mod.masm"));
+        .arg(&source)
+        .arg("--output")
+        .arg(&output_file);
     naming.apply(&mut cmd);
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("package must contain at least one exported procedure"));
+    cmd.assert().success();
+
+    let package = Package::deserialize_from_file(&output_file).unwrap();
+    assert_eq!(package.manifest.num_exports(), 0);
+    assert_eq!(expected.naming.callables().visible_paths().len(), 0);
+    // Match the independent caller-owned naming, including its private implementation selection.
+    package.check_naming(&expected.naming).unwrap();
+    let (_, private) = expected
+        .naming
+        .callables()
+        .bindings()
+        .find(|(_, binding)| binding.path().components() == ["lib", "lib_proc"])
+        .expect("the fixture must retain its private declaration");
+    let implementation = expected
+        .naming
+        .callables()
+        .selected_implementation(private.key())
+        .expect("the private fixture procedure must have a selected implementation");
+    let forest = package.mast_forest();
+    let root = forest
+        .find_procedure_root(implementation.into_word())
+        .expect("the private implementation must be retained as a procedure root");
+    assert!(!forest[root].is_external());
+    assert_eq!(package.mast_forest_commitment(), expected.package.mast_forest_commitment());
 }
 
 #[test]
@@ -683,6 +749,22 @@ fn bundle_kernel_package(working_dir: &Path, name: &str) -> PathBuf {
     output_file
 }
 
+fn assert_wrapped_diagnostic(stderr: &[u8], expected: &str) {
+    let stderr = String::from_utf8_lossy(stderr);
+    // The diagnostic renderer may wrap the message and prefix continuation lines with a bar.
+    let unwrapped = stderr.replace(['|', '│'], " ");
+    let unwrapped = unwrapped.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(unwrapped.contains(expected), "unexpected diagnostic: {stderr}");
+}
+
+fn assert_kernel_for_masp_diagnostic(command: &mut Command) {
+    let output = command.assert().failure();
+    assert_wrapped_diagnostic(
+        &output.get_output().stderr,
+        "--kernel applies to source assembly; a .masp carries its embedded kernel code",
+    );
+}
+
 #[test]
 fn run_rejects_kernel_for_masp_package() {
     let working_dir = TempDir::new().unwrap();
@@ -693,9 +775,7 @@ fn run_rejects_kernel_for_masp_package() {
     let inputs = ProgramFixture::new(working_dir.path(), &authority_path, None, &[]);
     let mut cmd = inputs.command(working_dir.path(), "run", &package_path);
     cmd.arg("--kernel").arg(fixture("tests/integration/cli/data/kernel_main.masm"));
-    cmd.assert().failure().stderr(predicate::str::contains(
-        "--kernel applies to source assembly; a .masp carries its embedded kernel code",
-    ));
+    assert_kernel_for_masp_diagnostic(&mut cmd);
 }
 
 #[test]
@@ -710,9 +790,7 @@ fn prove_rejects_kernel_for_masp_package() {
     let inputs = ProgramFixture::new(working_dir.path(), &authority_path, None, &[]);
     let mut cmd = inputs.command(working_dir.path(), "prove", &package_path);
     cmd.arg("--kernel").arg(fixture("tests/integration/cli/data/kernel_main.masm"));
-    cmd.assert().failure().stderr(predicate::str::contains(
-        "--kernel applies to source assembly; a .masp carries its embedded kernel code",
-    ));
+    assert_kernel_for_masp_diagnostic(&mut cmd);
 }
 
 /// A `.masp` kernel is registered with the host, so its procedures are reachable from a `syscall`.

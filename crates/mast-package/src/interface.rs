@@ -130,7 +130,7 @@ fn validate_semantic_components(components: &[String]) -> Result<(), Declaration
         decoded_len = decoded_len
             .checked_add(if index == 0 { 0 } else { 2 })
             .and_then(|len| len.checked_add(component.len()))
-            .filter(|len| *len <= u16::MAX as usize)
+            .filter(|len| u16::try_from(*len).is_ok())
             .ok_or(PathError::TooLong { max: u16::MAX as usize })?;
     }
     for namespace in namespaces {

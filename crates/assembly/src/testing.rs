@@ -488,7 +488,7 @@ impl TestContext {
 
     /// Add the modules of `library` to the [Assembler] constructed by this context.
     #[track_caller]
-    pub fn add_library(&mut self, package: Arc<miden_mast_package::Package>) -> Result<(), Report> {
+    pub fn add_library(&mut self, package: Arc<Package>) -> Result<(), Report> {
         let naming = self.fixture_namespace.admit_package(&package)?;
         self.assembler.link_package(package, miden_project::Linkage::Dynamic, naming)
     }
@@ -549,7 +549,7 @@ impl TestContext {
         version: Option<&str>,
         root: Box<Module>,
         support: impl IntoIterator<Item = Box<Module>>,
-    ) -> Result<Box<miden_mast_package::Package>, Report> {
+    ) -> Result<Box<Package>, Report> {
         self.assemble_library_with_fixture(name, version, root, support)
             .map(|(package, _)| package)
     }
@@ -810,7 +810,7 @@ mod package_features {
         pub fn project_assembler_for_path<'a>(
             &'a mut self,
             manifest_path: impl AsRef<std::path::Path>,
-        ) -> Result<crate::ProjectAssembler<'a, TestRegistry>, Report> {
+        ) -> Result<ProjectAssembler<'a, TestRegistry>, Report> {
             let mut assembler =
                 self.assembler().for_project_at_path(manifest_path, &mut self.registry)?;
             configure_project_fixture(&mut assembler);
@@ -820,7 +820,7 @@ mod package_features {
         pub fn project_assembler<'a>(
             &'a mut self,
             project: Arc<miden_project::Package>,
-        ) -> Result<crate::ProjectAssembler<'a, TestRegistry>, Report> {
+        ) -> Result<ProjectAssembler<'a, TestRegistry>, Report> {
             let mut assembler = self.assembler().for_project(project, &mut self.registry)?;
             configure_project_fixture(&mut assembler);
             Ok(assembler)

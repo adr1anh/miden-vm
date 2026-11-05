@@ -199,7 +199,7 @@ fn all_truncations_counts_versions_and_trailing_bytes_precede_policy() {
         assert!(PackageNaming::decode_v1(&bad, &profile, &context, limits()).is_err());
         assert_no_policy(&profile);
     }
-    let mut bad = bytes.clone();
+    let mut bad = bytes;
     bad.push(0);
     let profile = Profile::default();
     assert!(matches!(

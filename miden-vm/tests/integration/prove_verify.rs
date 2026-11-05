@@ -14,8 +14,8 @@ use miden_utils_testing::{
     stack_inputs_from_ints,
 };
 use miden_vm::{
-    DefaultHost, ExecutionOptions, FastProcessor, HashFunction, ProgramInfo, Prover, StackInputs,
-    StackOutputs, VerificationOutcome, Verifier, advice::AdviceInputs,
+    DefaultHost, ExecutionOptions, FastProcessor, HashFunction, Prover, StackInputs,
+    VerificationOutcome, Verifier, advice::AdviceInputs,
 };
 
 /// Applies the integration tests' policy to all STARK components in a verification outcome.
@@ -62,7 +62,8 @@ fn assert_prove_verify(
     .expect("processor initialization failed")
     .execute_for_proving_sync(&program, named.environment.execution(), &mut host)
     .expect("execution failed");
-    let stack_outputs = *witness.claim().stack_outputs();
+    let claim = witness.claim();
+    let stack_outputs = *claim.stack_outputs();
     let proof = Prover::new().with_hash_fn(hash_fn).prove_full(witness).expect("Proving failed");
 
     println!("Proof generated successfully!");
@@ -71,11 +72,10 @@ fn assert_prove_verify(
     }
 
     if verify_recursively {
-        assert_recursive_verify(program.to_info(), stack_inputs, stack_outputs, &proof);
+        assert_recursive_verify(&claim, &proof);
     }
 
     println!("Verifying proof...");
-    let claim = ExecutionClaim::from_program_info(program.into(), stack_inputs, stack_outputs);
     let outcome = Verifier::new().verify(&claim, &proof).expect("Verification failed");
     assert!(outcome.is_complete());
 
@@ -85,15 +85,9 @@ fn assert_prove_verify(
     );
 }
 
-fn assert_recursive_verify(
-    program_info: ProgramInfo,
-    stack_inputs: StackInputs,
-    stack_outputs: StackOutputs,
-    proof: &ExecutionProof,
-) {
-    let claim = ExecutionClaim::from_program_info(program_info, stack_inputs, stack_outputs);
+fn assert_recursive_verify(claim: &ExecutionClaim, proof: &ExecutionProof) {
     let verifier_root = CoreLibrary::default().vm_recursive_verifier_root();
-    let verifier_inputs = generate_request_inputs(verifier_root, proof, &claim)
+    let verifier_inputs = generate_request_inputs(verifier_root, proof, claim)
         .expect("recursive verifier request construction failed");
 
     let source = "
@@ -211,13 +205,12 @@ fn test_keccak_precompile_wrapper_prove_verify_final() {
     .expect("processor initialization failed")
     .execute_for_proving_sync(&program, named.environment.execution(), &mut host)
     .expect("failed to execute Keccak precompile program");
-    let stack_outputs = *witness.claim().stack_outputs();
+    let claim = witness.claim();
     let proof = Prover::new()
         .prove_full(witness)
         .expect("failed to prove Keccak precompile execution");
 
     assert!(matches!(proof.precompile(), miden_vm::PrecompileStatus::Proven(_)));
-    let claim = ExecutionClaim::from_program_info(program.into(), stack_inputs, stack_outputs);
     let outcome = Verifier::new().verify(&claim, &proof).expect("Verification failed");
     assert!(outcome.is_complete());
     assert_eq!(outcome.outstanding_precompile_root(), None);
@@ -334,7 +327,7 @@ fn test_eidos_recursive_verify_with_precompile_requests() {
     .expect("processor initialization failed")
     .execute_for_proving_sync(&program, named.environment.execution(), &mut host)
     .expect("execution failed");
-    let stack_outputs = *witness.claim().stack_outputs();
+    let claim = witness.claim();
     let proof = Prover::new()
         .with_hash_fn(HashFunction::Eidos)
         .prove_full(witness)
@@ -344,9 +337,8 @@ fn test_eidos_recursive_verify_with_precompile_requests() {
     assert!(matches!(proof.precompile(), miden_vm::PrecompileStatus::Proven(_)));
     assert_ne!(proof.vm().precompile_root, miden_core::deferred::TRUE_DIGEST);
 
-    assert_recursive_verify(program.to_info(), stack_inputs, stack_outputs, &proof);
+    assert_recursive_verify(&claim, &proof);
 
-    let claim = ExecutionClaim::from_program_info(program.into(), stack_inputs, stack_outputs);
     let outcome = Verifier::new().verify(&claim, &proof).expect("Verification failed");
     assert!(outcome.is_complete());
 }
@@ -359,15 +351,16 @@ mod prover_api_lifecycle {
 
     use miden_assembly::{Assembler, DefaultSourceManager};
     use miden_core::{
-        Felt, Word, ZERO,
+        Felt, ONE, Word, ZERO,
         deferred::{Node, PrecompileWitnessEntry, deferred_chunks_frame},
+        program::{EnvironmentRoot, ExecutionDescriptor, ProcedureKey},
     };
     use miden_precompiles::{UintDomain, UintPrecompile};
     use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
     use miden_vm::{
         DefaultHost, ExecutionClaim, ExecutionOptions, ExecutionProof, ExecutionWitness,
         FastProcessor, HashFunction, PrecompileLimits, PrecompileProof, PrecompileStatus,
-        PrecompileWitness, Program, Prover, ProverError, StackInputs, StackOutputs, StarkProof,
+        PrecompileWitness, Prover, ProverError, StackInputs, StackOutputs, StarkProof,
         VerificationError, VerificationOutcome, Verifier, advice::AdviceInputs, prove_sync,
     };
 
@@ -483,13 +476,12 @@ mod prover_api_lifecycle {
     }
 
     fn assert_complete(
-        program: &Program,
+        execution_descriptor: ExecutionDescriptor,
         stack_inputs: StackInputs,
         stack_outputs: StackOutputs,
         proof: &ExecutionProof,
     ) {
-        let claim =
-            ExecutionClaim::from_program_info(program.to_info(), stack_inputs, stack_outputs);
+        let claim = ExecutionClaim::new(execution_descriptor, stack_inputs, stack_outputs);
         let outcome = Verifier::new()
             .verify(&claim, proof)
             .expect("complete execution proof should verify");
@@ -507,6 +499,10 @@ mod prover_api_lifecycle {
         let program = assemble("begin push.1 drop end");
         let witness = execute(&program);
         let claim = witness.claim();
+        assert_eq!(
+            claim.execution_descriptor(),
+            program.named.environment.execution().descriptor(),
+        );
         let (vm_witness, precompile_witness) = witness.into_parts();
         assert!(precompile_witness.is_none());
 
@@ -520,6 +516,35 @@ mod prover_api_lifecycle {
             .verify(&claim, &proof)
             .expect("direct VM witness proof should verify");
         assert!(outcome.is_complete());
+
+        // Reuse the ordinary-only proof to check every coordinate of the caller's expected claim.
+        // Changing an entry key or environment root must fail even without a syscall or deferred
+        // request; changing either stack must likewise fail with the original descriptor intact.
+        for (field, range) in [
+            ("entry key", 0..4),
+            ("environment root", 4..8),
+            ("inputs", 8..24),
+            ("outputs", 24..40),
+        ] {
+            for coordinate in range {
+                let mut elements = claim.to_elements();
+                elements[coordinate] += ONE;
+                let changed = ExecutionClaim::new(
+                    ExecutionDescriptor::new(
+                        ProcedureKey::new(Word::new(elements[0..4].try_into().unwrap())),
+                        EnvironmentRoot::new(Word::new(elements[4..8].try_into().unwrap())),
+                    ),
+                    StackInputs::new(&elements[8..24]).unwrap(),
+                    StackOutputs::new(&elements[24..40]).unwrap(),
+                );
+                assert_ne!(changed, claim, "{field} coordinate {coordinate} must change");
+                let result = Verifier::new().verify(&changed, &proof);
+                assert!(
+                    matches!(result, Err(VerificationError::StarkVerificationError(..))),
+                    "ordinary proof must reject changed {field} coordinate {coordinate}: {result:?}",
+                );
+            }
+        }
     }
 
     #[test]
@@ -574,13 +599,13 @@ mod prover_api_lifecycle {
             // Parallel proof-of-work grinding may select different valid witnesses, so verify both
             // proofs instead of requiring byte-identical encodings.
             assert_complete(
-                &program.named.program,
+                program.named.environment.execution().descriptor(),
                 stack_inputs,
                 buffered_outputs,
                 &buffered_proof,
             );
             assert_complete(
-                &program.named.program,
+                program.named.environment.execution().descriptor(),
                 stack_inputs,
                 overlapped_outputs,
                 &overlapped_proof,

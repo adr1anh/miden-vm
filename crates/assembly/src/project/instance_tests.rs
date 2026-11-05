@@ -261,7 +261,7 @@ fn same_source_pinned_instances_keep_exact_keys_code_pool_and_runtime_records_co
         assert_eq!(cold.package.to_bytes(), reloaded.package.to_bytes());
         assert_eq!(cold.naming, reloaded.naming);
 
-        let root = assembler.dependency_graph.get(assembler.dependency_graph.root()).unwrap();
+        let root = assembler.dependency_graph.get(*assembler.dependency_graph.root()).unwrap();
         let local = root
             .dependencies
             .iter()
@@ -275,7 +275,7 @@ fn same_source_pinned_instances_keep_exact_keys_code_pool_and_runtime_records_co
         write(&temp.path().join("dep/mod.masm"), "pub proc run push.9 drop end\n");
         let error = assembler
             .resolve_dependency_package(
-                &local.dependency,
+                local.dependency,
                 "release",
                 &mut SourcePackageCache::new(),
                 local.binding.as_ref(),

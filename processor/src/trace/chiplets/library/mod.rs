@@ -25,7 +25,7 @@ use miden_core::{
 
 use crate::{
     ExecutionError, Felt, ONE, Word, ZERO,
-    environment::{OpeningOccurrence, ResolutionSession, SessionBinding},
+    environment::{OpeningId, OpeningOccurrence, ResolutionSession, SessionBinding},
     trace::limits::MAX_TRACE_LEN,
 };
 
@@ -51,7 +51,7 @@ impl<'a> LibraryTrace<'a> {
         if occurrences.is_empty()
             || occurrences.len() != totals.occurrences
             || totals.root_seed_count() != 1
-            || ledger.root().map(|id| id.index()) != Some(0)
+            || ledger.root().map(OpeningId::index) != Some(0)
             || ledger.expected_root() != session.descriptor().environment_root()
             || occurrences[0].commitment() != session.descriptor().environment_root()
             || occurrences[0].namespace() != Namespace::initial()
@@ -251,7 +251,7 @@ fn validate_occurrence(
                 .selected_children()
                 .get(parent.child_slot())
                 .and_then(|id| *id)
-                .map(|id| id.index())
+                .map(OpeningId::index)
                 != Some(index)
         {
             return Err(inconsistent());
@@ -377,7 +377,7 @@ fn visit_object<'a>(
 
 fn visit_list(
     children: &[EnvironmentRoot],
-    selected: &[Option<crate::environment::OpeningId>],
+    selected: &[Option<OpeningId>],
     namespace: Namespace,
     depth: usize,
     commitment: EnvironmentRoot,
@@ -453,7 +453,7 @@ fn pair(
     Ok((a, b))
 }
 
-fn selection(selected: &[Option<crate::environment::OpeningId>], slot: usize) -> Felt {
+fn selection(selected: &[Option<OpeningId>], slot: usize) -> Felt {
     let lo = selected.get(slot).is_some_and(Option::is_some);
     let hi = selected.get(slot + 1).is_some_and(Option::is_some);
     Felt::from_u8(u8::from(lo) + 2 * u8::from(hi))

@@ -5,6 +5,39 @@ pub(crate) mod preprocessed;
 
 pub mod ace;
 
+#[cfg(test)]
+fn canonical_setup_statement() -> miden_stark::air::Statement<
+    miden_core::Felt,
+    miden_core::field::QuadFelt,
+    miden_air::vm::MidenMultiAir,
+> {
+    use miden_air::vm::{MidenMultiAir, PublicInputs};
+    use miden_core::{
+        Felt, Word,
+        program::{
+            EnvironmentRoot, ExecutionClaim, ExecutionDescriptor, ProcedureKey, StackInputs,
+            StackOutputs,
+        },
+    };
+    use miden_stark::air::Statement;
+
+    let word = |start: u32| Word::new(core::array::from_fn(|i| Felt::from_u32(start + i as u32)));
+    let claim = ExecutionClaim::new(
+        ExecutionDescriptor::new(ProcedureKey::new(word(1)), EnvironmentRoot::new(word(5))),
+        StackInputs::new(&[Felt::from_u32(9)]).unwrap(),
+        StackOutputs::new(&[Felt::from_u32(10)]).unwrap(),
+    );
+    let inputs = PublicInputs::from_claim(&claim, word(11));
+    let (groups, auxiliary) = inputs.to_air_inputs();
+    assert_eq!(
+        groups.iter().map(alloc::vec::Vec::len).collect::<alloc::vec::Vec<_>>(),
+        [36, 4, 0, 0]
+    );
+    assert_eq!(auxiliary.len(), 4);
+    Statement::new(MidenMultiAir::new(), groups.into_iter().enumerate().collect(), auxiliary)
+        .expect("canonical VM statement")
+}
+
 pub mod config {
     use miden_core::program::domain::STARK_TRANSCRIPT;
     pub use miden_stark::{
@@ -19,14 +52,10 @@ pub mod config {
 
     #[cfg(test)]
     mod tests {
-        use alloc::vec;
-
-        use miden_air::vm::{MidenMultiAir, config};
-        use miden_air_definitions::vm::NUM_PUBLIC_VALUES;
+        use miden_air::vm::config;
         use miden_core::{Felt, field::QuadFelt};
         use miden_stark::{
             Preprocessed, StarkConfig,
-            air::Statement,
             config::{blake3_256_config, keccak_config},
             lmcs::Lmcs,
         };
@@ -38,12 +67,7 @@ pub mod config {
         fn canonical_setup_commitment<SC: StarkConfig<Felt, QuadFelt>>(
             config: &SC,
         ) -> <SC::Lmcs as Lmcs>::Commitment {
-            let statement = Statement::<Felt, QuadFelt, MidenMultiAir>::new(
-                MidenMultiAir::new(),
-                vec![(0, vec![Felt::ZERO; NUM_PUBLIC_VALUES])],
-                vec![],
-            )
-            .expect("canonical VM statement");
+            let statement = super::super::canonical_setup_statement();
             Preprocessed::build(&statement, config).expect("fixed And8 setup").commitment()
         }
 

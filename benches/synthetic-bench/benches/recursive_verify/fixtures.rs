@@ -12,7 +12,7 @@ use miden_core::{
     advice::AdviceInputs,
     crypto::hash::Blake3_256,
     field::QuotientMap,
-    program::ExecutionClaim,
+    program::{ExecutionClaim, ExecutionDescriptor},
     proof::{PrecompileProof, PrecompileStatus},
     serde::{Deserializable, Serializable},
     utils::to_hex,
@@ -23,8 +23,8 @@ use miden_processor::{DefaultHost, ExecutionOptions, FastProcessor};
 use miden_utils_testing::librarytree::{NamedProgram, assemble_fixture_program, trace_limits};
 use miden_verifier::Verifier;
 use miden_vm::{
-    Assembler, ExecutionProof, PrecompileWitness, ProgramInfo, Prover, StackInputs, StackOutputs,
-    prove_sync, trace::build_trace,
+    Assembler, ExecutionProof, PrecompileWitness, Prover, StackInputs, StackOutputs, prove_sync,
+    trace::build_trace,
 };
 use miden_vm_precompiles_bench::{PrecompileFixture, PrecompileWorkload};
 use miden_vm_stark::recursive::RecursiveVerifierInputs;
@@ -88,7 +88,7 @@ fn load_cached_tx_proof(
     cache_dir: &Path,
     proof_index: usize,
     cache_key: &str,
-    program_info: &ProgramInfo,
+    descriptor: ExecutionDescriptor,
     stack_inputs: StackInputs,
 ) -> Option<(StackOutputs, ExecutionProof)> {
     let (proof_path, outputs_path) = tx_proof_cache_paths(cache_dir, proof_index, cache_key);
@@ -143,8 +143,7 @@ fn load_cached_tx_proof(
         },
     };
 
-    let claim =
-        ExecutionClaim::from_program_info(program_info.clone(), stack_inputs, stack_outputs);
+    let claim = ExecutionClaim::new(descriptor, stack_inputs, stack_outputs);
     match Verifier::new().verify(&claim, &proof) {
         Ok(outcome) if outcome.is_complete() => Some((stack_outputs, proof)),
         Ok(_) => {
@@ -372,7 +371,7 @@ pub(super) fn load_tx_fixtures(
                     config.tx_proof_cache_dir(),
                     proof_index,
                     proof_cache_key.as_str(),
-                    &program_info,
+                    fixture.program.environment.execution().descriptor(),
                     stack_inputs,
                 ) {
                 (stack_outputs, proof, "hit")
@@ -393,8 +392,8 @@ pub(super) fn load_tx_fixtures(
                     "recursive_verify fixture at proof index {proof_index} emits deferred proof data; \
                      this benchmark expects precompile-free fixtures"
                 );
-                let claim = ExecutionClaim::from_program_info(
-                    program_info.clone(),
+                let claim = ExecutionClaim::new(
+                    fixture.program.environment.execution().descriptor(),
                     stack_inputs,
                     stack_outputs,
                 );
@@ -448,8 +447,8 @@ pub(super) fn recursive_proof_advice(
     fixture: &TxProofFixture,
     verifier_root: Word,
 ) -> RecursiveProofAdvice {
-    let claim = ExecutionClaim::from_program_info(
-        fixture.fixture.program.program.to_info(),
+    let claim = ExecutionClaim::new(
+        fixture.fixture.program.environment.execution().descriptor(),
         fixture.stack_inputs,
         fixture.stack_outputs,
     );

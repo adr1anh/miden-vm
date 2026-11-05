@@ -50,13 +50,8 @@ fn write_program(dir: &Path, source: &str) -> ProgramFixture {
     fixture
 }
 
-// PR12 debt: the verifier still accepts the legacy program-hash statement. Keep these complete,
-// deferred and security assertions until its caller-expected K_entry/R_E contract is migrated.
 fn verify_command(dir: &Path, program: &ProgramFixture) -> Command {
-    let mut command = bin_under_test(dir);
-    let hash: [u8; 32] = program.named.program.hash().into();
-    command.args(["verify", "--proof", "program.proof", "--program-hash", &hex::encode(hash)]);
-    command
+    program.verify_command(dir, "program.proof")
 }
 
 fn write_proof(dir: &Path, proof: &ExecutionProof) {
@@ -107,10 +102,7 @@ fn cli_precompile_policy_errors_precede_input_loading() {
             "1",
         ]]) {
             let mut command = if action == "verify" {
-                let mut command = bin_under_test(dir.path());
-                command.arg(action);
-                command.args(["--proof", "missing.proof", "--program-hash", "00"]);
-                command
+                program.verify_command(dir.path(), "missing.proof")
             } else {
                 program.command(dir.path(), action, "missing.masm")
             };
@@ -152,6 +144,12 @@ fn cli_private_precompile_witness_export_requires_opt_in() {
         .stdout(predicate::str::contains("Precompile witness: exported").not());
     // The default artifact carries a precompile STARK, with no portable witness to disclose.
     assert!(matches!(read_proof(dir.path()).precompile(), PrecompileStatus::Proven(_)));
+    fs::write(dir.path().join("public.inputs"), r#"{"operand_stack":[]}"#).unwrap();
+    verify_command(dir.path(), &program)
+        .args(["--input", "public.inputs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Proof status: complete"));
 
     program
         .command(dir.path(), "prove", "program.masm")
@@ -169,6 +167,11 @@ fn cli_private_precompile_witness_export_requires_opt_in() {
         entry,
         PrecompileWitnessEntry::Data { chunks, .. } if chunks.contains(&private_limbs)
     )));
+    verify_command(dir.path(), &program)
+        .args(["--input", "public.inputs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Proof status: deferred"));
 }
 
 #[test]

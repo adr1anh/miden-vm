@@ -591,7 +591,7 @@ fn verifier_memory_layout_is_complete_dense_and_disjoint() {
     use miden_assembly::{
         ModuleParser, Path as MasmPath, PathBuf as MasmPathBuf,
         ast::{
-            ConstantExpr, Ident,
+            ConstantExpr, Ident, Import, Module,
             constants::{
                 ConstEnvironment, ConstEvalError,
                 eval::{self, CachedConstantValue},
@@ -732,15 +732,14 @@ fn verifier_memory_layout_is_complete_dense_and_disjoint() {
         // Twelve live position cells, followed by one ID per proof position.
         ("pvm/layout.masm", "PROOF_ORDER_POSITIONS_PTR", 0, Until("PROOF_ORDER_IDS_PTR")),
         ("pvm/layout.masm", "PROOF_ORDER_IDS_PTR", 0, Fixed(12)),
-        ("vm/layout.masm", "NUM_KERNEL_PROCEDURES_PTR", 0, Fixed(1)),
-        ("vm/layout.masm", "CONTROL_ALIGNMENT_PADDING_PTR", 0, Fixed(3)),
+        ("vm/layout.masm", "CONTROL_ALIGNMENT_PADDING_PTR", 0, Fixed(4)),
         ("vm/layout.masm", "BUS_GAMMA_PTR", 0, Fixed(4)),
         ("vm/layout.masm", "C_TOTAL_PTR", 0, Fixed(4)),
         ("vm/layout.masm", "CLAIM_COMMITMENT_PTR", 0, Fixed(4)),
         ("vm/layout.masm", "CLAIM_PTR", 0, Fixed(40)),
         ("vm/layout.masm", "BOUNDARY_ANCHOR_PADDING_PTR", 0, Fixed(4)),
         ("vm/layout.masm", "BOUNDARY_INPUTS_PTR", 0, Fixed(8)),
-        ("vm/layout.masm", "KERNEL_WITNESS_PTR", 0, Fixed(1020)),
+        ("vm/layout.masm", "CONTROL_RESERVED_PTR", 0, Fixed(1020)),
         // Out-of-domain scatter table: row base, per-position dispatch pairs, and the `pipe_k`
         // digests, followed by the two proof-order maps inside the same 64-felt reserve. Sits
         // immediately after the VM control frame, so it is outside the tiling above.
@@ -784,7 +783,92 @@ fn verifier_memory_layout_is_complete_dense_and_disjoint() {
     }
 
     struct LocalConstantEnv<'a> {
+        asm_root: &'a Path,
         constants: BTreeMap<String, &'a ConstantExpr>,
+        imports: BTreeMap<String, (String, Option<String>)>,
+        imported_constants: BTreeMap<String, ConstantExpr>,
+        resolving_imports: Vec<String>,
+    }
+
+    impl<'a> LocalConstantEnv<'a> {
+        fn new(module: &'a Module, asm_root: &'a Path, resolving_imports: Vec<String>) -> Self {
+            Self {
+                asm_root,
+                constants: module
+                    .constants()
+                    .map(|constant| (constant.name().as_str().to_string(), &constant.value))
+                    .collect(),
+                imports: module
+                    .imports()
+                    .map(|import| {
+                        let source_name = match import {
+                            Import::Item(import) => Some(import.source_name().as_str().to_string()),
+                            Import::Module(_) => None,
+                        };
+                        (
+                            import.local_name().as_str().to_string(),
+                            (import.module_path().to_string(), source_name),
+                        )
+                    })
+                    .collect(),
+                imported_constants: BTreeMap::new(),
+                resolving_imports,
+            }
+        }
+
+        /// Evaluate a foreign constant in its declaring module's scope, never the caller's.
+        /// Only source modules beneath the audited core library are available to this audit.
+        fn imported_constant(
+            &mut self,
+            module_path: &str,
+            name: &str,
+        ) -> Result<Option<CachedConstantValue<'_>>, ConstEvalError> {
+            let module_path = module_path.trim_start_matches("::");
+            let key = format!("{module_path}::{name}");
+            if !self.imported_constants.contains_key(&key) {
+                assert!(
+                    !self.resolving_imports.contains(&key),
+                    "cyclic imported constant in verifier-memory audit: {key}"
+                );
+                assert!(
+                    self.resolving_imports.len() < 64,
+                    "imported constant dependency depth exceeds the verifier-memory audit limit: {key}"
+                );
+                let relative = module_path
+                    .strip_prefix("miden::core::")
+                    .unwrap_or_else(|| {
+                        panic!("constant import is outside the audited library: {key}")
+                    })
+                    .replace("::", "/");
+                let source = self.asm_root.join(relative);
+                let file = source.with_extension("masm");
+                let file = if file.is_file() { file } else { source.join("mod.masm") };
+                let module_path: MasmPathBuf =
+                    module_path.parse().expect("valid import module path");
+                let module = ModuleParser::default()
+                    .parse_file(
+                        Some(&module_path),
+                        &file,
+                        Arc::new(DefaultSourceManager::default()),
+                    )
+                    .unwrap_or_else(|err| panic!("failed to parse {}: {err}", file.display()));
+                let mut resolving_imports = self.resolving_imports.clone();
+                resolving_imports.push(key.clone());
+                let mut env = LocalConstantEnv::new(&module, self.asm_root, resolving_imports);
+                let constant = module
+                    .constants()
+                    .find(|constant| constant.name().as_str() == name)
+                    .unwrap_or_else(|| panic!("imported constant is not declared: {key}"));
+                assert!(constant.visibility.is_public(), "imported constant is private: {key}");
+                let value = eval::expr(&constant.value, &mut env)?;
+                assert!(
+                    !matches!(value, ConstantExpr::Var(_) | ConstantExpr::BinaryOp { .. }),
+                    "{key} has an unevaluated imported constant expression"
+                );
+                self.imported_constants.insert(key.clone(), value);
+            }
+            Ok(self.imported_constants.get(&key).map(CachedConstantValue::Miss))
+        }
     }
 
     impl ConstEnvironment for LocalConstantEnv<'_> {
@@ -795,25 +879,47 @@ fn verifier_memory_layout_is_complete_dense_and_disjoint() {
         }
 
         fn get(&mut self, name: &Ident) -> Result<Option<CachedConstantValue<'_>>, Self::Error> {
-            Ok(self.constants.get(name.as_str()).copied().map(CachedConstantValue::Miss))
+            if let Some(constant) = self.constants.get(name.as_str()).copied() {
+                return Ok(Some(CachedConstantValue::Miss(constant)));
+            }
+            let Some((module_path, Some(source_name))) = self.imports.get(name.as_str()).cloned()
+            else {
+                return Ok(None);
+            };
+            self.imported_constant(&module_path, &source_name)
         }
 
         fn get_by_path(
             &mut self,
             path: Span<&MasmPath>,
         ) -> Result<Option<CachedConstantValue<'_>>, Self::Error> {
-            match path.as_ident() {
-                Some(name) => self.get(&name),
-                None => Ok(None),
+            if let Some(name) = path.as_ident() {
+                return self.get(&name);
             }
+            let path = path.to_string();
+            let Some((prefix, name)) = path.split_once("::") else {
+                return Ok(None);
+            };
+            if prefix == "self" {
+                let name = Ident::new(name).expect("valid local constant name");
+                return self.get(&name);
+            }
+            if let Some((module_path, None)) = self.imports.get(prefix).cloned() {
+                return self.imported_constant(&module_path, name);
+            }
+            let Some((module_path, name)) = path.rsplit_once("::") else {
+                return Ok(None);
+            };
+            self.imported_constant(module_path, name)
         }
     }
 
     /// Semantically evaluated fixed-memory declarations in a MASM module.
     ///
     /// MASM constants may be expressions (`const NEW_PTR = OLD_PTR + 1`), so this uses
-    /// the semantic constant evaluator rather than text parsing. Anything numeric that remains
-    /// unresolved fails closed instead of escaping the manifest.
+    /// the semantic constant evaluator, including imported source constants, rather than text
+    /// parsing. Anything numeric that remains unresolved fails closed instead of escaping the
+    /// manifest.
     /// Relation layout modules are address-only, so every numeric constant in them is included.
     /// Elsewhere, pointer-named constants are included at any address; other numeric constants
     /// are treated as addresses only in the verifier's high 32-bit address band.
@@ -827,12 +933,8 @@ fn verifier_memory_layout_is_complete_dense_and_disjoint() {
             .parse_file(Some(&module_path), path, Arc::new(DefaultSourceManager::default()))
             .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()));
 
-        let mut env = LocalConstantEnv {
-            constants: module
-                .constants()
-                .map(|constant| (constant.name().as_str().to_string(), &constant.value))
-                .collect(),
-        };
+        let asm_root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/asm"));
+        let mut env = LocalConstantEnv::new(&module, asm_root, Vec::new());
         let mut declarations: Vec<_> = module
             .constants()
             .filter_map(|constant| {
@@ -1131,14 +1233,24 @@ fn verifier_memory_layout_is_complete_dense_and_disjoint() {
     assert_tiled_frame(&relation_region_refs, "vm", VM_ACE_READ_START, PVM_FRAME_START);
     assert_tiled_frame(&relation_region_refs, "pvm", PVM_FRAME_START, pvm_frame_end);
 
-    let kernel_witness = relation_regions
+    let reserved_control = relation_regions
         .iter()
-        .find(|region| region.source == "vm/layout.masm" && region.name == "KERNEL_WITNESS_PTR")
-        .expect("VM kernel witness region is declared");
+        .find(|region| region.source == "vm/layout.masm" && region.name == "CONTROL_RESERVED_PTR")
+        .expect("VM reserved control-frame region is declared");
     assert_eq!(
-        kernel_witness.hi - kernel_witness.lo + 1,
-        (miden_core::program::KernelDescriptor::MAX_NUM_PROCEDURES * 4) as u64,
-        "the VM kernel witness must hold the maximum number of procedure digests"
+        reserved_control.hi - reserved_control.lo + 1,
+        1020,
+        "retiring kernel-sidecar authority must preserve the control-frame memory anchors"
+    );
+    assert!(
+        relation_regions.iter().all(|region| {
+            region.source != "vm/layout.masm"
+                || !matches!(
+                    region.name.as_str(),
+                    "NUM_KERNEL_PROCEDURES_PTR" | "KERNEL_WITNESS_PTR"
+                )
+        }),
+        "the VM frame must not assign legacy kernel-sidecar metadata any authority"
     );
 }
 

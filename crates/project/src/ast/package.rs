@@ -425,7 +425,7 @@ impl ProjectFile {
                                 .source_mount
                                 .as_deref()
                                 .or(dep.source_mount.as_deref())
-                                .map(|mount| mount.resolve())
+                                .map(SourceMountSpec::resolve)
                                 .transpose()?;
                             let mut resolved =
                                 Dependency::new(dependency.name.clone(), version, linkage)
