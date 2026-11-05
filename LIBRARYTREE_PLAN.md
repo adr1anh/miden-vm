@@ -16,7 +16,7 @@ Read the linked design chapters when implementing their contracts. This plan sel
 
 ## Scope and invariants
 
-Breaking changes are accepted. Implement one new callable/statement model and rebuild its consumers; do not create a permanent dual-target executor or digest fallback to ease the transition.
+Breaking changes are accepted subject to D2: existing MASM programs must remain usable after rebuilding, with digest-shaped invocation targets interpreted as keys. New serialized MAST formats are allowed. Implement one new callable/statement model and rebuild its consumers; do not create a permanent dual-target executor or runtime digest fallback to ease the transition.
 
 1. **Environment authority:** execution is defined by immutable `(K_entry, R_E, N_kernel)`. Entry and every retained runtime invocation authenticate a binding in R_E. Code availability at implementation root D does not authorize execution. The environment root never switches on account/library calls.
 2. **Uniform callable keys:** EXEC/CALL/SYSCALL and dynamic targets use ProcedureKey K; `procref` produces K. Separate newtypes distinguish K, D, R_E, N and label commitment L. Structural JOIN/SPLIT/LOOP/SPAN and `ExternalNode(D)` remain structural code commitments. Immediate keyed nodes have no callee child.
@@ -33,7 +33,9 @@ Included: core identities/MAST, processor and replay, packed AIR/proofs, assembl
 
 ## Workflow and completion rules
 
-The first goal commit contains this plan only. Subagents perform the main research, implementation and review work; the orchestrator owns integration, signed commits, branch transitions and acceptance. Assign an independent reviewer who did not implement the change. Subagents must not commit or switch branches unless the orchestrator explicitly delegates that responsibility.
+The first goal commit contains this plan only. Subagents perform the main research, implementation and review work; the orchestrator owns integration, signed commits, branch transitions and acceptance. Prefer fresh bounded agents (`fork_turns: none`) with explicit task/file ownership, applicable user/repository instructions and selected references. Assign an independent reviewer who did not implement the change. Subagents must not commit or switch branches unless the orchestrator explicitly delegates that responsibility.
+
+Use `LIBRARYTREE_CURRENT.md` for the current handoff, then read only the active PR and relevant invariant/spec sections it names. This plan remains the sole backlog/scope/dependency/acceptance authority, and its ledger/evidence owns durable completion. The brief is not a second status ledger. Routine source snapshots live in uncommitted `.scratch/librarytree/reference-cache/` with Page/date/SHA-256 provenance; superseded proposals/handoffs and raw artifacts are reference-only archives, not agent input. Preserve shared temporary sources for other readers.
 
 Use one local branch per proposed PR in a **linear stack**: PR NN has PR NN−1 as its Git parent/base, even when its semantic dependency list is shorter. Research and design can proceed in parallel according to semantic dependencies; shared-worktree edits must have clear ownership. Branch names below are exact defaults using the required `adr1anh/` prefix. PR 00 starts from the baseline. Keep incomplete/noncompiling units as an unsubmitted local stack with deferred checks recorded. **Do not create any GitHub PR, including a draft, until the user explicitly says to do so.** No push or publication is required to execute the local stack.
 
@@ -43,7 +45,7 @@ Choose many focused, reviewable commits as work proceeds; do not freeze commit c
 
 Local uncommitted scratch files are allowed. Stage explicit file paths for each intended commit so scratch files and unrelated work are not swept into it. When a material shared design, product, ABI, security, policy or scope decision is needed, stop the affected work and ask the user a concise, concrete question to resolve together. Continue independent preparation only while waiting; do not silently choose a scope or weaken a selected contract to proceed. Routine implementation choices remain delegated within the agreed contracts.
 
-Maintain root `PR_DESCRIPTION.md` as the rolling description of the current PR. Before switching branches, finalize and commit it separately from implementation and plan changes. Describe only the final scope: problem/resulting behavior, stack base and semantic dependencies, checks passed/deferred with reasons, and material risks/open gates. Do not preserve abandoned approaches or use a passing happy path as completion evidence.
+Maintain root `PR_DESCRIPTION.md` for final branch review scope, never current-work discovery. Before switching branches, finalize and commit it separately from implementation and plan changes. Describe the problem/resulting behavior, stack base and semantic dependencies, checks passed/deferred with reasons, and material risks/open gates. Do not preserve abandoned approaches or use a passing happy path as completion evidence.
 
 The status ledger below is authoritative for progress. Allowed states are `planned`, `in-progress`, `implemented-awaiting-validation`, `complete`, and `blocked`. Add actual implementation commit SHAs and concrete test/capture/regeneration evidence. `complete` means its acceptance criteria are met; a branch with unrun required tests is `implemented-awaiting-validation`. Record exact external/decision blockers without guessing a policy to clear them.
 
@@ -79,7 +81,7 @@ Define distinct K/D/R_E/N/L types, typed label bytes, canonical environment obje
 
 Add EXEC control opcode 0x5f and target-only Exec/Call/SysCall nodes that hash K/mode without a structural callee. Replace dead callee-ID traversal assumptions directly. Preserve real structural External(D). Bump dense MAST 0.0.5 → 0.0.6 across safe/trusted/view/hashless/sparse readers/writers together.
 
-**Acceptance:** canonical round trips and malformed count/offset/version rejection; changing environment D leaves caller MAST unchanged; equal-D/different-K remains distinct; runtime recursion is representable and structural cycles reject. **Checks:** `cargo test -p miden-core --lib mast`; `cargo test -p miden-core --lib operations`; run affected fuzz smoke checks at final qualification with explicit bounds.
+**Acceptance:** canonical round trips and malformed count/offset/version rejection; changing environment D leaves caller MAST unchanged; equal-D/different-K remains distinct; runtime recursion is representable and structural cycles reject. Preserve existing MASM syntax through later lowering under D2; old serialized MAST compatibility is not required. **Checks:** `cargo test -p miden-core --lib mast`; `cargo test -p miden-core --lib operations`; run affected fuzz smoke checks at final qualification with explicit bounds.
 
 ### PR 03 Chiplet refactor and address ownership
 
@@ -99,7 +101,7 @@ Extract logical Controller-address handling and checked relocation/sentinel rule
 
 Separate canonical declarations and optional body availability; add validated NamespacePlan/interface-only artifact and explicit key/inline forms. Preserve exact-byte optional ABI metadata separately from tooling FunctionType. Do not invent placeholder D/forest or activate a partially migrated package9 executable. Reuse existing parsed Path components and core hashes.
 
-**Acceptance:** declaration-only Latest keys need no D; quoted `::`, exact Unicode bytes, typed labels and absent/present-empty ABI differ correctly; unknown versions/malformed homes reject; old bare digest syntax gets migration diagnostics. **Checks:** `make test-assembly-syntax`; `cargo test -p miden-mast-package --lib interface`; CST tests only if changed.
+**Acceptance:** declaration-only Latest keys need no D; quoted `::`, exact Unicode bytes, typed labels and absent/present-empty ABI differ correctly; unknown versions/malformed homes reject; existing name/path/word invocation syntax remains accepted, with digest-shaped words interpreted as keys under D2. Explicit inline opt-in is an optional extension. **Checks:** `make test-assembly-syntax`; `cargo test -p miden-mast-package --lib interface`; CST tests only if changed.
 
 ## Stage 2 Authenticated execution and relation
 
@@ -153,7 +155,7 @@ Extend the existing versioned execution witness with immutable descriptor, entry
 
 Split identity resolution from body supply, runtime reachability/SCCs from acyclic inline dependencies, and retain all public/helper/address-taken roots. Emit K for every retained invocation/procref; explicit inline alone composes a body. Activate validated namespaced package9 metadata and MAST0.0.6 together across trusted/safe readers, commitments and strip-debug. Replace root-centric Program/kernel reconstruction, root-call lowering and hardcoded `$kernel` authority rather than wrap them.
 
-**Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old callable formats reject and required metadata survives debug stripping. **Checks:** `make test-assembly test=namespaced_execution`; `cargo test -p miden-mast-package --lib package::serialization`; then `make test-assembly` and package lib tests after focused failures resolve.
+**Acceptance:** Latest-only declarations compile without D; caller hash stable across selected implementations; pinned-only self/helpers work; bundled/external supply preserves K; runtime recursion compiles/inline cycles reject; callback roots survive retention; malformed homes/relocations/old serialized callable formats reject and required metadata survives debug stripping. Existing MASM invocation/procref source rebuilds under D2, using K and real EXEC without digest fallback. **Checks:** `make test-assembly test=namespaced_execution`; `cargo test -p miden-mast-package --lib package::serialization`; then `make test-assembly` and package lib tests after focused failures resolve.
 
 ### PR 10 Revision-aware projects and code supply
 
@@ -233,12 +235,30 @@ Measure opening rows/compressions separately from invocation/context and Protoco
 
 **Checks after power guards:** repository `make exec`, `make exec-single`, `make format-check`, `make clippy`, `make test`, `make check-constraints`, `make check-pvm-proof-fixture`, `make test-masm-root-stability`; supported no_std surfaces including `cargo check -p miden-core -p miden-mast-package -p miden-assembly --no-default-features`; affected bounded fuzz/benchmark commands selected from the actual final changed graph. New test filters throughout this plan are provisional until registered test names exist; prefer the repository Make target where it supplies necessary features/stack settings. Resolve focused failures before broad suites, and repeat broad checks only for new changes/failures. Record exact commands/toolchains/features, commit SHAs and outcomes in the ledger/report. Verify deterministic regeneration with `git diff --exit-code` after intended generated changes are committed.
 
+## Resolved implementation decisions
+
+**D1 Environment-node preimage codec, agreed with the user on 2 November 2026:** own a VM v1
+record `version:u8=1 || kind:u8 || payload`, with Env=0, Mast=1, Data=2, Merkle=3, List=4.
+Fixed payload fields follow the selected hash-payload order and use existing canonical 32-byte
+Word encoding; Data's type is little-endian u32. List is a little-endian u32 child count followed
+by child words. Decoding requires exact input and a caller-supplied resource budget. This wire
+header/count encoding does not change the selected node hashes. Implement and test this codec
+separately from hash-only constructors. Protocol-specific codecs remain outside this decision.
+
+**D2 Existing MASM compatibility, clarified with the user on 2 November 2026:** existing MASM
+programs must keep working after rebuilding; serialized MAST files may use the new format.
+Preserve existing invocation/procref syntax, interpreting digest-shaped target words as keys.
+The new keyed execution semantics and optional explicit inline opt-in still apply. Do not retain
+runtime digest dispatch or infer an authenticated binding from code availability. Source syntax
+compatibility does not require preserving old child-ID nodes, serialized layouts or digest-based
+implementation lookup. Include existing source regressions in PRs 04/09 and final qualification.
+
 ## Open decisions and external gates
 
 | Gate | Required decision/evidence | Blocks |
 | --- | --- | --- |
-| Canonical cross-team wire contract | Confirm domain allocation collision check; Protocol/user/random wrappers; interface/release/resource codecs and full namespace provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
-| Frontend syntax and eligibility | Agree explicit key/inline grammar, fixed-body inline eligibility and migration diagnostics; source alias versus published alias versus wrapper semantics. | 04, 09 |
+| Canonical cross-team wire contract | VM node preimage codec is resolved in D1. Confirm remaining Protocol/user/random wrappers, interface/release/resource codecs and full namespace provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
+| Frontend syntax and eligibility | Preserve existing MASM name/path/word syntax under D2. Agree optional explicit key/inline extensions, fixed-body inline eligibility and diagnostics for genuinely invalid forms; source alias versus published alias versus wrapper semantics. | 04, 09 |
 | Private reusable-instance ABI | Freeze runtime-base handle transport, typed relative suffix/procref lowering and validation. C/D must remain identical across randomized user mounts; no implicit relocation or caller-derived namespace. | 11, private-instance acceptance |
 | Shared/fresh-context ABI | Specify supported value/pointer layouts, global/heap/function-table ownership, initialization and reentrancy for supported libraries. Namespace authentication supplies no RAM isolation. Do not guess a fresh-context-only/stateless-only scope. | 11, 13, final supported launch claim |
 | Protocol authority and admission | Agree canonical homes, user U reconstruction, root binding on public input stack, uniqueness checks, exact N_kernel authorization, release/resource admission and inclusion freshness evidence. | Protocol integration fixtures and release adoption |
@@ -255,7 +275,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | PR | Status | Implementation/plan commit SHA | Passed evidence | Deferred checks or blocker |
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
-| 01 Identities | planned | — | — | Wire allocation/codec gate |
+| 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | planned | — | — | Depends on 01 |
 | 03 Chiplet foundation | planned | — | — | Address/layout contract |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
@@ -271,3 +291,191 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
 | 15 API/CLI closure | planned | — | — | Depends on 08–14 |
 | 16 Qualification | planned | — | — | Entire stack and release gates |
+
+## Implementation evidence
+
+The domain audit found the selected environment/verifier allocations free in the current registry.
+Verifier configuration mounts require explicit forward-coordinate lexicographic ordering; existing
+`Word::Ord` compares coordinates in reverse and must not supply that canonical order. Add a vector
+that distinguishes those orders when implementing the configuration codec.
+
+### PR 01 Typed execution identities
+
+Commit `bf840bc6d` adds the five opaque Word roles and `ExecutionDescriptor`, reusing canonical
+Word serialization. An independent reviewer found no actionable issue. Existing Program and claim
+activation remain assigned to the later cutover.
+
+Passed on Rust 1.99.0 after successful AC/heavy-work guards:
+
+- `cargo test --locked -p miden-core --lib program::environment`: one test, including all truncated
+  lengths and a noncanonical value in each coordinate across all five roles.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --test public_api`: all three fixtures,
+  including rejection of an implementation root in the descriptor's procedure-key slot. The new
+  stderr was generated, inspected for the intended type mismatch, then verified without overwrite.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib -- -D warnings`.
+- `cargo +nightly-2026-10-09 fmt -p miden-core -- --check` and staged whitespace checks.
+
+### PR 01 Environment and verifier domains
+
+Commit `ee4e7f937` registers the eleven selected domains without activating the later claim or
+proof-request cutover. Independent review found no actionable issue. Frozen cryptographic vectors
+were produced with an independent portable reference checked against existing generic vectors;
+tests also compare literal IV/block framing to the production FeltSequence helper.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::domain`: five tests.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and whitespace checks.
+
+### PR 01 Built-in canonical labels
+
+Commit `6b27da605` adds retained Text/LibraryId/nonzero Revision preimages and ENV_LABEL hashing,
+reusing the existing LE32 packer. Independent review found no actionable issue. This slice does not
+complete label decoding, TypedId, environment objects or PR 01.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::label`:
+  five tests, including nine independent frozen vectors and allocation-boundary checks without
+  giant allocations.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- `cargo +nightly-2026-10-09 fmt -p miden-core -- --check` and staged whitespace checks.
+
+### PR 01 Exact labels and external TypedId validation
+
+Commit `3d389cf58` adds exact built-in decoding and explicit caller validation for opaque TypedIds,
+including a synthetic-codec frozen vector. No AccountId codec or unknown-codec recognition is
+assumed. Independent review found no actionable issue.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::label`:
+  all eleven tests, including malformed framing/payloads, EOF and callback validation boundaries.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Namespace and procedure-key derivation
+
+Commit `ed50330fc` adds allocation-free typed initial/child namespace and procedure-key helpers.
+Independent review found no actionable issue; frozen vectors cover direct and accumulated parents.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::tests`:
+  four tests, including three new derivation tests and the existing identity encoding test.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Owned environment object commitments
+
+Commit `eda3053b4` adds one owned EnvNode representation for all five commitments, reused by the
+following D1 codec slice. Independent review found no actionable issue. List flattening checks
+framing/layout bounds before fallible allocation; commitments confer no completeness or authority.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::object`:
+  five tests, including eleven frozen object cases and arithmetic-only allocation boundaries.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Exact budgeted D1 node codec
+
+Commit `27e100e10` implements the user-approved D1 record format on the same owned EnvNode.
+Independent review found no actionable issue. Whole-input budget checks prevent a valid prefix
+from hiding suffixes when BudgetedReader exhausts its budget; hashes remain unchanged.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::object::encoding`:
+  seven tests, including eleven frozen byte cases and malformed/budget/allocation boundaries.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Shared encoded-size preflight
+
+Commit `295809479` extracts allocation-free EnvNode::encoded_len and makes encoding delegate,
+preserving all size/layout/error semantics. Independent review found no actionable issue. The
+existing frozen-vector test checks all eleven expected lengths without another encoding path.
+
+Passed after successful AC/heavy-work guards: the seven focused codec tests, core Clippy
+(`--lib --tests -- -D warnings`), no-default-features check, pinned-nightly formatting and staged
+whitespace checks, using the exact commands in the preceding D1 evidence section.
+
+### PR 01 Bounded preimage storage
+
+Commit `8d0036dd7` adds explicit caller limits, internally committed owned-node storage and
+transactional insert preflight. Independent review found no actionable issue. Duplicate accepted
+work/bytes and retained List capacity/scratch are charged; this store does not certify completeness.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::builder`:
+  thirteen tests for exact/one-short limits, capacity, duplicate work, arithmetic and failure atomicity.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Complete bounded occurrence validation
+
+Commit `c67f3a963` adds consuming finish(root), immutable internally derived bindings and
+iterative per-occurrence traversal. Missing reachable preimages and duplicate keys reject;
+shared subtrees retain inherited namespaces at every occurrence. Independent review found no
+actionable issue. This optional local utility confers no authority or executable availability.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::environment::builder`:
+  thirty tests, including seventeen new completeness/uniqueness/occurrence/depth/work/storage cases.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Native verifier configuration
+
+Commit `d79a6c34c` adds immutable typed mounts/configuration and the v2 commitment with mandatory
+full N_kernel. Forward canonical-u64 sorting deliberately differs from Word::Ord; duplicate pairs
+reject while same-namespace distinct fragments remain subject to external disjointness checks.
+Independent review found no actionable issue. No claim/request/recursive activation is included.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::verifier`: nine tests,
+  including independently frozen complete 14/22/30-Felt preimages and ordering/mutation/boundaries.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+### PR 01 Identity derivation and shared-vector closure
+
+Commit `f02a64403` adds allocation-free typed verifier identity derivation with the exact
+12-Felt preimage and registered v1 domain. Commits `649bb327e` and `8152f9a34` move frozen
+expectations into `core/tests/fixtures/librarytree-vectors.txt`: 36 unique rows, with a small
+test-only parser and no production codec/dependency. Future MASM host tests can consume the
+same bytes/Felts/digests. All 32 previous environment/domain tests and production prefixes
+were preserved. Independent identity, acceptance and fixture reviews found no actionable issue.
+No MASM execution, recursive trust, claim/request cutover or root authority is claimed here.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program`: 86 tests, including
+  registry disjointness, all environment slices and twelve verifier tests.
+- After the final test-only verifier fixture migration:
+  `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --lib program::verifier`: twelve tests.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-core --test public_api`: all three
+  compile fixtures passed, including the D-versus-K compile failure.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-core --lib --tests -- -D warnings`:
+  passed again after the final fixture migration.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-core --no-default-features`.
+- Pinned-nightly core formatting and staged whitespace checks.
+
+PR 01 acceptance is complete. D2 governs the following MAST/toolchain work; its source-compatibility
+regressions remain PRs 04/09/final gates rather than an unimplemented PR 01 runtime claim.

@@ -14,8 +14,25 @@ pub use claim::{CLAIM_DOMAIN_TAG, ExecutionClaim, NUM_CLAIM_ELEMENTS, claim_comm
 
 pub mod domain;
 
+#[cfg(test)]
+mod test_vectors;
+
+mod environment;
+pub use environment::{
+    CanonicalLabel, EnvNode, EnvNodeError, EnvironmentBinding, EnvironmentBuildError,
+    EnvironmentBuildLimits, EnvironmentBuildResource, EnvironmentBuilder, EnvironmentRoot,
+    ExecutionDescriptor, ImplementationRoot, LabelCommitment, LabelError, Namespace, ProcedureKey,
+    ValidatedEnvironment,
+};
+
 mod request;
 pub use request::{PROOF_REQUEST_DOMAIN_TAG, proof_request_key};
+
+mod verifier;
+pub use verifier::{
+    VerifierConfiguration, VerifierConfigurationCommitment, VerifierConfigurationError,
+    VerifierIdentity, VerifierMount,
+};
 
 mod kernel;
 pub use kernel::{KERNEL_DOMAIN_TAG, KernelDescriptor, KernelError};
