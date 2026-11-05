@@ -1,0 +1,283 @@
+{
+  "started_utc": "2026-11-05T12:15:25.091447+00:00",
+  "implementation_commit": "4eeb5d2402b9bce315982b0acb04426fbabdd78d",
+  "base_commit": "8a42f4bac2fec49fd127de507e0ee2a3526c0f59",
+  "historical_timing_librarytree_commit": "18d4a347d96b63118e9c93af760f077d76493d52",
+  "historical_origin_next_commit": "00b12150715891582864d256ef51c5ea46bfb282",
+  "historical_archive": "/home/adrian/Dev/library-tree/miden-vm/.scratch/librarytree/archives/librarytree-evidence-2026-11-05.tar",
+  "profile": "optimized",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "platform": "Linux-7.1.13-401.asahi.fc44.aarch64+16k-aarch64-with-glibc2.43",
+  "cpu_affinity": [
+    4
+  ],
+  "cpu_capacity": "1024",
+  "runtime_environment": {
+    "RAYON_NUM_THREADS": "1",
+    "RUST_MIN_STACK": "16777216",
+    "LC_ALL": "C"
+  },
+  "rust_log": "unset",
+  "warmup_proofs_per_workload": 1,
+  "measured_samples_per_workload": 5,
+  "binary_sha256": "c951ec162be3c1afa2ca5ea92fff328a697a31cb6e051ae63faf3485f2a6fe40",
+  "source_sha256": {
+    "crates/test-utils/src/librarytree.rs": "cf3615c23a160d1481bb30d23e880c67c2c3b378082ee31dbd464c7c404fcffc",
+    "benches/blake3-bench/src/lib.rs": "a88f66a6a4ca9af7a6fe21a7da48664b4b39a19921696cee8ec999dc8b1b95ce",
+    "benches/blake3-bench/src/bin/librarytree-blake3.rs": "9f49a0e043d2b3c61562d94f52fdc70a8a02e2eeb702a40d4e922643d3351dc0",
+    "miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.masm": "a3e4c789ee6b35619c4ddfca9f5800a1cdadda7dc5c624360b2bd54a4861500c",
+    "miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.inputs": "6fe2c93ef340e303d8f55b0802c19140eb713daf5780fd976170b0440af9837d",
+    "crates/lib/core/asm/crypto/hashes/blake3.masm": "cc2beac4250ee73494a17e2a0822377cb493fa74af28153dbf2ca072a12076d8"
+  },
+  "runs": [
+    {
+      "argv": [
+        "taskset",
+        "-c",
+        "4",
+        "/home/adrian/.codex/worktrees/librarytree-20-merkle-library/miden-vm/target/optimized/librarytree-blake3",
+        "--iterations",
+        "1",
+        "--mode",
+        "diagnostics",
+        "--samples",
+        "5"
+      ],
+      "guards": [
+        {
+          "argv": [
+            "systemd-ac-power"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "/usr/local/bin/headless-power-policy",
+            "check-heavy"
+          ],
+          "exit_code": 0,
+          "stdout": "Heavy local work permitted: battery 80%, normal mode.\n",
+          "stderr": ""
+        }
+      ],
+      "exit_code": 0,
+      "stdout_file": "hash-1-diagnostics.json",
+      "stderr_file": "hash-1-diagnostics.stderr.log"
+    },
+    {
+      "argv": [
+        "taskset",
+        "-c",
+        "4",
+        "/home/adrian/.codex/worktrees/librarytree-20-merkle-library/miden-vm/target/optimized/librarytree-blake3",
+        "--iterations",
+        "1",
+        "--mode",
+        "proof",
+        "--samples",
+        "5"
+      ],
+      "guards": [
+        {
+          "argv": [
+            "systemd-ac-power"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "/usr/local/bin/headless-power-policy",
+            "check-heavy"
+          ],
+          "exit_code": 0,
+          "stdout": "Heavy local work permitted: battery 80%, normal mode.\n",
+          "stderr": ""
+        }
+      ],
+      "exit_code": 0,
+      "stdout_file": "hash-1-proof.json",
+      "stderr_file": "hash-1-proof.stderr.log"
+    },
+    {
+      "argv": [
+        "taskset",
+        "-c",
+        "4",
+        "/home/adrian/.codex/worktrees/librarytree-20-merkle-library/miden-vm/target/optimized/librarytree-blake3",
+        "--iterations",
+        "8",
+        "--mode",
+        "diagnostics",
+        "--samples",
+        "5"
+      ],
+      "guards": [
+        {
+          "argv": [
+            "systemd-ac-power"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "/usr/local/bin/headless-power-policy",
+            "check-heavy"
+          ],
+          "exit_code": 0,
+          "stdout": "Heavy local work permitted: battery 80%, normal mode.\n",
+          "stderr": ""
+        }
+      ],
+      "exit_code": 0,
+      "stdout_file": "hash-8-diagnostics.json",
+      "stderr_file": "hash-8-diagnostics.stderr.log"
+    },
+    {
+      "argv": [
+        "taskset",
+        "-c",
+        "4",
+        "/home/adrian/.codex/worktrees/librarytree-20-merkle-library/miden-vm/target/optimized/librarytree-blake3",
+        "--iterations",
+        "8",
+        "--mode",
+        "proof",
+        "--samples",
+        "5"
+      ],
+      "guards": [
+        {
+          "argv": [
+            "systemd-ac-power"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "/usr/local/bin/headless-power-policy",
+            "check-heavy"
+          ],
+          "exit_code": 0,
+          "stdout": "Heavy local work permitted: battery 80%, normal mode.\n",
+          "stderr": ""
+        }
+      ],
+      "exit_code": 0,
+      "stdout_file": "hash-8-proof.json",
+      "stderr_file": "hash-8-proof.stderr.log"
+    },
+    {
+      "argv": [
+        "taskset",
+        "-c",
+        "4",
+        "/home/adrian/.codex/worktrees/librarytree-20-merkle-library/miden-vm/target/optimized/librarytree-blake3",
+        "--iterations",
+        "32",
+        "--mode",
+        "diagnostics",
+        "--samples",
+        "5"
+      ],
+      "guards": [
+        {
+          "argv": [
+            "systemd-ac-power"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "/usr/local/bin/headless-power-policy",
+            "check-heavy"
+          ],
+          "exit_code": 0,
+          "stdout": "Heavy local work permitted: battery 80%, normal mode.\n",
+          "stderr": ""
+        }
+      ],
+      "exit_code": 0,
+      "stdout_file": "hash-32-diagnostics.json",
+      "stderr_file": "hash-32-diagnostics.stderr.log"
+    },
+    {
+      "argv": [
+        "taskset",
+        "-c",
+        "4",
+        "/home/adrian/.codex/worktrees/librarytree-20-merkle-library/miden-vm/target/optimized/librarytree-blake3",
+        "--iterations",
+        "32",
+        "--mode",
+        "proof",
+        "--samples",
+        "5"
+      ],
+      "guards": [
+        {
+          "argv": [
+            "systemd-ac-power"
+          ],
+          "exit_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        {
+          "argv": [
+            "/usr/local/bin/headless-power-policy",
+            "check-heavy"
+          ],
+          "exit_code": 0,
+          "stdout": "Heavy local work permitted: battery 80%, normal mode.\n",
+          "stderr": ""
+        }
+      ],
+      "exit_code": 0,
+      "stdout_file": "hash-32-proof.json",
+      "stderr_file": "hash-32-proof.stderr.log"
+    }
+  ],
+  "finished_utc": "2026-11-05T12:17:09.837924+00:00",
+  "artifact_sha256": {
+    "hash-1-diagnostics.json": "b9c6512b464da233d37dde2a6acba2cf1b0b76206606cdabfdc9bd23d667dd13",
+    "hash-1-diagnostics.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash-1-proof.json": "a5f177ea3cfde7b61e44b2903b19876ac93f3ec7766bb0f166a590032e41eee8",
+    "hash-1-proof.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash-32-diagnostics.json": "f631e0dba78f5ab0241f932c5ef027abeef99a42605981d9614d031f4c96f28c",
+    "hash-32-diagnostics.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash-32-proof.json": "be2ab9a7791c629e7f46df479d5537407e4b051497ff7601edb85f6cd1f043f7",
+    "hash-32-proof.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash-8-diagnostics.json": "f06b996be19dceb605d2f0df7a69593877dcec162b1524b7568963c82f363251",
+    "hash-8-diagnostics.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "hash-8-proof.json": "c046e9202a2d2516757d006be98ac6fa4bc2fa0abacdb34f95a5df5f2d36e831",
+    "hash-8-proof.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "summary.json": "6e56a2ba613e931a9d8d4b08afc692eba718eac03fd80a636f2e47c080d7c761",
+    "historical-reference.json": "2e3578023bb2a82cb34902e41c8e099c6f00f66228093732c868323d77b1d45e"
+  },
+  "build_command": [
+    "cargo",
+    "build",
+    "--locked",
+    "--offline",
+    "--profile",
+    "optimized",
+    "-p",
+    "miden-vm-blake3-bench",
+    "--bin",
+    "librarytree-blake3"
+  ],
+  "build_environment": {
+    "TMPDIR": "/home/adrian/.codex/worktrees/librarytree-20-merkle-library/miden-vm/target",
+    "CARGO_BUILD_JOBS": "1"
+  }
+}

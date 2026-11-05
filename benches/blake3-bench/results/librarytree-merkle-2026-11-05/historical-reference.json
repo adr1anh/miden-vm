@@ -1,0 +1,336 @@
+{
+  "schema": "librarytree_20_historical_reference_v1",
+  "archive": {
+    "path": "/home/adrian/Dev/library-tree/miden-vm/.scratch/librarytree/archives/librarytree-evidence-2026-11-05.tar",
+    "sha256_from_preserved_checksum_file": "f1fc37e0799b3ecbd319309f5c15d6f42fb8c2d70bbe112fe9106de575897d6c"
+  },
+  "historical_librarytree_list": {
+    "source_semantics_commit": "18d4a347d96b63118e9c93af760f077d76493d52",
+    "timing_revision_label": "head-at-request",
+    "diagnostic_checkout_commit": "421389f977f07fc6f948603384213ca39f5cfe1c",
+    "diagnostic_source_semantics": "18d4a347d96b63118e9c93af760f077d76493d52 via saved exact rlibs",
+    "cases": [
+      {
+        "hashes": 1,
+        "guest_cycles": 6853,
+        "execs": 32,
+        "opening_callbacks": 10,
+        "unique_requested_keys": 10,
+        "logical_library_rows": 1128,
+        "opening_compression_requests_before_eidos_interning": 620,
+        "distinct_eidos_blocks": 670,
+        "eidos_rows": 21440,
+        "padded_heights_core_chiplets_eidos_and8": [
+          8192,
+          4096,
+          32768,
+          65536
+        ],
+        "median_prove_ms": 2037.376794,
+        "median_witness_plus_prove_ms": 2042.008614,
+        "median_proof_bytes": 159037,
+        "conjectured_security_bits": [
+          96
+        ],
+        "diagnostic_member": "files/blake3-attribution/hash-1-runtime-list.json",
+        "timing_raw_member": "files/blake3-comparison/runs/20261105T075815.832527Z/hash-1-head-at-request.stdout.json",
+        "checked_masm_member": "files/blake3-comparison/fixtures/hash-1/miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.masm"
+      },
+      {
+        "hashes": 8,
+        "guest_cycles": 53949,
+        "execs": 249,
+        "opening_callbacks": 10,
+        "unique_requested_keys": 10,
+        "logical_library_rows": 1128,
+        "opening_compression_requests_before_eidos_interning": 620,
+        "distinct_eidos_blocks": 670,
+        "eidos_rows": 21440,
+        "padded_heights_core_chiplets_eidos_and8": [
+          65536,
+          16384,
+          32768,
+          65536
+        ],
+        "median_prove_ms": 4392.601404,
+        "median_witness_plus_prove_ms": 4405.709194,
+        "median_proof_bytes": 163357,
+        "conjectured_security_bits": [
+          96
+        ],
+        "diagnostic_member": "files/blake3-attribution/hash-8-runtime-list.json",
+        "timing_raw_member": "files/blake3-comparison/runs/20261105T075815.832527Z/hash-8-head-at-request.stdout.json",
+        "checked_masm_member": "files/blake3-comparison/fixtures/hash-8/miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.masm"
+      },
+      {
+        "hashes": 32,
+        "guest_cycles": 215421,
+        "execs": 993,
+        "opening_callbacks": 10,
+        "unique_requested_keys": 10,
+        "logical_library_rows": 1128,
+        "opening_compression_requests_before_eidos_interning": 620,
+        "distinct_eidos_blocks": 670,
+        "eidos_rows": 21440,
+        "padded_heights_core_chiplets_eidos_and8": [
+          262144,
+          32768,
+          32768,
+          65536
+        ],
+        "median_prove_ms": 13169.719953,
+        "median_witness_plus_prove_ms": 13208.301444,
+        "median_proof_bytes": 180709,
+        "conjectured_security_bits": [
+          96
+        ],
+        "diagnostic_member": "files/blake3-attribution/hash-32-runtime-list.json",
+        "timing_raw_member": "files/blake3-comparison/runs/20261105T075815.832527Z/hash-32-head-at-request.stdout.json",
+        "checked_masm_member": "files/blake3-comparison/fixtures/hash-32/miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.masm"
+      }
+    ]
+  },
+  "immutable_pre_librarytree_comparison": {
+    "source_commit": "00b12150715891582864d256ef51c5ea46bfb282",
+    "historical_label": "origin-next",
+    "warning": "This label means the immutable commit, not the current origin/next ref. These are pre-LibraryTree timing/shape values, not measurements of the later 1,015-binding List. EXEC/callback/Library-row diagnostics were not taken from these timing records.",
+    "cases": [
+      {
+        "hashes": 1,
+        "trace": {
+          "and8_rows": 65536,
+          "chiplets_rows": 822,
+          "core_rows": 6597,
+          "eidos_compression_rows": 6208,
+          "padded_heights": [
+            8192,
+            1024,
+            8192,
+            65536
+          ]
+        },
+        "median_prove_ms": 1141.539413,
+        "median_witness_plus_prove_ms": 1149.969341,
+        "median_proof_bytes": 158301,
+        "conjectured_security_bits": [
+          96
+        ],
+        "timing_raw_member": "files/blake3-comparison/runs/20261105T075815.832527Z/hash-1-origin-next.stdout.json"
+      },
+      {
+        "hashes": 8,
+        "trace": {
+          "and8_rows": 65536,
+          "chiplets_rows": 6346,
+          "core_rows": 51908,
+          "eidos_compression_rows": 6208,
+          "padded_heights": [
+            65536,
+            8192,
+            8192,
+            65536
+          ]
+        },
+        "median_prove_ms": 3140.078382,
+        "median_witness_plus_prove_ms": 3149.350648,
+        "median_proof_bytes": 158461,
+        "conjectured_security_bits": [
+          96
+        ],
+        "timing_raw_member": "files/blake3-comparison/runs/20261105T075815.832527Z/hash-8-origin-next.stdout.json"
+      },
+      {
+        "hashes": 32,
+        "trace": {
+          "and8_rows": 65536,
+          "chiplets_rows": 25306,
+          "core_rows": 207260,
+          "eidos_compression_rows": 6208,
+          "padded_heights": [
+            262144,
+            32768,
+            8192,
+            65536
+          ]
+        },
+        "median_prove_ms": 11449.805098,
+        "median_witness_plus_prove_ms": 11462.012258,
+        "median_proof_bytes": 177157,
+        "conjectured_security_bits": [
+          96
+        ],
+        "timing_raw_member": "files/blake3-comparison/runs/20261105T075815.832527Z/hash-32-origin-next.stdout.json"
+      }
+    ]
+  },
+  "methodology": {
+    "profile": "optimized",
+    "proof_hash": "eidos",
+    "threads": 1,
+    "samples_per_case": 5,
+    "warmup_proofs_per_case": 1,
+    "pinned_cpu": 4,
+    "cpu_capacity": "1024",
+    "runtime_env": {
+      "RAYON_NUM_THREADS": "1",
+      "RUST_MIN_STACK": "16777216",
+      "LC_ALL": "C"
+    },
+    "inherited_allocator_env": {
+      "GLIBC_TUNABLES": null,
+      "MALLOC_CONF": null,
+      "LD_PRELOAD": null
+    },
+    "order": "Within each N/case revisions alternate which runs first by (count_index+case_index)%2. No subprocesses overlap."
+  },
+  "compiler_versions": {
+    "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)"
+  },
+  "aggregation": "median of measured samples; combined time is median of each sample's witness_ms+prove_ms",
+  "workload": {
+    "seed_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "independent_oracle": "external blake3 crate; empty-message standard vector checked",
+    "preserving_output_assertions": 8,
+    "expected_chains": {
+      "1": {
+        "digest_hex": "9b34f060fbc0f0aa11f150e26519deff613277b60656f0f8356ed2261505f5c5",
+        "limbs": [
+          1626354843,
+          2867904763,
+          3796955409,
+          4292745573,
+          3061264993,
+          4176500230,
+          651324981,
+          3321169173
+        ]
+      },
+      "8": {
+        "digest_hex": "d478b694aba40d6b107336dc67815f8decf016569e716380073a0bdb4dfd9d0a",
+        "limbs": [
+          2494986452,
+          1796056235,
+          3694555920,
+          2371846503,
+          1444344044,
+          2154000798,
+          3674946055,
+          178126157
+        ]
+      },
+      "32": {
+        "digest_hex": "bbacd0865d30c8b462727c1c3a4f6967ca0e17a045f0e9087adb6cb59ee52bd5",
+        "limbs": [
+          2261822651,
+          3033018461,
+          477917794,
+          1734954810,
+          2685865674,
+          149549125,
+          3043810170,
+          3576423838
+        ]
+      }
+    },
+    "source_file_sha256": {
+      "miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.masm": "a3e4c789ee6b35619c4ddfca9f5800a1cdadda7dc5c624360b2bd54a4861500c",
+      "miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.inputs": "6fe2c93ef340e303d8f55b0802c19140eb713daf5780fd976170b0440af9837d",
+      "crates/lib/core/asm/crypto/hashes/blake3.masm": "cc2beac4250ee73494a17e2a0822377cb493fa74af28153dbf2ca072a12076d8",
+      "benches/blake3-bench/src/bin/vm-performance.rs": "dde1f3e1a4182c0d8b7074af9cf0c546f4464cb0ea82c5f15f4cccc4df5b7818"
+    },
+    "checked_fixture_sha256": {
+      "hash-1": "42dbc765d37ea5f6840d3f7a0346eadd5476d0bbcef4fc509687cbabeebfcee0",
+      "hash-8": "d548b6871dbcf5907e428389d977b65abbf1502957ce937a3b67b0b193253fb3",
+      "hash-32": "d15666bf6b4c15699b2e2759ac86e53681e622208b38769c88512dfbadf9d423"
+    }
+  },
+  "notes": [
+    "Diagnostic counts and timing samples come from separate fresh executions. Instrumented diagnostic durations are not benchmark timings.",
+    "The historical runtime-merkle diagnostic was remounted below a singleton root List; it generated no proofs.",
+    "Pinned CPU 4 was a performance CPU with capacity 1024. Earlier unpinned runs in the archive are excluded.",
+    "No archive members or existing evidence were modified."
+  ],
+  "source_members": {
+    "files/blake3-comparison/runs/20261105T075815.832527Z/summary.json": {
+      "sha256": "6d49cb3dfb3a0fac0108756e02c0c8bc0fce363e17937288a016642a079bb96b",
+      "bytes": 18166
+    },
+    "files/blake3-comparison/runs/20261105T075815.832527Z/manifest.json": {
+      "sha256": "b6e406232ba56c6a4e395fab08b27f7d4a2f6d1e7b84ab0981747b05064e2f5c",
+      "bytes": 16196
+    },
+    "files/blake3-attribution/matrix-manifest.json": {
+      "sha256": "b9acec56a8760ba9ada245f12a430f3a97273bdd01f871468be336e36b5a64c8",
+      "bytes": 25704
+    },
+    "files/blake3-comparison/preparation.json": {
+      "sha256": "d31a5186a1b47eed52d06e1da54c5404c5151709017865e48e1710fef6d476d7",
+      "bytes": 7042
+    },
+    "files/blake3-comparison/compare.py": {
+      "sha256": "e909d6406a02bf5056e2ff13f8adb33a6bfa7d77ea93b6ae3e4139dfe9ca3ee3",
+      "bytes": 16636
+    },
+    "files/blake3-comparison/expected_chain.rs": {
+      "sha256": "ca5107701c5db7a33ba7048492b1d164093848af78b9a81376b896dee6a52c6a",
+      "bytes": 1300
+    },
+    "files/blake3-attribution/probe.rs": {
+      "sha256": "3d1a4e467d25d759c42dd4d97496872868b420ad4c1801f60cdf65b05936e05d",
+      "bytes": 18003
+    },
+    "files/blake3-attribution/run_matrix.py": {
+      "sha256": "7d6d39da21895c5e91e77183c491c2803db16782c0e425296dc95d7aada65edc",
+      "bytes": 2344
+    },
+    "files/blake3-attribution/hash-1-runtime-list.json": {
+      "sha256": "56569578dc04901f1bf7a1b5cdb4f8468b378cdbc624bd9fdbe4722004fc0bfc",
+      "bytes": 358475
+    },
+    "files/blake3-comparison/fixtures/hash-1/miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.masm": {
+      "sha256": "42dbc765d37ea5f6840d3f7a0346eadd5476d0bbcef4fc509687cbabeebfcee0",
+      "bytes": 1132
+    },
+    "files/blake3-comparison/runs/20261105T075815.832527Z/hash-1-head-at-request.stdout.json": {
+      "sha256": "041cbd35e393bc60110d8908fb16555d9c2d77ce23ab8cb8eb0d891de0df00b8",
+      "bytes": 1394
+    },
+    "files/blake3-comparison/runs/20261105T075815.832527Z/hash-1-origin-next.stdout.json": {
+      "sha256": "3ee41f0e8a4baa292202e041bcd3f1496a96be1bfa33c1e435d628df7d9890a3",
+      "bytes": 1361
+    },
+    "files/blake3-attribution/hash-8-runtime-list.json": {
+      "sha256": "c282f40ad2f54a38876dc604d359132ff3f4ade0870f2d251e511ae20f062862",
+      "bytes": 404459
+    },
+    "files/blake3-comparison/fixtures/hash-8/miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.masm": {
+      "sha256": "d548b6871dbcf5907e428389d977b65abbf1502957ce937a3b67b0b193253fb3",
+      "bytes": 1132
+    },
+    "files/blake3-comparison/runs/20261105T075815.832527Z/hash-8-head-at-request.stdout.json": {
+      "sha256": "63af6fff559db9821caca276171da1acbc941a6d3ade0e39172793af93ceca24",
+      "bytes": 1401
+    },
+    "files/blake3-comparison/runs/20261105T075815.832527Z/hash-8-origin-next.stdout.json": {
+      "sha256": "25f6fb9eca47995da91dae42a3050d0ddb9bac4496cbfbe98e31efd459dcca03",
+      "bytes": 1381
+    },
+    "files/blake3-attribution/hash-32-runtime-list.json": {
+      "sha256": "26972e353aad65d13d3ba7a03dbdd7b301a52b6391de9705ec4c48412fbca8d7",
+      "bytes": 562451
+    },
+    "files/blake3-comparison/fixtures/hash-32/miden-vm/masm-examples/hashing/blake3_1to1/blake3_1to1.masm": {
+      "sha256": "d15666bf6b4c15699b2e2759ac86e53681e622208b38769c88512dfbadf9d423",
+      "bytes": 1131
+    },
+    "files/blake3-comparison/runs/20261105T075815.832527Z/hash-32-head-at-request.stdout.json": {
+      "sha256": "b88b2583eececd4c675e91bc21a195f3343699d8a8d9a763073917411cffa2f8",
+      "bytes": 1387
+    },
+    "files/blake3-comparison/runs/20261105T075815.832527Z/hash-32-origin-next.stdout.json": {
+      "sha256": "7ca45767eca97ed704147c00ac28ac7b32ecdcf424d5c7900af412cbcd3d9c26",
+      "bytes": 1395
+    }
+  }
+}
