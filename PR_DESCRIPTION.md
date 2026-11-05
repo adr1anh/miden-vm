@@ -1,9 +1,24 @@
-The completed LibraryTree branch still carried private alternate AIR evaluators, an unused kernel-inventory API, and a legacy parser implementation used only as a test oracle. This follow-up removes those leftovers while retaining current-production security regressions and independent fixture expectations.
+The host currently retrieves environment openings through a request wrapper and combines keyed procedure and structural external code loading in one callback. This draft specifies three explicit operations and a bounded in-memory opening source, so callers can use local or delegated retrieval without losing package/source ownership or changing authenticated execution.
 
-Eight comparison/adapter modules are deleted. Honest proofs and balanced malformed witnesses now use the production proving path and native/MASM assertions; Controller counter regressions remain. Tag/frame cases retain narrowly checked production lookup-construction rejection without claiming an unavailable malicious-artifact MASM result. KernelDescriptor, its codec/errors/reexports/domain API and descriptor-only generator/seed/fuzz plumbing are retired; its numeric domain remains reserved. Actual root-namespace syscall authorization and structural MAST generation remain covered. Parser budget tests use typed current-crypto expected stores, and three unused parsing helpers are removed.
+This is a specification and worktree-startup draft. Production implementation has not started. The complete contract, migration slices and acceptance gates are in [the PR18 plan card](https://github.com/adr1anh/miden-vm/blob/adr1anh/librarytree-18-host-environment-access/LIBRARYTREE_PLAN.md#pr-18-explicit-host-environment-access-and-bounded-in-memory-openings).
 
-The [qualification report](LIBRARYTREE_QUALIFICATION.md#blake3-revision-comparison--5-november-2026) records the requested origin/next `00b1215` versus pre-cleanup HEAD `18d4a347d` Blake3 computation comparison. Clean package-only builds, common independently asserted workloads, Eidos, one performance CPU/worker and five measured samples give 15.24–77.57% more execution-plus-proof time across 1/8/32 hashes. All 60 measured proofs verify at 96-bit conjectured security. Full-inventory List fixture costs and inherent dependency differences limit generalization; cached/unpinned exploratory timings are excluded.
+Base: `adr1anh/librarytree-17-cleanup` on `adr1anh/miden-vm`, verified at `fd1007dfc8050d759277ae7a81b15974f6ef0e55`. Head: `adr1anh/librarytree-18-host-environment-access` on the same fork. The preceding stack is managed separately; this PR adds only the PR18 specification/startup documentation.
 
-Validation: 94 affected tests plus 2 final processor generator tests; exact Make formatting and warning-denied all-target/all-feature Clippy; three-root no_std; independent source/measurement reviews; static 21-target registration and unchanged AIR/STARK/MASM artifact-path checks. Fuzz builds/runs remain waived. The historical 8,106-test full qualification is separately dated; it is not presented as a fresh cleanup run.
+Planned work:
 
-Local branch `adr1anh/librarytree-17-cleanup` is based on `18d4a347d`. Implementation and context documentation are committed separately. No GitHub PR or push was created.
+- Split retrieval into `open_procedure(root, K, limits)`, `load_procedure(K, D)` and `load_external(D)` with existing sync/async conventions and failure semantics.
+- Preserve independently expected targets, bounded construction/verification, exact loaded-code owners and source occurrences, callbacks, cancellation and replay behavior.
+- Provide a bounded index over a validated environment with exact occurrence slots and preallocation checks.
+- Migrate default/custom hosts, CLI sources, tests and public examples; validate supported features.
+
+The opening-budget interface remains a design-review decision. The proposed minimal default retains the VM-supplied `OpeningLimits` argument, while applications configure policy once. Omitting it requires an execution-bound immutable policy contract before implementation. This draft does not introduce a public environment factory, partial-code format, generic blob API, new commitment or AIR relation, or expanded structural retry behavior.
+
+Validation: independent source/specification review and documentation whitespace checks. No new Rust compilation, tests, benchmarks or artifact regeneration were run. The PR17 qualification report is inherited evidence, not a new validation claim for PR18.
+
+Implementation checklist:
+
+- [ ] Settle the budget contract.
+- [ ] Split and migrate retrieval methods.
+- [ ] Add the bounded in-memory source.
+- [ ] Migrate consumers and document local/delegating hosts.
+- [ ] Complete the card's focused tests, lint/feature and drift checks.
