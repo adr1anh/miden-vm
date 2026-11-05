@@ -3,10 +3,7 @@
 use miden_core::{Felt, WORD_SIZE, field::PrimeCharacteristicRing};
 use miden_stark::lookup::BoundaryBuilder;
 
-use super::{
-    buses::library::emit_open_seed,
-    messages::{BlockHashMsg, LogDeferredMsg},
-};
+use super::{buses::library::emit_open_seed, messages::LogDeferredMsg};
 use crate::vm::{MIDEN_AIR_COUNT, NUM_CHIPLETS_PUBLIC_VALUES};
 
 // COMMITTED NORMALIZED SUM COUNT
@@ -19,46 +16,16 @@ pub const NUM_LOGUP_COMMITTED_FINALS: usize = MIDEN_AIR_COUNT;
 // BOUNDARY EMITTERS
 // ================================================================================================
 
-/// Emit boundary corrections for Core lookup columns.
+/// Emit the two deferred-transcript boundary corrections for Core lookup columns.
 ///
-/// The block-hash seed and log-deferred root terminals cancel against these Core
-/// bus accumulators:
-/// - `BlockHashTable` lives on `MAIN_COLUMN_SHAPE[1]` (block_hash + op_group merged column).
-/// - `LogDeferredRoot` lives on `MAIN_COLUMN_SHAPE[0]` (block_stack + range + log-cap merged
-///   column).
+/// Entry authentication is the in-trace root Resolve demand; no external program-digest
+/// seed participates in the block-hash relation.
 pub(crate) fn emit_core_boundary<B: BoundaryBuilder>(boundary: &mut B) {
-    // Core's legacy program-hash/deferred prefix stays explicit until the root/claim cutover.
-    // Bare-trace tools must supply statement data rather than silently invent zero authority.
     let inputs = boundary.var_len_public_inputs();
     assert_eq!(inputs.len(), 1, "Core boundary requires one explicit input slice");
-    let stmt = inputs[0];
-    assert_eq!(stmt.len(), 2 * WORD_SIZE, "Core boundary requires its complete fixed prefix");
-    let program_hash: [B::F; 4] = core::array::from_fn(|i| stmt[i]);
-    let final_state: [B::F; 4] = core::array::from_fn(|i| stmt[WORD_SIZE + i]);
-
-    // Block-hash seed: +1 / encode(BLOCK_HASH_TABLE, [ph, 0, 0, 0]).
-    //
-    // The boundary correction emits a `Child` payload while the in-trace removal at the
-    // root END row (in `block_hash_and_op_group.rs`) emits an `End` payload — the two
-    // collapse to the same denominator by the algebra below, so a single `Child` here
-    // cancels the root END's `-1/d`:
-    //
-    //   - At the root END row, the next op is HALT, so the decoder forces `addr_next = 0`, hence
-    //     `parent = addr_next = 0`.
-    //   - `halt_next() = 1` ⇒ `is_first_child = 1 - end_next - repeat_next - halt_next = 0`.
-    //   - The root block is not a loop body, so `is_loop_body = 0`.
-    //   - `child_hash = h_0 = program_hash` by the decoder's program-hash boundary.
-    //
-    // With `is_first_child = 0` and `is_loop_body = 0`, the `End` payload encodes
-    // identically to `Child { parent: 0, child_hash: program_hash }`, so the boundary
-    // `+1/d` here matches the in-trace `-1/d` and the bus balances.
-    boundary.add(
-        "block_hash_seed",
-        BlockHashMsg::Child {
-            parent: B::F::ZERO,
-            child_hash: program_hash,
-        },
-    );
+    let deferred = inputs[0];
+    assert_eq!(deferred.len(), WORD_SIZE, "Core boundary requires exactly its deferred root");
+    let final_state: [B::F; 4] = core::array::from_fn(|i| deferred[i]);
 
     // Log-deferred root terminals: +1 / d_initial − 1 / d_final.
     boundary.add("log_deferred_initial", LogDeferredMsg { state: [B::F::ZERO; 4] });
@@ -88,13 +55,13 @@ mod tests {
     use std::{vec, vec::Vec};
 
     use miden_core::{
-        field::{PrimeCharacteristicRing, QuadFelt},
+        field::{Field, PrimeCharacteristicRing, QuadFelt},
         utils::{Matrix, RowMajorMatrix},
     };
     use miden_stark::{
         air::BaseAir,
         lookup::{
-            Challenges, build_lookup_fractions,
+            BoundaryBuilder, Challenges, LookupMessage, build_lookup_fractions,
             debug::{ValidateLayout, ValidateLookupAir},
         },
     };
@@ -110,51 +77,73 @@ mod tests {
         trace::AUX_TRACE_RAND_CHALLENGES,
     };
 
-    /// Pin the `BlockHashMsg::End -> Child` boundary collapse: at the root END row, the
-    /// algebra forces `is_first_child = 0`, `is_loop_body = 0`, `parent = 0`, and
-    /// `child_hash = program_hash`, so the in-trace `End` removal and the boundary
-    /// `Child` seed encode to the same denominator.
-    #[test]
-    fn block_hash_seed_matches_root_end_removal() {
-        use miden_stark::lookup::{Challenges, LookupMessage};
+    struct CoreBoundary<'a> {
+        inputs: &'a [&'a [Felt]],
+        events: Vec<(Felt, QuadFelt)>,
+    }
 
-        use crate::vm::constraints::lookup::messages::BlockHashMsg;
+    impl BoundaryBuilder for CoreBoundary<'_> {
+        type F = Felt;
+        type EF = QuadFelt;
 
-        let challenges = Challenges::<QuadFelt>::new(
+        fn var_len_public_inputs(&self) -> &[&[Felt]] {
+            self.inputs
+        }
+
+        fn insert<M>(&mut self, _name: &'static str, multiplicity: Felt, message: M)
+        where
+            M: LookupMessage<Felt, QuadFelt>,
+        {
+            self.events.push((multiplicity, message.encode(&challenges())));
+        }
+    }
+
+    fn challenges() -> Challenges<QuadFelt> {
+        Challenges::new(
             QuadFelt::from_u32(7),
             QuadFelt::from_u32(11),
             MIDEN_MAX_MESSAGE_WIDTH,
             BusId::COUNT,
-        );
+        )
+    }
 
-        let program_hash: [Felt; 4] = [
-            Felt::from_u32(101),
-            Felt::from_u32(102),
-            Felt::from_u32(103),
-            Felt::from_u32(104),
-        ];
+    #[test]
+    fn core_boundary_has_only_two_deferred_terms() {
+        use crate::vm::constraints::lookup::messages::LogDeferredMsg;
 
-        // Boundary side: emitted by `emit_core_boundary` for the root program hash seed.
-        let seed = BlockHashMsg::Child {
-            parent: Felt::ZERO,
-            child_hash: program_hash,
-        };
+        let final_state = core::array::from_fn(|i| Felt::from_u32(101 + i as u32));
+        let inputs = [final_state.as_slice()];
+        let mut boundary = CoreBoundary { inputs: &inputs, events: Vec::new() };
+        super::emit_core_boundary(&mut boundary);
+        let initial = LogDeferredMsg { state: [Felt::ZERO; 4] }.encode(&challenges());
+        let final_denominator = LogDeferredMsg { state: final_state }.encode(&challenges());
+        assert_eq!(boundary.events, vec![(Felt::ONE, initial), (-Felt::ONE, final_denominator)]);
+        let correction: QuadFelt = boundary.events.iter().map(|(m, d)| d.inverse() * *m).sum();
+        assert_eq!(correction, initial.inverse() - final_denominator.inverse());
+    }
 
-        // In-trace side: the root END row's removal, with the four conditions documented in
-        // `emit_core_boundary` (addr_next=0 via HALT; halt_next=1 so is_first_child=0; root
-        // not a loop so is_loop_body=0; child_hash = h_0 = program_hash).
-        let root_end = BlockHashMsg::End {
-            parent: Felt::ZERO,
-            child_hash: program_hash,
-            is_first_child: Felt::ZERO,
-            is_loop_body: Felt::ZERO,
-        };
+    #[test]
+    fn core_boundary_rejects_absent_partial_or_legacy_program_hash_carriers() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
 
-        assert_eq!(
-            <BlockHashMsg<Felt> as LookupMessage<Felt, QuadFelt>>::encode(&seed, &challenges),
-            <BlockHashMsg<Felt> as LookupMessage<Felt, QuadFelt>>::encode(&root_end, &challenges),
-            "boundary `Child` seed and root-END `End` removal must encode to equal denominators"
-        );
+        for length in [0, 1, 3, 5, 8, 12] {
+            let values = vec![Felt::ZERO; length];
+            let inputs = [values.as_slice()];
+            let mut boundary = CoreBoundary { inputs: &inputs, events: Vec::new() };
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| super::emit_core_boundary(&mut boundary)))
+                    .is_err()
+            );
+        }
+        let values = [Felt::ZERO; 4];
+        for count in [0, 2] {
+            let inputs = vec![values.as_slice(); count];
+            let mut boundary = CoreBoundary { inputs: &inputs, events: Vec::new() };
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| super::emit_core_boundary(&mut boundary)))
+                    .is_err()
+            );
+        }
     }
 
     /// Lookup-structure validation for `CoreAir`.

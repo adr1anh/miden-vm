@@ -145,16 +145,16 @@ impl Deserializable for PublicInputs {
 // PROCESSOR AIR
 // ================================================================================================
 
-/// Number of public values read by Core; the other Miden VM AIRs have no public values.
+/// Number of public values read by Core.
 ///
-/// Layout (32 Felts total):
+/// Layout (36 Felts total):
 ///   [0..16]  stack inputs
 ///   [16..32] stack outputs
+///   [32..36] entry ProcedureKey
 ///
-/// The program hash and final deferred root are not read by any AIR constraint, so they
-/// are carried as `aux_inputs` and consumed only by [`crate::vm::statement::observe`] and
-/// [`crate::vm::statement::eval_external`].
-pub const NUM_PUBLIC_VALUES: usize = MIN_STACK_DEPTH + MIN_STACK_DEPTH;
+/// Chiplets separately reads `R_E || N_kernel`. The legacy carrier above does not yet project
+/// these complete public groups; canonical claim/statement activation remains PR12 work.
+pub const NUM_PUBLIC_VALUES: usize = MIN_STACK_DEPTH + MIN_STACK_DEPTH + WORD_SIZE;
 
 /// Mandatory Chiplets public values: `R_E[4] || N_kernel[4]`.
 ///

@@ -670,6 +670,441 @@ fn dynamic_prefix(target: ProcedureKey) -> Vec<Operation> {
     operations
 }
 
+fn assert_native_core_bindings(
+    trace: &miden_processor::trace::VmTrace,
+    entry: ProcedureKey,
+    expected: &[(u8, ProcedureKey, Word)],
+) {
+    use miden_core::operations::opcodes;
+    use miden_processor::{ONE, ZERO, trace::RowIndex};
+
+    let main = trace.main_trace();
+    assert_eq!(main.fn_hash(RowIndex::from(0)), entry.into_word().into_elements());
+    let mut invocations = Vec::new();
+    let mut root_ends = Vec::new();
+    let mut halt_stack = None;
+    for index in 0..main.core_height() {
+        let row = RowIndex::from(index);
+        let core = main.core_row(row);
+        let opcode = main.get_op_code(row).as_canonical_u64() as u8;
+        assert_eq!(core.system.clk, Felt::new_unchecked(index as u64));
+        if matches!(
+            opcode,
+            opcodes::EXEC | opcodes::CALL | opcodes::SYSCALL | opcodes::DYN | opcodes::DYNCALL
+        ) {
+            let (expected_opcode, key, implementation) = expected[invocations.len()];
+            assert_eq!(opcode, expected_opcode);
+            assert_ne!(key.into_word(), implementation, "fixture must separate K from D");
+            assert_eq!(main.decoder_hasher_state_first_half(row), key.into_word());
+            assert_eq!(main.decoder_resolved_digest(row), implementation);
+            let next = RowIndex::from(index + 1);
+            let establishes_principal = matches!(opcode, opcodes::CALL | opcodes::DYNCALL);
+            let principal = if establishes_principal { key } else { entry };
+            assert_eq!(main.fn_hash(next), principal.into_word().into_elements());
+            if establishes_principal {
+                assert_ne!(main.ctx(next), main.ctx(row));
+            } else {
+                assert_eq!(main.ctx(next), main.ctx(row));
+            }
+            assert_eq!(main.is_left_shift(row), opcode == opcodes::DYN);
+            assert!(!main.is_right_shift(row));
+            if opcode == opcodes::DYNCALL {
+                let state = main.decoder_hasher_state_second_half(row);
+                assert_eq!(state[0], main.stack_depth(row) - ONE);
+                if state[0].as_canonical_u64() > 16 {
+                    assert_ne!(state[1], ZERO, "saved post-pop overflow pointer must survive");
+                } else {
+                    assert_eq!(state[1], ZERO);
+                }
+                assert_eq!(&state.as_slice()[2..], &[ZERO, ZERO]);
+            } else {
+                assert_eq!(main.decoder_hasher_state_second_half(row), Word::default());
+            }
+            invocations.push(row);
+        } else {
+            assert_eq!(main.decoder_resolved_digest(row), Word::default());
+        }
+        if opcode == opcodes::END {
+            if main.is_root_end(row) == ONE {
+                root_ends.push(row);
+                assert_eq!(main.is_loop_body_flag(row), ZERO);
+                assert_eq!(main.decoder_hasher_state_first_half(row), *trace.program_hash());
+                let next = RowIndex::from(index + 1);
+                assert_eq!(main.get_op_code(next), Felt::from_u8(opcodes::HALT));
+                assert_eq!(main.fn_hash(next), entry.into_word().into_elements());
+            } else {
+                assert_eq!(main.is_root_end(row), ZERO);
+            }
+        }
+        if opcode == opcodes::HALT {
+            assert_eq!(main.fn_hash(row), entry.into_word().into_elements());
+            assert_eq!(main.ctx(row), ZERO);
+            assert_eq!(main.is_root_end(row), ZERO);
+            let state = (core.stack.top, core.stack.b0, core.stack.b1, core.stack.h0);
+            assert_eq!(*halt_stack.get_or_insert(state), state);
+        }
+    }
+    assert_eq!(invocations.len(), expected.len());
+    assert_eq!(root_ends.len(), 1);
+    assert!(halt_stack.is_some());
+}
+
+#[test]
+fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
+    use miden_air_definitions::vm::trace::chiplets::library::MAST;
+    use miden_core::operations::opcodes;
+    use miden_processor::{
+        ZERO,
+        trace::{RowIndex, build_trace},
+    };
+
+    let entry = key(&["app"], "entry");
+    let aliases = [key(&["lib"], "a"), key(&["lib"], "b")];
+    let callee = body(vec![Operation::Noop]);
+    let mut callee_builder = PackageDebugInfoBuilder::default();
+    let callee_source =
+        source_node(&mut callee_builder, callee.entrypoint(), Vec::new(), 1, "callee::shared");
+    callee_builder.add_root(callee_source);
+    let callee_debug = *callee_builder.build();
+    let budget = miden_vm_stark::memory::default_budget();
+    for mode in [Mode::Exec, Mode::Call, Mode::Syscall, Mode::Dyn, Mode::DynCall] {
+        let opcode = match mode {
+            Mode::Exec => opcodes::EXEC,
+            Mode::Call => opcodes::CALL,
+            Mode::Syscall => opcodes::SYSCALL,
+            Mode::Dyn => opcodes::DYN,
+            Mode::DynCall => opcodes::DYNCALL,
+        };
+        let keys = [aliases[0], aliases[1], aliases[0]];
+        let mut forest = MastForest::new();
+        let mut source_builder = PackageDebugInfoBuilder::default();
+        let mut root = None;
+        for key in keys {
+            let invoked = invocation(&mut forest, mode, key);
+            let invoked_source =
+                source_node(&mut source_builder, invoked, Vec::new(), 1, "caller::invoke");
+            let (next, next_source) = if matches!(mode, Mode::Dyn | Mode::DynCall) {
+                let mut operations = dynamic_prefix(key);
+                operations.extend([Operation::Push(felt(7)); 4]);
+                operations.push(Operation::Push(felt(KEY_ADDR)));
+                let op_end = u32::try_from(operations.len()).unwrap();
+                let setup = block(&mut forest, operations);
+                let setup_source =
+                    source_node(&mut source_builder, setup, Vec::new(), op_end, "caller::setup");
+                let next = join(&mut forest, setup, invoked);
+                let source = source_node(
+                    &mut source_builder,
+                    next,
+                    vec![setup_source, invoked_source],
+                    1,
+                    "caller::dynamic",
+                );
+                (next, source)
+            } else {
+                (invoked, invoked_source)
+            };
+            root = Some(match root {
+                Some((previous, previous_source)) => {
+                    let next = join(&mut forest, previous, next);
+                    let source = source_node(
+                        &mut source_builder,
+                        next,
+                        vec![previous_source, next_source],
+                        1,
+                        "caller::entry",
+                    );
+                    (next, source)
+                },
+                None => (next, next_source),
+            });
+        }
+        let (root, source_root) = root.unwrap();
+        let (root, source_root) = if matches!(mode, Mode::Dyn | Mode::DynCall) {
+            // Keep all three invocations' caller overflow live, then remove their four fillers
+            // each.
+            let cleanup = block(&mut forest, vec![Operation::Drop; 12]);
+            let cleanup_source =
+                source_node(&mut source_builder, cleanup, Vec::new(), 12, "caller::cleanup");
+            let next = join(&mut forest, root, cleanup);
+            let source = source_node(
+                &mut source_builder,
+                next,
+                vec![source_root, cleanup_source],
+                1,
+                "caller::entry",
+            );
+            (next, source)
+        } else {
+            (root, source_root)
+        };
+        let program = finish_program(forest, root);
+        source_builder.add_root(source_root);
+        let source_debug = *source_builder.build();
+        let environment = EnvironmentFixture::new(&[
+            (&["app"], "entry", program.hash()),
+            (&["lib"], "a", callee.hash()),
+            (&["lib"], "b", callee.hash()),
+        ]);
+        let configuration = environment.configuration(entry, namespace(&["lib"]));
+        let expected: Vec<_> = keys.into_iter().map(|key| (opcode, key, callee.hash())).collect();
+        let mut baseline = None;
+        for fragment_size in [3, 64] {
+            let options = ExecutionOptions::default()
+                .with_environment_trace_limits(trace_limits())
+                .with_core_trace_fragment_size(fragment_size)
+                .unwrap();
+            let mut host = CountingHost::new(&environment, &[&callee]);
+            let witness = FastProcessor::new(StackInputs::default())
+                .with_options(options.clone())
+                .unwrap()
+                .execute_for_proving_sync(&program, configuration, &mut host)
+                .unwrap();
+            assert_eq!(host.requests_for(aliases[0]), 1);
+            assert_eq!(host.requests_for(aliases[1]), 1);
+            assert_eq!(*host.code_requests.borrow(), vec![callee.hash()]);
+            let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+            let restored = ExecutionWitness::read_from_bytes_with_limits(
+                &bytes,
+                &configuration,
+                trace_limits(),
+                read_limits(),
+            )
+            .unwrap();
+            for witness in [witness, restored] {
+                let trace = build_trace(witness.into_parts().0, &budget).unwrap();
+                assert_native_core_bindings(&trace, entry, &expected);
+                let main = trace.main_trace();
+                for (key, count) in [(entry, 1), (aliases[0], 2), (aliases[1], 1)] {
+                    let responses: Vec<_> = (0..main.chiplets_height())
+                        .map(RowIndex::from)
+                        .filter(|&row| main.is_library_row(row))
+                        .map(|row| main.chiplet_cols(row).library())
+                        .filter(|row| row.k == MAST && row.z == key.into_word().into_elements())
+                        .collect();
+                    assert_eq!(responses.len(), 1);
+                    let count = Felt::from_u32(count);
+                    let syscall = key != entry && matches!(mode, Mode::Syscall);
+                    assert_eq!(
+                        (responses[0].a, responses[0].b),
+                        if syscall { (ZERO, count) } else { (count, ZERO) }
+                    );
+                }
+                let matrices = main.clone_air_matrices();
+                if let Some(expected) = &baseline {
+                    assert_eq!(&matrices, expected);
+                } else {
+                    baseline = Some(matrices);
+                }
+            }
+            if fragment_size == 3 {
+                for explicit_root in [false, true] {
+                    let mut host = CountingHost::new(&environment, &[&callee]);
+                    host.forests.insert(
+                        callee.hash(),
+                        LoadedMastForest::with_package_debug_info(
+                            callee.mast_forest().clone(),
+                            Ok(Some(callee_debug.clone())),
+                        ),
+                    );
+                    let processor = FastProcessor::new(StackInputs::default())
+                        .with_options(options.clone())
+                        .unwrap();
+                    let witness = if explicit_root {
+                        processor.execute_for_proving_with_package_debug_info_at_source_node_sync(
+                            &program,
+                            configuration,
+                            &source_debug,
+                            source_root,
+                            &mut host,
+                        )
+                    } else {
+                        processor.execute_for_proving_with_package_debug_info_sync(
+                            &program,
+                            configuration,
+                            &source_debug,
+                            &mut host,
+                        )
+                    }
+                    .unwrap();
+                    let trace = build_trace(witness.into_parts().0, &budget).unwrap();
+                    assert_native_core_bindings(&trace, entry, &expected);
+                    assert_eq!(
+                        &trace.main_trace().clone_air_matrices(),
+                        baseline.as_ref().unwrap()
+                    );
+                }
+            }
+            #[cfg(feature = "std")]
+            {
+                let (trace, precompile) = FastProcessor::new(StackInputs::default())
+                    .with_options(options.clone())
+                    .unwrap()
+                    .execute_and_build_trace_sync(
+                        &program,
+                        configuration,
+                        &mut CountingHost::new(&environment, &[&callee]),
+                        &budget,
+                    )
+                    .unwrap();
+                assert!(precompile.is_none());
+                assert_native_core_bindings(&trace, entry, &expected);
+                assert_eq!(&trace.main_trace().clone_air_matrices(), baseline.as_ref().unwrap());
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
+    use miden_core::serde::{DeserializationError, Serializable};
+
+    let entry = key(&["app"], "entry");
+    let target = key(&["lib"], "child");
+    let callee = body(vec![Operation::Noop]);
+    let program = invocation_program(Mode::Call, target);
+    let environment = EnvironmentFixture::new(&[
+        (&["app"], "entry", program.hash()),
+        (&["lib"], "child", callee.hash()),
+    ]);
+    let configuration = environment.configuration(entry, namespace(&["kernel"]));
+    let witness = FastProcessor::new(StackInputs::default())
+        .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+        .unwrap()
+        .execute_for_proving_sync(
+            &program,
+            configuration,
+            &mut CountingHost::new(&environment, &[&callee]),
+        )
+        .unwrap();
+    let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+    let restored = ExecutionWitness::read_from_bytes_with_limits(
+        &bytes,
+        &configuration,
+        trace_limits(),
+        read_limits(),
+    )
+    .expect("unmodified root CALL evidence must pass bounded native revalidation");
+    assert_eq!(restored.claim(), witness.claim());
+    assert_eq!(restored.execution_descriptor(), configuration.descriptor());
+    let budget = miden_vm_stark::memory::default_budget();
+    let original_trace = miden_processor::trace::build_trace(witness.into_parts().0, &budget)
+        .expect("unmodified captured root CALL evidence must build a trace");
+    let restored_trace = miden_processor::trace::build_trace(restored.into_parts().0, &budget)
+        .expect("unmodified imported root CALL evidence must build a trace");
+    assert_native_core_bindings(
+        &restored_trace,
+        entry,
+        &[(miden_core::operations::opcodes::CALL, target, callee.hash())],
+    );
+    assert_eq!(
+        restored_trace.main_trace().clone_air_matrices(),
+        original_trace.main_trace().clone_air_matrices(),
+    );
+
+    // Locate the public v4 observation by its mode/tag/K/D prefix, rather than depending on the
+    // unrelated serialized stack, sparse MAST or Controller layouts. All reads use caller limits.
+    let mut prefix = vec![1, 0]; // CALL, normal Resolve
+    target.write_into(&mut prefix);
+    ImplementationRoot::new(callee.hash()).write_into(&mut prefix);
+    let offsets: Vec<_> = bytes
+        .windows(prefix.len())
+        .enumerate()
+        .filter_map(|(offset, window)| (window == prefix).then_some(offset))
+        .collect();
+    assert_eq!(offsets.len(), 1);
+    let offset = offsets[0];
+    const RECORD_BYTES: usize = 150;
+    assert_eq!(&bytes[offset - 8..offset], &2u64.to_le_bytes());
+    assert_eq!(bytes[offset + RECORD_BYTES], 5, "root END follows the root CALL");
+
+    #[derive(Clone, Copy)]
+    enum Rejection {
+        NativeRecord(&'static str),
+        InvocationTransition,
+    }
+    let rejects = |name: &str, bytes: &[u8], expected: Rejection| {
+        let decoded = ExecutionWitness::read_from_bytes_with_limits(
+            bytes,
+            &configuration,
+            trace_limits(),
+            read_limits(),
+        );
+        match expected {
+            Rejection::NativeRecord(reason) => match decoded {
+                Err(DeserializationError::InvalidValue(actual)) => {
+                    assert_eq!(actual, format!("invalid keyed replay: {reason}"), "{name}");
+                },
+                Err(error) => panic!("{name} failed outside native keyed validation: {error}"),
+                Ok(_) => panic!("{name} unexpectedly passed native keyed validation"),
+            },
+            Rejection::InvocationTransition => {
+                let witness = decoded.unwrap_or_else(|error| {
+                    panic!("{name} must reach actual Core replay, but import failed: {error}")
+                });
+                match miden_processor::trace::build_trace(witness.into_parts().0, &budget) {
+                    Err(ExecutionError::Internal(reason)) => {
+                        assert_eq!(reason, "invocation differs from keyed replay event", "{name}");
+                    },
+                    Err(error) => panic!("{name} failed outside actual invocation replay: {error}"),
+                    Ok(_) => panic!("{name} unexpectedly built a Core trace"),
+                }
+            },
+        }
+    };
+    for (name, field, expected) in [
+        ("mode", 0, Rejection::NativeRecord("same-principal mode changes principal")),
+        ("tag", 1, Rejection::NativeRecord("mode and native invocation tag differ")),
+        (
+            "key",
+            2,
+            Rejection::NativeRecord("call does not establish the requested principal"),
+        ),
+        (
+            "implementation",
+            34,
+            Rejection::NativeRecord("record differs from natively reconstructed use"),
+        ),
+        ("row", 74, Rejection::InvocationTransition),
+        ("principal before", 78, Rejection::InvocationTransition),
+        (
+            "principal after",
+            110,
+            Rejection::NativeRecord("call does not establish the requested principal"),
+        ),
+    ] {
+        let mut forged = bytes.clone();
+        forged[offset + field] ^= 1;
+        assert_ne!(forged, bytes, "{name} mutation must change the observation");
+        rejects(name, &forged, expected);
+    }
+    let mut omitted = bytes.clone();
+    omitted[offset - 8..offset].copy_from_slice(&1u64.to_le_bytes());
+    omitted.drain(offset..offset + RECORD_BYTES);
+    rejects(
+        "omitted invocation",
+        &omitted,
+        Rejection::NativeRecord("unused or missing opening occurrences"),
+    );
+
+    let mut doubled = bytes.clone();
+    doubled[offset - 8..offset].copy_from_slice(&3u64.to_le_bytes());
+    doubled.splice(offset..offset, bytes[offset..offset + RECORD_BYTES].iter().copied());
+    rejects(
+        "doubled invocation",
+        &doubled,
+        Rejection::NativeRecord("keyed record lies outside its chronological fragment"),
+    );
+
+    let mut missing_completion = bytes.clone();
+    missing_completion[offset - 8..offset].copy_from_slice(&1u64.to_le_bytes());
+    missing_completion.drain(offset + RECORD_BYTES..offset + 2 * RECORD_BYTES);
+    rejects(
+        "missing root completion",
+        &missing_completion,
+        Rejection::NativeRecord("last keyed record is not root END"),
+    );
+}
+
 #[test]
 fn dyn_shares_ram_fmp_and_principal_while_dyncall_uses_call_conventions() {
     let entry = key(&["app"], "entry");
@@ -777,6 +1212,39 @@ fn root_call_and_terminal_dyncall_restore_before_discharge_at_actual_entry_end()
         assert_eq!(host.observations[0].principal, target.into_word());
         assert_eq!(resume.resolution_session().uses().count(), 2);
         assert_eq!(resume.resolution_session().uses().last().unwrap().procedure_key(), entry);
+
+        let witness = FastProcessor::new(StackInputs::default())
+            .with_options(ExecutionOptions::default().with_environment_trace_limits(trace_limits()))
+            .unwrap()
+            .execute_for_proving_sync(
+                &program,
+                environment.configuration(entry, namespace(&["kernel"])),
+                &mut CountingHost::new(&environment, &[&callee]),
+            )
+            .unwrap();
+        let trace = miden_processor::trace::build_trace(
+            witness.into_parts().0,
+            &miden_vm_stark::memory::default_budget(),
+        )
+        .unwrap();
+        let opcode = if matches!(mode, Mode::Call) {
+            miden_core::operations::opcodes::CALL
+        } else {
+            miden_core::operations::opcodes::DYNCALL
+        };
+        assert_native_core_bindings(&trace, entry, &[(opcode, target, callee.hash())]);
+        let main = trace.main_trace();
+        let root_end = (0..main.core_height())
+            .map(miden_processor::trace::RowIndex::from)
+            .find(|&row| main.is_root_end(row) == miden_processor::ONE)
+            .unwrap();
+        if matches!(mode, Mode::Call) {
+            assert_eq!(main.fn_hash(root_end), target.into_word().into_elements());
+            assert_eq!(main.restores_caller_frame_flag(root_end), miden_processor::ONE);
+        } else {
+            assert_eq!(main.fn_hash(root_end), entry.into_word().into_elements());
+            assert_eq!(main.restores_caller_frame_flag(root_end), miden_processor::ZERO);
+        }
     }
 }
 

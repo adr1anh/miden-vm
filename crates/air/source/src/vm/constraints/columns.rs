@@ -40,7 +40,7 @@ pub struct CoreCols<T> {
     pub stack: StackCols<T>,
 }
 
-/// Number of columns in the core trace (48), derived from the struct layout.
+/// Number of columns in the core trace (52), derived from the struct layout.
 pub const NUM_CORE_COLS: usize = size_of::<CoreCols<u8>>();
 
 impl<T> Borrow<CoreCols<T>> for [T] {
@@ -255,7 +255,7 @@ pub const fn indices_arr<const N: usize>() -> [usize; N] {
 // ================================================================================================
 //
 // The auxiliary trace is the LogUp lookup-argument segment built per-AIR by `CoreAir`'s
-// and `ChipletsAir`'s `AuxBuilder` impls (see `crates/air/source/src/vm/constraints/lookup/`): 4
+// and `ChipletsAir`'s `AuxBuilder` impls (see `crates/air/source/src/vm/constraints/lookup/`): 5
 // Core columns + 4 Chiplets columns.
 
 pub const NUM_SYSTEM_COLS: usize = size_of::<SystemCols<u8>>();
@@ -272,8 +272,10 @@ pub const NUM_ACE_COLS: usize = size_of::<AceCols<u8>>();
 pub const NUM_ACE_READ_COLS: usize = size_of::<AceReadCols<u8>>();
 pub const NUM_ACE_EVAL_COLS: usize = size_of::<AceEvalCols<u8>>();
 
+const _: () = assert!(NUM_CORE_COLS == 52);
+const _: () = assert!(TRACE_WIDTH == 76);
 const _: () = assert!(NUM_SYSTEM_COLS == 6);
-const _: () = assert!(NUM_DECODER_COLS == 23);
+const _: () = assert!(NUM_DECODER_COLS == 27);
 const _: () = assert!(NUM_STACK_COLS == 19);
 const _: () = assert!(NUM_BITWISE_COLS == 13);
 const _: () = assert!(NUM_AEAD_STREAM_COLS == 20);
@@ -293,7 +295,8 @@ const _: () = assert!(NUM_ACE_EVAL_COLS == 4);
 mod tests {
     use super::*;
     use crate::vm::trace::{
-        CHIPLETS_CLK_COL, CHIPLETS_WIDTH, DECODER_TRACE_WIDTH, SYS_TRACE_WIDTH,
+        CHIPLETS_CLK_COL, CHIPLETS_WIDTH, DECODER_TRACE_OFFSET, RESOLVED_DIGEST_RANGE,
+        STACK_TRACE_OFFSET,
     };
 
     /// Per-AIR index maps used only by the column-layout tests below. Each field holds its
@@ -311,10 +314,6 @@ mod tests {
         >())
     };
 
-    /// Column offset of the decoder section within the unified main trace.
-    const DECODER_OFFSET: usize = SYS_TRACE_WIDTH;
-    /// Column offset of the stack section within the unified main trace.
-    const STACK_OFFSET: usize = SYS_TRACE_WIDTH + DECODER_TRACE_WIDTH;
     // --- Core trace column map vs offset constants -------------------------------------------
     //
     // `CoreCols` starts at offset 0 of the unified main trace, so its per-AIR indices match
@@ -330,25 +329,31 @@ mod tests {
 
     #[test]
     fn col_map_decoder() {
-        assert_eq!(CORE_COL_MAP.decoder.addr, DECODER_OFFSET);
-        assert_eq!(CORE_COL_MAP.decoder.op_bits[0], DECODER_OFFSET + 1);
-        assert_eq!(CORE_COL_MAP.decoder.op_bits[6], DECODER_OFFSET + 7);
-        assert_eq!(CORE_COL_MAP.decoder.hasher_state[0], DECODER_OFFSET + 8);
-        assert_eq!(CORE_COL_MAP.decoder.in_span, DECODER_OFFSET + 16);
-        assert_eq!(CORE_COL_MAP.decoder.group_count, DECODER_OFFSET + 17);
-        assert_eq!(CORE_COL_MAP.decoder.op_index, DECODER_OFFSET + 18);
-        assert_eq!(CORE_COL_MAP.decoder.full_batch, DECODER_OFFSET + 19);
-        assert_eq!(CORE_COL_MAP.decoder.batch_size_code, DECODER_OFFSET + 20);
-        assert_eq!(CORE_COL_MAP.decoder.extra[0], DECODER_OFFSET + 21);
+        assert_eq!(CORE_COL_MAP.decoder.addr, DECODER_TRACE_OFFSET);
+        assert_eq!(CORE_COL_MAP.decoder.op_bits[0], DECODER_TRACE_OFFSET + 1);
+        assert_eq!(CORE_COL_MAP.decoder.op_bits[6], DECODER_TRACE_OFFSET + 7);
+        assert_eq!(CORE_COL_MAP.decoder.hasher_state[0], DECODER_TRACE_OFFSET + 8);
+        assert_eq!(CORE_COL_MAP.decoder.in_span, DECODER_TRACE_OFFSET + 16);
+        assert_eq!(CORE_COL_MAP.decoder.group_count, DECODER_TRACE_OFFSET + 17);
+        assert_eq!(CORE_COL_MAP.decoder.op_index, DECODER_TRACE_OFFSET + 18);
+        assert_eq!(CORE_COL_MAP.decoder.full_batch, DECODER_TRACE_OFFSET + 19);
+        assert_eq!(CORE_COL_MAP.decoder.batch_size_code, DECODER_TRACE_OFFSET + 20);
+        assert_eq!(CORE_COL_MAP.decoder.extra[0], DECODER_TRACE_OFFSET + 21);
+        assert_eq!(CORE_COL_MAP.decoder.extra[1], DECODER_TRACE_OFFSET + 22);
+        assert_eq!(
+            CORE_COL_MAP.decoder.resolved_digest,
+            core::array::from_fn(|i| RESOLVED_DIGEST_RANGE.start + i)
+        );
+        assert_eq!(RESOLVED_DIGEST_RANGE.end, STACK_TRACE_OFFSET);
     }
 
     #[test]
     fn col_map_stack() {
-        assert_eq!(CORE_COL_MAP.stack.top[0], STACK_OFFSET);
-        assert_eq!(CORE_COL_MAP.stack.top[15], STACK_OFFSET + 15);
-        assert_eq!(CORE_COL_MAP.stack.b0, STACK_OFFSET + 16);
-        assert_eq!(CORE_COL_MAP.stack.b1, STACK_OFFSET + 17);
-        assert_eq!(CORE_COL_MAP.stack.h0, STACK_OFFSET + 18);
+        assert_eq!(CORE_COL_MAP.stack.top[0], STACK_TRACE_OFFSET);
+        assert_eq!(CORE_COL_MAP.stack.top[15], STACK_TRACE_OFFSET + 15);
+        assert_eq!(CORE_COL_MAP.stack.b0, STACK_TRACE_OFFSET + 16);
+        assert_eq!(CORE_COL_MAP.stack.b1, STACK_TRACE_OFFSET + 17);
+        assert_eq!(CORE_COL_MAP.stack.h0, STACK_TRACE_OFFSET + 18);
     }
 
     // --- Chiplet trace column map -------------------------------------------------------------

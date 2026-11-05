@@ -272,6 +272,11 @@ impl MainTrace {
         self.core_row(i).decoder.hasher_state
     }
 
+    /// Returns the authenticated implementation digest selected on an invocation row.
+    pub fn decoder_resolved_digest(&self, i: RowIndex) -> Word {
+        self.core_row(i).decoder.resolved_digest.into()
+    }
+
     /// Returns the first half of the hasher state at row i.
     pub fn decoder_hasher_state_first_half(&self, i: RowIndex) -> Word {
         let hs = &self.core_row(i).decoder.hasher_state;
@@ -289,7 +294,7 @@ impl MainTrace {
         self.core_row(i).decoder.hasher_state[element]
     }
 
-    /// Returns the current function hash (i.e., root) at row i.
+    /// Returns the current principal key at row i (legacy `fn_hash` column name).
     pub fn fn_hash(&self, i: RowIndex) -> [Felt; DIGEST_LEN] {
         self.core_row(i).system.fn_hash
     }
@@ -313,6 +318,11 @@ impl MainTrace {
     pub fn op_batch_encoding(&self, i: RowIndex) -> [Felt; NUM_OP_BATCH_ENCODING_COLS] {
         let decoder = &self.core_row(i).decoder;
         [decoder.full_batch, decoder.batch_size_code]
+    }
+
+    /// Returns whether an END row completes the root and enters HALT.
+    pub fn is_root_end(&self, i: RowIndex) -> Felt {
+        self.core_row(i).decoder.end_block_flags().is_root_end
     }
 
     /// Returns the decoder's `group_count` value at row i.

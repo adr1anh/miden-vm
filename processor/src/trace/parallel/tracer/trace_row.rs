@@ -21,7 +21,7 @@ use miden_core::{
 
 use super::{ExecutionContextInfo, StackState, SystemState, get_digest_in_forest};
 use crate::{
-    ExecutionError,
+    ExecutionError, InvocationTag, KeyedEventKind, KeyedMode,
     continuation_stack::Continuation,
     errors::MapExecErrNoCtx,
     mast::{ExecutableMastForest, MastNode},
@@ -46,6 +46,8 @@ struct DecoderRow {
     pub opcode: u8,
     /// The two child hashes for start operations (first hash, second hash)
     pub hasher_state: (Word, Word),
+    /// Authenticated implementation root, present only on a keyed invocation row.
+    pub resolved_digest: Word,
     /// Whether this row is an operation within a basic block
     pub in_basic_block: bool,
     /// Remaining operation groups for basic-block decoding. LOOP multiplicity is filled after
@@ -71,6 +73,7 @@ impl DecoderRow {
         Self {
             opcode,
             hasher_state,
+            resolved_digest: Word::default(),
             addr,
             in_basic_block: false,
             group_count: ZERO,
@@ -101,6 +104,7 @@ impl DecoderRow {
         Ok(Self {
             opcode,
             hasher_state,
+            resolved_digest: Word::default(),
             addr,
             in_basic_block: false,
             group_count,
@@ -135,6 +139,7 @@ impl DecoderRow {
         Ok(Self {
             opcode: operation.op_code(),
             hasher_state,
+            resolved_digest: Word::default(),
             addr: current_addr,
             in_basic_block: true,
             group_count: basic_block_ctx.group_count_in_block,
@@ -393,9 +398,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         call_node: &CallNode,
         _current_forest: &Arc<SparseMastForest>,
     ) -> Result<(), ExecutionError> {
-        // For CALL/SYSCALL operations, the hasher state in start operations contains the callee
-        // hash in the first half, and zeros in the second half (since CALL only has one
-        // child)
+        // Immediate invocation hashing commits K || ZERO, independently of the resolved D.
         let callee_hash = call_node.target().into_word();
         let zero_hash = Word::default();
 
@@ -599,8 +602,53 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         &mut self,
         system: &SystemState,
         stack: &StackState,
-        decoder_row: DecoderRow,
+        mut decoder_row: DecoderRow,
     ) -> Result<(), ExecutionError> {
+        let mode = match decoder_row.opcode {
+            opcodes::EXEC => Some(KeyedMode::Exec),
+            opcodes::CALL => Some(KeyedMode::Call),
+            opcodes::SYSCALL => Some(KeyedMode::Syscall),
+            opcodes::DYN => Some(KeyedMode::Dyn),
+            opcodes::DYNCALL => Some(KeyedMode::DynCall),
+            _ => None,
+        };
+        if let Some(mode) = mode {
+            let event = self.keyed_event.ok_or(ExecutionError::Internal(
+                "invocation trace row has no authenticated keyed event",
+            ))?;
+            let tag = if mode == KeyedMode::Syscall {
+                InvocationTag::Syscall
+            } else {
+                InvocationTag::Normal
+            };
+            if event.kind != KeyedEventKind::Invoke(mode)
+                || event.use_record.tag() != tag
+                || event.use_record.row() != system.clk
+                || event.use_record.procedure_key().into_word() != decoder_row.hasher_state.0
+            {
+                return Err(ExecutionError::Internal(
+                    "invocation trace row differs from authenticated keyed event",
+                ));
+            }
+            decoder_row.resolved_digest = event.use_record.implementation_root().into_word();
+        } else if let Some(event) = self.keyed_event {
+            if decoder_row.opcode != opcodes::END
+                || event.kind != KeyedEventKind::RootEnd
+                || event.use_record.tag() != InvocationTag::Normal
+                || event.use_record.row() != system.clk
+                || event.use_record.implementation_root().into_word() != decoder_row.hasher_state.0
+                || event.use_record.procedure_key() != event.principal_after
+                || decoder_row.hasher_state.1[0] != ZERO
+                || decoder_row.hasher_state.1[3] != ONE
+            {
+                return Err(ExecutionError::Internal(
+                    "root END trace row differs from authenticated keyed event",
+                ));
+            }
+        } else if decoder_row.opcode == opcodes::END && decoder_row.hasher_state.1[3] != ZERO {
+            return Err(ExecutionError::Internal("root END trace row has no authenticated event"));
+        }
+
         let mut row = CoreCols::<Felt>::default();
         if let Some(system) = &self.system_cols {
             row.system = system.clone();
@@ -645,6 +693,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         decoder.hasher_state[5] = second_hash[1];
         decoder.hasher_state[6] = second_hash[2];
         decoder.hasher_state[7] = second_hash[3];
+        decoder.resolved_digest = decoder_row.resolved_digest.into_elements();
 
         // Remaining decoder trace columns (identical for all control flow operations)
         decoder.op_index = decoder_row.op_index;

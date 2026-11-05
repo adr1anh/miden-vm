@@ -43,8 +43,8 @@ impl CoreAir {
 
     /// LogUp boundary correction for the core trace: the running sum of every
     /// boundary interaction reduced to its denominator contribution. The single var-len slice
-    /// carries `[program_hash (4) | deferred_root (4)]`, the statement inputs the core
-    /// boundary cancels against the block-hash and log-deferred buses.
+    /// carries exactly the deferred root (4). Entry authentication is an in-trace Resolve
+    /// demand at the root END, so the block-hash relation has no external seed.
     pub(super) fn boundary_correction<EF: ExtensionField<Felt>>(
         self,
         challenges: &Challenges<EF>,
@@ -57,10 +57,10 @@ impl CoreAir {
             )
             .into());
         }
-        if boundary_inputs[0].len() != 2 * WORD_SIZE {
+        if boundary_inputs[0].len() != WORD_SIZE {
             return Err(format!(
-                "CoreAir expects {} boundary felts (program hash + deferred root), got {}",
-                2 * WORD_SIZE,
+                "CoreAir expects {} boundary felts (deferred root), got {}",
+                WORD_SIZE,
                 boundary_inputs[0].len()
             )
             .into());

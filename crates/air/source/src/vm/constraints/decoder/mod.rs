@@ -37,7 +37,7 @@
 //! ## Decoder Trace Layout
 //!
 //! ```text
-//! addr | b0 b1 b2 b3 b4 b5 b6 | h0 h1 h2 h3 h4 h5 h6 h7 | sp | gc | ox | full | size | e0 e1
+//! addr | b0 b1 b2 b3 b4 b5 b6 | h0 h1 h2 h3 h4 h5 h6 h7 | sp | gc | ox | full | size | e0 e1 | resolved_digest[4]
 //!  (1)        (7 op bits)             (8 hasher state)    (1)  (1)  (1)    (1)    (1)     (2)
 //! ```
 //!
@@ -48,7 +48,7 @@
 //! |Context    |h0         |h1..h3   |h4            |h5      |h6                   |h7      |
 //! |-----------|-----------|---------|--------------|--------|---------------------|--------|
 //! |SPAN/RESPAN|packed ops |op groups|op group      |op group|op group             |op group|
-//! |END        |block hash₀|hash₁..₃ |is_loop_body  |is_loop |restores_caller_frame|0       |
+//! |END        |block hash₀|hash₁..₃ |is_loop_body  |is_loop |restores_caller_frame|root END|
 //! |User ops   |packed ops |op groups|user_op_helper|...     |...                  |...     |
 //!
 //! ## Operation Flag Degrees
@@ -107,8 +107,9 @@ pub fn enforce_main<AB>(
         full_batch,
         batch_size_code,
         extra,
+        resolved_digest,
     } = local.decoder;
-    let [b0, b1, b2, b3, b4, b5, b6] = op_bits;
+    let [b0, b1, _, _, b4, b5, b6] = op_bits;
     let [e0, e1] = extra;
     let h0 = hasher_state[0];
 
@@ -116,6 +117,7 @@ pub fn enforce_main<AB>(
     let end_flags = local.decoder.end_block_flags();
     let is_loop_body = end_flags.is_loop_body;
     let is_loop = end_flags.is_loop;
+    let is_root_end = end_flags.is_root_end;
 
     // --- Destructure next-row decoder columns ---------------------------------------------------
     let DecoderCols {
@@ -202,14 +204,13 @@ pub fn enforce_main<AB>(
     //   b6 b5 b4 | Constraint
     //   ---------+----------------------
     //   1  0  0  | b0 = 0
-    //   1  0  1  | exclude opcode 95
+    //   1  0  1  | all slots allocated, including EXEC (95)
     //   1  1  *  | b0 = b1 = 0
     //
     // With Boolean opcode bits and constrained e0, b6 - e0 selects prefixes 100 and 11,
-    // disjoint from e0's 101 prefix. Under prefix 101, b0 is forbidden only for slot 95.
+    // disjoint from e0's 101 prefix. All 101 slots, including EXEC, are valid.
     let prefix_100_or_11 = b6 - e0;
-    let prefix_101_with_low_bits_111 = e0 * b3 * b2 * b1;
-    builder.when(prefix_100_or_11 + prefix_101_with_low_bits_111).assert_zero(b0);
+    builder.when(prefix_100_or_11).assert_zero(b0);
 
     // Prefix 11 also requires b1 = 0.
     builder.when(e1).assert_zero(b1);
@@ -222,7 +223,7 @@ pub fn enforce_main<AB>(
     // Operation | Constraint                          | Why
     // ----------+-------------------------------------+------------------------------------
     // SPLIT     | s0 in {0, 1}                        | s0 selects true/false branch
-    // DYN       | h4 = h5 = h6 = h7 = 0               | callee digest lives in h0..h3 only
+    // Invokes   | canonical h4..h7                   | target K lives in h0..h3
     // REPEAT    | s0 = 1                              | loop condition must be true
     // END+loop  | is_loop (h5) => s0 = 0              | exiting loop: condition became false
     // END+REP'  | is_loop_body (h4) = 1               | REPEAT follows a loop-body END
@@ -232,9 +233,12 @@ pub fn enforce_main<AB>(
     let branch_condition = local.stack.get(0);
     builder.when(op_flags.split()).assert_bool(branch_condition);
 
-    // DYN uses h0..h3 for the callee digest in memory and block-hash lookups; h4..h7 are unused.
+    // Immediate invocations hash K followed by a zero word. DYN also leaves its second word
+    // unused: its target key is authenticated by the memory-read lookup instead.
     {
-        let builder = &mut builder.when(op_flags.dyn_op());
+        let immediate_or_dyn =
+            op_flags.exec() + op_flags.call() + op_flags.syscall() + op_flags.dyn_op();
+        let builder = &mut builder.when(immediate_or_dyn);
         let hasher_zeros = [hasher_state[4], hasher_state[5], hasher_state[6], hasher_state[7]];
         builder.assert_zeros(hasher_zeros)
     }
@@ -247,7 +251,17 @@ pub fn enforce_main<AB>(
         let builder = &mut builder.when(op_flags.dyncall());
         builder.assert_eq(hasher_state[4], local.stack.b0 - overflow.dup());
         builder.when(overflow.not()).assert_zero(hasher_state[5]);
+        builder.assert_zeros([hasher_state[6], hasher_state[7]]);
     }
+
+    // The resolved implementation is meaningful only on the five invocation kinds. Every other
+    // row has canonical zero lanes, including END and the complete HALT suffix.
+    let invocation = op_flags.exec()
+        + op_flags.call()
+        + op_flags.syscall()
+        + op_flags.dyn_op()
+        + op_flags.dyncall();
+    builder.when(invocation.not()).assert_zeros(resolved_digest);
 
     // REPEAT consumes a true loop condition.
     builder.when(op_flags.repeat()).assert_one(local.stack.get(0));
@@ -259,19 +273,20 @@ pub fn enforce_main<AB>(
 
     // END entry-kind selectors form the same tagged union as `BlockStackMsg`. They are boolean and
     // mutually exclusive: an END consumes either a LOOP continuation or a caller frame, never
-    // both. h7 has no END semantics and is fixed to zero rather than carrying unauthenticated
-    // metadata.
+    // both. h7 marks exactly the END that enters the terminal HALT suffix.
     {
         let restores_caller_frame = end_flags.restores_caller_frame;
         let builder = &mut builder.when(op_flags.end());
         builder.assert_bool(is_loop);
         builder.assert_bool(restores_caller_frame);
-        builder.assert_zero(hasher_state[7]);
+        builder.assert_bool(is_root_end);
+        builder.assert_eq(is_root_end, op_flags.halt_next());
+        builder.when(is_root_end).assert_zero(is_loop_body);
         builder.assert_zero(is_loop * restores_caller_frame);
     }
 
-    // `is_loop_body` is intentionally not authenticated by a standalone decoder constraint. The
-    // block-hash relation includes it in the END key. A value of one can match only a LoopBody
+    // Except at root completion (where it is explicitly zero above), `is_loop_body` is
+    // authenticated by the block-hash relation's END key. A value of one can match only a LoopBody
     // entry emitted by the unique LOOP row that owns `addr_next`; a value of zero can match only a
     // non-loop child entry. The block-stack relation separately authenticates the END's
     // child-to-parent edge.
@@ -291,6 +306,14 @@ pub fn enforce_main<AB>(
 
     // The first row has no END predecessor, so it cannot be REPEAT.
     builder.when_first_row().assert_zero(op_flags.repeat());
+
+    // A real END must precede the HALT suffix; entry cannot already be HALT. Together with the
+    // final-row boundary and absorption, this gives exactly one authenticated root completion.
+    builder.when_first_row().assert_zero(op_flags.halt());
+    builder
+        .when_transition()
+        .when(op_flags.halt_next())
+        .assert_zero((op_flags.halt() + op_flags.end()).not());
 
     // HALT is absorbing: once entered, the VM stays in HALT for all remaining rows.
     builder.when_transition().when(op_flags.halt()).assert_one(op_flags.halt_next());
@@ -487,7 +510,7 @@ pub fn enforce_main<AB>(
     // operation (f_ctrl = 1). These two states are mutually exclusive and exhaustive.
     //
     // f_ctrl covers: JOIN, SPLIT, LOOP, SPAN, RESPAN, END, REPEAT, HALT, DYN, DYNCALL,
-    //                CALL, SYSCALL.
+    //                EXEC, CALL, SYSCALL.
     //
     // This also implies in_span = 1 - f_ctrl, so in_span is automatically 0 on
     // control-flow rows and 1 otherwise (given that in_span is binary, enforced above).
@@ -708,10 +731,170 @@ mod tests {
             assert!(decoder_accepts(&local, &next), "opcode {opcode} must be accepted");
         }
 
-        for opcode in [65, 95, 97, 98] {
+        for opcode in [65, 97, 98] {
             set_opcode(&mut local, opcode);
             assert!(!decoder_accepts(&local, &next), "unused opcode {opcode} must be rejected");
         }
+    }
+
+    #[test]
+    fn exec_is_a_control_row_with_an_authenticated_implementation_lane() {
+        let mut local = generate_test_row(opcodes::EXEC.into());
+        local.decoder.hasher_state[..4].fill(Felt::from_u8(17));
+        local.decoder.resolved_digest = [Felt::from_u8(29); 4];
+        let next = generate_test_row(opcodes::JOIN.into());
+        assert!(decoder_accepts(&local, &next));
+
+        local.decoder.in_span = Felt::ONE;
+        assert!(!decoder_accepts(&local, &next), "EXEC cannot execute inside a basic block");
+    }
+
+    #[test]
+    fn resolved_digest_is_zero_except_on_invocations() {
+        let next = generate_test_row(opcodes::JOIN.into());
+        for opcode in
+            [opcodes::EXEC, opcodes::CALL, opcodes::SYSCALL, opcodes::DYN, opcodes::DYNCALL]
+        {
+            let mut local = generate_test_row(opcode.into());
+            local.decoder.resolved_digest = [Felt::from_u8(29); 4];
+            assert!(decoder_accepts(&local, &next), "invocation {opcode} must carry its D");
+        }
+
+        let (in_span, in_span_next) = honest_in_span_pair();
+        let control = generate_test_row(opcodes::JOIN.into());
+        let end = generate_test_row(opcodes::END.into());
+        let halt = generate_test_row(opcodes::HALT.into());
+        for (local, next) in [
+            (in_span, in_span_next),
+            (control, next.clone()),
+            (end, next),
+            (halt.clone(), halt),
+        ] {
+            assert!(decoder_accepts(&local, &next));
+            for lane in 0..4 {
+                let mut forged = local.clone();
+                forged.decoder.resolved_digest[lane] = Felt::ONE;
+                assert!(
+                    !decoder_accepts(&forged, &next),
+                    "non-invocation D lane {lane} must be zero"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invocation_helper_words_are_canonical() {
+        let next = generate_test_row(opcodes::JOIN.into());
+        for opcode in [opcodes::EXEC, opcodes::CALL, opcodes::SYSCALL, opcodes::DYN] {
+            let local = generate_test_row(opcode.into());
+            assert!(decoder_accepts(&local, &next));
+            for lane in 4..8 {
+                let mut forged = local.clone();
+                forged.decoder.hasher_state[lane] = Felt::ONE;
+                assert!(!decoder_accepts(&forged, &next), "opcode {opcode} h{lane} must be zero");
+            }
+        }
+        let local = generate_test_row(opcodes::DYNCALL.into());
+        assert!(decoder_accepts(&local, &next));
+        for lane in 6..8 {
+            let mut forged = local.clone();
+            forged.decoder.hasher_state[lane] = Felt::ONE;
+            assert!(!decoder_accepts(&forged, &next), "DYNCALL h{lane} must be zero");
+        }
+    }
+
+    #[test]
+    fn root_end_is_exactly_the_transition_into_halt() {
+        let halt = generate_test_row(opcodes::HALT.into());
+        let mut end = generate_test_row(opcodes::END.into());
+        end.decoder.hasher_state[7] = Felt::ONE;
+        assert!(decoder_accepts(&end, &halt));
+
+        let mut missing_root = end.clone();
+        missing_root.decoder.hasher_state[7] = Felt::ZERO;
+        assert!(!decoder_accepts(&missing_root, &halt));
+        for flag in [Felt::from_u8(2), -Felt::ONE] {
+            let mut forged = end.clone();
+            forged.decoder.hasher_state[7] = flag;
+            assert!(!decoder_accepts(&forged, &halt));
+        }
+        let mut loop_body_root = end.clone();
+        loop_body_root.decoder.hasher_state[4] = Felt::ONE;
+        assert!(!decoder_accepts(&loop_body_root, &halt), "root cannot be a loop-body child");
+        assert!(!decoder_accepts(&end, &generate_test_row(opcodes::JOIN.into())));
+        assert!(decoder_accepts(&halt, &halt), "HALT padding remains absorbing");
+        assert!(!decoder_accepts(&halt, &end), "HALT cannot resume execution");
+        for opcode in [opcodes::JOIN, opcodes::EXEC, opcodes::CALL, opcodes::DYN] {
+            assert!(
+                !decoder_accepts(&generate_test_row(opcode.into()), &halt),
+                "only END enters HALT"
+            );
+        }
+    }
+
+    #[test]
+    fn first_row_cannot_be_halt() {
+        let halt = generate_test_row(opcodes::HALT.into());
+        let flags = OpFlags::new(&halt.decoder, &halt.stack, &halt.decoder);
+        let mut builder = ConstraintEvalBuilder::new().with_row_flags(true, false, true);
+        enforce_main(&mut builder, &halt, &halt, &flags);
+        assert!(builder.evaluations.iter().any(|v| *v != QuadFelt::ZERO));
+    }
+
+    #[test]
+    fn cyclic_boundary_cannot_replace_authenticated_root_completion() {
+        let join = generate_test_row(opcodes::JOIN.into());
+        let halt = generate_test_row(opcodes::HALT.into());
+        let mut root_end = generate_test_row(opcodes::END.into());
+        root_end.decoder.hasher_state[7] = Felt::ONE;
+        let rows = [join.clone(), root_end.clone(), halt.clone(), halt.clone()];
+        let eval_at = |trace: &[CoreCols<Felt>], row: usize| {
+            let local = &trace[row];
+            let next = &trace[(row + 1) % trace.len()];
+            let flags = OpFlags::new(&local.decoder, &local.stack, &next.decoder);
+            let mut builder = ConstraintEvalBuilder::new().with_row_flags(
+                row == 0,
+                row + 1 == trace.len(),
+                row + 1 < trace.len(),
+            );
+            enforce_main(&mut builder, local, next, &flags);
+            builder.evaluations.iter().all(|value| *value == QuadFelt::ZERO)
+        };
+
+        // A valid decoder spine ends in HALT and wraps to a non-HALT first row. Transition rules
+        // are disabled only for that physical final-to-first edge; both boundary rules remain.
+        for row in 0..rows.len() {
+            assert!(eval_at(&rows, row), "valid decoder spine rejected at row {row}");
+        }
+
+        let mut missing_root = rows.clone();
+        missing_root[1].decoder.hasher_state[7] = Felt::ZERO;
+        assert!(!eval_at(&missing_root, 1), "END before HALT must carry the root flag");
+
+        let mut skipped_end = rows.clone();
+        skipped_end[1] = join.clone();
+        assert!(!eval_at(&skipped_end, 1), "an interior non-END cannot enter the HALT suffix");
+
+        // END -> JOIN is valid in the interior. Putting that same edge at the physical wrap
+        // cannot omit HALT/root completion, even though the transition selector is zero there.
+        let ordinary_end = generate_test_row(opcodes::END.into());
+        assert!(decoder_accepts(&ordinary_end, &join));
+        let no_halt = [join.clone(), join.clone(), join.clone(), ordinary_end];
+        assert!(!eval_at(&no_halt, 3), "the physical final row must still be HALT");
+
+        // Moving a matching END(r=1) -> HALT edge across the wrap also fails independently at
+        // both physical boundaries. The same opcode pairs are valid away from those boundaries.
+        assert!(decoder_accepts(&root_end, &halt));
+        assert!(decoder_accepts(&halt, &halt));
+        let wrapped_root = [halt.clone(), halt.clone(), halt, root_end];
+        assert!(
+            !eval_at(&wrapped_root, 3),
+            "a final END cannot complete through the cyclic edge"
+        );
+        assert!(
+            !eval_at(&wrapped_root, 0),
+            "HALT cannot become the first row after a cyclic END"
+        );
     }
 
     /// END entry-kind selectors must encode exactly one valid semantic kind.
@@ -752,7 +935,7 @@ mod tests {
         );
         assert!(
             !accepts(Felt::ZERO, Felt::ONE, Felt::ONE),
-            "the unused h7 lane must be zero on an END row"
+            "a root flag cannot be set without a following HALT"
         );
         assert!(
             !accepts(Felt::ZERO, Felt::new_unchecked(3), Felt::ZERO),

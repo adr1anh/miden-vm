@@ -12,8 +12,8 @@
 //!
 //! One [`miden_stark::lookup::LookupBuilder::next_column`] call with one opcode-gated group:
 //!
-//! - Block-stack table: JOIN/SPLIT/SPAN/DYN, LOOP, DYNCALL, CALL/SYSCALL, two END cases, RESPAN
-//!   batch (7 branches, mutually exclusive via decoder opcode flags).
+//! - Block-stack table: JOIN/SPLIT/SPAN/EXEC/DYN, LOOP, DYNCALL, CALL/SYSCALL, two END cases,
+//!   RESPAN batch (7 branches, mutually exclusive via decoder opcode flags).
 //! - u32 range-check batch: 4 removes gated by `u32_rc_op`.
 //! - Merkle range-check batches: depth bounds plus part of the canonical-index witness, gated by
 //!   MPVERIFY / MRUPDATE.
@@ -25,7 +25,7 @@
 //! mutually exclusive decoder-opcode flags. The three bus families live in disjoint
 //! opcode sets:
 //!
-//! - Block-stack: {JOIN, SPLIT, SPAN, DYN, LOOP, DYNCALL, CALL, SYSCALL, END, RESPAN}
+//! - Block-stack: {JOIN, SPLIT, SPAN, EXEC, DYN, LOOP, DYNCALL, CALL, SYSCALL, END, RESPAN}
 //! - u32: {U32SPLIT, U32ASSERT2, U32ADD, U32SUB, U32MUL, U32DIV, U32MOD, U32AND, U32XOR, U32ADD3,
 //!   U32MADD, …} — prefix_100 in the opcode encoding.
 //! - Merkle: {MPVERIFY, MRUPDATE}.
@@ -44,7 +44,7 @@
 //!
 //! |Interaction                                  |Gate deg|Payload              |U degree|V degree|
 //! |---------------------------------------------|--------|---------------------|--------|--------|
-//! |JOIN/SPLIT/SPAN/DYN continuation add         |5       |Continuation, denom 1|6       |5       |
+//! |JOIN/SPLIT/SPAN/EXEC/DYN continuation add    |5       |Continuation, denom 1|6       |5       |
 //! |LOOP continuation add                        |5       |Continuation, denom 1|6       |5       |
 //! |DYNCALL caller-frame add                     |5       |CallerFrame, denom 1 |6       |5       |
 //! |CALL/SYSCALL caller-frame add                |4       |CallerFrame, denom 1 |5       |4       |
@@ -145,11 +145,14 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                 |g| {
                     // ---- Block-stack relation (Continuation / CallerFrame tagged entries) ----
 
-                    // JOIN/SPLIT/SPAN/DYN: continuation push with `is_loop = 0`.
-                    let f =
-                        op_flags.join() + op_flags.split() + op_flags.span() + op_flags.dyn_op();
+                    // JOIN/SPLIT/SPAN/EXEC/DYN: continuation push with `is_loop = 0`.
+                    let f = op_flags.join()
+                        + op_flags.split()
+                        + op_flags.span()
+                        + op_flags.exec()
+                        + op_flags.dyn_op();
                     g.add(
-                        "join_split_span_dyn",
+                        "join_split_span_exec_dyn",
                         f,
                         || {
                             let block_id = addr_next.into();

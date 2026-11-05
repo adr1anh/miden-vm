@@ -100,7 +100,7 @@ fn naive_composites(
 
     let control_flow = deg5[4] + deg5[5] + deg5[6] + deg5[7] // SPAN/JOIN/SPLIT/LOOP
         + deg4[4] + deg4[5] + deg4[6] + deg4[7] // END/REPEAT/RESPAN/HALT
-        + deg5[8] + deg5[12] // DYN/DYNCALL
+        + deg5[8] + deg5[12] + deg5[15] // DYN/DYNCALL/EXEC
         + deg4[2] + deg4[3]; // SYSCALL/CALL
 
     (left_shift, right_shift, control_flow)
@@ -149,6 +149,7 @@ fn test_get_op_index_degree5() {
     assert_eq!(get_op_index(opcodes::SPAN), 6);
     assert_eq!(get_op_index(opcodes::JOIN), 7);
     assert_eq!(get_op_index(opcodes::PUSH), 11);
+    assert_eq!(get_op_index(opcodes::EXEC), 15);
 }
 
 #[test]
@@ -347,13 +348,14 @@ fn degree_4_op_flags() {
 #[test]
 fn composite_no_shift_flags() {
     // Operations where all 16 positions remain unchanged
-    let no_shift_opcodes: [u8; 7] = [
+    let no_shift_opcodes: [u8; 8] = [
         opcodes::MPVERIFY,
         opcodes::SPAN,
         opcodes::HALT,
         opcodes::EMIT,
         opcodes::CALL,
         opcodes::SYSCALL,
+        opcodes::EXEC,
         opcodes::EVALCIRCUIT,
     ];
 
@@ -664,7 +666,7 @@ fn composite_swapw3_flags() {
 #[test]
 fn control_flow_flag() {
     // Control flow operations
-    let cf_opcodes: [u8; 10] = [
+    let cf_opcodes: [u8; 13] = [
         opcodes::SPAN,
         opcodes::JOIN,
         opcodes::SPLIT,
@@ -675,6 +677,9 @@ fn control_flow_flag() {
         opcodes::HALT,
         opcodes::CALL,
         opcodes::SYSCALL,
+        opcodes::DYN,
+        opcodes::DYNCALL,
+        opcodes::EXEC,
     ];
 
     for opcode in cf_opcodes {
@@ -696,6 +701,31 @@ fn control_flow_flag() {
     for op in non_cf_ops {
         let op_flags = op_flags_for_opcode(op.op_code().into());
         assert_eq!(op_flags.control_flow(), ZERO, "control_flow should be ZERO for {op:?}");
+    }
+}
+
+#[test]
+fn exec_has_a_distinct_control_flow_flag_and_preserves_the_full_stack() {
+    for opcode in valid_opcodes() {
+        let flags = op_flags_for_opcode(opcode);
+        assert_eq!(
+            flags.exec(),
+            if opcode == usize::from(opcodes::EXEC) {
+                ONE
+            } else {
+                ZERO
+            }
+        );
+    }
+
+    let flags = op_flags_for_opcode(opcodes::EXEC.into());
+    assert_eq!(flags.control_flow(), ONE);
+    assert_eq!(flags.left_shift(), ZERO);
+    assert_eq!(flags.right_shift(), ZERO);
+    for depth in 0..16 {
+        assert_eq!(flags.no_shift_at(depth), ONE);
+        assert_eq!(flags.left_shift_at(depth), ZERO);
+        assert_eq!(flags.right_shift_at(depth), ZERO);
     }
 }
 

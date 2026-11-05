@@ -16,7 +16,9 @@ use crate::vm::{
             main_air::MainLookupBuilder,
         },
     },
-    inputs::{AUX_KERNEL_DIGESTS, NUM_CHIPLETS_PUBLIC_VALUES, NUM_PUBLIC_VALUES},
+    inputs::{
+        AUX_DEFERRED_ROOT, AUX_KERNEL_DIGESTS, NUM_CHIPLETS_PUBLIC_VALUES, NUM_PUBLIC_VALUES,
+    },
     trace,
 };
 
@@ -41,10 +43,13 @@ pub use eidos_compression::EidosCompressionAir;
 pub trait MidenAirBuilder: LiftedAirBuilder<F = Felt> {}
 impl<T: LiftedAirBuilder<F = Felt>> MidenAirBuilder for T {}
 
-/// Combined LogUp width used by constraint test harnesses: 4 core columns, 4 chiplet
+/// Combined LogUp width used by constraint test harnesses: 5 core columns, 4 chiplet
 /// columns, and the byte-pair table column. Standalone Eidos compression tests size their aux
 /// matrix from the AIR directly.
-pub const LOGUP_AUX_TRACE_WIDTH: usize = 9;
+pub const LOGUP_AUX_TRACE_WIDTH: usize = crate::vm::constraints::lookup::main_air::MAIN_COLUMN_SHAPE
+    .len()
+    + crate::vm::constraints::lookup::chiplet_air::CHIPLET_COLUMN_SHAPE.len()
+    + 1;
 
 // MIDEN AIR
 // ================================================================================================
@@ -132,7 +137,10 @@ impl MidenAir {
                     )
                     .into());
                 }
-                CoreAir.boundary_correction(challenges, &[&aux_inputs[..AUX_KERNEL_DIGESTS]])
+                CoreAir.boundary_correction(
+                    challenges,
+                    &[&aux_inputs[AUX_DEFERRED_ROOT..AUX_KERNEL_DIGESTS]],
+                )
             },
             Self::Chiplets => ChipletsAir.boundary_correction(challenges, &[public_inputs]),
             Self::EidosCompression => EidosCompressionAir.boundary_correction(challenges, &[]),

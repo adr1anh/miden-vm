@@ -1,8 +1,9 @@
 use crate::vm::trace::decoder::{
-    NUM_HASHER_COLUMNS, NUM_OP_BITS, NUM_OP_BITS_EXTRA_COLS, NUM_USER_OP_HELPERS,
+    NUM_HASHER_COLUMNS, NUM_OP_BITS, NUM_OP_BITS_EXTRA_COLS, NUM_RESOLVED_DIGEST_COLUMNS,
+    NUM_USER_OP_HELPERS,
 };
 
-/// Decoder columns in the main execution trace (23 columns).
+/// Decoder columns in the main execution trace (27 columns).
 #[repr(C)]
 #[derive(Debug, Clone, Default)]
 pub struct DecoderCols<T> {
@@ -24,6 +25,8 @@ pub struct DecoderCols<T> {
     pub batch_size_code: T,
     /// Degree-reduction extra columns e0, e1.
     pub extra: [T; NUM_OP_BITS_EXTRA_COLS],
+    /// Authenticated implementation digest on invocation rows; zero on every other row.
+    pub resolved_digest: [T; NUM_RESOLVED_DIGEST_COLUMNS],
 }
 
 impl<T: Copy> DecoderCols<T> {
@@ -39,18 +42,18 @@ impl<T: Copy> DecoderCols<T> {
         ]
     }
 
-    /// Returns the END flags stored in hasher state columns 4 through 6.
-    /// Column 7 is constrained to zero on END rows.
+    /// Returns the END flags stored in hasher state columns 4 through 7.
     pub fn end_block_flags(&self) -> EndBlockFlags<T> {
         EndBlockFlags {
             is_loop_body: self.hasher_state[4],
             is_loop: self.hasher_state[5],
             restores_caller_frame: self.hasher_state[6],
+            is_root_end: self.hasher_state[7],
         }
     }
 }
 
-/// Named overlay for the semantic END flags in `hasher_state[4..7]`.
+/// Named overlay for the semantic END flags in `hasher_state[4..8]`.
 #[repr(C)]
 #[derive(Clone, Debug)]
 pub struct EndBlockFlags<T> {
@@ -60,4 +63,6 @@ pub struct EndBlockFlags<T> {
     pub is_loop: T,
     /// Whether this END restores state from an authenticated caller-frame entry.
     pub restores_caller_frame: T,
+    /// Whether this END enters the terminal HALT suffix.
+    pub is_root_end: T,
 }

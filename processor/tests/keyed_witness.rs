@@ -81,6 +81,37 @@ fn assert_single_mast_prefix(
     assert_eq!(main.chiplet_clk(first_controller), Felt::new_unchecked(9));
     assert_eq!(main.addr(RowIndex::from(0)), ZERO, "the absent root address stays zero");
     assert_eq!(main.addr(RowIndex::from(1)), Felt::new_unchecked(9));
+
+    let entry = descriptor.entry_key().into_word().into_elements();
+    assert_eq!(main.fn_hash(RowIndex::from(0)), entry);
+    let mut root_ends = 0;
+    let mut halt_system = None;
+    for index in 0..main.core_height() {
+        let row = RowIndex::from(index);
+        let core = main.core_row(row);
+        assert_eq!(core.decoder.resolved_digest, [ZERO; 4]);
+        assert_eq!(core.system.clk, Felt::new_unchecked(index as u64));
+        assert_eq!(core.system.fn_hash, entry);
+        if main.is_root_end(row) == ONE {
+            root_ends += 1;
+            assert_eq!(main.get_op_code(row), Felt::from_u8(miden_core::operations::opcodes::END));
+            assert_eq!(main.is_loop_body_flag(row), ZERO);
+            assert_eq!(main.decoder_hasher_state_first_half(row), *trace.program_hash());
+            let next = RowIndex::from(index + 1);
+            assert_eq!(
+                main.get_op_code(next),
+                Felt::from_u8(miden_core::operations::opcodes::HALT)
+            );
+            halt_system = Some(main.core_row(next).system.clone());
+        }
+        if let Some(system) = &halt_system
+            && main.get_op_code(row) == Felt::from_u8(miden_core::operations::opcodes::HALT)
+        {
+            assert_eq!(core.system.ctx, system.ctx);
+            assert_eq!(core.system.fn_hash, system.fn_hash);
+        }
+    }
+    assert_eq!(root_ends, 1);
 }
 
 #[test]

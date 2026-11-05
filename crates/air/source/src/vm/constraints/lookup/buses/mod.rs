@@ -1,6 +1,6 @@
 //! Physical lookup-column emitters for the Miden VM's LogUp argument.
 //!
-//! The Miden VM's LogUp buses are emitted across 8 columns — most host a single bus, but
+//! The Core and Chiplets LogUp buses are emitted across 9 columns — most host a single bus, but
 //! several host two or more linearly-independent buses sharing one running accumulator via
 //! distinct `bus_prefix[bus]` additive bases (see per-bus module docs for the merges).
 //! Each emitter opens one [`miden_stark::lookup::LookupBuilder::next_column`] closure and fixes
@@ -32,7 +32,7 @@
 //!
 //! The main-trace and chiplet-trace contexts live next to their respective LookupAirs:
 //! - [`super::main_air::MainBusContext`]: two-row window plus the shared [`LookupOpFlags`] instance
-//!   consumed by the 4 main-trace emitters.
+//!   consumed by the 5 main-trace emitters.
 //! - [`super::chiplet_air::ChipletBusContext`]: two-row window plus the shared
 //!   [`ChipletActiveFlags`] snapshot consumed by the 4 chiplet-trace emitters.
 //!
@@ -55,6 +55,7 @@ pub(in crate::vm::constraints::lookup) mod hash_kernel;
 pub(in crate::vm::constraints::lookup) mod hasher_returns;
 pub(crate) mod library;
 pub(in crate::vm::constraints::lookup) mod lookup_op_flags;
+pub(in crate::vm::constraints::lookup) mod resolution;
 pub(in crate::vm::constraints::lookup) mod stack_overflow;
 pub(in crate::vm::constraints::lookup) mod wiring;
 

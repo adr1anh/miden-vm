@@ -331,7 +331,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
 | 06 Library | implemented-awaiting-validation | MAIN `b9db78846`; lookup `d5245be2e`; public boundary `4bbba1e34`; native `668f581c4`; test `8ddf89e49`; reporting `c53ea3cc7`; earlier refs below; base `53acb4837` | Independent reviews; AIR360 with actual packed degree≤9/shape24/4/periodic9/public8/exact [4,4,3,2], raw moved-fraction multisets; witness9 default/testing; execution16/40cases; strict scoped Clippy/no_std | Full production forged matrices/Range+And8 closure and normal/parallel/lookup/streamed fixtures await inherited assembly/fixture migration and Core07/claim12 closure; generated/MASM/recursive/security/qualification and measured snapshot recapture remain |
-| 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
+| 07 Core resolution | implemented-awaiting-validation | MAIN `c668075ff`; lookup `299452ea6`; native `cf934ab3f`; public tests `606d36364`; base `cc6a74742` | Independent reviews; actual Core52/decoder27/aux5/Core36 and degree9; AIR383 pass with one explicit legacy-claim failure; execution18/witness9 default+testing; strict scoped Clippy/no_std | Legacy claim fixture/public projection remains12; normal processor/parallel/decoder/lookup gates await assembly/fixture migration; full forged-matrix/generated/MASM/recursive/security and inherited acceptance remain |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
 | 09 Assembly/packages | planned | — | — | Depends on 02,04,05 |
 | 10 Projects/imports | planned | — | — | Depends on 04,09; release identity codec |
@@ -1478,3 +1478,60 @@ native/MASM/recursive/security and qualification gates remain. Old prove/verify/
 omit Chiplets8 and reject at statement construction; their legacy carrier cannot enable the selected
 proof. Proceed to PR07 Core binding, then PR12 canonical claim/public/transport activation without
 defaults or old-authority adapters. No GitHub PR or push was created.
+
+
+### PR 07 Opening boundary
+
+`adr1anh/librarytree-07-core-resolution` starts exactly at PR06 final review-description commit
+`cc6a74742722ff9860d34cae20323faf90ee04ee`. PR06 remains implemented-awaiting-validation with every
+recorded gate. Bounded source research confirms the selected four explicit decoder resolved-D lanes
+produce decoder27/Core52, separately from public Core36, and add one dedicated capacity1 Core Resolve
+column. It identifies existing keyed K/D/mode/row evidence for native production, missing EXEC
+classifications, first-row/padding principal gaps and END/root completion changes. Proceed under PR07's
+existing scope/acceptance; no shared semantic ambiguity or new policy/default was selected. No PR07
+code/check pass is claimed at this opening, and no GitHub PR or push was created.
+
+
+### PR 07 Initial Core validation checkpoint
+
+At branch `adr1anh/librarytree-07-core-resolution`, verified HEAD
+`66c8dd135e4356607e0087e8c8bd18977610be64`, the reviewed Core MAIN/Resolve/native sources
+remain uncommitted. After AC/heavy guards the actual AIR and processor libraries compile.
+AIR tests pass382/fail2: actual Core52/decoder27/aux5/Core36, degree9 and new Core binding tests
+pass; the expected column-map snapshot is now updated but not rerun. The legacy claim fixture's
+32-public assumption remains an explicit PR12 integration gate, with no dropped principal or
+compatibility fallback. Public execution passes17/fails1: the new all-mode native fixture reaches
+OutputStackOverflow(12); the strengthened mutation-rejection test passes. Logs `pr07-core-*`.
+These scoped results do not establish full proof acceptance or clear inherited gates.
+
+The user's repeated identity clarification reaffirms authoritative D3 and separate correction
+`a477732bc`; profile Rustdoc alignment is `71bf65973`. Both exact Page formulas, permanent binding,
+full L(I)/external(I) projection and required external Protocol inputs remain unchanged. This
+checkpoint updates documentation only, preserving all in-flight implementation. No GitHub PR or push.
+
+
+### PR 07 Reviewed Core binding and native checkpoint
+
+`c668075ff` appends four resolved-D lanes, enables EXEC, constrains canonical invocation helpers,
+real root-END/absorbing HALT and first/final K_entry principal. `299452ea6` adds the dedicated unit
+Resolve column with literal normal/SYS tags, executed-child D versus static K/zero preimages and
+root completion from actual completed hash/next principal. Signed END multiplicity r−1 preserves
+degree9; Core boundary now accepts exactly deferred4 and emits only two transcript terms.
+`cf934ab3f` writes validated retained K/D/mode/row events, preserves initial/terminal principals
+and marks the actual RootEnd. Public tests `606d36364` cover all five modes, K≠D, alias/cache-hit
+frequencies, source/debug/replay/streamed/fragment parity and exact mutation rejection. Review
+strengthened the negative oracle; final dynamic fixture cleanup restores stack depth without
+removing saved-overflow coverage. No new witness authority, encoded field or wire version.
+
+After AC/heavy guards AIR383 tests pass; the sole failure is the explicit legacy-claim fixture
+32-versus36 public mismatch, reserved for PR12 rather than hidden by a K-dropping fallback.
+The column snapshot passes. Public execution18 and witness9 pass in default/testing configurations.
+Strict AIR library/tests, processor library and exact-source/public-test Clippy in both configurations
+plus no-default-features processor pass. Logs `pr07-core-*`. Initial test/lint failures are retained
+separately. Source and integration reviews are clean; formatting/whitespace checks pass.
+
+PR07 remains implemented-awaiting-validation. Full production forged matrices/global lookup closure,
+normal decoder/lookup/parallel suites behind assembly migration, generated/MASM/recursive/security
+and inherited gates remain open. Canonical claim44/transport3/proof activation remains PR12.
+Finalize PR07 review scope, then continue PR08 without replacing the retained session, duplicating
+its ledger or assuming replay parity establishes proof acceptance. D3 and external profiles unchanged.

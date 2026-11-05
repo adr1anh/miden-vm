@@ -107,10 +107,10 @@ pub struct SystemState {
     /// Execution context ID - starts at 0 (root context), changes on CALL/SYSCALL operations
     pub ctx: ContextId,
 
-    /// Hash of the function that initiated the current execution context
-    /// - For root context: [ZERO; 4]
-    /// - For CALL/DYNCALL contexts: hash of the called function
-    /// - For SYSCALL contexts: hash remains from the calling function
+    /// Procedure key of the principal established in the current execution context.
+    /// - Entry initializes the principal to the descriptor's entry key.
+    /// - CALL/DYNCALL establish the requested key; returns restore the saved principal.
+    /// - EXEC/DYN/SYSCALL preserve the established principal.
     pub fn_hash: Word,
 
     /// Deferred root used for recording `log_deferred` calls.
@@ -459,12 +459,23 @@ pub enum EndBlockStackEntryKind {
 pub struct EndBlockFlags {
     is_loop_body: bool,
     entry_kind: EndBlockStackEntryKind,
+    is_root_end: bool,
 }
 
 impl EndBlockFlags {
     /// Creates END flags for the specified block-stack entry kind.
     pub fn new(is_loop_body: bool, entry_kind: EndBlockStackEntryKind) -> Self {
-        Self { is_loop_body, entry_kind }
+        Self {
+            is_loop_body,
+            entry_kind,
+            is_root_end: false,
+        }
+    }
+
+    /// Marks the END authenticated by the retained root-completion event.
+    pub(crate) fn with_root_end(mut self, is_root_end: bool) -> Self {
+        self.is_root_end = is_root_end;
+        self
     }
 
     /// Encodes the flags in their hasher-state column order.
@@ -476,7 +487,8 @@ impl EndBlockFlags {
             EndBlockStackEntryKind::CallerFrame => (ZERO, ONE),
         };
 
-        [is_loop_body, is_loop, restores_caller_frame, ZERO].into()
+        let is_root_end = if self.is_root_end { ONE } else { ZERO };
+        [is_loop_body, is_loop, restores_caller_frame, is_root_end].into()
     }
 }
 
@@ -1841,6 +1853,19 @@ mod tests {
             (
                 EndBlockFlags::new(false, EndBlockStackEntryKind::CallerFrame),
                 [ZERO, ZERO, ONE, ZERO].into(),
+            ),
+            (
+                EndBlockFlags::new(false, EndBlockStackEntryKind::Continuation).with_root_end(true),
+                [ZERO, ZERO, ZERO, ONE].into(),
+            ),
+            (
+                EndBlockFlags::new(false, EndBlockStackEntryKind::CallerFrame).with_root_end(true),
+                [ZERO, ZERO, ONE, ONE].into(),
+            ),
+            (
+                EndBlockFlags::new(false, EndBlockStackEntryKind::LoopContinuation)
+                    .with_root_end(true),
+                [ZERO, ONE, ZERO, ONE].into(),
             ),
         ];
 
