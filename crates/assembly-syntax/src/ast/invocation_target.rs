@@ -51,19 +51,19 @@ impl Invoke {
 // INVOCATION TARGET
 // ================================================================================================
 
-/// Describes targets of `exec`, `call`, and `syscall` instructions.
+/// Describes targets of `exec`, `call`, `syscall`, and `procref` instructions.
 ///
 /// A label of an invoked procedure must comply with the following rules:
-/// - It can be a hexadecimal string representing a MAST root digest ([Word]). In this case, the
-///   label must start with "0x" and must be followed by a hexadecimal string (the parser also
-///   accepts a 63-digit string, padded) that is the serialized byte form returned by
-///   [`Word::to_hex`] — the four field elements each encoded as an 8-byte little-endian chunk (see
-///   [`Word::as_bytes`]), not as canonical big-endian integers. Concretely, for a word with
-///   elements `[e0, e1, e2, e3]`, the literal is `0x` followed by `hex(e0.to_le_bytes()) ||
-///   hex(e1.to_le_bytes()) || hex(e2.to_le_bytes()) || hex(e3.to_le_bytes())`. Encoding a literal
-///   by instead formatting each field element as a canonical big-endian integer and concatenating
-///   (e.g. `format!("{e0:016x}{e1:016x}...")`) can silently produce a different, incorrect
-///   [Word]/MAST root (or fail to parse, if a reversed limb exceeds the field modulus) — always
+/// - It can be a hexadecimal string representing a ProcedureKey K ([Word]). In this case, the label
+///   must start with "0x" and must be followed by a hexadecimal string (the parser also accepts a
+///   63-digit string, padded) that is the serialized byte form returned by [`Word::to_hex`] — the
+///   four field elements each encoded as an 8-byte little-endian chunk (see [`Word::as_bytes`]),
+///   not as canonical big-endian integers. Concretely, for a word with elements `[e0, e1, e2, e3]`,
+///   the literal is `0x` followed by `hex(e0.to_le_bytes()) || hex(e1.to_le_bytes()) ||
+///   hex(e2.to_le_bytes()) || hex(e3.to_le_bytes())`. Encoding a literal by instead formatting each
+///   field element as a canonical big-endian integer and concatenating (e.g.
+///   `format!("{e0:016x}{e1:016x}...")`) can silently produce a different, incorrect
+///   [Word]/procedure key (or fail to parse, if a reversed limb exceeds the field modulus) — always
 ///   construct such literals from [`Word::to_hex`] instead of hand-encoding the field elements.
 /// - It can contain a single procedure name. In this case, the label must comply with procedure
 ///   name rules.
@@ -73,9 +73,10 @@ impl Invoke {
 /// All other combinations will result in an error.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum InvocationTarget {
-    /// An absolute procedure reference, but opaque in that we do not know where the callee is
-    /// defined. However, it does not actually matter, we consider such references to be _a priori_
-    /// valid.
+    /// An opaque ProcedureKey K literal, retaining the historical `MastRoot` AST spelling.
+    ///
+    /// Parsing or constructing this target supplies neither an implementation body/root D nor an
+    /// authenticated binding. Executable key resolution is a separate toolchain/runtime concern.
     MastRoot(Span<Word>),
     /// A locally-defined procedure.
     Symbol(Ident),

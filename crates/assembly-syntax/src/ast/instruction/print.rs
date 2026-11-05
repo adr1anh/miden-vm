@@ -323,8 +323,10 @@ impl PrettyPrint for Instruction {
             },
             Self::DynExec => const_text("dynexec"),
             Self::DynCall => const_text("dyncall"),
-            Self::ProcRef(InvocationTarget::MastRoot(_)) => {
-                panic!("invalid procref instruction: expected name not MAST root")
+            Self::ProcRef(InvocationTarget::MastRoot(key)) => {
+                const_text("procref")
+                    + const_text(".")
+                    + text(format!("{:#x}", DisplayHex(key.as_bytes().as_slice())))
             },
             Self::ProcRef(InvocationTarget::Symbol(name)) => {
                 flatten(const_text("procref") + const_text(".") + text(name))
@@ -421,7 +423,7 @@ mod tests {
     use miden_debug_types::Span;
 
     use crate::{
-        Felt,
+        Felt, Word,
         ast::*,
         parser::{IntValue, PushValue},
     };
@@ -469,5 +471,24 @@ mod tests {
             "exec.0x517a70559a11f74acd98f20c85eeaf04dddbca3459510e40e5e979a26cfa3c69",
             instruction
         );
+    }
+
+    #[test]
+    fn invocation_source_compatibility_word_display() {
+        let key = Word::new([
+            Felt::new_unchecked(0x0807060504030201),
+            Felt::new_unchecked(0x1817161514131211),
+            Felt::new_unchecked(0x2827262524232221),
+            Felt::new_unchecked(0x3837363534333231),
+        ]);
+        for (mnemonic, build) in [
+            ("exec", Instruction::Exec as fn(InvocationTarget) -> Instruction),
+            ("call", Instruction::Call),
+            ("syscall", Instruction::SysCall),
+            ("procref", Instruction::ProcRef),
+        ] {
+            let instruction = build(InvocationTarget::MastRoot(Span::unknown(key)));
+            assert_eq!(format!("{instruction}"), format!("{mnemonic}.{}", key.to_hex()));
+        }
     }
 }

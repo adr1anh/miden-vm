@@ -99,7 +99,7 @@ Extract logical Controller-address handling and checked relocation/sentinel rule
 
 **Existing files:** `crates/assembly-syntax/src/{module.rs,ast/invocation_target.rs,ast/instruction/mod.rs,ast/instruction/print.rs,parser/cst/instructions.rs}`, parser/sema tests, `crates/mast-package/src/{lib.rs,package/manifest.rs,package/mod.rs}`. **New:** `crates/mast-package/src/{interface.rs,namespace_plan.rs,interface/serialization.rs}` as needed. Touch CST lexer/parser only if selected explicit-key/inline syntax requires it.
 
-Separate canonical declarations and optional body availability; add validated NamespacePlan/interface-only artifact and explicit key/inline forms. Preserve exact-byte optional ABI metadata separately from tooling FunctionType. Do not invent placeholder D/forest or activate a partially migrated package9 executable. Reuse existing parsed Path components and core hashes.
+Separate canonical declarations and optional body availability; add validated NamespacePlan/interface-only artifact and preserve existing key-literal/name/path forms. Explicit inline syntax remains optional. Preserve exact-byte optional ABI metadata separately from tooling FunctionType. Do not invent placeholder D/forest or activate a partially migrated package9 executable. Reuse existing parsed Path components and core hashes.
 
 **Acceptance:** declaration-only Latest keys need no D; quoted `::`, exact Unicode bytes, typed labels and absent/present-empty ABI differ correctly; unknown versions/malformed homes reject; existing name/path/word invocation syntax remains accepted, with digest-shaped words interpreted as keys under D2. Explicit inline opt-in is an optional extension. **Checks:** `make test-assembly-syntax`; `cargo test -p miden-mast-package --lib interface`; CST tests only if changed.
 
@@ -255,11 +255,33 @@ runtime digest dispatch or infer an authenticated binding from code availability
 require preserving child-ID invocation nodes, old serialized layouts or digest-based implementation
 lookup. Include existing source and stack/memory regressions in PRs 04/05/09 and final qualification.
 
+**D3 Interface identity, closure and external profile, reviewed with the user on 2 November 2026:**
+Protocol supplies immutable LibraryId I and authenticates its association with the canonical
+publisher-qualified descriptor and declaration commitment. Do not derive I from declarations or
+invent an identity hash. Closure metadata is the complete finite transitive LibraryId set excluding
+self; all direct external requirements are included, with self references implicit. This introduces
+no VM-level interface-cycle prohibition. Completeness needs authenticated contributing declarations.
+Publisher-descriptor canonicalization, permitted complete homes and the Protocol-local numbered-v1
+domain allocation remain **mandatory external profile inputs, with no permissive fallback**.
+
+Implement the reviewed generic InterfaceArtifact/Home v1 framing under that required profile:
+canonical Word/label encodings; little-endian u32 lengths; exact EOF; declarations with nonempty
+semantic Text paths and absent/present UTF-8 ABI; strict envelope-byte path order and canonical-Word
+byte order for unique direct/closure sets. Artifact fields are version 1, I, declaration commitment,
+length-prefixed canonical descriptor Q0 and declaration bytes DB. Commit `B(Q0)||DB` using standard
+Eidos FeltSequence over `[1, byte_length, packed_u32_bytes]` in the profile-supplied Protocol domain;
+Q0 excludes I, commitment and association proofs. Home is version 1 plus an explicit complete typed
+path, including explicit empty N0. Require caller budgets and expected I/context; structurally valid
+bytes alone supply no authority. Reuse core label/hash helpers, add no default home/domain/profile,
+and do not activate package9 or a ReleaseRecord codec. Sources: assembly §§3.2, 5–7
+(cached lines 172–211, 347–405, 445–465, 554–562, 720–766), shared §2, vmprotocol §7.
+Production descriptor/domain/home fixtures remain external acceptance gates.
+
 ## Open decisions and external gates
 
 | Gate | Required decision/evidence | Blocks |
 | --- | --- | --- |
-| Canonical cross-team wire contract | VM node preimage codec is resolved in D1. Confirm remaining Protocol/user/random wrappers, interface/release/resource codecs and full namespace provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
+| Canonical cross-team wire contract | VM node preimages are resolved in D1; generic interface/home v1 and required external profile are recorded in D3. Obtain owner descriptor/domain/home fixtures; confirm remaining release/resource/user/random codecs and provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
 | Frontend syntax and eligibility | Preserve existing MASM name/path/word syntax under D2. Agree optional explicit key/inline extensions, fixed-body inline eligibility and diagnostics for genuinely invalid forms; source alias versus published alias versus wrapper semantics. | 04, 09 |
 | Private reusable-instance ABI | Freeze runtime-base handle transport, typed relative suffix/procref lowering and validation. C/D must remain identical across randomized user mounts; no implicit relocation or caller-derived namespace. | 11, private-instance acceptance |
 | Shared/fresh-context ABI | Specify supported value/pointer layouts, global/heap/function-table ownership, initialization and reentrancy for supported libraries. Namespace authentication supplies no RAM isolation. Do not guess a fresh-context-only/stateless-only scope. | 11, 13, final supported launch claim |
@@ -278,9 +300,9 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | in-progress | Latest `9ebac7cc1`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, core seed generation, public API and full-feature Clippy pass | Final audit: add explicit structural-cycle/keyed-recursion cases. Processor witness checks await 05/09; fuzz smoke at 16. D2 preserves existing MASM source. |
+| 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
 | 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
-| 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
+| 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required owner-approved descriptor/domain/home/association/closure fixtures remain external. Generic implementation and local checks are done. Executable lowering at 09; fuzz regeneration/smoke at16. |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
@@ -680,3 +702,135 @@ trace::execution_tracer::controller_address_tests, tracer::physical_helper_tests
 run `cargo test -p miden-processor --lib --features concurrent trace::parallel` and processor Clippy.
 Apply the standard AC/heavy-work guards to every command. Final packed shape/degree/lookup/four-AIR,
 D2 source/stack/memory regressions and clean regeneration remain PRs 06/later/16 gates.
+
+### PR 04 Declaration model and reviewed profile boundary
+
+Commit `5435a9cab` adds declaration-only paths/ABI/tooling signatures and explicit typed NamespacePlan
+homes, deriving keys with existing core helpers without body/D/forest. Independent review closed a
+forward/reverse quote-parsing discrepancy: validate the exact retained forward local spelling rather
+than a reverse suffix. Commit `ba9f981d5` independently repairs the existing debug-remapping fixture
+with a structural Loop parent, preserving non-root remapping coverage without casting D to K.
+
+After successful AC/heavy-work guards, these current-tree commands passed:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib interface`: 13 tests.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib test_package_source_debug_merge_remaps_non_root_execution_nodes`: one test.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-mast-package --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-mast-package --no-default-features`.
+- Pinned-nightly package formatting and whitespace checks.
+
+D3 records the user's shared-contract decisions. Protocol namespace 0x02 is reserved to its owner;
+no local Protocol registry is present here, and narrow connected-source searches do not prove an ID
+free. Generic codecs require an explicit validating profile and externally allocated domain, not a
+VM allocation or permissive policy. The uncommitted working draft and research are reference notes;
+this plan owns decisions/acceptance, code owns exact implemented wire behavior, and the current brief
+owns handoff. Actual production descriptor/domain/home fixtures remain external gates.
+
+### PR 04 Semantic paths, source compatibility and Home v1 validated
+
+Commit `77ba2607a` shares procedure semantic-character validation and adds bounded decoded public
+paths without escaping/reparsing. Source construction retains exact forward-spelling validation.
+Independent review passed; 17 package interface-filter tests and scoped package Clippy passed.
+Commit `26342ece3` mechanically moves unchanged tests after the feature-gated Arbitrary implementation,
+closing the subsequent syntax test-inclusive Clippy ordering lint.
+
+Commit `8a02bc43c` repairs word-form procref printing, retains existing invocation grammar/legacy AST
+shape, and documents key literals without authority. Seven new tests cover all invocation forms,
+canonical/63-digit word spelling, malformed words and accepted quoted names. Independent review
+closed a test helper that reinterpreted a Symbol as a Path. Initial source fixtures assumed quoted
+Unicode/backslash tokens were names; the existing CST lexer classifies them as strings. Accepted
+source fixtures were corrected, while semantic declarations retain exact Unicode/backslash tests.
+Reconcile this source-token/decoded-path distinction during PR 09 frontend lowering; no restriction
+was added or made a new acceptance requirement. Actual keyed assembly lowering remains PR 09.
+
+Commit `a4ceb8260` adds explicit finite logical codec limits and required external TypedId/Home
+profiles, then exact Home v1 encoding/decoding. Explicit empty N0 still requires permission; final
+home validation follows EOF. Twelve new budget/malformed/profile/frozen-vector tests pass. Independent
+review found no issue. Bounds do not promise RSS limits or fallible allocation inside reused core
+label copies. No AccountId parser, production policy/domain/default, or package9 activation is added.
+
+After successful AC/heavy-work guards, current combined-tree checks passed:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib interface`: 29 tests.
+- `CARGO_NET_OFFLINE=true make test-assembly-syntax`: all 327 tests, including the seven new invocation tests and two semantic-validator tests, checked-in MASM corpus and printed-corelib parser regressions.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-mast-package -p miden-assembly-syntax --lib --tests --features miden-assembly-syntax/testing,miden-assembly-syntax/serde -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-mast-package --no-default-features`.
+- Pinned-nightly targeted formatting and staged whitespace checks.
+
+The first Make attempt lacked cached metadata dependencies; the sandbox retry could not write Cargo's
+external registry cache. An approved cache-filling rerun enabled the normal offline checks. These were
+environment failures, followed by the addressed test/lint issues above; no failed check is counted as
+passing. Logs remain separate under uncommitted `.scratch/librarytree/logs/`. Nine canonical reference
+snapshots match their recorded provenance hashes; the superseded wire draft is archived outside routine
+input. Continue with D3 verified artifact encoding and then exact decoding, retaining external production
+profile fixtures and all later processor/AIR/proof gates.
+
+### PR 04 Verified interface construction and encoding validated
+
+Commit `a70fdc8b1` adds opaque LibraryId/DeclarationCommitment roles and immutable InterfaceArtifactV1
+construction/encoding with required external descriptor, immutable-association and closure validation.
+The typed profile supplies its allocated Protocol numbered-v1 FeltSequence domain; generic namespace/
+version checks do not establish allocation ownership. Encoding recomputes stored C before contextual
+authority callbacks. Exact optional ABI, canonical envelope-vector path ordering and Word-byte ID
+ordering are committed; tooling signatures remain outside wire/hash/authority. No decoder or production
+Protocol profile is claimed. Native ID input order canonicalizes; duplicate IDs reject.
+
+Two independent wire/resource and authority/domain reviews found no correctness issue. Nine new tests
+include literal DB/hash preimages, 255/256-byte envelope ordering and authority short-circuit sequences.
+An independent Python reconstruction agrees with the literal DB/DCL and fourteen-Felt payload; the
+test domain is explicitly synthetic, not a production allocation. Artifact dependency wiring changes
+only one existing Cargo.lock edge. A test-only hex-helper Clippy lint was fixed without a suppression.
+After successful AC/heavy-work guards, final current-tree checks passed:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib interface`: 38 tests.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-mast-package --lib --tests -- -D warnings`.
+- `CARGO_NET_OFFLINE=true cargo check --locked -p miden-mast-package --no-default-features`.
+- Pinned-nightly targeted formatting and whitespace checks.
+
+Strict decoding follows as its own commit: exact outer/nested EOF, expected I and stored-C checks,
+canonical wire ordering without silently sorting input, bounded parsing and authority callback suppression
+on malformed data. Reuse core labels and shared envelope extraction without invoking TypedId validators
+for disallowed declaration-path tags. Retain production profile fixtures and all later security gates.
+
+### PR 04 Strict decoding validated; package fixture migration pending
+
+Commit `5c9c78799` adds exact profile-bound decoding, canonical raw envelope/Word ordering, expected-I
+and stored-C checks before authority, and shared borrowed label extraction preserving Home behavior.
+Fourteen independently authored adversarial tests recompute malformed raw-DB commitments so unrelated
+hash failures cannot mask missing canonicality checks. Independent production and test reviews found
+no issue. After successful AC/heavy-work guards, the interface filter passed all 52 tests, package
+Clippy with tests and `-D warnings` passed, and package no-default-features passed. Pinned formatting
+and whitespace checks passed. Production descriptor/domain/home/association/closure fixtures remain
+required external acceptance evidence; generic profiles and synthetic vectors do not discharge them.
+
+A broader `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib` check passed 202,
+failed five and ignored one. All five fail in the shared test-only `locate_first_node_hash` helper:
+its old MAST offsets misread v0.0.6's added target count/table, causing an out-of-bounds vint64 peek
+before spoofed-digest assertions. Repair this test helper separately, retaining trusted/untrusted
+hash-validation coverage; do not change executable package serialization to accommodate the fixture.
+The failing full check is not counted as passing. Log: uncommitted
+`.scratch/librarytree/logs/pr04-package-regression.log`. Root will rerun affected/full package checks
+following the repair, then finalize this branch's description and unresolved-gate disposition.
+
+### PR 04 Generic implementation closed; production profile evidence remains open
+
+Commit `2a3f608e3` repairs the package spoof-fixture locator using shared ByteReader/
+BudgetedReader<SliceReader> rather than a custom vint64 parser. It checks v6 framing, skips the
+fixed target count/table, and verifies the original node hash before patching. A keyed Exec fixture
+proves the target table is untouched while trusted decoding retains and untrusted decoding rejects
+the spoofed hash. Independent static review and pinned formatting passed; production package bytes
+and trust boundaries were not changed.
+
+After successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib spoofed`: all six passed.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-mast-package --lib`: 208 passed, zero failed; only the manual `package::seed_gen::generate_fuzz_seeds` is ignored. This includes all 52 interface/Home tests and closes the five previous offset failures.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-mast-package --lib --tests -- -D warnings` passed on the repaired tree.
+- Pinned-nightly formatting and whitespace checks passed. The decoder no-default-features check and 327-test syntax evidence above remain applicable; the subsequent repair changes only tests.
+
+PR 04 is **implemented-awaiting-validation**, not complete. Its generic implementation/local checks
+are done; Protocol must still provide authoritative descriptor bytes, allocated domain, permitted
+complete homes and immutable association/authenticated closure fixtures. The pending source question
+does not authorize defaults or waive evidence. Validate accepted/rejected owner fixtures through both
+artifact and Home codecs and record provenance before clearing this gate. Continue the local stack
+with this unresolved validation owner explicit; no GitHub PR or push is authorized.

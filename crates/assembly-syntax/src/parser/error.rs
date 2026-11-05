@@ -224,7 +224,7 @@ pub enum ParsingError {
         span: SourceSpan,
         kind: BinErrorKind,
     },
-    #[error("invalid MAST root literal")]
+    #[error("invalid procedure key literal")]
     InvalidMastRoot {
         #[label]
         span: SourceSpan,

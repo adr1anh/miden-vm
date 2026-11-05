@@ -7,10 +7,11 @@ use alloc::{
 use miden_debug_types::{Span, Spanned};
 
 use crate::{
-    MAX_REPEAT_COUNT, Path,
+    Felt, MAX_REPEAT_COUNT, Path, Word,
     ast::{
-        Constant, ConstantExpr, ImportKind, Item, Module, ModuleKind, SymbolResolutionError,
-        TypeAlias, TypeExpr, Visibility, constants::ConstEvalError, types,
+        Constant, ConstantExpr, ImportKind, Instruction, InvocationTarget, Item, Module,
+        ModuleKind, Op, SymbolResolutionError, TypeAlias, TypeExpr, Visibility,
+        constants::ConstEvalError, types,
     },
     diagnostics::reporting::PrintDiagnostic,
     sema::{SemanticAnalysisError, SyntaxError},
@@ -506,6 +507,90 @@ fn sema_import_define_items_detect_cross_kind_duplicates_for_all_pairs_and_order
             }
             assert_cross_kind_conflict(first, second);
         }
+    }
+}
+
+#[test]
+fn invocation_source_compatibility_sema_word_roundtrip() {
+    let context = SyntaxTestContext::default();
+    let key = Word::new([
+        Felt::new_unchecked(0x0807060504030201),
+        Felt::new_unchecked(0x1817161514131211),
+        Felt::new_unchecked(0x2827262524232221),
+        Felt::new_unchecked(0x3837363534333231),
+    ]);
+    let literal = key.to_hex();
+    let source = format!(
+        "begin\n    exec.{literal}\n    call.{literal}\n    syscall.{literal}\n    procref.{literal}\nend\n"
+    );
+    let module = context.parse_program(&source).expect("opaque key targets should pass sema");
+    let printed = module.to_string();
+    let reparsed = context.parse_program(&printed).expect("printed key targets should pass sema");
+    for module in [&module, &reparsed] {
+        let entry = module.procedures().find(|procedure| procedure.is_entrypoint()).unwrap();
+        assert_eq!(entry.body().len(), 4);
+        for op in entry.body().iter() {
+            let Op::Inst(instruction) = op else {
+                panic!("expected an invocation instruction, got {op:?}");
+            };
+            let target = match instruction.inner() {
+                Instruction::Exec(target)
+                | Instruction::Call(target)
+                | Instruction::SysCall(target)
+                | Instruction::ProcRef(target) => target,
+                other => panic!("expected an invocation instruction, got {other:?}"),
+            };
+            assert!(matches!(target, InvocationTarget::MastRoot(value) if *value.inner() == key));
+        }
+    }
+    assert_eq!(reparsed.to_string(), printed);
+}
+
+#[test]
+fn invocation_source_compatibility_sema_named_roundtrip() {
+    let context = SyntaxTestContext::default();
+    let mut source = String::from(
+        "use \"dep::segment\" as dep\n\
+         proc local nop end\n\
+         proc \"quoted::local\" nop end\n\
+         proc \"hash#local\" nop end\n\
+         proc \"proc.name\" nop end\n\
+         begin\n",
+    );
+    for mnemonic in ["exec", "call", "procref"] {
+        for target in [
+            "local",
+            r#""quoted::local""#,
+            r#""hash#local""#,
+            r#""proc.name""#,
+            r#"dep::"proc::name""#,
+        ] {
+            source.push_str(&format!("    {mnemonic}.{target}\n"));
+        }
+    }
+    source.push_str("end\n");
+    let module = context.parse_program(&source).expect("existing named targets should pass sema");
+    assert_import(&module, "dep", ImportKind::Module, true);
+    let printed = module.to_string();
+    let reparsed = context.parse_program(&printed).expect("printed named targets should pass sema");
+    assert_eq!(reparsed.to_string(), printed);
+}
+
+#[test]
+fn invocation_source_compatibility_sema_named_syscall_targets_kernel() {
+    let context = SyntaxTestContext::default();
+    let module = context
+        .parse_program("begin\n    syscall.service\n    syscall.\"quoted::service\"\nend\n")
+        .expect("named syscall targets should resolve in the kernel namespace");
+    let entry = module.procedures().find(|procedure| procedure.is_entrypoint()).unwrap();
+    for (op, name) in entry.body().iter().zip(["service", "quoted::service"]) {
+        let Op::Inst(instruction) = op else {
+            panic!("expected a syscall instruction, got {op:?}");
+        };
+        let Instruction::SysCall(InvocationTarget::Path(path)) = instruction.inner() else {
+            panic!("expected a kernel syscall path, got {instruction:?}");
+        };
+        assert_eq!(path.inner().as_ref(), Path::kernel_path().join(name).as_path());
     }
 }
 

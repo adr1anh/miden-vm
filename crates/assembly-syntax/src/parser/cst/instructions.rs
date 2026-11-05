@@ -1425,7 +1425,7 @@ fn lower_error_code_instruction(
     Ok(Some(vec![inst_op(instruction_span, build(value))]))
 }
 
-/// Lowers an invocation target operand into a symbol, path, or MAST-root reference.
+/// Lowers an invocation target operand into a symbol, path, or opaque procedure key literal.
 fn lower_invocation_target(
     context: &mut LoweringContext<'_>,
     tokens: &[SyntaxToken],
@@ -1443,7 +1443,7 @@ fn lower_invocation_target(
             },
             ParsedNumeric::Int(_) => Err(ParsingError::InvalidSyntax {
                 span,
-                message: "expected a procedure name, path, or MAST root digest".to_string(),
+                message: "expected a procedure name, path, or procedure key literal".to_string(),
             }),
         };
     }
@@ -1459,7 +1459,7 @@ fn lower_invocation_target(
     }) {
         return Err(ParsingError::InvalidSyntax {
             span,
-            message: "expected a procedure name, path, or MAST root digest".to_string(),
+            message: "expected a procedure name, path, or procedure key literal".to_string(),
         });
     }
 

@@ -1,32 +1,17 @@
-# Chiplet Memory and checked Controller-address foundations
+# Declaration-only interfaces and explicit namespace homes
 
-Branch: `adr1anh/librarytree-03-chiplet-foundation`
+LibraryTree tooling needs procedure keys before executable bodies or releases are selected. This branch adds validated semantic declaration paths, exact optional UTF-8 ABI metadata, separate tooling signatures, and explicit typed NamespacePlan homes that derive keys with the core label/hash helpers.
 
-Git base: `adr1anh/librarytree-02-keyed-mast` (`7602d32ed`). Semantic dependencies: PR 00 and
-the selected chiplet layout/address contracts.
+InterfaceArtifact v1 and Home v1 codecs require explicit finite budgets and external Protocol profiles/context. Artifacts commit canonical publisher-qualified descriptor/declaration bytes, retain externally assigned immutable LibraryId, and validate association and transitive dependency closure. Decoding rejects malformed framing, noncanonical Words/order/paths, wrong expected identity and commitment before authority callbacks. Encoding revalidates context; tooling signatures are outside wire/hash/authority. Profiles must supply descriptor canonicalization, permitted homes and an allocated Protocol numbered-v1 domain; none has a default.
 
-Library prefix placement needs a single address boundary and lower-degree Memory equations.
-This branch simplifies existing Memory conditional inverses without changing accepted assignments
-or its six inverse/selection emission positions. One checked logical Controller owner prevents
-span overflow and preserves absence, row zero and exact-cap cursors. Saved/replayed state uses
-nominal logical addresses with the existing canonical Felt bytes.
+Existing MASM invocation grammar is preserved. Word-form procref now prints canonically; the legacy MastRoot AST spelling documents opaque ProcedureKey semantics. Executable assembler lowering and package9 activation remain PR 09. Test fixtures now follow childless keyed MAST and the v6 target table without weakening trusted/untrusted hash checks.
 
-A shared immutable ChipletsLayout now drives final Core/helper/chiplet materialization after
-buffered/prebuilt convergence. Only Controller address roles translate; VM clocks, context/RAM,
-overflow and unrelated helpers retain their values. Production Library prefix remains zero.
-Nonzero prefixes are synthetic tests; actual Library rows and alignment/proof gates belong to PR 06.
-The final into_traces host writer is crate-private/fallible and its sole repo caller is updated.
+Stack base: PR 03, `45be30b96`. Semantic foundation: PR 01 identities and reviewed D3 contract. Implementation is awaiting production Protocol profile evidence; synthetic domains/codecs are test fixtures and claim no allocation or publication authority.
 
-Validation: independent algebra, address, state, final-sink and acceptance reviews; eighteen
-chiplet definition tests; eighteen generated capture/drift/ACE tests, with one manual timing test
-ignored; definitions test-inclusive Clippy; pinned formatting and whitespace checks. Rust checks
-ran after successful power guards. The finite 7,560-assignment matrix complements the algebraic
-equivalence argument; it is not exhaustive field enumeration.
+Validation after AC/heavy-work guards:
 
-Status remains implemented-awaiting-validation. Twenty-five address/state tests are authored
-but unrun. The processor library check emits the same six old callee() and four missing Exec
-cutover errors. PRs 05/09 must close those consumers before processor/parallel/serde tests and
-Clippy run. The plan ledger records exact commands, checkpoints and deferred owners. Final packed
-dimensions, degree/lookup gates and D2 MASM syntax/stack/memory regressions remain required.
+- Package lib tests: 208 passed; one manual fuzz-seed generator ignored. Focused interface/Home tests: 52 passed.
+- Full Make assembly-syntax suite: 327 passed, including checked-in MASM and printed-corelib parser regressions.
+- Scoped and combined test-inclusive Clippy with `-D warnings`, package no-default-features, pinned formatting and whitespace checks passed.
 
-No GitHub PR has been created. Creating any PR requires the user's explicit instruction.
+Required external descriptor/domain/home/immutable-association/authenticated-closure fixtures remain open. Processor/fuzz validation inherited from earlier stack branches and runtime/AIR/statement/recursive integration belong to later PRs; this branch does not activate those execution/proof paths. The existing source-token versus decoded Unicode/backslash distinction is tracked for PR 09. No GitHub PR or push has been created.

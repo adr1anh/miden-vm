@@ -10,6 +10,8 @@ extern crate std;
 
 pub mod debug_info;
 mod dependency;
+pub mod interface;
+pub mod namespace_plan;
 mod package;
 mod serde_helpers;
 
@@ -23,6 +25,14 @@ pub use miden_core::{Word, mast::MastForest, program::Program};
 pub use self::package::arbitrary;
 pub use self::{
     dependency::Dependency,
+    interface::{
+        DeclarationError, DeclarationSet, ProcedureDeclaration, PublicProcedurePath,
+        artifact::{
+            ArtifactError, ArtifactProfileOperation, DeclarationCommitment, InterfaceArtifactV1,
+            InterfaceProfile, LibraryId,
+        },
+    },
+    namespace_plan::NamespacePlan,
     package::{
         ConstantExport, EventHandlerManifestEntry, EventHandlerSection, EventHandlerSectionError,
         InvalidSectionIdError, InvalidTargetTypeError, MAX_HANDLERS, MAX_MODULE_BYTES,

@@ -262,6 +262,19 @@ impl ProcedureName {
         name.as_ref().parse::<Self>().map(|name| name.with_span(span))
     }
 
+    /// Validates the exact semantic text of a procedure name, without parsing source spelling.
+    ///
+    /// These are the character rules for the body of a quoted procedure name. Backslashes are
+    /// literal characters; double quotes are source delimiters and cannot occur in the semantic
+    /// name. This does not impose path length, nonempty-component, or reserved-name rules.
+    pub fn validate_semantic(name: &str) -> Result<(), IdentError> {
+        if name.chars().all(is_valid_quoted_identifier_char) {
+            Ok(())
+        } else {
+            Err(IdentError::InvalidChars { ident: name.into() })
+        }
+    }
+
     /// Sets the span for this [ProcedureName].
     pub fn with_span(self, span: SourceSpan) -> Self {
         Self(self.0.with_span(span))
@@ -434,7 +447,7 @@ impl ProcedureName {
                 },
                 c => {
                     // if char is not alphanumeric or asciigraphic then return err
-                    if !(c.is_alphanumeric() || c.is_ascii_graphic()) {
+                    if !is_valid_quoted_identifier_char(c) {
                         return Err(IdentError::InvalidChars { ident: name.into() });
                     }
                 },
@@ -449,6 +462,10 @@ impl ProcedureName {
 // FROM STR HELPER
 fn is_valid_unquoted_identifier_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '$' | '.')
+}
+
+fn is_valid_quoted_identifier_char(c: char) -> bool {
+    c != '"' && (c.is_alphanumeric() || c.is_ascii_graphic())
 }
 
 // ARBITRARY IMPLEMENTATION
@@ -470,4 +487,51 @@ impl proptest::prelude::Arbitrary for ProcedureName {
     }
 
     type Strategy = proptest::prelude::BoxedStrategy<Self>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn semantic_validation_matches_parsed_procedure_names() {
+        for (source, semantic) in [
+            ("run", "run"),
+            (r#""run""#, "run"),
+            (r#""f#tag""#, "f#tag"),
+            (r#""a::b""#, "a::b"),
+            (r#""a\b""#, r"a\b"),
+            (r#""a\\b""#, r"a\\b"),
+            (r#""Å""#, "Å"),
+            (r#""Å""#, "Å"),
+            (r#""""#, ""),
+        ] {
+            let parsed = ProcedureName::new(source).expect("valid source procedure name");
+            assert_eq!(parsed.as_str(), semantic, "{source:?}");
+            assert!(ProcedureName::validate_semantic(semantic).is_ok(), "{semantic:?}");
+        }
+    }
+
+    #[test]
+    fn semantic_validation_does_not_parse_quotes_or_backslash_escapes() {
+        assert!(ProcedureName::validate_semantic("f#tag").is_ok());
+        assert!(ProcedureName::new("f#tag").is_err());
+        for semantic in [
+            r#""run""#,
+            r#"prefix"run""#,
+            r#"f\"tag"#,
+            "bad name",
+            "bad\0name",
+            "bad\nname",
+            "bad\tname",
+            "bad\u{7f}name",
+            "e\u{301}",
+            "🙂",
+        ] {
+            assert!(ProcedureName::validate_semantic(semantic).is_err(), "{semantic:?}");
+        }
+        for source in [r#""prefix"run""#, r#""f\"tag""#, r#""é""#] {
+            assert!(ProcedureName::new(source).is_err(), "{source:?}");
+        }
+    }
 }
