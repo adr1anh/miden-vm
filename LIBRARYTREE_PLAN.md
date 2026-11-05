@@ -1,6 +1,6 @@
 # LibraryTree VM implementation plan
 
-This plan owns the selected LibraryTree scope, dependencies, acceptance and durable implementation evidence. The approved generic VM/toolchain scope is complete as of 4 November 2026; see the completion ledger and final PR16 closeout below. The initial plan commit was documentation only; later evidence records implementation and validation.
+This plan owns the selected LibraryTree scope, dependencies, acceptance and durable implementation evidence. The original approved generic VM/toolchain scope qualified on 4 November 2026. A new user-requested PR17 retirement/Blake3-comparison follow-up is active; see its card and ledger. Historical PR16 evidence remains valid for its recorded source. The initial plan commit was documentation only; later evidence records implementation and validation.
 
 The repository baseline is `00b12150715891582864d256ef51c5ea46bfb282`, inspected on 2 November 2026. The design chapters use the earlier baseline `a3d9bc09ef8a956774eb4ec0e6e734428e194a8c`; source paths and interfaces below follow this checkout. The live design Pages remain unchanged.
 
@@ -346,6 +346,14 @@ Measure opening rows/compressions separately from invocation/context costs; repo
 
 **Checks after power guards:** repository `make exec`, `make exec-single`, `make format-check`, `make clippy`, `make test`, `make check-constraints`, `make check-pvm-proof-fixture`, `make test-masm-root-stability`; supported no_std surfaces including `cargo check -p miden-core -p miden-mast-package -p miden-assembly --no-default-features`; affected benchmark commands selected from the actual final changed graph. Fuzz-target runs are waived by the user decision above. New test filters throughout this plan are provisional until registered test names exist; prefer the repository Make target where it supplies necessary features/stack settings. Resolve focused failures before broad suites, and repeat broad checks only for new changes/failures. Record exact commands/toolchains/features, commit SHAs and outcomes in the ledger/report. Verify deterministic regeneration with `git diff --exit-code` after intended generated changes are committed.
 
+### PR 17 Retire obsolete comparison code and compare Blake3 costs
+
+**Branch:** `adr1anh/librarytree-17-cleanup`, base `18d4a347d`. **User scope, 5 November 2026:** retire unused/old implementation code retained just for comparisons. Compare a program computing Blake3 on pinned origin/next and HEAD; prepare in parallel with cleanup, execute all heavy builds/runs sequentially. No GitHub PR/push; fuzz runs remain waived.
+
+Remove private alternate-AIR comparison modules/adapters while preserving current-production honest and malicious trace tests, independently captured claims, lookup-delta/resource/boundary oracles and exact native/MASM rejection where an artifact exists. A production lookup-construction rejection is the retained tag/frame case's expected boundary; historical alternate acceptance/isolated-rule-necessity evidence is not a reason to ship an old evaluator. Retire unused KernelDescriptor metadata/codec/exports/domain APIs and descriptor-only generator/seed/fuzz plumbing; reserve its old domain number permanently. Preserve active root-namespace kernel semantics and structural MAST generation. Remove the old full-parser test oracle and unused tree parsing helpers; use typed current crypto fixtures for independent expected results. Keep active format rejection and provenance consumers.
+
+Pin benchmark revisions: origin/next `00b12150715891582864d256ef51c5ea46bfb282`, HEAD-at-request `18d4a347d96b63118e9c93af760f077d76493d52`. Use isolated baseline and cached optimized HEAD binaries, same Rust/profile/no native CPU flags, common Blake3 input/source/output assertions, Eidos proof hashing, worker/sample counts. Report actual times, proof bytes, trace/security differences and timing boundaries; no historical timing substitution or simultaneous heavy runs. Validate changed production APIs/generators, production-only adversarial proofs, parser budgets and all target references, plus appropriate formatting/lints/artifact checks. Source and context commits stay separate.
+
 ## Resolved implementation decisions
 
 **D1 Environment-node preimage codec, agreed with the user on 2 November 2026:** own a VM v1
@@ -534,6 +542,8 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 15 API/CLI closure | complete | Final source `a99264137`; checked links/CLI `ba651f64d`; review `8ba05fd00`; prior SHAs below; base `f4350360d` | Independent reviews; fresh combined runtime/CLI/witness/proof/flow3,179; strict14-crate all-target custom Clippy; production no_std10 with graph audit; four extra consumers; six compiled doctests; standalone fuzz2 typechecks; earlier scoped evidence below; final PR16: full8,106/exact gates and measured qualification below | Inherited gates closed by final PR16 qualification; fuzz execution waived by user. |
 | 15a AIR/Chiplets cleanup | complete | Counter/rebinding `7d51bff1b`; review `cffb3f279`; base `1afb98f50` | Independent reviews; fresh combined3,615; MAIN/ext/lookup capture and generated/recursive parity; actual heights; strict14; production no_std10; clean post-commit generation/check; PVM constants/277756-byte fixture; root-stability policy; final PR16: full8,106/exact gates and measured qualification below | Inherited gates closed by final PR16 qualification; fuzz execution waived by user. |
 | 16 Qualification | complete | Base `91011b897`; benchmark `02784740f`; proof controls `5fa34aeb7`; loop migration/measurement source `ae045c199` | Actual28release measurements, new native/MASM proof controls and polynomial guards, affected loop7, strict15 and pinned formatting; report/evidence below; final PR16: full8,106/exact gates and measured qualification below | No required check remains. Fuzz runs were waived; unadopted external integrations remain outside scope. |
+
+| 17 Retirement follow-up | in-progress | Base `18d4a347d`; new user scope5November | Static source retirements prepared; pinned benchmark baseline building; no fresh runtime pass yet | Production-only proof/API/parser checks and sequential origin/next–HEAD measurements remain |
 
 ## Implementation evidence
 
