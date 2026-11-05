@@ -155,7 +155,7 @@ pub(in crate::vm::constraints::lookup) fn emit_block_hash_and_op_group<LB>(
                         f_child,
                         || {
                             let parent = addr_next.into();
-                            let child_hash = dec.resolved_digest.map(LB::Expr::from);
+                            let child_hash = dec.resolved_digest().map(LB::Expr::from);
                             BlockHashMsg::Child { parent, child_hash }
                         },
                         Deg { v: 5, u: 6 },

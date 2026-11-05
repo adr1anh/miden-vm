@@ -42,8 +42,8 @@ pub const NUM_OP_BITS_EXTRA_COLS: usize = 2;
 /// Number of columns holding the implementation selected for a keyed invocation.
 pub const NUM_RESOLVED_DIGEST_COLUMNS: usize = WORD_SIZE;
 
-/// Decoder-local offset of the resolved implementation digest, after the legacy decoder fields.
-pub const DECODER_RESOLVED_DIGEST_OFFSET: usize = 23;
+/// Decoder-local offset of the implementation overlay in hasher state lanes h4 through h7.
+pub const DECODER_RESOLVED_DIGEST_OFFSET: usize = 12;
 
 /// Decoder-local columns holding the resolved implementation digest.
 pub const DECODER_RESOLVED_DIGEST_RANGE: Range<usize> =

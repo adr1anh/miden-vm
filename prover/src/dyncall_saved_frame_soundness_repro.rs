@@ -1,18 +1,13 @@
 //! Regression tests: DYNCALL's saved caller-frame depth and overflow pointer must match reality.
 //!
-//! Before the fix `h4` was unconstrained, so the caller could be made to resume at an arbitrary
-//! depth through an otherwise honest caller-frame restoration, with the frame kind unchanged.
+//! Historically a free decoder helper let the caller resume at a prover-selected depth through
+//! an otherwise honest caller-frame restoration. The compact layout derives the saved depth as
+//! `b0 - overflow()` and saves only the post-pop overflow pointer in `group_count`. Its second
+//! hasher word holds the authenticated implementation and stays unchanged in every attack here.
 //!
-//! DYNCALL's block-stack addition records the saved caller depth from decoder `hasher_state[4]`
-//! (`caller_stack_depth = h4` in `block_stack_and_range_logcap.rs`), where CALL/SYSCALL use the
-//! real column `b0`. Honestly `h4` is the caller stack depth (16 at root). Nothing bound it, and
-//! the matching caller-frame removal reads `caller_stack_depth = b0_next`, so the bus forced the
-//! *restored* depth to equal whatever `h4` held -- not the real caller depth. `decoder/mod.rs` now
-//! pins `h4 = b0 - overflow()` on every DYNCALL row.
-//!
-//! This is distinct from the entry-kind relabelling forgery: here the entry remains a caller frame
-//! at both ends and the only forged input is `h4`. The entry-kind tag does NOT catch this, which
-//! is precisely why the `h4` binding is needed as well.
+//! These mutations retain the caller-frame kind at both ends. Forging a restored depth must
+//! mismatch the independently derived saved frame; forging its pointer must fail either the
+//! empty-overflow constraint or the nonempty overflow-record authentication.
 //!
 //! To keep the rest of the trace valid, the forged restored depth `D` is contained inside an
 //! enclosing `call`: the dyncall runs inside a called procedure, the dyncall's END restores the
@@ -34,6 +29,7 @@ const FORGED_DEPTH: u64 = 99;
 struct Fixture {
     trace: ReproTrace,
     dyncall_row: usize,
+    invocation_state: [Felt; 8],
     dyncall_end: usize,
     /// The enclosing procedure's caller-frame END, after which the root is restored.
     outer_end: usize,
@@ -112,14 +108,14 @@ fn build_fixture_with_setup(dyncall_setup: &str, pre_dyncall_depth: u64) -> Fixt
         Felt::new_unchecked(pre_dyncall_depth),
     );
     assert_eq!(
-        main.decoder_hasher_state_element(4, RowIndex::from(dyncall_row)),
+        main.dyncall_caller_stack_depth(RowIndex::from(dyncall_row)),
         Felt::new_unchecked(16),
-        "h4 honestly holds the parent depth 16"
+        "the derived post-pop caller depth is 16"
     );
     assert_eq!(
-        main.decoder_hasher_state_element(5, RowIndex::from(dyncall_row)),
+        main.dyncall_caller_overflow_addr(RowIndex::from(dyncall_row)),
         Felt::ZERO,
-        "h5 honestly holds the post-pop overflow pointer"
+        "the group-count overlay holds the post-pop overflow pointer"
     );
     // The dyncall's END honestly restores the caller (bar) to depth 16 ...
     assert_eq!(main.stack_depth(RowIndex::from(dyncall_end + 1)), Felt::new_unchecked(16));
@@ -129,9 +125,14 @@ fn build_fixture_with_setup(dyncall_setup: &str, pre_dyncall_depth: u64) -> Fixt
     Fixture {
         trace: ReproTrace::new(&trace),
         dyncall_row,
+        invocation_state: main.decoder_hasher_state(RowIndex::from(dyncall_row)),
         dyncall_end,
         outer_end,
     }
+}
+
+fn assert_invocation_unchanged(f: &Fixture, core: &mut RowMajorMatrix<Felt>) {
+    assert_eq!(core_row_mut(core, f.dyncall_row).decoder.hasher_state, f.invocation_state);
 }
 
 /// Holds `b0` at the forged depth `D` across the excursion window `[dyncall_end+1 ..= outer_end]`,
@@ -139,9 +140,8 @@ fn build_fixture_with_setup(dyncall_setup: &str, pre_dyncall_depth: u64) -> Fixt
 fn apply_depth_excursion(f: &Fixture, core: &mut RowMajorMatrix<Felt>) {
     let d = Felt::new_unchecked(FORGED_DEPTH);
     let h0 = (d - Felt::new_unchecked(16)).inverse();
-    // Forge the saved caller depth on the dyncall row.
-    core_row_mut(core, f.dyncall_row).decoder.hasher_state[4] = d;
-    // Carry the forged depth through the window so the block-stack bus balances.
+    // The invocation's authenticated implementation and derived saved depth stay honest.
+    // Carry a forged restored depth through the window, then erase it at the outer return.
     for row in (f.dyncall_end + 1)..=f.outer_end {
         let r = core_row_mut(core, row);
         r.stack.b0 = d;
@@ -156,43 +156,46 @@ fn honest_trace_verifies() {
     assert!(f.trace.prove_and_verify_current().is_ok(), "honest trace must verify");
 }
 
-/// The former gap: forge `h4` to an arbitrary depth while keeping the caller-frame entry kind
-/// honest, then match it with a contained `b0` excursion. The caller used to resume at a depth the
-/// prover chose.
+/// The former gap: restore an arbitrary caller depth while keeping the caller-frame entry kind
+/// honest. The contained `b0` excursion must disagree with the depth derived at DYNCALL.
 #[test]
 fn forged_caller_depth_via_caller_frame_path_is_rejected() {
     let f = build_fixture();
     let mut core = f.trace.core.clone();
     apply_depth_excursion(&f, &mut core);
 
+    assert_invocation_unchanged(&f, &mut core);
     let result = f.trace.prove_and_verify_allowing_lookup_rejection(core);
     assert!(
         result.is_err(),
-        "the proof pipeline must reject a forged saved caller depth: h4 is now bound to \
-         b0 - overflow() on every DYNCALL row: {result:?}"
+        "the proof pipeline must reject a restored caller depth that disagrees with the \
+         saved b0 - overflow() value: {result:?}"
     );
 }
 
-/// Control: forge `h4` alone, leaving `b0` honest.
-///
-/// The direct `h4 = b0 - overflow()` constraint rejects this mutation. The block-stack relation
-/// also rejects it because the caller-frame addition and removal disagree on the saved depth.
+/// Control: corrupt only the first restored depth, leaving the remaining caller trace honest.
+/// The frame removal must still disagree with the DYNCALL's independently derived addition.
 #[test]
-fn forged_h4_without_matching_excursion_is_rejected() {
+fn forged_restored_depth_without_matching_excursion_is_rejected() {
     let f = build_fixture();
     let mut core = f.trace.core.clone();
-    core_row_mut(&mut core, f.dyncall_row).decoder.hasher_state[4] =
-        Felt::new_unchecked(FORGED_DEPTH);
+    let restored = core_row_mut(&mut core, f.dyncall_end + 1);
+    restored.stack.b0 = Felt::new_unchecked(FORGED_DEPTH);
+    restored.stack.h0 = (restored.stack.b0 - Felt::new_unchecked(16)).inverse();
 
+    assert_invocation_unchanged(&f, &mut core);
     let result = f.trace.prove_and_verify_allowing_lookup_rejection(core);
-    assert!(result.is_err(), "the proof pipeline must reject forged h4: {result:?}");
+    assert!(
+        result.is_err(),
+        "the proof pipeline must reject a forged restored depth: {result:?}"
+    );
 }
 
-/// The sibling gap: DYNCALL's saved caller *overflow pointer* (`h5`) is likewise recorded from a
+/// The sibling gap: DYNCALL's saved caller overflow pointer is recorded from a
 /// decoder cell. The stack-overflow relation pins it only when the overflow table is non-empty
 /// (that branch is gated on `dyncall * overflow`), so the empty case — the common one — was open.
 ///
-/// Forged the same way as `h4`: set `h5` on the DYNCALL row and carry the matching `b1` across
+/// Forge the group-count overlay on the DYNCALL row and carry the matching `b1` across
 /// the excursion window, which bar's enclosing END erases before the last-row `b1 = 0` boundary.
 #[test]
 fn forged_caller_overflow_pointer_is_rejected() {
@@ -200,33 +203,35 @@ fn forged_caller_overflow_pointer_is_rejected() {
     let mut core = f.trace.core.clone();
     let forged = Felt::new_unchecked(1234);
 
-    core_row_mut(&mut core, f.dyncall_row).decoder.hasher_state[5] = forged;
+    core_row_mut(&mut core, f.dyncall_row).decoder.group_count = forged;
     for row in (f.dyncall_end + 1)..=f.outer_end {
         core_row_mut(&mut core, row).stack.b1 = forged;
     }
 
+    assert_invocation_unchanged(&f, &mut core);
     let result = f.trace.prove_and_verify_allowing_lookup_rejection(core);
     assert!(
         result.is_err(),
-        "the proof pipeline must reject a forged saved caller overflow pointer: h5 is now pinned to \
+        "the proof pipeline must reject a forged saved caller overflow pointer: it is pinned to \
          zero on a DYNCALL taken from an empty overflow table: {result:?}"
     );
 }
 
-/// Control for the above: forging `h5` with `b1` left honest must be rejected by the
+/// Control for the above: forging the saved pointer with `b1` left honest must be rejected by the
 /// block-stack relation regardless, since the addition then records a pointer the matching
 /// removal does not restore.
 #[test]
-fn forged_h5_without_matching_pointer_is_rejected() {
+fn forged_saved_pointer_without_matching_restoration_is_rejected() {
     let f = build_fixture();
     let mut core = f.trace.core.clone();
-    core_row_mut(&mut core, f.dyncall_row).decoder.hasher_state[5] = Felt::new_unchecked(1234);
+    core_row_mut(&mut core, f.dyncall_row).decoder.group_count = Felt::new_unchecked(1234);
 
+    assert_invocation_unchanged(&f, &mut core);
     let result = f.trace.prove_and_verify_allowing_lookup_rejection(core);
     assert!(
         result.is_err(),
-        "forging h5 with b1 left honest must be rejected (the direct h5 constraint fires \
-         first; before the fix this rejected via the block-stack relation): {result:?}"
+        "forging the saved pointer with b1 left honest must be rejected by the empty-overflow \
+         constraint and the mismatched caller frame: {result:?}"
     );
 }
 
@@ -239,11 +244,12 @@ fn forged_caller_overflow_pointer_with_nonempty_table_is_rejected() {
     let mut core = f.trace.core.clone();
     let forged = Felt::new_unchecked(1234);
 
-    core_row_mut(&mut core, f.dyncall_row).decoder.hasher_state[5] = forged;
+    core_row_mut(&mut core, f.dyncall_row).decoder.group_count = forged;
     for row in (f.dyncall_end + 1)..=f.outer_end {
         core_row_mut(&mut core, row).stack.b1 = forged;
     }
 
+    assert_invocation_unchanged(&f, &mut core);
     let result = f.trace.prove_and_verify_allowing_lookup_rejection(core);
     assert!(
         result.is_err(),

@@ -41,13 +41,11 @@ pub use eidos_compression::EidosCompressionAir;
 pub trait MidenAirBuilder: LiftedAirBuilder<F = Felt> {}
 impl<T: LiftedAirBuilder<F = Felt>> MidenAirBuilder for T {}
 
-/// Combined LogUp width used by constraint test harnesses: 5 core columns, 4 chiplet
-/// columns, and the byte-pair table column. Standalone Eidos compression tests size their aux
-/// matrix from the AIR directly.
+/// Combined Core and Chiplets LogUp width used by constraint test harnesses.
+/// Standalone And8 and Eidos compression traces size their auxiliary matrices from their AIRs.
 pub const LOGUP_AUX_TRACE_WIDTH: usize = crate::vm::constraints::lookup::main_air::MAIN_COLUMN_SHAPE
     .len()
-    + crate::vm::constraints::lookup::chiplet_air::CHIPLET_COLUMN_SHAPE.len()
-    + 1;
+    + crate::vm::constraints::lookup::chiplet_air::CHIPLET_COLUMN_SHAPE.len();
 
 // MIDEN AIR
 // ================================================================================================

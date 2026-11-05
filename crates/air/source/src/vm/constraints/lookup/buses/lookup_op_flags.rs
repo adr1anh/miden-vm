@@ -653,7 +653,13 @@ mod tests {
         ];
 
         for opcode in block_hash_ops {
-            let row = generate_test_row(opcode.into());
+            let mut row = generate_test_row(opcode.into());
+            if opcode == opcodes::DYNCALL {
+                // Real DYNCALL rows reuse these cells for the selected implementation and the
+                // saved caller overflow link; neither payload may activate op-group decoding.
+                row.decoder.hasher_state[4..8].fill(Felt::from_u32(29));
+                row.decoder.group_count = Felt::from_u32(1234);
+            }
             let row_next = generate_test_row(0);
             let flags = LookupOpFlags::from_main_cols(&row.decoder, &row.stack, &row_next.decoder);
 
@@ -775,7 +781,18 @@ mod tests {
     #[test]
     fn boolean_row_matches_polynomial_for_all_valid_opcodes() {
         for opcode in valid_opcodes() {
-            let row = generate_test_row(opcode);
+            let mut row = generate_test_row(opcode);
+            if matches!(
+                opcode as u8,
+                opcodes::EXEC | opcodes::CALL | opcodes::SYSCALL | opcodes::DYN | opcodes::DYNCALL
+            ) {
+                // Invocation implementations need not be Boolean; END alone owns the flags
+                // overlay read by the stack-shift selectors.
+                row.decoder.hasher_state[4..8].fill(Felt::from_u32(29));
+            }
+            if opcode == opcodes::DYNCALL as usize {
+                row.decoder.group_count = Felt::from_u32(1234);
+            }
             let row_next = generate_test_row(0);
             let polynomial =
                 LookupOpFlags::from_main_cols(&row.decoder, &row.stack, &row_next.decoder);

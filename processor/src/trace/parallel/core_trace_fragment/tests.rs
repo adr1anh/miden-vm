@@ -1069,10 +1069,10 @@ fn test_call_decoding() {
     assert_eq!(first_basic_block_hash, get_hasher_state1(&dec_trace, 7));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 7));
 
-    // in the 8th row, CALL commits the independently named bar key
+    // in the 8th row, CALL holds the named bar key and its resolved implementation
     let bar_root_hash = bar_root_node.digest();
     assert_eq!(fixture_binding("bar", false).key().into_word(), get_hasher_state1(&dec_trace, 8));
-    assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 8));
+    assert_eq!(bar_root_hash, get_hasher_state2(&dec_trace, 8));
 
     // in the 9th row, the hasher state for JOIN is set to hashes of (bar_span, foo_call)
     let bar_basic_block_hash = bar_basic_block.digest();
@@ -1084,10 +1084,10 @@ fn test_call_decoding() {
     assert_eq!(bar_basic_block_hash, get_hasher_state1(&dec_trace, 12));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 12));
 
-    // in the 13th row, CALL commits the independently named foo key
+    // in the 13th row, CALL holds the named foo key and its resolved implementation
     let foo_root_hash = foo_root.digest();
     assert_eq!(fixture_binding("foo", false).key().into_word(), get_hasher_state1(&dec_trace, 13));
-    assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 13));
+    assert_eq!(foo_root_hash, get_hasher_state2(&dec_trace, 13));
 
     // at the end of the foo block, the hasher state is set to the hash of the first child
     assert_eq!(foo_root_hash, get_hasher_state1(&dec_trace, 16));
@@ -1376,10 +1376,10 @@ fn test_syscall_decoding() {
     assert_eq!(first_basic_block_hash, get_hasher_state1(&dec_trace, 7));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 7));
 
-    // in the 8th row, CALL commits the independently named bar key
+    // in the 8th row, CALL holds the named bar key and its resolved implementation
     let bar_root_hash = bar_root_node.digest();
     assert_eq!(fixture_binding("bar", false).key().into_word(), get_hasher_state1(&dec_trace, 8));
-    assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 8));
+    assert_eq!(bar_root_hash, get_hasher_state2(&dec_trace, 8));
 
     // in the 9th row, the hasher state for JOIN is set to hashes of (bar_span, foo_call)
     let bar_basic_block_hash = bar_basic_block.digest();
@@ -1391,10 +1391,10 @@ fn test_syscall_decoding() {
     assert_eq!(bar_basic_block_hash, get_hasher_state1(&dec_trace, 12));
     assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 12));
 
-    // in the 13th row, SYSCALL commits the independently named N0 foo key
+    // in the 13th row, SYSCALL holds the N0 foo key and its resolved implementation
     let foo_root_hash = foo_root.digest();
     assert_eq!(fixture_binding("foo", true).key().into_word(), get_hasher_state1(&dec_trace, 13));
-    assert_eq!(EMPTY_WORD, get_hasher_state2(&dec_trace, 13));
+    assert_eq!(foo_root_hash, get_hasher_state2(&dec_trace, 13));
 
     // at the end of the foo block, the hasher state is set to the hash of the first child
     assert_eq!(foo_root_hash, get_hasher_state1(&dec_trace, 16));
@@ -1608,9 +1608,10 @@ fn test_dyn_node_decoding() {
     assert_eq!(join_hash, get_hasher_state1(&trace, 9));
     assert_eq!(Word::from([ZERO, ZERO, ZERO, ZERO]), get_hasher_state2(&trace, 9));
 
-    // at the start of the DYN block, the hasher state commits the foo key
+    // at the start of the DYN block, the hasher words hold the foo key and implementation
     let foo_hash = foo_root_node.digest();
     assert_eq!(fixture_binding("foo", false).key().into_word(), get_hasher_state1(&trace, 10));
+    assert_eq!(foo_hash, get_hasher_state2(&trace, 10));
 
     // at the end of the DYN SPAN, the hasher state is set to the hash of the foo span
     assert_eq!(foo_hash, get_hasher_state1(&trace, 14));

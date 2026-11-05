@@ -8,7 +8,7 @@
 //!   cycle, spilled value, and link to the previous overflow row.
 //! - **Left shift ∧ non-empty overflow** (remove): consume the matching `(b1, s15', b1')` row.
 //! - **DYNCALL ∧ non-empty overflow** (remove): DYNCALL is excluded from `left_shift`; it consumes
-//!   `(b1, s15', hasher_state[5])` because the caller's post-pop overflow pointer is staged in h5
+//!   `(b1, s15', group_count)` because the caller's post-pop overflow pointer overlays group_count
 //!   while `b1'` is reset.
 
 use miden_stark::lookup::{Deg, LookupColumn, LookupGroup};
@@ -42,7 +42,7 @@ pub(in crate::vm::constraints::lookup) fn emit_stack_overflow<LB>(
     let s15_next = next.stack.get(15);
     let b1 = local.stack.b1;
     let b1_next = next.stack.b1;
-    let h5 = local.decoder.hasher_state[5];
+    let caller_overflow_addr = local.decoder.dyncall_overflow_addr();
 
     // `op_flags.overflow() = (b0 - 16) * h0`, degree 2. Aliased once so each removal can cheaply
     // duplicate the expression.
@@ -79,8 +79,8 @@ pub(in crate::vm::constraints::lookup) fn emit_stack_overflow<LB>(
                         Deg { v: 7, u: 8 },
                     );
 
-                    // DYNCALL with non-empty overflow: pop `(b1, s15', h5)`. The new overflow
-                    // pointer lives in `hasher_state[5]` after a DYNCALL, since
+                    // DYNCALL with non-empty overflow: pop the caller's saved overflow link.
+                    // The pointer overlays `group_count` on a DYNCALL row, since
                     // `b1'` is reset by the call.
                     g.remove(
                         "dyncall",
@@ -88,7 +88,7 @@ pub(in crate::vm::constraints::lookup) fn emit_stack_overflow<LB>(
                         || StackOverflowMsg {
                             clk: b1.into(),
                             val: s15_next.into(),
-                            prev: h5.into(),
+                            prev: caller_overflow_addr.into(),
                         },
                         Deg { v: 7, u: 8 },
                     );

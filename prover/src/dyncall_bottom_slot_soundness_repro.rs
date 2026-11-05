@@ -9,8 +9,8 @@
 //!   is deliberately no left-shift term at the bottom slot, and DYNCALL is in neither of those two
 //!   arrays, so `flag_sum = 0` and the constraint reads `0 = 0`.
 //! - the `s15' = 0` zeroing in `stack/overflow.rs` was gated only on the aggregate left-shift flag,
-//!   which excludes DYNCALL by construction: DYNCALL records its caller's post-pop stack depth and
-//!   overflow address in decoder helper columns and uses a dedicated overflow-table interaction.
+//!   which excludes DYNCALL by construction: DYNCALL derives its caller's post-pop depth, saves its
+//!   overflow pointer in the group-count overlay, and uses a dedicated overflow interaction.
 //! - the stack-overflow bus branch that would bind `s15'` for DYNCALL is gated on `dyncall() *
 //!   overflow()`, and `overflow() = (b0 - 16) * h0` is 0 exactly when the depth is 16.
 //! - the output boundary binds `s15` to the claimed output, which the forgery changes to match the

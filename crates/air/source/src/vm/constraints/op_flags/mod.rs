@@ -609,8 +609,9 @@ where
 
         // left_shift_scalar (degree 5):
         // DYNCALL also left-shifts the visible stack, but is intentionally excluded: call entry
-        // resets the depth and b1 columns, while its post-shift caller state is carried in decoder
-        // h4/h5 and its overflow-table removal is constrained separately.
+        // resets the depth and b1 columns. Its saved caller depth is derived from the current
+        // stack, and group_count carries the overflow link authenticated by the separate
+        // overflow lookup.
         let prefix_010 = prefix_01 * bits[4][0].clone();
         let u32_add3_madd_group = prefix_100 * bits[3][1].clone() * bits[2][1].clone();
         let left_shift_scalar = E::sum_array::<6>(&[
@@ -929,9 +930,8 @@ impl<E: PrimeCharacteristicRing> OpFlags<E> {
         span => opcodes::SPAN,
         /// Operation Flag of PUSH operation.
         push => opcodes::PUSH,
-        /// Operation Flag of DYN operation.
-        dyn_op => opcodes::DYN,
         /// Operation Flag of EXEC operation.
+        #[cfg(test)]
         exec => opcodes::EXEC,
         /// Operation Flag of DYNCALL operation.
         dyncall => opcodes::DYNCALL,

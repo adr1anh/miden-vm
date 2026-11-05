@@ -1,16 +1,16 @@
 //! Main-trace LogUp lookup AIR.
 //!
-//! Owns the main-trace side of the Miden VM's LogUp argument: five lookup columns, one
+//! Owns the main-trace side of the Miden VM's LogUp argument: four lookup columns, one
 //! per `emit_*` function in [`super::buses`]. This module wires them together via a single
 //! [`MainBusContext`] that carries the two-row window plus a shared [`OpFlags`] instance.
 //!
 //! Columns (in emission order):
 //! - block-stack table + u32 and Merkle-depth range checks + log-deferred capacity + range-table
-//!   response (merged — see [`super::buses::block_stack_and_range_logcap`]).
+//!   response + authenticated Library Resolve demands (merged — see
+//!   [`super::buses::block_stack_and_range_logcap`]).
 //! - block-hash queue + op-group table.
 //! - chiplet requests from the decoder + U32DIV remainder-bound range checks.
 //! - stack overflow table.
-//! - authenticated Library Resolve demands.
 //!
 //! The [`MainLookupBuilder`] extension trait exists so the `OpFlags` construction can diverge
 //! between the constraint path (polynomial, the default body) and the prover path (boolean fast
@@ -31,7 +31,6 @@ use super::{
         block_hash_and_op_group::{self, emit_block_hash_and_op_group},
         block_stack_and_range_logcap::{self, emit_block_stack_and_range_logcap},
         chiplet_requests::{self, emit_chiplet_requests},
-        resolution::{self, emit_resolution},
         stack_overflow::{self, emit_stack_overflow},
     },
 };
@@ -43,7 +42,7 @@ use crate::vm::{CoreCols, Felt, constraints::columns::NUM_CORE_COLS};
 /// Extension trait the main-trace [`LookupAir`] requires from its [`LookupBuilder`].
 ///
 /// Carries a single hook, [`build_op_flags`](Self::build_op_flags), for constructing the
-/// shared [`LookupOpFlags`] instance that the five main-trace bus emitters consume. The
+/// shared [`LookupOpFlags`] instance that the four main-trace bus emitters consume. The
 /// default body uses the polynomial path. The prover-path adapter overrides this method to skip
 /// the dead polynomial products that come from decoder bits already being concrete 0/1 values; no
 /// emitter code moves.
@@ -70,7 +69,7 @@ pub(crate) trait MainLookupBuilder: LookupBuilder<F = Felt> {
 // MAIN BUS CONTEXT
 // ================================================================================================
 
-/// Shared context for the five main-trace bus emitters.
+/// Shared context for the four main-trace bus emitters.
 ///
 /// Holds the two-row window plus a single [`LookupOpFlags`] instance built once per `eval`
 /// through [`MainLookupBuilder::build_op_flags`]. Every emitter reads `ctx.local`,
@@ -109,22 +108,21 @@ where
 
 /// LogUp lookup argument over the main trace.
 ///
-/// Zero-sized. Emits five permutation columns: the first packs block-stack + u32 and Merkle-depth
-/// range checks + log-deferred capacity + range-table response; the second unions block-hash queue
-/// and op-group table; the third hosts the decoder's chiplet requests and U32DIV remainder-bound
-/// range checks; the fourth hosts the stack overflow table; the fifth carries Library Resolve
-/// demands. The chiplet-trace half of the argument
+/// Zero-sized. Emits four permutation columns: the first packs block-stack + u32 and Merkle-depth
+/// range checks + log-deferred capacity + range-table response + Library Resolve demands; the
+/// second unions block-hash queue and op-group table; the third hosts the decoder's chiplet
+/// requests and U32DIV remainder-bound range checks; the fourth hosts the stack overflow table.
+/// The chiplet-trace half of the argument
 /// lives in [`super::chiplet_air::ChipletLookupAir`].
 #[derive(Copy, Clone, Debug, Default)]
 pub(crate) struct MainLookupAir;
 
 /// Per-column fraction stride, in emission order (see [`MainLookupAir`] docs).
-pub(crate) const MAIN_COLUMN_SHAPE: [usize; 5] = [
+pub(crate) const MAIN_COLUMN_SHAPE: [usize; 4] = [
     block_stack_and_range_logcap::MAX_INTERACTIONS_PER_ROW,
     block_hash_and_op_group::MAX_INTERACTIONS_PER_ROW,
     chiplet_requests::MAX_INTERACTIONS_PER_ROW,
     stack_overflow::MAX_INTERACTIONS_PER_ROW,
-    resolution::MAX_INTERACTIONS_PER_ROW,
 ];
 
 impl<LB> LookupAir<LB> for MainLookupAir
@@ -167,6 +165,5 @@ where
         emit_block_hash_and_op_group::<LB>(builder, &ctx);
         emit_chiplet_requests::<LB>(builder, &ctx);
         emit_stack_overflow::<LB>(builder, &ctx);
-        emit_resolution::<LB>(builder, &ctx);
     }
 }

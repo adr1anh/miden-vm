@@ -1,19 +1,20 @@
-//! Packs three bus families onto one main-trace lookup column:
+//! Packs block-stack, resolution, range-check, and transcript buses onto one lookup column:
 //!
-//! - Block-stack table: control-flow block nesting.
+//! - Block-stack table and Library Resolve demands: control-flow nesting and authenticated calls.
 //! - u32 and Merkle-depth range-check removes: gated by u32 or Merkle opcodes.
 //! - Log-deferred transcript-state: gated by the log deferred opcode.
 //!
 //! Soundness of the merge relies on the bus families using distinct `bus_prefix[bus]` bases
 //! (so their rationals remain linearly independent in the extension field) and on all
-//! interactions being mutually exclusive by opcode.
+//! top-level branches being mutually exclusive by opcode. Simultaneous frame and Resolve
+//! interactions are batched inside their shared branch.
 //!
 //! # Structure
 //!
 //! One [`miden_stark::lookup::LookupBuilder::next_column`] call with one opcode-gated group:
 //!
 //! - Block-stack table: JOIN/SPLIT/SPAN/EXEC/DYN, LOOP, DYNCALL, CALL/SYSCALL, two END cases,
-//!   RESPAN batch (7 branches, mutually exclusive via decoder opcode flags).
+//!   RESPAN batch (branches mutually exclusive via decoder opcode flags).
 //! - u32 range-check batch: 4 removes gated by `u32_rc_op`.
 //! - Merkle range-check batches: depth bounds plus part of the canonical-index witness, gated by
 //!   MPVERIFY / MRUPDATE.
@@ -22,7 +23,7 @@
 //! # Mutual exclusivity
 //!
 //! The main group is sound under simple-group accumulation because all its gates are
-//! mutually exclusive decoder-opcode flags. The three bus families live in disjoint
+//! mutually exclusive decoder-opcode flags. The branch families live in disjoint
 //! opcode sets:
 //!
 //! - Block-stack: {JOIN, SPLIT, SPAN, EXEC, DYN, LOOP, DYNCALL, CALL, SYSCALL, END, RESPAN}
@@ -44,12 +45,13 @@
 //!
 //! |Interaction                                  |Gate deg|Payload              |U degree|V degree|
 //! |---------------------------------------------|--------|---------------------|--------|--------|
-//! |JOIN/SPLIT/SPAN/EXEC/DYN continuation add    |5       |Continuation, denom 1|6       |5       |
+//! |JOIN/SPLIT/SPAN continuation add              |5       |Continuation, denom 1|6       |5       |
+//! |EXEC/DYN continuation + Resolve batch         |5       |2 linear denoms      |7       |6       |
 //! |LOOP continuation add                        |5       |Continuation, denom 1|6       |5       |
-//! |DYNCALL caller-frame add                     |5       |CallerFrame, denom 1 |6       |5       |
-//! |CALL/SYSCALL caller-frame add                |4       |CallerFrame, denom 1 |5       |4       |
-//! |END continuation remove                      |5       |Continuation, denom 1|6       |5       |
-//! |END caller-frame remove                      |5       |CallerFrame, denom 1 |6       |5       |
+//! |DYNCALL caller-frame + Resolve batch         |5       |denoms 2 + 1         |8       |7       |
+//! |CALL/SYSCALL frame + Resolve batches          |4       |2 linear denoms      |6       |5       |
+//! |END continuation + optional root Resolve     |5       |2 linear denoms      |7       |7       |
+//! |END caller-frame + optional root Resolve     |5       |2 linear denoms      |7       |7       |
 //! |RESPAN batch (k=2, f=respan deg 4)           |—       |Continuation         |6       |5       |
 //! |u32rc batch (k=4, f=u32_rc_op deg 3)         |—       |Range, denom 1       |**7**   |**6**   |
 //! |MPVERIFY Merkle batch (k=3, f=mpverify deg 5)|—       |Range, denom 1       |**8**   |**7**   |
@@ -63,7 +65,7 @@ use core::array;
 use miden_core::field::PrimeCharacteristicRing;
 use miden_stark::lookup::{Deg, LookupBatch, LookupColumn, LookupGroup};
 
-use super::super::operations::merkle;
+use super::{super::operations::merkle, resolution};
 use crate::vm::{
     constraints::{
         lookup::{
@@ -77,11 +79,11 @@ use crate::vm::{
 
 /// Upper bound on fractions this emitter pushes into its column per row.
 ///
-/// `max(1, 1, 1, 1, 1, 1, 2 (RESPAN), 4 (u32rc), 3 (MPVERIFY), 4 (MRUPDATE),
+/// `max(1 (structural), 2 (invocation/END), 2 (RESPAN), 4 (u32rc), 3 (MPVERIFY), 4 (MRUPDATE),
 /// 2 (logpre)) = 4`.
 pub(in crate::vm::constraints::lookup) const MAX_INTERACTIONS_PER_ROW: usize = 4;
 
-/// Emit the merged block-stack + u32/Merkle-depth range-check + logpre column.
+/// Emit the merged block-stack + Resolve + u32/Merkle-depth range-check + logpre column.
 pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
     builder: &mut LB,
     ctx: &MainBusContext<LB>,
@@ -99,14 +101,11 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
 
     // ---- Block-stack captures (from block_stack.rs) ----
     //
-    // `dec.hasher_state` holds `[h0..h7]` with `h[4..8]` doubling as the end-block flags
-    // (see `end_block_flags()`). DYNCALL reads `h[4]`/`h[5]` as the caller stack depth and
-    // caller overflow address; END reads its semantic flags through the typed `EndBlockFlags`
-    // overlay.
+    // On invocations h[4..8] holds the resolved implementation. DYNCALL derives the saved
+    // post-pop depth and stages its saved overflow address in the group-count overlay. END
+    // reads h[4..8] through the disjoint semantic EndBlockFlags overlay.
     let addr = dec.addr;
     let addr_next = dec_next.addr;
-    let h4 = dec.hasher_state[4];
-    let h5 = dec.hasher_state[5];
     let h1_next = dec_next.hasher_state[1];
     let end_flags = dec.end_block_flags();
 
@@ -145,123 +144,164 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                 |g| {
                     // ---- Block-stack relation (Continuation / CallerFrame tagged entries) ----
 
-                    // JOIN/SPLIT/SPAN/EXEC/DYN: continuation push with `is_loop = 0`.
-                    let f = op_flags.join()
-                        + op_flags.split()
-                        + op_flags.span()
-                        + op_flags.exec()
-                        + op_flags.dyn_op();
+                    // Structural nodes only push their continuation. Invocations below also
+                    // demand one authenticated binding, in the same simultaneous batch.
+                    let f = op_flags.join() + op_flags.split() + op_flags.span();
                     g.add(
-                        "join_split_span_exec_dyn",
+                        "join_split_span",
                         f,
-                        || {
-                            let block_id = addr_next.into();
-                            let parent_id = addr.into();
-                            let is_loop = LB::Expr::ZERO;
-                            BlockStackMsg::Continuation { block_id, parent_id, is_loop }
+                        || BlockStackMsg::Continuation {
+                            block_id: addr_next.into(),
+                            parent_id: addr.into(),
+                            is_loop: LB::Expr::ZERO,
                         },
                         Deg { v: 5, u: 6 },
                     );
+                    g.batch(
+                        "exec_dyn",
+                        op_flags.exec() + op_flags.dyn_op(),
+                        |b| {
+                            b.add(
+                                "invocation_continuation",
+                                BlockStackMsg::Continuation {
+                                    block_id: addr_next.into(),
+                                    parent_id: addr.into(),
+                                    is_loop: LB::Expr::ZERO,
+                                },
+                                Deg { v: 5, u: 6 },
+                            );
+                            b.remove(
+                                "ordinary_invocation",
+                                resolution::invocation_message(dec, LB::Expr::ZERO),
+                                Deg { v: 5, u: 6 },
+                            );
+                        },
+                        Deg { v: 6, u: 7 },
+                    );
 
-                    // LOOP: push with `is_loop = 1`. Under do-while semantics LOOP reads no
-                    // stack input, as it unconditionally enters the loop.
+                    // LOOP unconditionally enters the body and records its continuation kind.
                     g.add(
                         "loop",
                         op_flags.loop_op(),
-                        || {
-                            let block_id = addr_next.into();
-                            let parent_id = addr.into();
-                            let is_loop = LB::Expr::ONE;
-                            BlockStackMsg::Continuation { block_id, parent_id, is_loop }
+                        || BlockStackMsg::Continuation {
+                            block_id: addr_next.into(),
+                            parent_id: addr.into(),
+                            is_loop: LB::Expr::ONE,
                         },
                         Deg { v: 5, u: 6 },
                     );
 
-                    // DYNCALL: caller-frame push with h[4]/h[5] carrying the caller stack depth
-                    // and overflow address.
-                    g.add(
+                    // The derived post-pop depth is quadratic, so this batch's two
+                    // denominators have degrees two and one: (V,U)=(2+5,3+5).
+                    g.batch(
                         "dyncall",
                         op_flags.dyncall(),
-                        || {
-                            let block_id = addr_next.into();
-                            let parent_id = addr.into();
-                            let caller_ctx = sys_ctx.into();
-                            let caller_stack_depth = h4.into();
-                            let caller_overflow_addr = h5.into();
-                            let caller_fn_hash = fn_hash.map(LB::Expr::from);
-                            BlockStackMsg::CallerFrame {
-                                block_id,
-                                parent_id,
-                                caller_ctx,
-                                caller_stack_depth,
-                                caller_overflow_addr,
-                                caller_fn_hash,
-                            }
+                        |b| {
+                            b.add(
+                                "dyncall_caller_frame",
+                                BlockStackMsg::CallerFrame {
+                                    block_id: addr_next.into(),
+                                    parent_id: addr.into(),
+                                    caller_ctx: sys_ctx.into(),
+                                    caller_stack_depth: LB::Expr::from(b0) - op_flags.overflow(),
+                                    caller_overflow_addr: dec.dyncall_overflow_addr().into(),
+                                    caller_fn_hash: fn_hash.map(LB::Expr::from),
+                                },
+                                Deg { v: 5, u: 7 },
+                            );
+                            b.remove(
+                                "ordinary_invocation",
+                                resolution::invocation_message(dec, LB::Expr::ZERO),
+                                Deg { v: 5, u: 6 },
+                            );
                         },
-                        Deg { v: 5, u: 6 },
+                        Deg { v: 7, u: 8 },
                     );
 
-                    // CALL/SYSCALL: caller-frame push saving the caller state.
-                    let f = op_flags.call() + op_flags.syscall();
-                    g.add(
-                        "call_syscall",
-                        f,
-                        || {
-                            let block_id = addr_next.into();
-                            let parent_id = addr.into();
-                            let caller_ctx = sys_ctx.into();
-                            let caller_stack_depth = b0.into();
-                            let caller_overflow_addr = b1.into();
-                            let caller_fn_hash = fn_hash.map(LB::Expr::from);
-                            BlockStackMsg::CallerFrame {
-                                block_id,
-                                parent_id,
-                                caller_ctx,
-                                caller_stack_depth,
-                                caller_overflow_addr,
-                                caller_fn_hash,
-                            }
-                        },
-                        Deg { v: 4, u: 5 },
-                    );
+                    // Separate branches keep the syscall tag literal in each linear message.
+                    for (name, flag, syscall) in [
+                        ("call", op_flags.call(), LB::Expr::ZERO),
+                        ("syscall", op_flags.syscall(), LB::Expr::ONE),
+                    ] {
+                        g.batch(
+                            name,
+                            flag,
+                            |b| {
+                                b.add(
+                                    "invocation_caller_frame",
+                                    BlockStackMsg::CallerFrame {
+                                        block_id: addr_next.into(),
+                                        parent_id: addr.into(),
+                                        caller_ctx: sys_ctx.into(),
+                                        caller_stack_depth: b0.into(),
+                                        caller_overflow_addr: b1.into(),
+                                        caller_fn_hash: fn_hash.map(LB::Expr::from),
+                                    },
+                                    Deg { v: 4, u: 5 },
+                                );
+                                b.remove(
+                                    "invocation_resolution",
+                                    resolution::invocation_message(dec, syscall),
+                                    Deg { v: 4, u: 5 },
+                                );
+                            },
+                            Deg { v: 5, u: 6 },
+                        );
+                    }
 
-                    // END of a continuation: pop with the stored is_loop.
+                    // The two END subtypes remain exclusive. Both pop a frame and, only when
+                    // the Boolean root flag is one, authenticate the completed root binding.
+                    // -f/B - f*r/R = -f*(R + r*B)/(B*R), giving (V,U)=(7,7).
                     let restores_caller_frame: LB::Expr = end_flags.restores_caller_frame.into();
                     let f = op_flags.end() * restores_caller_frame.not();
-                    g.remove(
+                    g.batch(
                         "end_continuation",
                         f,
-                        || {
-                            let block_id = addr.into();
-                            let parent_id = addr_next.into();
-                            let is_loop = end_flags.is_loop.into();
-                            BlockStackMsg::Continuation { block_id, parent_id, is_loop }
+                        |b| {
+                            b.remove(
+                                "end_continuation_frame",
+                                BlockStackMsg::Continuation {
+                                    block_id: addr.into(),
+                                    parent_id: addr_next.into(),
+                                    is_loop: end_flags.is_loop.into(),
+                                },
+                                Deg { v: 5, u: 6 },
+                            );
+                            b.insert(
+                                "root_completion",
+                                -LB::Expr::from(end_flags.is_root_end),
+                                resolution::root_completion_message(dec, fn_hash_next),
+                                Deg { v: 6, u: 6 },
+                            );
                         },
-                        Deg { v: 5, u: 6 },
+                        Deg { v: 7, u: 7 },
                     );
-
-                    // END of a caller frame: pop with restored caller state.
+                    let restores_caller_frame: LB::Expr = end_flags.restores_caller_frame.into();
                     let f = op_flags.end() * restores_caller_frame;
-                    g.remove(
+                    g.batch(
                         "end_caller_frame",
                         f,
-                        || {
-                            let block_id = addr.into();
-                            let parent_id = addr_next.into();
-                            let caller_ctx = sys_ctx_next.into();
-                            let caller_stack_depth = b0_next.into();
-                            let caller_overflow_addr = b1_next.into();
-                            let caller_fn_hash = fn_hash_next.map(LB::Expr::from);
-                            BlockStackMsg::CallerFrame {
-                                block_id,
-                                parent_id,
-                                caller_ctx,
-                                caller_stack_depth,
-                                caller_overflow_addr,
-                                caller_fn_hash,
-                            }
+                        |b| {
+                            b.remove(
+                                "end_caller_frame_pop",
+                                BlockStackMsg::CallerFrame {
+                                    block_id: addr.into(),
+                                    parent_id: addr_next.into(),
+                                    caller_ctx: sys_ctx_next.into(),
+                                    caller_stack_depth: b0_next.into(),
+                                    caller_overflow_addr: b1_next.into(),
+                                    caller_fn_hash: fn_hash_next.map(LB::Expr::from),
+                                },
+                                Deg { v: 5, u: 6 },
+                            );
+                            b.insert(
+                                "root_completion",
+                                -LB::Expr::from(end_flags.is_root_end),
+                                resolution::root_completion_message(dec, fn_hash_next),
+                                Deg { v: 6, u: 6 },
+                            );
                         },
-                        Deg { v: 5, u: 6 },
+                        Deg { v: 7, u: 7 },
                     );
 
                     // RESPAN: simultaneous push + pop — one batch under the RESPAN flag.

@@ -4,6 +4,7 @@ use core::borrow::{Borrow, BorrowMut};
 use miden_core::{
     Felt, ONE, Word, ZERO,
     field::PrimeCharacteristicRing,
+    operations::opcodes,
     utils::{Matrix, RowMajorMatrix},
 };
 
@@ -272,9 +273,28 @@ impl MainTrace {
         self.core_row(i).decoder.hasher_state
     }
 
-    /// Returns the authenticated implementation digest selected on an invocation row.
+    /// Returns the authenticated implementation selected on an invocation row, otherwise zero.
     pub fn decoder_resolved_digest(&self, i: RowIndex) -> Word {
-        self.core_row(i).decoder.resolved_digest.into()
+        let opcode = self.get_op_code(i);
+        if [opcodes::EXEC, opcodes::CALL, opcodes::SYSCALL, opcodes::DYN, opcodes::DYNCALL]
+            .into_iter()
+            .any(|invocation| opcode == Felt::from_u8(invocation))
+        {
+            self.core_row(i).decoder.resolved_digest().into()
+        } else {
+            Word::default()
+        }
+    }
+
+    /// Returns DYNCALL's caller stack depth after consuming its address operand.
+    pub fn dyncall_caller_stack_depth(&self, i: RowIndex) -> Felt {
+        let stack = &self.core_row(i).stack;
+        stack.b0 - (stack.b0 - Felt::from_u8(16)) * stack.h0
+    }
+
+    /// Returns DYNCALL's caller overflow pointer after consuming its address operand.
+    pub fn dyncall_caller_overflow_addr(&self, i: RowIndex) -> Felt {
+        self.core_row(i).decoder.dyncall_overflow_addr()
     }
 
     /// Returns the first half of the hasher state at row i.

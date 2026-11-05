@@ -286,29 +286,24 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             return Ok(None);
         }
 
-        let (stack_depth_after_drop, overflow_addr_after_drop) =
-            if processor.stack.stack_depth() > MIN_STACK_DEPTH {
-                // Stack is above minimum depth, so peek at the overflow replay for the post-pop
-                // overflow address.
-                let (_, overflow_addr_after_drop) = processor
+        let overflow_addr_after_drop = if processor.stack.stack_depth() > MIN_STACK_DEPTH {
+            // Stack is above minimum depth, so peek at the overflow replay for the post-pop
+            // overflow address.
+            let (_, overflow_addr_after_drop) = processor
                 .stack_overflow_replay
                 .peek_replay_pop_overflow()
                 .ok_or(ExecutionError::Internal(
                     "stack depth is above minimum, but no corresponding overflow pop in the replay",
                 ))?;
-                let stack_depth_after_drop = processor.stack.stack_depth() - 1;
-
-                (stack_depth_after_drop as u32, *overflow_addr_after_drop)
-            } else {
-                // Stack is at minimum depth already, so the overflow address is ZERO and the depth
-                // remains the same after the drop.
-                (processor.stack.stack_depth() as u32, ZERO)
-            };
+            *overflow_addr_after_drop
+        } else {
+            // At minimum depth there is no overflow row to consume.
+            ZERO
+        };
 
         Ok(Some(ExecutionContextInfo::new(
             processor.system.ctx,
             processor.system.fn_hash,
-            stack_depth_after_drop,
             overflow_addr_after_drop,
         )))
     }

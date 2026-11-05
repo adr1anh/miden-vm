@@ -730,6 +730,7 @@ fn assert_native_core_bindings(
     let main = trace.main_trace();
     assert_eq!(main.fn_hash(RowIndex::from(0)), entry.into_word().into_elements());
     let mut invocations = Vec::new();
+    let mut dyncall_frames = Vec::new();
     let mut root_ends = Vec::new();
     let mut halt_stack = None;
     for index in 0..main.core_height() {
@@ -746,6 +747,7 @@ fn assert_native_core_bindings(
             assert_ne!(key.into_word(), implementation, "fixture must separate K from D");
             assert_eq!(main.decoder_hasher_state_first_half(row), key.into_word());
             assert_eq!(main.decoder_resolved_digest(row), implementation);
+            assert_eq!(main.decoder_hasher_state_second_half(row), implementation);
             let next = RowIndex::from(index + 1);
             let establishes_principal = matches!(opcode, opcodes::CALL | opcodes::DYNCALL);
             let principal = if establishes_principal { key } else { entry };
@@ -758,22 +760,39 @@ fn assert_native_core_bindings(
             assert_eq!(main.is_left_shift(row), opcode == opcodes::DYN);
             assert!(!main.is_right_shift(row));
             if opcode == opcodes::DYNCALL {
-                let state = main.decoder_hasher_state_second_half(row);
-                assert_eq!(state[0], main.stack_depth(row) - ONE);
-                if state[0].as_canonical_u64() > 16 {
-                    assert_ne!(state[1], ZERO, "saved post-pop overflow pointer must survive");
+                let depth = main.dyncall_caller_stack_depth(row);
+                let overflow = core.decoder.dyncall_overflow_addr();
+                let popped = if main.is_non_empty_overflow(row) { ONE } else { ZERO };
+                assert_eq!(depth, main.stack_depth(row) - popped);
+                if depth.as_canonical_u64() > 16 {
+                    assert_ne!(overflow, ZERO, "saved post-pop overflow pointer must survive");
                 } else {
-                    assert_eq!(state[1], ZERO);
+                    assert_eq!(overflow, ZERO);
                 }
-                assert_eq!(&state.as_slice()[2..], &[ZERO, ZERO]);
-            } else {
-                assert_eq!(main.decoder_hasher_state_second_half(row), Word::default());
+                dyncall_frames.push((
+                    main.addr(next),
+                    depth,
+                    overflow,
+                    main.ctx(row),
+                    main.fn_hash(row),
+                ));
             }
             invocations.push(row);
         } else {
             assert_eq!(main.decoder_resolved_digest(row), Word::default());
         }
         if opcode == opcodes::END {
+            if main.restores_caller_frame_flag(row) == ONE
+                && let Some(frame) =
+                    dyncall_frames.iter().position(|frame| frame.0 == main.addr(row))
+            {
+                let (_, depth, overflow, context, principal) = dyncall_frames.remove(frame);
+                let next = RowIndex::from(index + 1);
+                assert_eq!(main.stack_depth(next), depth);
+                assert_eq!(main.parent_overflow_address(next), overflow);
+                assert_eq!(main.ctx(next), context);
+                assert_eq!(main.fn_hash(next), principal);
+            }
             if main.is_root_end(row) == ONE {
                 root_ends.push(row);
                 assert_eq!(main.is_loop_body_flag(row), ZERO);
@@ -797,6 +816,7 @@ fn assert_native_core_bindings(
         }
     }
     assert_eq!(invocations.len(), expected.len());
+    assert!(dyncall_frames.is_empty(), "every DYNCALL must restore its saved caller frame");
     assert_eq!(root_ends.len(), 1);
     assert!(halt_stack.is_some());
 }

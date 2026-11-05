@@ -37,7 +37,7 @@
 //! ## Decoder Trace Layout
 //!
 //! ```text
-//! addr | b0 b1 b2 b3 b4 b5 b6 | h0 h1 h2 h3 h4 h5 h6 h7 | sp | gc | ox | full | size | e0 e1 | resolved_digest[4]
+//! addr | b0 b1 b2 b3 b4 b5 b6 | h0 h1 h2 h3 h4 h5 h6 h7 | sp | gc | ox | full | size | e0 e1
 //!  (1)        (7 op bits)             (8 hasher state)    (1)  (1)  (1)    (1)    (1)     (2)
 //! ```
 //!
@@ -48,6 +48,7 @@
 //! |Context    |h0         |h1..h3   |h4            |h5      |h6                   |h7      |
 //! |-----------|-----------|---------|--------------|--------|---------------------|--------|
 //! |SPAN/RESPAN|packed ops |op groups|op group      |op group|op group             |op group|
+//! |Invocations|K₀         |K₁..₃    |D₀            |D₁      |D₂                   |D₃      |
 //! |END        |block hash₀|hash₁..₃ |is_loop_body  |is_loop |restores_caller_frame|root END|
 //! |User ops   |packed ops |op groups|user_op_helper|...     |...                  |...     |
 //!
@@ -71,7 +72,6 @@ pub(crate) mod batch;
 pub mod columns;
 
 use miden_stark::air::AirBuilder;
-use p3_field::Dup;
 
 use crate::vm::{
     CoreCols, Felt, MidenAirBuilder,
@@ -107,7 +107,6 @@ pub fn enforce_main<AB>(
         full_batch,
         batch_size_code,
         extra,
-        resolved_digest,
     } = local.decoder;
     let [b0, b1, _, _, b4, b5, b6] = op_bits;
     let [e0, e1] = extra;
@@ -223,7 +222,7 @@ pub fn enforce_main<AB>(
     // Operation | Constraint                          | Why
     // ----------+-------------------------------------+------------------------------------
     // SPLIT     | s0 in {0, 1}                        | s0 selects true/false branch
-    // Invokes   | canonical h4..h7                   | target K lives in h0..h3
+    // Invokes   | resolved D overlays h4..h7          | target K lives in h0..h3
     // REPEAT    | s0 = 1                              | loop condition must be true
     // END+loop  | is_loop (h5) => s0 = 0              | exiting loop: condition became false
     // END+REP'  | is_loop_body (h4) = 1               | REPEAT follows a loop-body END
@@ -233,35 +232,17 @@ pub fn enforce_main<AB>(
     let branch_condition = local.stack.get(0);
     builder.when(op_flags.split()).assert_bool(branch_condition);
 
-    // Immediate invocations hash K followed by a zero word. DYN also leaves its second word
-    // unused: its target key is authenticated by the memory-read lookup instead.
-    {
-        let immediate_or_dyn =
-            op_flags.exec() + op_flags.call() + op_flags.syscall() + op_flags.dyn_op();
-        let builder = &mut builder.when(immediate_or_dyn);
-        let hasher_zeros = [hasher_state[4], hasher_state[5], hasher_state[6], hasher_state[7]];
-        builder.assert_zeros(hasher_zeros)
-    }
-
-    // DYNCALL records its caller's post-pop stack depth and overflow pointer in h4/h5. Bind the
-    // depth directly; the overflow relation binds h5 when non-empty, and the constraint below
-    // handles the empty case.
+    // Invocation rows hold K in h0..h3 and D in h4..h7. The hasher lookup constructs the
+    // committed zero word explicitly, leaving this overlay independent of the MAST payload.
+    // DYNCALL saves its post-pop overflow pointer in group_count; its caller depth is derived
+    // directly by the caller-frame lookup. With empty overflow the pointer must be zero here.
     {
         let overflow = op_flags.overflow();
-        let builder = &mut builder.when(op_flags.dyncall());
-        builder.assert_eq(hasher_state[4], local.stack.b0 - overflow.dup());
-        builder.when(overflow.not()).assert_zero(hasher_state[5]);
-        builder.assert_zeros([hasher_state[6], hasher_state[7]]);
+        builder
+            .when(op_flags.dyncall())
+            .when(overflow.not())
+            .assert_zero(local.decoder.dyncall_overflow_addr());
     }
-
-    // The resolved implementation is meaningful only on the five invocation kinds. Every other
-    // row has canonical zero lanes, including END and the complete HALT suffix.
-    let invocation = op_flags.exec()
-        + op_flags.call()
-        + op_flags.syscall()
-        + op_flags.dyn_op()
-        + op_flags.dyncall();
-    builder.when(invocation.not()).assert_zeros(resolved_digest);
 
     // REPEAT consumes a true loop condition.
     builder.when(op_flags.repeat()).assert_one(local.stack.get(0));
@@ -348,8 +329,9 @@ pub fn enforce_main<AB>(
         .when(op_flags.span() + op_flags.respan() + is_push.clone())
         .assert_one(delta_group_count.clone());
 
-    // If delta_group_count = 1 on this row, the next row cannot be END or RESPAN — those ops need
-    // a fresh batch or span closure, not a mid-batch decrement.
+    // Any counter change forbids END or RESPAN next: these need a span closure or a fresh batch.
+    // DYNCALL's group_count overlay is compatible with this rule because its callee enters at a
+    // node start, rather than END or RESPAN. Keep the global rule to preserve existing edges.
     builder
         .when_transition()
         .when(delta_group_count.clone())
@@ -741,7 +723,7 @@ mod tests {
     fn exec_is_a_control_row_with_an_authenticated_implementation_lane() {
         let mut local = generate_test_row(opcodes::EXEC.into());
         local.decoder.hasher_state[..4].fill(Felt::from_u8(17));
-        local.decoder.resolved_digest = [Felt::from_u8(29); 4];
+        local.decoder.hasher_state[4..8].fill(Felt::from_u8(29));
         let next = generate_test_row(opcodes::JOIN.into());
         assert!(decoder_accepts(&local, &next));
 
@@ -750,57 +732,29 @@ mod tests {
     }
 
     #[test]
-    fn resolved_digest_is_zero_except_on_invocations() {
+    fn invocations_share_the_existing_second_hasher_word() {
         let next = generate_test_row(opcodes::JOIN.into());
         for opcode in
             [opcodes::EXEC, opcodes::CALL, opcodes::SYSCALL, opcodes::DYN, opcodes::DYNCALL]
         {
             let mut local = generate_test_row(opcode.into());
-            local.decoder.resolved_digest = [Felt::from_u8(29); 4];
+            let implementation = [Felt::from_u8(29); 4];
+            local.decoder.hasher_state[4..8].copy_from_slice(&implementation);
+            assert_eq!(local.decoder.resolved_digest(), implementation);
             assert!(decoder_accepts(&local, &next), "invocation {opcode} must carry its D");
-        }
-
-        let (in_span, in_span_next) = honest_in_span_pair();
-        let control = generate_test_row(opcodes::JOIN.into());
-        let end = generate_test_row(opcodes::END.into());
-        let halt = generate_test_row(opcodes::HALT.into());
-        for (local, next) in [
-            (in_span, in_span_next),
-            (control, next.clone()),
-            (end, next),
-            (halt.clone(), halt),
-        ] {
-            assert!(decoder_accepts(&local, &next));
-            for lane in 0..4 {
-                let mut forged = local.clone();
-                forged.decoder.resolved_digest[lane] = Felt::ONE;
-                assert!(
-                    !decoder_accepts(&forged, &next),
-                    "non-invocation D lane {lane} must be zero"
-                );
-            }
         }
     }
 
     #[test]
-    fn invocation_helper_words_are_canonical() {
-        let next = generate_test_row(opcodes::JOIN.into());
-        for opcode in [opcodes::EXEC, opcodes::CALL, opcodes::SYSCALL, opcodes::DYN] {
-            let local = generate_test_row(opcode.into());
-            assert!(decoder_accepts(&local, &next));
-            for lane in 4..8 {
-                let mut forged = local.clone();
-                forged.decoder.hasher_state[lane] = Felt::ONE;
-                assert!(!decoder_accepts(&forged, &next), "opcode {opcode} h{lane} must be zero");
-            }
-        }
-        let local = generate_test_row(opcodes::DYNCALL.into());
+    fn dyncall_overflow_overlay_does_not_act_as_an_op_group_counter() {
+        let mut local = generate_test_row(opcodes::DYNCALL.into());
+        local.stack.b0 = Felt::from_u8(18);
+        local.stack.h0 = Felt::from_u8(2).inverse();
+        local.decoder.group_count = Felt::from_u32(1234);
+        local.decoder.hasher_state[4..8].fill(Felt::from_u8(29));
+        let next = span_row_with_single_group();
         assert!(decoder_accepts(&local, &next));
-        for lane in 6..8 {
-            let mut forged = local.clone();
-            forged.decoder.hasher_state[lane] = Felt::ONE;
-            assert!(!decoder_accepts(&forged, &next), "DYNCALL h{lane} must be zero");
-        }
+        assert_eq!(local.decoder.dyncall_overflow_addr(), Felt::from_u32(1234));
     }
 
     #[test]
@@ -969,33 +923,25 @@ mod tests {
         );
     }
 
-    /// DYNCALL records the caller state after consuming its address operand. The decoder binds
-    /// the saved depth in both overflow regimes and binds the saved pointer directly only in the
-    /// empty regime; with overflow present, the stack-overflow relation owns that pointer.
+    /// The overflow bus owns a nonempty saved pointer. The local decoder pins the relocated
+    /// pointer only when the caller has no overflow; the implementation word stays independent.
     #[test]
-    fn dyncall_saved_frame_cells_follow_the_post_pop_state() {
-        let accepts = |depth: Felt, overflow_helper: Felt, h4: Felt, h5: Felt| {
+    fn dyncall_saved_overflow_pointer_is_zero_only_when_empty() {
+        let accepts = |depth: Felt, overflow_helper: Felt, pointer: Felt| {
             let mut local = generate_test_row(opcodes::DYNCALL.into());
             local.stack.b0 = depth;
             local.stack.h0 = overflow_helper;
-            local.decoder.hasher_state[4] = h4;
-            local.decoder.hasher_state[5] = h5;
+            local.decoder.group_count = pointer;
+            local.decoder.hasher_state[4..8].fill(Felt::from_u8(29));
             let next = generate_test_row(0);
             eval_decoder(&local, &next).iter().all(|v| *v == QuadFelt::ZERO)
         };
 
-        // Empty overflow: consuming the address leaves the represented depth clamped at 16 and
-        // there is no previous overflow row, so both saved values are fixed directly.
-        assert!(accepts(Felt::from_u8(16), Felt::ZERO, Felt::from_u8(16), Felt::ZERO));
-        assert!(!accepts(Felt::from_u8(16), Felt::ZERO, Felt::from_u8(15), Felt::ZERO));
-        assert!(!accepts(Felt::from_u8(16), Felt::ZERO, Felt::from_u8(16), Felt::ONE));
+        assert!(accepts(Felt::from_u8(16), Felt::ZERO, Felt::ZERO));
+        assert!(!accepts(Felt::from_u8(16), Felt::ZERO, Felt::ONE));
 
-        // Non-empty overflow: at depth 18 the inverse helper makes `overflow() = 1`, so the
-        // post-pop saved depth is 17. h5 is deliberately outside this module's authority here;
-        // the DYNCALL removal in the stack-overflow relation binds it to the prior row address.
+        // Nonempty overflow: the DYNCALL removal in the overflow relation authenticates pointer.
         let inverse_two = Felt::from_u8(2).inverse();
-        let relation_owned_h5 = Felt::new_unchecked(123);
-        assert!(accepts(Felt::from_u8(18), inverse_two, Felt::from_u8(17), relation_owned_h5));
-        assert!(!accepts(Felt::from_u8(18), inverse_two, Felt::from_u8(18), relation_owned_h5));
+        assert!(accepts(Felt::from_u8(18), inverse_two, Felt::from_u32(123)));
     }
 }

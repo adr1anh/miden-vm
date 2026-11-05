@@ -53,7 +53,7 @@ tables**. Both are signed multiset relations enforced by typed, domain-separated
 
 Miden VM is a four-AIR statement: Core, Chiplets, Eidos compression, and And8 lookup. The
 traditional combined row view of the Core and Chiplets matrices consists of $72$ main columns;
-the combined layout reserves $9$ auxiliary LogUp columns. Eidos compression uses its own
+the combined layout reserves $8$ auxiliary LogUp columns. Eidos compression uses its own
 108-column main matrix and $20$ auxiliary LogUp columns in each 32-row cycle, while And8 uses a fixed
 65,536-row byte-pair table with five preprocessed columns, seven multiplicity columns, and four
 auxiliary LogUp columns. The And8 constraints have degree three.
@@ -61,6 +61,15 @@ auxiliary LogUp columns. The And8 constraints have degree three.
 The system, decoder, and stack use dedicated columns, while all chiplets share the same $24$
 columns. Binary selector columns identify which chiplet owns each row. Range-check requests do not
 occupy a separate main-trace segment; their multiplicities are recorded in `And8LookupAir`.
+
+The Library chiplet authenticates procedure-key-to-implementation bindings from the public
+environment root within the shared chiplet columns. On Core invocation rows, decoder lanes
+`h0..h3` hold the requested procedure key and `h4..h7` hold the resolved implementation digest.
+DYNCALL saves its caller's post-pop overflow pointer in the decoder's `group_count` cell and
+derives the saved depth from the stack depth and overflow flag. These cells retain their ordinary
+meanings on other row kinds. Library Resolve demands share the Core block-stack lookup batches,
+including the root-completion demand on the terminal END, so Core and Chiplets each use four
+auxiliary columns. The combined layout keeps the degree-nine constraint bound.
 
 The system component uses the following trace column:
 
