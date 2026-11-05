@@ -1,4 +1,4 @@
-use alloc::format;
+use alloc::{format, vec::Vec};
 
 use miden_core::{
     deferred::{Digest, TRUE_DIGEST},
@@ -9,13 +9,19 @@ use miden_core::{
     },
 };
 
-use crate::{ProgramInfo, StackInputs, StackOutputs, fast::ExecutionOutput};
+use crate::{
+    EnvironmentTraceLimits, ExecutionEnvironment, ProgramInfo, StackInputs, StackOutputs,
+    fast::ExecutionOutput,
+};
 
 pub(crate) mod utils;
 use utils::ChipletTraceFragment;
 
 pub mod chiplets;
 pub(crate) mod execution_tracer;
+pub(crate) mod keyed;
+pub(crate) mod limits;
+pub use keyed::ReplayReadLimits;
 
 mod block_stack;
 mod parallel;
@@ -60,7 +66,13 @@ impl ExecutionWitness {
         stack_inputs: StackInputs,
         execution_output: ExecutionOutput,
         trace: TraceReplay,
-    ) -> Self {
+    ) -> Result<Self, crate::ExecutionError> {
+        trace.require_validated()?;
+        if program_info.program_hash() != trace.entry_implementation()?.as_word() {
+            return Err(crate::ExecutionError::Internal(
+                "legacy ProgramInfo differs from authenticated entry",
+            ));
+        }
         let ExecutionOutput {
             stack: stack_outputs,
             advice: _,
@@ -76,7 +88,7 @@ impl ExecutionWitness {
             precompile_root,
         };
 
-        Self { vm, precompile }
+        Ok(Self { vm, precompile })
     }
 
     /// Returns the public claim associated with this witness.
@@ -97,20 +109,26 @@ impl ExecutionWitness {
         (self.vm, self.precompile)
     }
 
-    /// Decodes one execution witness from a potentially adversarial byte slice.
-    ///
-    /// The reader applies an input-proportional limit to byte consumption and collection
-    /// preallocation, then rejects trailing bytes. These checks establish safe transport syntax.
-    /// They do not prove that the sparse MAST replay is a subset of a particular source forest
-    /// because the witness wire does not carry such a proof.
-    ///
-    /// Use [`Self::read_from_bytes_trusted`] for bytes retained inside a trusted prover system.
-    #[track_caller]
-    pub fn read_from_bytes(bytes: &[u8]) -> Result<Self, DeserializationError> {
+    /// Immutable descriptor authenticated separately from legacy ProgramInfo transport.
+    pub fn execution_descriptor(&self) -> crate::ExecutionDescriptor {
+        self.vm.trace.environment.descriptor()
+    }
+
+    /// Reads replay v4 using caller authority and explicit transport/revalidation budgets.
+    pub fn read_from_bytes_with_limits(
+        bytes: &[u8],
+        environment: &ExecutionEnvironment,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<Self, DeserializationError> {
+        if bytes.len() > read_limits.max_wire_bytes {
+            return Err(DeserializationError::InvalidValue(
+                "execution witness exceeds wire limit".into(),
+            ));
+        }
         let budget = bytes.len().saturating_mul(EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER);
         let mut reader = BudgetedReader::new(SliceReader::new(bytes), budget);
-        let witness = <Self as Deserializable>::read_from(&mut reader)?;
-
+        let witness = Self::read_with_limits(&mut reader, environment, trace_limits, read_limits)?;
         if reader.has_more_bytes() {
             return Err(DeserializationError::InvalidValue(
                 "extra bytes after execution witness payload".into(),
@@ -119,16 +137,49 @@ impl ExecutionWitness {
         Ok(witness)
     }
 
-    /// Decodes execution witness bytes retained inside a trusted prover system.
-    ///
-    /// This preserves the original permissive byte-slice behavior. It trusts sparse MAST replay
-    /// hashes, accepts trailing bytes, and uses a replay-sized byte budget. Use
-    /// [`Self::read_from_bytes`] for bytes received across a trust boundary.
-    #[track_caller]
-    pub fn read_from_bytes_trusted(bytes: &[u8]) -> Result<Self, DeserializationError> {
-        let budget = bytes.len().saturating_mul(EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER);
-        let mut reader = BudgetedReader::new(SliceReader::new(bytes), budget);
-        <Self as Deserializable>::read_from(&mut reader)
+    /// Writes only validated, completed replay under the supplied export bounds.
+    pub fn write_into_with_limits<W: ByteWriter>(
+        &self,
+        target: &mut W,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<(), DeserializationError> {
+        self.export_size(trace_limits, read_limits)?;
+        self.write_payload(target);
+        Ok(())
+    }
+
+    pub fn to_bytes_with_limits(
+        &self,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<Vec<u8>, DeserializationError> {
+        let size = self.export_size(trace_limits, read_limits)?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(size).map_err(|_| {
+            DeserializationError::InvalidValue("witness export allocation failed".into())
+        })?;
+        self.write_payload(&mut bytes);
+        Ok(bytes)
+    }
+
+    fn export_size(
+        &self,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<usize, DeserializationError> {
+        self.vm
+            .require_validated()
+            .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?;
+        self.vm.trace.validate_export(trace_limits, read_limits)?;
+        let mut size = WitnessSize { bytes: 0, overflow: false };
+        self.write_payload(&mut size);
+        if size.overflow || size.bytes > read_limits.max_wire_bytes {
+            return Err(DeserializationError::InvalidValue(
+                "execution witness exceeds wire limit".into(),
+            ));
+        }
+        Ok(size.bytes)
     }
 }
 
@@ -138,15 +189,15 @@ const EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER: usize = 4;
 /// Current wire format version for [`ExecutionWitness`] serialization.
 ///
 /// The version is written as the first byte of every serialized witness. Deserialization only
-/// accepts this exact value; older formats are intentionally unsupported. Version 3 changes sparse
-/// CALL/SYSCALL targets from callee node IDs to procedure keys and adds keyed EXEC nodes. This
+/// accepts this exact value; older formats are intentionally unsupported. Version 4 includes
+/// mandatory authenticated environment metadata and per-fragment keyed observations. This
 /// replay version is separate from proof transport and execution-claim versions.
-const EXECUTION_WITNESS_WIRE_VERSION: u8 = 3;
+const EXECUTION_WITNESS_WIRE_VERSION: u8 = 4;
 
-impl Serializable for ExecutionWitness {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+impl ExecutionWitness {
+    fn write_payload<W: ByteWriter>(&self, target: &mut W) {
         EXECUTION_WITNESS_WIRE_VERSION.write_into(target);
-        self.vm.write_into(target);
+        self.vm.write_payload(target);
         match &self.precompile {
             Some(precompile) => {
                 target.write_u8(1);
@@ -157,8 +208,13 @@ impl Serializable for ExecutionWitness {
     }
 }
 
-impl Deserializable for ExecutionWitness {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+impl ExecutionWitness {
+    fn read_with_limits<R: ByteReader>(
+        source: &mut R,
+        environment: &ExecutionEnvironment,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<Self, DeserializationError> {
         let version = u8::read_from(source)?;
         if version != EXECUTION_WITNESS_WIRE_VERSION {
             return Err(DeserializationError::InvalidValue(format!(
@@ -166,7 +222,7 @@ impl Deserializable for ExecutionWitness {
                  {EXECUTION_WITNESS_WIRE_VERSION})"
             )));
         }
-        let vm = VmWitness::read_from(source)?;
+        let vm = VmWitness::read_with_limits(source, environment, trace_limits, read_limits)?;
         let precompile = match source.read_u8()? {
             0 => {
                 if vm.precompile_root != TRUE_DIGEST {
@@ -194,10 +250,6 @@ impl Deserializable for ExecutionWitness {
         };
         Ok(Self { vm, precompile })
     }
-
-    fn read_from_bytes(bytes: &[u8]) -> Result<Self, DeserializationError> {
-        ExecutionWitness::read_from_bytes(bytes)
-    }
 }
 
 /// Witness required to materialize and prove a VM execution trace.
@@ -207,8 +259,7 @@ impl Deserializable for ExecutionWitness {
 /// inside the trace replay are not checked against a source `MastForest` commitment; see
 /// <https://github.com/0xMiden/miden-vm/issues/3303>.
 ///
-/// Its direct [`Serializable`] encoding is an unversioned implementation detail. Use the
-/// versioned [`ExecutionWitness`] envelope for transport or persistence.
+/// Transport uses the versioned [`ExecutionWitness`] envelope with explicit caller budgets.
 #[derive(Debug)]
 pub struct VmWitness {
     program_info: ProgramInfo,
@@ -219,6 +270,16 @@ pub struct VmWitness {
 }
 
 impl VmWitness {
+    pub(crate) fn require_validated(&self) -> Result<(), crate::ExecutionError> {
+        self.trace.require_validated()?;
+        if self.program_info.program_hash() != self.trace.entry_implementation()?.as_word() {
+            return Err(crate::ExecutionError::Internal(
+                "legacy ProgramInfo differs from authenticated entry",
+            ));
+        }
+        Ok(())
+    }
+
     /// Returns the public claim associated with this witness.
     pub fn claim(&self) -> ExecutionClaim {
         ExecutionClaim::from_program_info(
@@ -272,136 +333,83 @@ impl VmWitness {
     }
 }
 
-impl Serializable for VmWitness {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+impl VmWitness {
+    fn write_payload<W: ByteWriter>(&self, target: &mut W) {
         self.program_info.write_into(target);
         self.stack_inputs.write_into(target);
         self.stack_outputs.write_into(target);
-        self.trace.write_into(target);
+        self.trace.write_payload(target);
         self.precompile_root.write_into(target);
     }
 }
 
-impl Deserializable for VmWitness {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
-        Ok(Self {
+impl VmWitness {
+    fn read_with_limits<R: ByteReader>(
+        source: &mut R,
+        environment: &ExecutionEnvironment,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<Self, DeserializationError> {
+        let witness = Self {
             program_info: ProgramInfo::read_from(source)?,
             stack_inputs: StackInputs::read_from(source)?,
             stack_outputs: StackOutputs::read_from(source)?,
-            trace: TraceReplay::read_from(source)?,
+            trace: TraceReplay::read_with_limits(source, environment, trace_limits, read_limits)?,
             precompile_root: Digest::read_from(source)?,
-        })
+        };
+        let entry = witness
+            .trace
+            .entry_implementation()
+            .map_err(|error| DeserializationError::InvalidValue(format!("{error}")))?;
+        if witness.program_info.program_hash() != entry.as_word() {
+            return Err(DeserializationError::InvalidValue(
+                "legacy ProgramInfo differs from authenticated entry implementation".into(),
+            ));
+        }
+        Ok(witness)
+    }
+}
+
+struct WitnessSize {
+    bytes: usize,
+    overflow: bool,
+}
+impl ByteWriter for WitnessSize {
+    fn write_u8(&mut self, _: u8) {
+        self.write_bytes(&[0]);
+    }
+    fn write_bytes(&mut self, values: &[u8]) {
+        match self.bytes.checked_add(values.len()) {
+            Some(bytes) => self.bytes = bytes,
+            None => self.overflow = true,
+        }
     }
 }
 
 #[cfg(test)]
 mod wire_tests {
-    use miden_assembly::Assembler;
-    use miden_core::{
-        deferred::TRUE_DIGEST,
-        mast::{BasicBlockNodeBuilder, MastForest},
-        operations::Operation,
-        program::Program,
-    };
+    use miden_core::deferred::TRUE_DIGEST;
     use rstest::rstest;
 
     use super::{
-        ExecutionWitness, Serializable, build_trace,
+        ExecutionWitness, build_trace,
         trace_state::{AeadStreamReplayEntry, BitwiseOp, BitwiseReplayEntry},
     };
-    use crate::{DefaultHost, ExecutionError, FastProcessor, Felt, StackInputs, mast::MastNodeId};
+    use crate as processor;
+    use crate::{ExecutionError, Felt, mast::MastNodeId};
 
-    fn execution_witness(source: &str) -> ExecutionWitness {
-        let program = Assembler::default()
-            .assemble_program("program", source)
-            .expect("program should compile")
-            .unwrap_program();
-        let mut host = DefaultHost::default();
-        FastProcessor::new(StackInputs::default())
-            .execute_for_proving_sync(&program, &mut host)
-            .expect("execution should produce a witness")
+    // Keep the public fixture shared without exposing private replay mutations to integration
+    // tests.
+    mod common {
+        include!("../../tests/common/keyed_witness.rs");
     }
-
-    fn deferred_witness() -> ExecutionWitness {
-        execution_witness("begin log_deferred end")
-    }
-
-    fn deferred_witness_bytes() -> alloc::vec::Vec<u8> {
-        deferred_witness().to_bytes()
-    }
-
-    #[test]
-    fn witness_reports_precompile_state() {
-        let plain = execution_witness("begin push.1 drop end");
-        assert!(!plain.has_precompiles());
-
-        let deferred = execution_witness("begin log_deferred end");
-        assert!(deferred.has_precompiles());
-    }
-
-    fn aead_stream_witness() -> ExecutionWitness {
-        let mut mast_forest = MastForest::new();
-        let basic_block_id = BasicBlockNodeBuilder::new(vec![Operation::CryptoStream])
-            .add_to_forest(&mut mast_forest)
-            .unwrap();
-        mast_forest.make_root(basic_block_id);
-        let program = Program::new(mast_forest.into(), basic_block_id);
-
-        let stack = [
-            1, 2, 3, 4, // K_CTR
-            0, // counter
-            0, // src_ptr
-            8, // dst_ptr
-            1, // remaining
-            0, 0, 0, 0, 0, 0, 0, 0, // tail
-        ]
-        .map(Felt::new_unchecked);
-        let mut host = DefaultHost::default();
-        FastProcessor::new(StackInputs::new(&stack).unwrap())
-            .execute_for_proving_sync(&program, &mut host)
-            .expect("AEAD stream execution should produce a witness")
-    }
-
-    #[test]
-    fn witness_wire_rejects_unsupported_version() {
-        let mut bytes = deferred_witness_bytes();
-        assert!(ExecutionWitness::read_from_bytes(&bytes).is_ok());
-        assert_eq!(bytes[0], 3, "keyed replay witnesses must use wire version 3");
-
-        // Rejected versions are checked before decoding replay or witness payloads.
-        for version in [0, 1, 2, super::EXECUTION_WITNESS_WIRE_VERSION + 1] {
-            bytes[0] = version;
-            let err = ExecutionWitness::read_from_bytes(&bytes)
-                .expect_err("unsupported witness format must be rejected");
-            assert!(format!("{err:?}").contains("unsupported execution witness wire version"));
-            assert!(
-                ExecutionWitness::read_from_bytes_trusted(&bytes).is_err(),
-                "trusted decoding must also reject legacy replay formats"
-            );
-        }
-    }
-
-    #[test]
-    fn witness_wire_rejects_trailing_bytes() {
-        let mut bytes = deferred_witness_bytes();
-        bytes.push(0);
-
-        let err = ExecutionWitness::read_from_bytes(&bytes)
-            .expect_err("witness payload with trailing bytes should be rejected");
-        assert!(
-            format!("{err:?}").contains("extra bytes after execution witness payload"),
-            "unexpected error: {err:?}"
-        );
-
-        assert!(
-            ExecutionWitness::read_from_bytes_trusted(&bytes).is_ok(),
-            "the explicit trusted reader should preserve the old permissive behavior"
-        );
-    }
+    use common::{
+        WitnessFixture, aead_stream_witness, deferred_witness, read_limits, trace_limits,
+    };
 
     #[test]
     fn witness_wire_accepts_large_minimally_encoded_continuation_stack() {
-        let mut witness = deferred_witness();
+        let WitnessFixture { mut witness, environment } = deferred_witness();
         let continuation = &mut witness
             .vm
             .trace_replay_mut()
@@ -409,41 +417,26 @@ mod wire_tests {
             .first_mut()
             .expect("witness should contain a trace fragment")
             .continuation;
+        let initial_len = continuation.len();
         for _ in 0..4096 {
             continuation.push_start_node(MastNodeId::from(0));
         }
 
-        let bytes = witness.to_bytes();
-        let restored = ExecutionWitness::read_from_bytes(&bytes)
-            .expect("valid witness should fit its input-proportional allocation budget");
-
-        assert_eq!(restored.to_bytes(), bytes);
-    }
-
-    #[test]
-    fn aead_stream_witness_round_trip_rebuilds_the_same_trace() {
-        let witness = aead_stream_witness();
-        let bytes = witness.to_bytes();
-        let claim = witness.claim();
-        let (original_vm, original_precompile) = witness.into_parts();
-        assert!(original_precompile.is_none());
-        let original_trace = build_trace(original_vm, &miden_vm_stark::memory::default_budget())
-            .expect("original trace should build");
-
-        let restored =
-            ExecutionWitness::read_from_bytes(&bytes).expect("witness should round trip");
-        assert_eq!(restored.claim(), claim);
-        let (restored_vm, restored_precompile) = restored.into_parts();
-        assert!(restored_precompile.is_none());
-        let restored_trace = build_trace(restored_vm, &miden_vm_stark::memory::default_budget())
-            .expect("restored trace should build");
-
-        assert_eq!(restored_trace.public_inputs(), original_trace.public_inputs());
-        assert_eq!(restored_trace.trace_len_summary(), original_trace.trace_len_summary());
+        // Continuations do not change authenticated keyed metadata. Preserve the allocation-budget
+        // regression through the checked export and the explicit, input-proportional reader.
+        let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+        let restored = ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &environment,
+            trace_limits(),
+            read_limits(),
+        )
+        .expect("minimally encoded continuations should fit the input-proportional read budget");
         assert_eq!(
-            restored_trace.main_trace().clone_air_matrices(),
-            original_trace.main_trace().clone_air_matrices()
+            restored.vm.trace_replay().core_trace_contexts[0].continuation.len(),
+            initial_len + 4096
         );
+        assert_eq!(restored.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
     }
 
     #[rstest]
@@ -471,7 +464,7 @@ mod wire_tests {
         #[case] expected_error: &str,
         #[values(0, 7)] lane: usize,
     ) {
-        let mut witness = aead_stream_witness();
+        let WitnessFixture { mut witness, environment } = aead_stream_witness();
         let replay = &mut witness.vm.trace_replay_mut().bitwise_replay;
         let mut tampered = false;
         for entry in core::mem::take(replay) {
@@ -489,8 +482,14 @@ mod wire_tests {
         }
         assert!(tampered, "the witness should contain an AEAD stream entry");
 
-        let witness = ExecutionWitness::read_from_bytes(&witness.to_bytes())
-            .expect("the wire reader accepts Felt-valued replay lanes");
+        let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+        let witness = ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &environment,
+            trace_limits(),
+            read_limits(),
+        )
+        .expect("the bounded wire reader accepts Felt-valued replay lanes");
         let Err(error) =
             build_trace(witness.into_parts().0, &miden_vm_stark::memory::default_budget())
         else {
@@ -502,41 +501,73 @@ mod wire_tests {
 
     #[test]
     fn witness_wire_rejects_precompile_witness_with_true_root() {
-        let bytes = deferred_witness_bytes();
-        let restored = ExecutionWitness::read_from_bytes(&bytes).expect("witness round trip");
+        let WitnessFixture { witness, environment } = deferred_witness();
+        let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+        let restored = ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &environment,
+            trace_limits(),
+            read_limits(),
+        )
+        .expect("witness round trip");
         let (vm, precompile) = restored.into_parts();
         let precompile = precompile.expect("deferred execution should carry a precompile witness");
         assert_ne!(vm.precompile_root, TRUE_DIGEST);
 
-        // A carried witness with an explicitly empty VM-side root is not a valid transport shape.
+        // This changes only the VM-side deferred root, leaving authenticated keyed metadata intact.
         let tampered = ExecutionWitness {
             vm: super::VmWitness { precompile_root: TRUE_DIGEST, ..vm },
             precompile: Some(precompile),
         };
-        let err = ExecutionWitness::read_from_bytes(&tampered.to_bytes())
-            .expect_err("tampered witness should be rejected");
+        let tampered_bytes = tampered.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+        let err = ExecutionWitness::read_from_bytes_with_limits(
+            &tampered_bytes,
+            &environment,
+            trace_limits(),
+            read_limits(),
+        )
+        .expect_err("carried precompile witness with an empty deferred root should be rejected");
         assert!(
             format!("{err:?}")
                 .contains("VM witness carries a precompile witness for an empty deferred root"),
             "unexpected error: {err:?}"
         );
 
-        // Sanity: the untampered wire still round-trips.
-        assert!(ExecutionWitness::read_from_bytes(&bytes).is_ok());
+        assert!(
+            ExecutionWitness::read_from_bytes_with_limits(
+                &bytes,
+                &environment,
+                trace_limits(),
+                read_limits(),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
     fn witness_wire_rejects_missing_precompile_witness() {
-        let bytes = deferred_witness_bytes();
-        let restored = ExecutionWitness::read_from_bytes(&bytes).expect("witness round trip");
+        let WitnessFixture { witness, environment } = deferred_witness();
+        let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+        let restored = ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &environment,
+            trace_limits(),
+            read_limits(),
+        )
+        .expect("witness round trip");
         let (vm, precompile) = restored.into_parts();
         assert!(precompile.is_some(), "deferred execution should carry a precompile witness");
 
-        // Drop only the precompile witness while the VM side still claims deferred work: the
-        // wire must not validate as a complete execution.
+        // Drop only the precompile half while the VM root still authenticates deferred work.
         let stripped = ExecutionWitness { vm, precompile: None };
-        let err = ExecutionWitness::read_from_bytes(&stripped.to_bytes())
-            .expect_err("witness without its precompile half should be rejected");
+        let stripped_bytes = stripped.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+        let err = ExecutionWitness::read_from_bytes_with_limits(
+            &stripped_bytes,
+            &environment,
+            trace_limits(),
+            read_limits(),
+        )
+        .expect_err("witness without its precompile half should be rejected");
         assert!(
             format!("{err:?}")
                 .contains("VM witness claims deferred work but no precompile witness is present"),

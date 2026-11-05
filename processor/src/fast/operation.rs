@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use miden_air_definitions::vm::trace::{RowIndex, chiplets::hasher::HasherState};
 use miden_core::{
@@ -11,11 +11,28 @@ use miden_core::{
 };
 
 use crate::{
-    AdviceProvider, ContextId, ExecutionError,
+    AdviceProvider, ContextId, ExecutionError, MapExecErr,
     errors::OperationError,
     fast::{FastProcessor, INITIAL_STACK_TOP_IDX, SystemCallState, memory::Memory},
     processor::{HasherInterface, Processor, StackInterface, SystemInterface},
 };
+
+/// Only the caller overflow affected by a prepared context switch.
+pub(crate) struct PreparedStackContext {
+    overflow: Vec<Felt>,
+}
+
+/// A return owns any replacement buffer until both saved frames have been checked.
+pub(crate) struct PreparedStackRestore {
+    overflow_len: usize,
+    replacement: Option<Box<[Felt]>>,
+}
+
+/// A complete saved system frame, retained until both return components are prepared.
+pub(crate) struct PreparedSystemRestore {
+    ctx: ContextId,
+    caller_hash: Word,
+}
 
 impl Processor for FastProcessor {
     type System = Self;
@@ -130,6 +147,8 @@ impl HasherInterface for FastProcessor {
 }
 
 impl SystemInterface for FastProcessor {
+    type CallRestore = PreparedSystemRestore;
+
     #[inline(always)]
     fn caller_hash(&self) -> Word {
         self.caller_hash
@@ -178,6 +197,29 @@ impl SystemInterface for FastProcessor {
     }
 
     #[inline(always)]
+    fn prepare_save_call_state(&mut self) -> Result<(), ExecutionError> {
+        self.system_call_state_stack
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("saved system frame allocation failed"))
+    }
+
+    fn prepare_restore_call_state(&self) -> Result<Self::CallRestore, OperationError> {
+        self.system_call_state_stack
+            .last()
+            .map(|saved| PreparedSystemRestore {
+                ctx: saved.ctx,
+                caller_hash: saved.caller_hash,
+            })
+            .ok_or(OperationError::Internal(
+                "system call state stack should never be empty when restoring context",
+            ))
+    }
+
+    fn restored_caller_hash(prepared: &Self::CallRestore) -> Word {
+        prepared.caller_hash
+    }
+
+    #[inline(always)]
     fn save_call_state(&mut self) {
         self.system_call_state_stack.push(SystemCallState {
             ctx: self.ctx,
@@ -186,17 +228,23 @@ impl SystemInterface for FastProcessor {
     }
 
     #[inline(always)]
-    fn restore_call_state(&mut self) -> Result<(), OperationError> {
-        let saved = self.system_call_state_stack.pop().ok_or(OperationError::Internal(
-            "system call state stack should never be empty when restoring context",
-        ))?;
-        self.ctx = saved.ctx;
-        self.caller_hash = saved.caller_hash;
-        Ok(())
+    fn commit_restore_call_state(&mut self, prepared: Self::CallRestore) {
+        let saved = self
+            .system_call_state_stack
+            .pop()
+            .expect("prepared return retains its saved system frame");
+        debug_assert_eq!(saved.ctx, prepared.ctx);
+        debug_assert_eq!(saved.caller_hash, prepared.caller_hash);
+        self.ctx = prepared.ctx;
+        self.caller_hash = prepared.caller_hash;
     }
 }
 
 impl StackInterface for FastProcessor {
+    type ContextStart = PreparedStackContext;
+    type ContextRestore = PreparedStackRestore;
+    type StackPop = ();
+
     #[inline(always)]
     fn top(&self) -> &[Felt] {
         self.stack_top()
@@ -291,69 +339,114 @@ impl StackInterface for FastProcessor {
         Ok(())
     }
 
-    #[inline(always)]
-    fn start_context(&mut self) {
-        let overflow_stack = if self.stack_size() > MIN_STACK_DEPTH {
-            // save the overflow stack, and zero out the buffer.
-            //
-            // Note: we need to zero the overflow buffer, since the new context expects ZERO's to be
-            // pulled in if they decrement the stack size (e.g. by executing a `drop`).
-            let overflow_stack =
-                self.stack[self.stack_bot_idx..self.stack_top_idx - MIN_STACK_DEPTH].to_vec();
-            self.stack[self.stack_bot_idx..self.stack_top_idx - MIN_STACK_DEPTH].fill(ZERO);
-
-            overflow_stack
-        } else {
-            Vec::new()
-        };
-
-        self.stack_bot_idx = self.stack_top_idx - MIN_STACK_DEPTH;
-
-        // Charge the suspended overflow against the aggregate operand-stack budget. The elements
-        // are merely moved from the active stack into the saved overflow, so the aggregate depth is
-        // unchanged here; tracking it lets `ensure_stack_capacity_for_push` cap the total across
-        // all nested contexts rather than only the active one.
-        self.saved_overflow_len += overflow_stack.len();
-        self.stack_overflow_save_stack.push(overflow_stack);
+    fn preflight_decrement_size(&self) -> Result<(), OperationError> {
+        Ok(())
     }
 
-    #[inline(always)]
-    fn restore_context(&mut self) -> Result<(), OperationError> {
-        // when a call/dyncall/syscall node ends, stack depth must be exactly 16.
-        if self.stack_size() > MIN_STACK_DEPTH {
-            return Err(OperationError::InvalidStackDepthOnReturn { depth: self.stack_size() });
-        }
-
-        let overflow_stack =
-            self.stack_overflow_save_stack.pop().ok_or(OperationError::Internal(
-                "stack overflow save stack should never be empty when restoring context",
-            ))?;
-
-        let target_overflow_len = overflow_stack.len();
-        debug_assert!(
-            MIN_STACK_DEPTH.saturating_add(target_overflow_len) <= self.options.max_stack_depth(),
-            "suspended caller stacks are checked against the operand stack depth limit before being saved"
-        );
-
-        // Release this segment from the aggregate operand-stack budget; the elements are about to
-        // be moved back into the active context below.
-        self.saved_overflow_len -= target_overflow_len;
-
-        // Check if there's enough room to restore the overflow stack in the current stack buffer.
-        // If not, move the stack within the buffer so that after restoring the overflow stack, the
-        // `stack_bot_idx` is at its original position (i.e. `INITIAL_STACK_TOP_IDX - 16`).
-        if target_overflow_len > self.stack_bot_idx {
-            let new_stack_top_idx = INITIAL_STACK_TOP_IDX + target_overflow_len;
-            self.ensure_stack_capacity_for_top_idx(new_stack_top_idx);
-
-            self.reset_stack_in_buffer(new_stack_top_idx);
-        }
-
-        // Restore the overflow.
-        self.stack[range(self.stack_bot_idx - target_overflow_len, target_overflow_len)]
-            .copy_from_slice(&overflow_stack);
-        self.stack_bot_idx -= target_overflow_len;
-
+    fn prepare_decrement_size(&self) -> Result<Self::StackPop, OperationError> {
         Ok(())
+    }
+
+    fn commit_decrement_size(&mut self, _prepared: Self::StackPop) {
+        self.decrement_stack_size();
+    }
+
+    fn prepare_start_context(
+        &mut self,
+        drop_top: bool,
+    ) -> Result<Self::ContextStart, ExecutionError> {
+        let overflow_len =
+            self.stack_size().saturating_sub(MIN_STACK_DEPTH + usize::from(drop_top));
+        let depth = self
+            .saved_overflow_len
+            .checked_add(overflow_len)
+            .and_then(|saved| saved.checked_add(MIN_STACK_DEPTH))
+            .ok_or(ExecutionError::Internal("aggregate operand stack depth overflow"))?;
+        if depth > self.options.max_stack_depth() {
+            return Err(ExecutionError::StackDepthLimitExceeded {
+                depth,
+                max: self.options.max_stack_depth(),
+            });
+        }
+        self.stack_overflow_save_stack
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("saved overflow frame allocation failed"))?;
+        let mut overflow = Vec::new();
+        overflow
+            .try_reserve_exact(overflow_len)
+            .map_err(|_| ExecutionError::Internal("caller overflow allocation failed"))?;
+        overflow.extend_from_slice(&self.stack[range(self.stack_bot_idx, overflow_len)]);
+        Ok(PreparedStackContext { overflow })
+    }
+
+    fn commit_start_context(&mut self, prepared: Self::ContextStart) {
+        let new_bottom = self.stack_top_idx - MIN_STACK_DEPTH;
+        debug_assert_eq!(new_bottom - self.stack_bot_idx, prepared.overflow.len());
+        self.stack[self.stack_bot_idx..new_bottom].fill(ZERO);
+        self.stack_bot_idx = new_bottom;
+        self.saved_overflow_len += prepared.overflow.len();
+        self.stack_overflow_save_stack.push(prepared.overflow);
+    }
+
+    fn prepare_restore_context(&self) -> Result<Self::ContextRestore, ExecutionError> {
+        if self.stack_size() != MIN_STACK_DEPTH {
+            return Err(OperationError::InvalidStackDepthOnReturn { depth: self.stack_size() })
+                .map_exec_err();
+        }
+        let overflow_len = self
+            .stack_overflow_save_stack
+            .last()
+            .ok_or(ExecutionError::Internal("saved caller overflow frame is missing"))?
+            .len();
+        let aggregate_depth = self
+            .saved_overflow_len
+            .checked_add(MIN_STACK_DEPTH)
+            .ok_or(ExecutionError::Internal("aggregate operand stack depth overflow"))?;
+        if self.saved_overflow_len < overflow_len
+            || aggregate_depth > self.options.max_stack_depth()
+        {
+            return Err(ExecutionError::Internal("saved caller overflow accounting is invalid"));
+        }
+        let replacement = if overflow_len > self.stack_bot_idx {
+            let len = INITIAL_STACK_TOP_IDX
+                .checked_add(overflow_len)
+                .and_then(|top| top.checked_add(1))
+                .ok_or(ExecutionError::Internal("caller stack restoration size overflow"))?;
+            let mut buffer = Vec::new();
+            buffer.try_reserve_exact(len).map_err(|_| {
+                ExecutionError::Internal("caller stack restoration allocation failed")
+            })?;
+            buffer.resize(len, ZERO);
+            Some(buffer.into_boxed_slice())
+        } else {
+            None
+        };
+        Ok(PreparedStackRestore { overflow_len, replacement })
+    }
+
+    fn commit_restore_context(&mut self, prepared: Self::ContextRestore) {
+        debug_assert_eq!(self.stack_size(), MIN_STACK_DEPTH);
+        let overflow = self
+            .stack_overflow_save_stack
+            .pop()
+            .expect("prepared return retains its overflow frame");
+        debug_assert_eq!(overflow.len(), prepared.overflow_len);
+        if let Some(mut buffer) = prepared.replacement {
+            let top = INITIAL_STACK_TOP_IDX + prepared.overflow_len;
+            let bottom = top - MIN_STACK_DEPTH;
+            buffer[bottom..top]
+                .copy_from_slice(&self.stack[self.stack_bot_idx..self.stack_top_idx]);
+            self.stack = buffer;
+            self.stack_bot_idx = bottom;
+            self.stack_top_idx = top;
+        }
+        self.saved_overflow_len -= prepared.overflow_len;
+        let bottom = self.stack_bot_idx - prepared.overflow_len;
+        self.stack[bottom..self.stack_bot_idx].copy_from_slice(&overflow);
+        self.stack_bot_idx = bottom;
+    }
+
+    fn restored_context_depth(prepared: &Self::ContextRestore) -> usize {
+        MIN_STACK_DEPTH + prepared.overflow_len
     }
 }

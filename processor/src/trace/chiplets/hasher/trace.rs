@@ -16,7 +16,8 @@ use super::{
 };
 use crate::{ExecutionError, trace::chiplets::layout::ControllerRow};
 
-const _: () = assert!(crate::trace::parallel::MAX_TRACE_LEN % CONTROLLER_TRACE_ALIGNMENT == 0);
+const _: () =
+    assert!(crate::trace::parallel::MAX_TRACE_LEN.is_multiple_of(CONTROLLER_TRACE_ALIGNMENT));
 
 // HASHER OPERATION
 // ================================================================================================

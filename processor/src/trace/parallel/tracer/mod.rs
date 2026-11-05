@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 
 use miden_air_definitions::vm::{StackCols, SystemCols};
-use miden_core::program::MIN_STACK_DEPTH;
+use miden_core::program::{MIN_STACK_DEPTH, ProcedureKey};
 
 use super::{
     super::{
@@ -23,7 +23,10 @@ use crate::{
         chiplets::layout::ChipletsLayout,
         trace_state::{EndBlockFlags, EndBlockStackEntryKind},
     },
-    tracer::{OperationHelperRegisters, Tracer},
+    tracer::{
+        CycleProjection, KeyedEvent, KeyedEventKind, KeyedMode, KeyedTarget,
+        OperationHelperRegisters, Tracer,
+    },
 };
 
 mod trace_row;
@@ -109,6 +112,8 @@ pub(crate) struct CoreTraceGenerationTracer<'a> {
     /// subsequent `start_clock_cycle` and `finalize_clock_cycle` calls become no-ops, and the
     /// error is returned by [`into_parts`](Self::into_parts).
     error_encountered: Option<ExecutionError>,
+    keyed_event: Option<KeyedEvent>,
+    prepared_keyed_cycle: Option<(KeyedEventKind, ProcedureKey)>,
 }
 
 impl<'a> CoreTraceGenerationTracer<'a> {
@@ -134,6 +139,8 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             continuation: None,
             is_loop_body: false,
             error_encountered: None,
+            keyed_event: None,
+            prepared_keyed_cycle: None,
         }
     }
 
@@ -142,6 +149,9 @@ impl<'a> CoreTraceGenerationTracer<'a> {
     pub fn into_final_state(self) -> Result<TracerFinalState, ExecutionError> {
         if let Some(err) = self.error_encountered {
             return Err(err);
+        }
+        if self.keyed_event.is_some() || self.prepared_keyed_cycle.is_some() {
+            return Err(ExecutionError::InvalidExecutionState);
         }
 
         Ok(TracerFinalState {
@@ -211,6 +221,9 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                     call_node,
                     current_forest,
                 )?;
+            },
+            MastNode::Exec(exec_node) => {
+                self.fill_exec_start_trace_row(&processor.system, &processor.stack, exec_node)?;
             },
             MastNode::Dyn(dyn_node) => {
                 let callee_hash = self.dyn_callee_hash.take().ok_or(ExecutionError::Internal(
@@ -358,6 +371,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             },
             Continuation::FinishJoin(_)
             | Continuation::FinishSplit(_)
+            | Continuation::FinishExec(_)
             | Continuation::FinishBasicBlock(_) => {
                 Ok(EndBlockFlags::new(is_loop_body, EndBlockStackEntryKind::Continuation))
             },
@@ -384,16 +398,70 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             };
 
             if let MastNode::Dyn(_) = node {
-                let (word_read, _addr, _ctx, _clk) =
-                    processor.memory_reads_replay.iter_read_words().next().ok_or(
-                        ExecutionError::Internal(
-                            "dyn node reads the procedure hash (word) from memory",
-                        ),
-                    )?;
+                let word_read = processor
+                    .memory_reads_replay
+                    .peek_read_word(
+                        processor.system.ctx,
+                        processor.stack.get(0),
+                        processor.system.clk,
+                    )
+                    .map_err(ExecutionError::MemoryErrorNoCtx)?;
                 return Ok(Some(word_read));
             }
         }
 
+        Ok(None)
+    }
+
+    fn keyed_cycle(
+        &self,
+        continuation: &Continuation<Arc<SparseMastForest>>,
+        continuation_stack: &ContinuationStack<Arc<SparseMastForest>>,
+        processor: &ReplayProcessor,
+        forest: &Arc<SparseMastForest>,
+    ) -> Result<Option<(KeyedEventKind, ProcedureKey)>, ExecutionError> {
+        if let Continuation::StartNode(id) = continuation {
+            let mode_and_key = match get_node_in_forest(forest, *id)? {
+                MastNode::Exec(node) => Some((KeyedMode::Exec, node.target())),
+                MastNode::Call(node) => Some((
+                    if node.is_syscall() {
+                        KeyedMode::Syscall
+                    } else {
+                        KeyedMode::Call
+                    },
+                    node.target(),
+                )),
+                MastNode::Dyn(node) => Some((
+                    if node.is_dyncall() {
+                        KeyedMode::DynCall
+                    } else {
+                        KeyedMode::Dyn
+                    },
+                    ProcedureKey::new(
+                        self.get_dyn_callee_hash(continuation, processor, forest)?
+                            .expect("actual dynamic node has its checked memory word"),
+                    ),
+                )),
+                _ => None,
+            };
+            return Ok(mode_and_key.map(|(mode, key)| (KeyedEventKind::Invoke(mode), key)));
+        }
+        if matches!(
+            continuation,
+            Continuation::FinishBasicBlock(_)
+                | Continuation::FinishJoin(_)
+                | Continuation::FinishSplit(_)
+                | Continuation::FinishExec(_)
+                | Continuation::FinishLoop(_)
+                | Continuation::FinishCall(_)
+                | Continuation::FinishDyn(_)
+        ) && !matches!(continuation, Continuation::FinishLoop(_)
+            if processor.stack.get(0) == ONE)
+        {
+            return Ok(continuation_stack
+                .root_boundary_after_next()
+                .map(|(_, principal)| (KeyedEventKind::RootEnd, principal)));
+        }
         Ok(None)
     }
 }
@@ -404,6 +472,112 @@ impl<'a> CoreTraceGenerationTracer<'a> {
 impl Tracer for CoreTraceGenerationTracer<'_> {
     type Processor = ReplayProcessor;
     type Forest = Arc<SparseMastForest>;
+    type KeyedReservation = KeyedEvent;
+
+    fn prepare_environment(
+        &mut self,
+        _descriptor: &crate::ExecutionDescriptor,
+        _entry: crate::SessionBinding,
+    ) -> Result<KeyedEvent, ExecutionError> {
+        Err(ExecutionError::Internal("fragment replay cannot initialize native environment"))
+    }
+
+    fn commit_environment(&mut self, _reservation: KeyedEvent) {
+        unreachable!("replay environment is validated before fragment generation")
+    }
+
+    fn prepare_environment_completion(
+        &mut self,
+        _environment: &crate::ExecutionEnvironment,
+        _session: &crate::ResolutionSession,
+    ) -> Result<KeyedEvent, ExecutionError> {
+        Err(ExecutionError::Internal("fragment replay cannot capture native environment"))
+    }
+
+    fn commit_environment_completion(&mut self, _reservation: KeyedEvent) {
+        unreachable!("replay environment is validated before fragment generation")
+    }
+
+    fn prepare_keyed_transition(
+        &mut self,
+        processor: &ReplayProcessor,
+        event: &KeyedEvent,
+        target: KeyedTarget<'_, Arc<SparseMastForest>>,
+        projection: CycleProjection,
+    ) -> Result<KeyedEvent, ExecutionError> {
+        let record = processor
+            .keyed
+            .peek()
+            .map_err(|_| ExecutionError::Internal("missing validated keyed replay event"))?;
+        let forest_id = processor
+            .mast_forest_store
+            .iter()
+            .position(|forest| Arc::ptr_eq(forest, target.forest))
+            .and_then(|index| u32::try_from(index).ok())
+            .map(crate::mast::MastForestId::from)
+            .ok_or(ExecutionError::Internal("keyed target forest is absent from replay store"))?;
+        record.matches(*event, forest_id, target.root).map_err(|_| {
+            ExecutionError::Internal("keyed replay event differs from actual transition")
+        })?;
+        if self.keyed_event.is_some()
+            || event.use_record.row() != projection.row
+            || processor.system.clk != projection.row
+            || event.use_record.implementation_root() != target.implementation
+            || processor.system.fn_hash != *event.principal_before.as_word()
+        {
+            return Err(ExecutionError::Internal(
+                "keyed event does not match replay row or principal",
+            ));
+        }
+        if self.prepared_keyed_cycle != Some((event.kind, event.use_record.procedure_key()))
+            || match event.kind {
+                KeyedEventKind::Invoke(KeyedMode::Call | KeyedMode::DynCall) => {
+                    event.principal_after != event.use_record.procedure_key()
+                },
+                KeyedEventKind::Invoke(_) => event.principal_before != event.principal_after,
+                KeyedEventKind::RootEnd => {
+                    Some(event.principal_after)
+                        != self.prepared_keyed_cycle.map(|(_, principal)| principal)
+                },
+            }
+        {
+            return Err(ExecutionError::Internal("keyed replay event differs from actual mode"));
+        }
+        Ok(*event)
+    }
+
+    fn commit_keyed_transition(&mut self, reservation: KeyedEvent, event: KeyedEvent) {
+        debug_assert_eq!(reservation, event);
+        self.keyed_event = Some(reservation);
+    }
+
+    fn prepare_clock_cycle(
+        &mut self,
+        processor: &ReplayProcessor,
+        continuation: &Continuation<Arc<SparseMastForest>>,
+        continuation_stack: &ContinuationStack<Arc<SparseMastForest>>,
+        current_forest: &Arc<SparseMastForest>,
+        projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        if self.error_encountered.is_some() {
+            return Err(ExecutionError::Internal("core replay tracer has been invalidated"));
+        }
+        if projection.row != processor.system.clk
+            || projection.row.as_usize().checked_add(1) != Some(projection.next_clock.as_usize())
+        {
+            return Err(ExecutionError::Internal("core replay projection does not match clock"));
+        }
+        self.writer.preflight_write_row(self.row_write_index)?;
+        let ctx_info =
+            self.get_execution_context_for_dyncall(current_forest, continuation, processor)?;
+        let dyn_callee_hash = self.get_dyn_callee_hash(continuation, processor, current_forest)?;
+        self.preflight_trace_row(continuation, processor, current_forest)?;
+        self.prepared_keyed_cycle =
+            self.keyed_cycle(continuation, continuation_stack, processor, current_forest)?;
+        self.ctx_info = ctx_info;
+        self.dyn_callee_hash = dyn_callee_hash;
+        Ok(())
+    }
 
     fn start_clock_cycle(
         &mut self,
@@ -417,13 +591,28 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
         }
 
         let result = (|| -> Result<(), ExecutionError> {
-            // If this is a DYNCALL node, store execution context info needed when writing the trace
-            // row in finalize_clock_cycle.
-            self.ctx_info =
-                self.get_execution_context_for_dyncall(current_forest, &continuation, processor)?;
+            let event = self.keyed_event;
+            if matches!(&continuation, Continuation::StartNode(id)
+                if matches!(current_forest.get_node_by_id(*id),
+                    Some(MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_))))
+                && event.is_none()
+            {
+                return Err(ExecutionError::Internal(
+                    "invocation row has no authenticated keyed event",
+                ));
+            }
+            if self.prepared_keyed_cycle.take()
+                != event.map(|event| (event.kind, event.use_record.procedure_key()))
+            {
+                return Err(ExecutionError::Internal("row has no matching authenticated event"));
+            }
+            if let Some(event) = event
+                && (event.use_record.row() != processor.system.clk
+                    || *event.principal_before.as_word() != processor.system.fn_hash)
+            {
+                return Err(ExecutionError::Internal("authenticated event belongs to another row"));
+            }
             self.finish_loop_condition = self.get_finish_loop_condition(&continuation, processor);
-            self.dyn_callee_hash =
-                self.get_dyn_callee_hash(&continuation, processor, current_forest)?;
 
             // For END operations, determine if the ending node is a body of a LOOP by checking
             // whether the next clock-incrementing continuation is a FinishLoop.
@@ -450,12 +639,19 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
         current_forest: &Arc<SparseMastForest>,
     ) -> Result<(), ExecutionError> {
         if self.error_encountered.is_some() {
-            return Ok(());
+            return Err(ExecutionError::InvalidExecutionState);
         }
 
         use Continuation::*;
 
         let result = (|| -> Result<(), ExecutionError> {
+            if let Some(event) = self.keyed_event.take()
+                && *event.principal_after.as_word() != processor.system.fn_hash
+            {
+                return Err(ExecutionError::Internal(
+                    "keyed replay principal after transition differs from actual mode",
+                ));
+            }
             let continuation = self.continuation.as_ref().ok_or(ExecutionError::Internal(
                 "continuation not stored at start of clock cycle",
             ))?;
@@ -528,6 +724,21 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
                 },
                 FinishCall(node_id) => {
                     let node = get_node_in_forest(current_forest, *node_id)?;
+                    let flags = self.compute_end_block_flags(continuation, current_forest)?;
+                    self.fill_end_trace_row(
+                        &processor.system,
+                        &processor.stack,
+                        node.digest(),
+                        flags.to_hasher_state_second_word(),
+                    )?;
+                },
+                FinishExec(node_id) => {
+                    let node = get_node_in_forest(current_forest, *node_id)?;
+                    if !matches!(node, MastNode::Exec(_)) {
+                        return Err(ExecutionError::Internal(
+                            "expected exec node in FinishExec continuation",
+                        ));
+                    }
                     let flags = self.compute_end_block_flags(continuation, current_forest)?;
                     self.fill_end_trace_row(
                         &processor.system,
@@ -623,7 +834,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
                         flags.to_hasher_state_second_word(),
                     )?;
                 },
-                EnterForest { .. } => {
+                EnterForest { .. } | RootBoundary { .. } => {
                     unreachable!(
                         "Tracer contract guarantees that EnterForest continuations do not occur here"
                     )
@@ -635,6 +846,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
 
         if let Err(e) = result {
             self.error_encountered = Some(e);
+            return Err(ExecutionError::InvalidExecutionState);
         }
 
         Ok(())
@@ -682,11 +894,7 @@ mod tests {
         ContextId,
         trace::{
             parallel::CORE_TRACE_WIDTH,
-            trace_state::{
-                AdviceReplay, ExecutionContextReplay, HasherResponseReplay,
-                MastForestResolutionReplay, MemoryReadsReplay, StackOverflowReplay, StackState,
-                SystemState,
-            },
+            trace_state::{ExecutionReplay, StackOverflowReplay, StackState, SystemState},
             utils::RowMajorTraceWriter,
         },
     };
@@ -733,15 +941,13 @@ mod tests {
             deferred_root: Word::default(),
         };
 
-        let processor = ReplayProcessor::new(
+        let (processor, block_stack_replay, block_address_replay) = ReplayProcessor::from_replay(
             system,
             stack,
-            stack_overflow_replay,
-            ExecutionContextReplay::default(),
-            AdviceReplay::default(),
-            MemoryReadsReplay::default(),
-            HasherResponseReplay::default(),
-            MastForestResolutionReplay::default(),
+            ExecutionReplay {
+                stack_overflow: stack_overflow_replay,
+                ..ExecutionReplay::default()
+            },
             vec![forest.clone()],
             crate::ExecutionOptions::DEFAULT_MAX_STACK_DEPTH,
             1u32.into(),
@@ -756,8 +962,8 @@ mod tests {
                 current_addr: crate::trace::chiplets::layout::LogicalControllerAddress::ABSENT,
                 parent_addr: crate::trace::chiplets::layout::LogicalControllerAddress::ABSENT,
             },
-            BlockAddressReplay::default(),
-            BlockStackReplay::default(),
+            block_address_replay,
+            block_stack_replay,
             ChipletsLayout::new(0, 0, 0, 0, 0, 0).unwrap(),
         );
 

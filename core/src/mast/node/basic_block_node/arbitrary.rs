@@ -1,5 +1,6 @@
 use alloc::{
     collections::{BTreeMap, BTreeSet},
+    format,
     sync::Arc,
     vec,
 };
@@ -17,7 +18,11 @@ use crate::{
         ExternalNodeBuilder, JoinNodeBuilder, LoopNodeBuilder, SplitNodeBuilder,
     },
     operations::Operation,
-    program::{KernelDescriptor, ProcedureKey, Program},
+    program::{
+        CanonicalLabel, EnvNode, EnvironmentBuildError, EnvironmentBuildLimits, EnvironmentBuilder,
+        ImplementationRoot, KernelDescriptor, LabelCommitment, Namespace, ProcedureKey, Program,
+        ValidatedEnvironment,
+    },
 };
 
 // OPERATIONS
@@ -258,31 +263,32 @@ impl Arbitrary for BasicBlockNode {
 /// What a `MastForest` sample guarantees.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GenerationMode {
-    /// Every procedure root runs to completion on any operand stack. See [`MastForestParams`].
-    #[default]
+    /// Every procedure root runs to completion with the environment owned by its
+    /// [`ExecutableForestFixture`]. Use [`executable_forest_strategy`].
     Executable,
     /// Broad structural coverage without execution guarantees: fallible operations, dyn nodes,
     /// externals with random digests, and keyed invocations with independent procedure keys.
+    #[default]
     StructureOnly,
 }
 
 /// Parameters for generating `MastForest` instances via proptest.
 ///
-/// In [`GenerationMode::Executable`] every procedure root of a sample executes to completion on
-/// any operand stack once the forest is loaded into the host:
+/// [`executable_forest_strategy`] pairs an executable forest with its complete authenticated
+/// environment. Every procedure root executes to completion on any valid operand stack:
 ///
-/// - basic blocks hold only infallible operations and leave the stack depth unchanged;
+/// - ordinary blocks hold only infallible operations and leave the stack depth unchanged;
 /// - each split sits behind a block that pushes its condition, and each loop body ends by pushing
 ///   `0`, so conditions are binary and loops run exactly once;
-/// - each external resolves to a procedure root of the same forest, and the graph of externals is
-///   acyclic;
-/// - immediate keyed invocations and dyn nodes are never emitted.
+/// - each invocation authenticates a generated namespace-qualified key and resolves to an earlier
+///   balanced procedure; dynamic wrappers write the key before reading it;
+/// - externals resolve to earlier procedure roots of the same forest, so the combined runtime
+///   invocation/external graph is acyclic.
 ///
-/// The executable mode currently covers structural execution only. Generating executable
-/// EXEC/CALL/SYSCALL requires a paired authenticated execution environment, which this API does not
-/// yet provide. Structure-only mode covers all three immediate invocation modes and retains each
-/// selected implementation body as a separate procedure root. A symbolic key does not retain its
-/// implementation through a structural edge.
+/// The plain [`Arbitrary`] implementation for [`MastForest`] and [`forest_kernel_strategy`] accept
+/// only [`GenerationMode::StructureOnly`], the default. A bare forest cannot carry execution
+/// authority. Structure-only samples retain implementation bodies separately from their childless
+/// symbolic invocation nodes and make no execution guarantee.
 ///
 /// `kernel_procedures` supplies digest-only descriptor metadata. It does not authorize or select
 /// symbolic invocation keys.
@@ -298,15 +304,15 @@ pub struct MastForestParams {
     pub max_splits: usize,
     /// Maximum number of loop nodes.
     pub max_loops: usize,
-    /// Maximum number of call nodes. Ignored in [`GenerationMode::Executable`].
+    /// Maximum number of call nodes.
     pub max_calls: usize,
-    /// Maximum number of exec nodes. Ignored in [`GenerationMode::Executable`].
+    /// Maximum number of exec nodes.
     pub max_execs: usize,
-    /// Maximum number of syscall nodes. Ignored in [`GenerationMode::Executable`].
+    /// Maximum number of syscall nodes.
     pub max_syscalls: usize,
     /// Maximum number of external nodes.
     pub max_externals: usize,
-    /// Maximum number of dyn and dyncall nodes. Ignored in [`GenerationMode::Executable`].
+    /// Maximum combined number of dyn and dyncall nodes.
     pub max_dyns: usize,
     /// Guarantees the samples provide.
     pub mode: GenerationMode,
@@ -329,8 +335,83 @@ impl Default for MastForestParams {
             max_syscalls: 1,
             max_externals: 1,
             max_dyns: 0,
-            mode: GenerationMode::Executable,
+            mode: GenerationMode::StructureOnly,
             kernel_procedures: None,
+        }
+    }
+}
+
+/// A generated callable label and its actual materialized procedure root after dense ID remapping.
+///
+/// Several labels may select the same implementation digest. Keys are derived from the label and
+/// fixture namespace, independently of the selected body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExecutableForestProcedure {
+    /// Namespace-qualified callable key, independent of the implementation digest.
+    pub key: ProcedureKey,
+    /// Local export label used to derive the key and commit its environment leaf.
+    pub label: LabelCommitment,
+    /// Materialized procedure root in the finalized dense forest.
+    pub root: MastNodeId,
+}
+
+/// An executable arbitrary sample, including the environment required to authenticate every root
+/// and retained invocation. This is a synthetic test environment, not a deployment profile.
+///
+/// Processor consumers explicitly select an entry key and all runtime resource limits. In
+/// particular, a legacy [`KernelDescriptor`] is never used to derive syscall authority.
+#[derive(Debug)]
+pub struct ExecutableForestFixture {
+    forest: Arc<MastForest>,
+    environment: ValidatedEnvironment,
+    procedures: Vec<ExecutableForestProcedure>,
+    kernel_namespace: Namespace,
+}
+
+impl ExecutableForestFixture {
+    /// Returns the complete owned code supply, including external targets.
+    pub fn forest(&self) -> &Arc<MastForest> {
+        &self.forest
+    }
+
+    /// Returns the locally validated complete synthetic environment and its fixed root.
+    pub fn environment(&self) -> &ValidatedEnvironment {
+        &self.environment
+    }
+
+    /// Includes a binding for every materialized procedure root, as well as invocation aliases.
+    pub fn procedures(&self) -> &[ExecutableForestProcedure] {
+        &self.procedures
+    }
+
+    /// The full accumulated namespace containing every generated syscall target.
+    pub const fn kernel_namespace(&self) -> Namespace {
+        self.kernel_namespace
+    }
+
+    /// Returns actual committed preimages and selected child indices for a generated binding.
+    /// The consumer converts these neutral core values into its processor witness type.
+    pub fn opening(&self, key: ProcedureKey) -> Option<Vec<(EnvNode, Option<usize>)>> {
+        let slot = self.procedures.iter().position(|procedure| procedure.key == key)?;
+        let mut current = self.environment.root();
+        let mut path = Vec::new();
+        loop {
+            let node = self.environment.get(current)?.clone();
+            match &node {
+                EnvNode::Env { child, .. } => {
+                    current = *child;
+                    path.push((node, Some(0)));
+                },
+                EnvNode::List(children) => {
+                    current = *children.get(slot)?;
+                    path.push((node, Some(slot)));
+                },
+                EnvNode::Mast { .. } => {
+                    path.push((node, None));
+                    return Some(path);
+                },
+                _ => return None,
+            }
         }
     }
 }
@@ -376,8 +457,8 @@ struct ForestSeeds {
     exec_picks: Vec<InvocationPick>,
     syscall_picks: Vec<InvocationPick>,
     external_picks: Vec<ExternalPick>,
-    /// `true` selects `dyncall`, `false` selects `dyn`.
-    dyn_selectors: Vec<bool>,
+    /// `true` selects `dyncall`, `false` selects `dyn`; the index chooses an earlier body.
+    dyn_selectors: Vec<(bool, usize)>,
     /// One flag per skeleton node: whether it becomes a procedure root.
     root_selection: Vec<bool>,
 }
@@ -400,26 +481,19 @@ fn forest_seeds_strategy(params: &MastForestParams) -> BoxedStrategy<ForestSeeds
             .prop_map(|digests| digests.into_iter().map(ExternalPick::Random).collect())
             .boxed()
     };
-    let max_dyns = if executable { 0 } else { params.max_dyns };
-    let (max_calls, max_execs, max_syscalls) = if executable {
-        (0, 0, 0)
-    } else {
-        (params.max_calls, params.max_execs, params.max_syscalls)
-    };
-
     (
         prop::collection::vec(any_with::<BasicBlockNode>(block_params), blocks),
         (
             prop::collection::vec(any::<(usize, usize)>(), 0..=params.max_joins),
             prop::collection::vec(any::<(usize, usize, bool)>(), 0..=params.max_splits),
             prop::collection::vec(any::<usize>(), 0..=params.max_loops),
-            invocation_picks_strategy(max_calls),
-            invocation_picks_strategy(max_execs),
+            invocation_picks_strategy(params.max_calls),
+            invocation_picks_strategy(params.max_execs),
         ),
         (
-            invocation_picks_strategy(max_syscalls),
+            invocation_picks_strategy(params.max_syscalls),
             external_picks,
-            prop::collection::vec(any::<bool>(), 0..=max_dyns),
+            prop::collection::vec(any::<(bool, usize)>(), 0..=params.max_dyns),
         ),
     )
         // Root selection is the one vector that needs an exact size: a flag per skeleton node.
@@ -623,18 +697,129 @@ fn mark_reachable(
 // EXECUTABLE MODE
 // ================================================================================================
 
+fn fixture_label(kind: &str, index: usize) -> LabelCommitment {
+    CanonicalLabel::text(&format!("{kind}-{index}"))
+        .expect("generated ASCII fixture label")
+        .commitment()
+}
+
+fn fixture_namespace_labels() -> [LabelCommitment; 2] {
+    ["arbitrary-fixture", "kernel"]
+        .map(|text| CanonicalLabel::text(text).expect("constant ASCII fixture label").commitment())
+}
+
+/// Key words are stored using the existing dynamic invocation memory convention. The preparation
+/// restores the original stack depth, then pushes the address consumed by DYN/DYNCALL.
+fn dynamic_setup(target: ProcedureKey) -> Vec<Operation> {
+    let mut operations = Vec::new();
+    operations
+        .extend(target.as_word().as_slice().iter().rev().map(|&value| Operation::Push(value)));
+    operations.extend([
+        Operation::Push(Felt::from_u32(256)),
+        Operation::MStoreW,
+        Operation::Drop,
+        Operation::Drop,
+        Operation::Drop,
+        Operation::Drop,
+        Operation::Push(Felt::from_u32(256)),
+    ]);
+    operations
+}
+
 fn build_executable_forest(
     seeds: &ForestSeeds,
-    kernel: Option<&KernelDescriptor>,
-) -> (MastForest, KernelDescriptor) {
-    let Skeleton { mut forest, node_ids, mut roots } = build_skeleton(seeds, true);
+    limits: EnvironmentBuildLimits,
+) -> Result<ExecutableForestFixture, EnvironmentBuildError> {
+    // Only complete balanced procedures enter the runtime target pool. Raw split conditions,
+    // dynamic setup blocks and childless DYN nodes must never become independent roots.
+    let mut structural = seeds.clone();
+    structural.call_picks.clear();
+    structural.exec_picks.clear();
+    structural.syscall_picks.clear();
+    let Skeleton { mut forest, mut node_ids, .. } = build_skeleton(&structural, true);
+    let mut roots = node_ids.clone();
+    for &root in &roots {
+        forest.mark_root(root);
+    }
+
+    let namespace_labels = fixture_namespace_labels();
+    let kernel_namespace = namespace_labels
+        .iter()
+        .fold(Namespace::initial(), |namespace, &label| namespace.child(label));
+    let mut bindings = Vec::new();
+    for (mode, picks) in [(0, &seeds.call_picks), (1, &seeds.exec_picks), (2, &seeds.syscall_picks)]
+    {
+        for pick in picks {
+            let body = choose(&node_ids, pick.body);
+            let label = fixture_label("target", bindings.len());
+            let key = kernel_namespace.procedure_key(label);
+            bindings.push((label, body));
+            let id = match mode {
+                0 => forest.push_node(CallNodeBuilder::new(key)).expect("call"),
+                1 => forest.push_node(ExecNodeBuilder::new(key)).expect("exec"),
+                _ => forest.push_node(CallNodeBuilder::new_syscall(key)).expect("syscall"),
+            };
+            forest.mark_root(id);
+            roots.push(id);
+            node_ids.push(id);
+        }
+    }
+    for &(dyncall, body) in &seeds.dyn_selectors {
+        let label = fixture_label("target", bindings.len());
+        let key = kernel_namespace.procedure_key(label);
+        bindings.push((label, choose(&node_ids, body)));
+        let setup = forest
+            .push_node(BasicBlockNodeBuilder::new(dynamic_setup(key)))
+            .expect("dynamic key preparation");
+        let dynamic = if dyncall {
+            DynNodeBuilder::new_dyncall()
+        } else {
+            DynNodeBuilder::new_dyn()
+        };
+        let dynamic = forest.push_node(dynamic).expect("dynamic invocation");
+        let wrapper = forest
+            .push_node(JoinNodeBuilder::new([setup, dynamic]))
+            .expect("dynamic invocation wrapper");
+        forest.mark_root(wrapper);
+        roots.push(wrapper);
+        node_ids.push(wrapper);
+    }
+
     let mut externals = BTreeMap::new();
-
     add_local_externals(&mut forest, &node_ids, &mut roots, &mut externals, &seeds.external_picks);
-    promote_unreachable(&mut forest, &mut roots);
+    for (index, &root) in roots.iter().enumerate() {
+        bindings.push((fixture_label("entry", index), root));
+    }
 
-    let forest = forest.build().expect("generated forest is valid");
-    (forest, kernel.cloned().unwrap_or_default())
+    let (forest, remapping) = forest.build_with_id_map().expect("generated forest is valid");
+    let procedures: Vec<_> = bindings
+        .into_iter()
+        .map(|(label, root)| ExecutableForestProcedure {
+            key: kernel_namespace.procedure_key(label),
+            label,
+            root: remapping.get(root).expect("every generated binding retains its body"),
+        })
+        .collect();
+    let mut environment = EnvironmentBuilder::new(limits);
+    let leaves = procedures
+        .iter()
+        .map(|procedure| {
+            environment.insert(EnvNode::Mast {
+                label: procedure.label,
+                implementation: ImplementationRoot::new(forest[procedure.root].digest()),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut root = environment.insert(EnvNode::List(leaves))?;
+    for label in namespace_labels.into_iter().rev() {
+        root = environment.insert(EnvNode::Env { label, child: root })?;
+    }
+    Ok(ExecutableForestFixture {
+        forest: Arc::new(forest),
+        environment: environment.finish(root)?,
+        procedures,
+        kernel_namespace,
+    })
 }
 
 /// Adds externals resolving to a root of the same forest. Each one is joined with an existing
@@ -681,7 +866,7 @@ fn build_structure_only_forest(
         }
     }
 
-    for &dyncall in &seeds.dyn_selectors {
+    for &(dyncall, _) in &seeds.dyn_selectors {
         let node = if dyncall {
             DynNodeBuilder::new_dyncall()
         } else {
@@ -698,28 +883,56 @@ fn build_structure_only_forest(
 // STRATEGIES
 // ================================================================================================
 
-/// Strategy yielding `(MastForest, KernelDescriptor)` pairs. The descriptor preserves supplied
-/// implementation hashes independently of symbolic keys. It does not authenticate invocation
-/// bindings. See [`MastForestParams`] for what each [`GenerationMode`] guarantees.
+/// Strategy yielding structure-only `(MastForest, KernelDescriptor)` pairs. The descriptor
+/// preserves supplied implementation hashes independently of symbolic keys. It does not
+/// authenticate invocation bindings. See [`MastForestParams`] for what each [`GenerationMode`]
+/// guarantees.
 ///
 /// # Panics
 ///
-/// Panics if `params.kernel_procedures` is rejected by [`KernelDescriptor::from_hashes`]. The
-/// check does not depend on the sample, so it runs once here instead of rejecting every sample.
+/// Panics for [`GenerationMode::Executable`]; use [`executable_forest_strategy`] to retain its
+/// required environment. Also panics if `params.kernel_procedures` is rejected by
+/// [`KernelDescriptor::from_hashes`]. These checks run once before sampling.
 pub fn forest_kernel_strategy(
     params: MastForestParams,
 ) -> BoxedStrategy<(MastForest, KernelDescriptor)> {
+    assert_eq!(
+        params.mode,
+        GenerationMode::StructureOnly,
+        "Executable generation requires executable_forest_strategy and its owned environment",
+    );
     let kernel = params.kernel_procedures.clone().map(|hashes| {
         KernelDescriptor::from_hashes(hashes)
             .unwrap_or_else(|err| panic!("MastForestParams::kernel_procedures is invalid: {err}"))
     });
-    let mode = params.mode;
-
     forest_seeds_strategy(&params)
-        .prop_map(move |seeds| match mode {
-            GenerationMode::Executable => build_executable_forest(&seeds, kernel.as_ref()),
-            GenerationMode::StructureOnly => build_structure_only_forest(&seeds, kernel.as_ref()),
-        })
+        .prop_map(move |seeds| build_structure_only_forest(&seeds, kernel.as_ref()))
+        .boxed()
+}
+
+/// Generates forests with complete authenticated bindings and a terminating runtime target graph.
+/// All procedure roots and invocation aliases are bound under a full nested synthetic namespace;
+/// that namespace is the fixture's explicit syscall authority.
+///
+/// Environment construction errors are strategy values, never filtered samples. Callers select
+/// sufficient explicit build limits and handle any returned resource error. Processor execution
+/// budgets are supplied separately by the consumer.
+///
+/// # Panics
+///
+/// Panics unless `params.mode` is [`GenerationMode::Executable`] and `kernel_procedures` is absent:
+/// digest-only legacy kernel metadata cannot define the fixture's namespace authority.
+pub fn executable_forest_strategy(
+    params: MastForestParams,
+    limits: EnvironmentBuildLimits,
+) -> BoxedStrategy<Result<ExecutableForestFixture, EnvironmentBuildError>> {
+    assert_eq!(params.mode, GenerationMode::Executable, "executable fixture mode is required");
+    assert!(
+        params.kernel_procedures.is_none(),
+        "executable fixtures use explicit namespace authority"
+    );
+    forest_seeds_strategy(&params)
+        .prop_map(move |seeds| build_executable_forest(&seeds, limits))
         .boxed()
 }
 
@@ -727,9 +940,8 @@ impl Arbitrary for MastForest {
     type Parameters = MastForestParams;
     type Strategy = BoxedStrategy<Self>;
 
-    /// In [`GenerationMode::Executable`] every root runs under the empty kernel of `Program::new`.
-    /// Immediate keyed invocations remain restricted to [`GenerationMode::StructureOnly`] until
-    /// execution-environment generation is available.
+    /// Produces structure-only forests. Executable samples require the owned environment returned
+    /// by [`executable_forest_strategy`]; requesting that mode here fails explicitly.
     fn arbitrary_with(params: Self::Parameters) -> Self::Strategy {
         forest_kernel_strategy(params).prop_map(|(forest, _)| forest).boxed()
     }
@@ -899,14 +1111,33 @@ mod tests {
             blocks: 1..=4,
             max_syscalls: 3,
             max_externals: 3,
+            mode: GenerationMode::Executable,
             ..Default::default()
         }
     }
 
+    fn fixture_limits() -> EnvironmentBuildLimits {
+        EnvironmentBuildLimits {
+            max_submitted_nodes: 256,
+            max_visits: 256,
+            max_depth: 3,
+            max_list_children: 253,
+            max_encoded_bytes: 65_536,
+            max_bindings: 253,
+            max_storage_bytes: 1_048_576,
+        }
+    }
+
+    fn executable_strategy(params: MastForestParams) -> BoxedStrategy<ExecutableForestFixture> {
+        executable_forest_strategy(params, fixture_limits())
+            .prop_map(|sample| sample.expect("explicit test fixture limits are sufficient"))
+            .boxed()
+    }
+
     #[test]
-    fn default_params_select_executable_mode() {
+    fn bare_forest_defaults_to_structure_only() {
         let params = MastForestParams::default();
-        assert_eq!(params.mode, GenerationMode::Executable);
+        assert_eq!(params.mode, GenerationMode::StructureOnly);
         assert_eq!(params.kernel_procedures, None);
         assert_eq!(
             (
@@ -918,6 +1149,72 @@ mod tests {
             ),
             (1, 1, 1, 1, 0),
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Executable generation requires executable_forest_strategy")]
+    fn bare_forest_rejects_executable_mode() {
+        let _ = any_with::<MastForest>(executable_params());
+    }
+
+    #[test]
+    fn insufficient_fixture_limits_return_resource_error() {
+        let mut limits = fixture_limits();
+        limits.max_submitted_nodes = 0;
+        let strategy = executable_forest_strategy(executable_params(), limits);
+        let mut runner = TestRunner::default();
+        assert!(matches!(
+            sample(&strategy, &mut runner),
+            Err(EnvironmentBuildError::LimitExceeded {
+                resource: crate::program::EnvironmentBuildResource::SubmittedNodes,
+                limit: 0,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn executable_fixture_retains_all_modes_and_same_digest_aliases() {
+        let mut seeds = invocation_seeds(Operation::Incr);
+        seeds.dyn_selectors = vec![(false, 1), (true, 1)];
+        seeds.external_picks = vec![ExternalPick::Local { root: 0, sibling: 1 }];
+        let fixture = build_executable_forest(&seeds, fixture_limits()).expect("fixture limits");
+        let forest = fixture.forest();
+        assert_eq!(immediate_invocations(forest).len(), 3);
+        assert_eq!(forest.nodes().iter().filter(|node| node.is_dyn()).count(), 2);
+        assert!(forest.nodes().iter().any(|node| node.is_external()));
+        let body = seeds.basic_blocks[1].digest();
+        let aliases: BTreeSet<_> = fixture
+            .environment()
+            .bindings()
+            .iter()
+            .filter(|binding| binding.implementation().into_word() == body)
+            .map(|binding| binding.key())
+            .collect();
+        assert!(aliases.len() >= 5, "each invocation has an independently labeled alias");
+        for procedure in fixture.procedures() {
+            assert!(!forest[procedure.root].is_external());
+            assert!(forest.is_procedure_root(procedure.root));
+            let binding = fixture.environment().binding(procedure.key).expect("validated binding");
+            assert_eq!(binding.label(), procedure.label);
+            assert_eq!(binding.namespace(), fixture.kernel_namespace());
+            assert_eq!(binding.implementation().into_word(), forest[procedure.root].digest());
+        }
+        assert_pruned(forest);
+    }
+
+    #[test]
+    fn executable_keys_and_invocation_hashes_do_not_depend_on_body_digest() {
+        let first = build_executable_forest(&invocation_seeds(Operation::Incr), fixture_limits())
+            .expect("fixture limits");
+        let second = build_executable_forest(&invocation_seeds(Operation::Neg), fixture_limits())
+            .expect("fixture limits");
+        assert_eq!(immediate_invocations(first.forest()), immediate_invocations(second.forest()));
+        let first_bindings: Vec<_> = first.procedures().iter().map(|p| (p.key, p.label)).collect();
+        let second_bindings: Vec<_> =
+            second.procedures().iter().map(|p| (p.key, p.label)).collect();
+        assert_eq!(first_bindings, second_bindings);
+        assert_ne!(first.environment().root(), second.environment().root());
     }
 
     #[test]
@@ -1070,26 +1367,43 @@ mod tests {
 
     proptest! {
         #[test]
-        fn executable_forests_emit_only_structural_nodes(
-            (forest, _) in forest_kernel_strategy(MastForestParams {
+        fn executable_forests_bind_every_materialized_root_and_invocation(
+            fixture in executable_strategy(MastForestParams {
                 max_calls: 6,
                 max_execs: 6,
                 max_syscalls: 6,
                 max_dyns: 6,
-                ..Default::default()
+                ..executable_params()
             })
         ) {
-            prop_assert!(!forest.nodes().iter().any(|node| matches!(
-                node, MastNode::Call(_) | MastNode::Exec(_) | MastNode::Dyn(_)
-            )));
-        }
-
-        /// The plain strategy preserves the same structural execution guarantee.
-        #[test]
-        fn plain_executable_forests_have_no_syscalls(
-            forest in any_with::<MastForest>(MastForestParams { max_syscalls: 3, ..Default::default() })
-        ) {
-            prop_assert!(syscalls(&forest).next().is_none());
+            let forest = fixture.forest();
+            for &root in forest.procedure_roots() {
+                prop_assert!(fixture.procedures().iter().any(|procedure| procedure.root == root));
+                prop_assert!(!forest[root].is_external());
+            }
+            for procedure in fixture.procedures() {
+                let binding = fixture.environment().binding(procedure.key).expect("complete binding");
+                prop_assert_eq!(binding.key(), binding.namespace().procedure_key(procedure.label));
+                prop_assert_eq!(binding.implementation().into_word(), forest[procedure.root].digest());
+                prop_assert_eq!(binding.namespace(), fixture.kernel_namespace());
+                let opening = fixture.opening(procedure.key).expect("committed opening");
+                prop_assert_eq!(opening[0].0.commitment().unwrap(), fixture.environment().root());
+                for pair in opening.windows(2) {
+                    let child = match &pair[0] {
+                        (EnvNode::Env { child, .. }, Some(0)) => *child,
+                        (EnvNode::List(children), Some(slot)) => children[*slot],
+                        _ => panic!("unexpected fixture path"),
+                    };
+                    prop_assert_eq!(child, pair[1].0.commitment().unwrap());
+                }
+                prop_assert_eq!(&opening.last().unwrap().0, &EnvNode::Mast {
+                    label: procedure.label,
+                    implementation: binding.implementation(),
+                });
+            }
+            for (_, target, _) in immediate_invocations(forest) {
+                prop_assert!(fixture.environment().binding(target).is_some());
+            }
         }
 
         /// Balancing never pushes an executable block past `max_ops_len`.
@@ -1113,8 +1427,9 @@ mod tests {
         /// the single-operation blocks that push a split or loop condition.
         #[test]
         fn executable_blocks_are_infallible_and_balanced(
-            forest in any_with::<MastForest>(executable_params())
+            fixture in executable_strategy(executable_params())
         ) {
+            let forest = fixture.forest();
             for node in forest.nodes() {
                 let Some(block) = node.get_basic_block() else { continue };
                 let ops: Vec<Operation> =
@@ -1136,8 +1451,9 @@ mod tests {
 
         #[test]
         fn externals_resolve_to_a_local_root(
-            forest in any_with::<MastForest>(executable_params())
+            fixture in executable_strategy(executable_params())
         ) {
+            let forest = fixture.forest();
             for node in forest.nodes().iter().filter(|node| node.is_external()) {
                 let target = forest.find_procedure_root(node.digest());
                 prop_assert!(
@@ -1147,10 +1463,15 @@ mod tests {
             }
         }
 
-        /// Edges lead from the root containing an external to the root it resolves to.
+        /// Include structural children, every shared external occurrence, and authenticated
+        /// immediate and prepared dynamic targets; final dense ID order is not runtime order.
         #[test]
-        fn externals_form_a_dag(
-            forest in any_with::<MastForest>(MastForestParams { max_externals: 6, ..Default::default() })
+        fn executable_runtime_graph_is_acyclic(
+            fixture in executable_strategy(MastForestParams {
+                max_externals: 6,
+                max_dyns: 4,
+                ..executable_params()
+            })
         ) {
             fn acyclic(
                 node: MastNodeId,
@@ -1173,25 +1494,39 @@ mod tests {
                 ok
             }
 
+            let forest = fixture.forest();
             let roots = forest.procedure_roots();
             let mut edges = Vec::new();
             for (index, node) in forest.nodes().iter().enumerate() {
-                if !node.is_external() {
-                    continue;
-                }
                 let id = MastNodeId::new_unchecked(index as u32);
-                let source = roots
-                    .iter()
-                    .copied()
-                    .find(|root| SubtreeIterator::new(root, &forest).any(|reached| reached == id))
-                    .expect("pruned forest");
-                let target = forest.find_procedure_root(node.digest()).expect("resolvable external");
-                edges.push((source, target));
+                node.for_each_child(|child| edges.push((id, child)));
+                let key = match node {
+                    MastNode::Call(call) => Some(call.target()),
+                    MastNode::Exec(exec) => Some(exec.target()),
+                    MastNode::Join(join) if forest[join.second()].is_dyn() => {
+                        let setup = forest[join.first()].get_basic_block().expect("dynamic setup");
+                        let pushes: Vec<_> = setup.op_batches().iter().flat_map(OpBatch::ops)
+                            .filter_map(|op| if let Operation::Push(value) = op { Some(*value) } else { None })
+                            .take(4)
+                            .collect();
+                        Some(ProcedureKey::new(Word::from([pushes[3], pushes[2], pushes[1], pushes[0]])))
+                    },
+                    MastNode::External(_) => {
+                        let target = forest.find_procedure_root(node.digest()).expect("resolvable external");
+                        edges.push((id, target));
+                        None
+                    },
+                    _ => None,
+                };
+                if let Some(key) = key {
+                    let target = fixture.procedures().iter().find(|p| p.key == key).expect("bound target");
+                    edges.push((id, target.root));
+                }
             }
 
             let (mut path, mut done) = (BTreeSet::new(), BTreeSet::new());
             for &root in roots {
-                prop_assert!(acyclic(root, &edges, &mut path, &mut done), "cycle through externals");
+                prop_assert!(acyclic(root, &edges, &mut path, &mut done), "cycle through runtime targets");
             }
         }
 
@@ -1219,8 +1554,8 @@ mod tests {
         }
 
         #[test]
-        fn executable_forests_are_pruned(forest in any_with::<MastForest>(executable_params())) {
-            assert_pruned(&forest);
+        fn executable_forests_are_pruned(fixture in executable_strategy(executable_params())) {
+            assert_pruned(fixture.forest());
         }
 
         #[test]

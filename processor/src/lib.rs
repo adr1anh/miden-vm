@@ -18,6 +18,7 @@ use core::{
 use miden_mast_package::debug_info::DebugSourceNodeId;
 
 mod continuation_stack;
+mod environment;
 mod errors;
 mod execution;
 mod execution_options;
@@ -53,32 +54,43 @@ mod tests;
 // ================================================================================================
 
 pub use continuation_stack::{Continuation, SourceInlineCallContext};
+pub use environment::{
+    InvocationTag, InvocationUse, LedgerCounters, LedgerError, LedgerLimits, LedgerResource,
+    OpeningError, OpeningId, OpeningLedger, OpeningLimits, OpeningOccurrence, OpeningParent,
+    OpeningResource, OpeningStep, OpeningUseCounts, PreparedEntry, PreparedInvocation,
+    PreparedOpening, PreparedRootEnd, ResolutionSession, ResolutionWitness, ResolvedBinding,
+    SessionBinding, SessionCounters, SessionError, SessionLimits, SessionPhase, SessionResource,
+    VerifiedOpening,
+};
 pub use errors::{
     AceError, ExecutionError, HostError, MemoryError, PackageSourceDebugContext,
     advice_error_with_package_source_context, event_error_with_package_source_context,
     procedure_not_found_with_package_source_context,
 };
-pub use execution_options::{ExecutionOptions, ExecutionOptionsError};
+pub use execution_options::{
+    EnvironmentTraceLimits, ExecutionEnvironment, ExecutionOptions, ExecutionOptionsError,
+};
 pub use executor::ProgramExecutor;
 pub use fast::{
     BreakReason, DebugCallFrame, DebugCallFrameResolver, DebugFrameOrigin, ExecutionOutput,
     FastProcessor, ResumeContext,
 };
 pub use host::{
-    BaseHost, FutureMaybeSend, Host, LoadedMastForest, MastForestStore, MemMastForestStore,
-    SyncHost,
+    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    FutureMaybeSend, Host, LoadedMastForest, MastForestStore, MemMastForestStore, SyncHost,
     debug::{StdoutWriter, format_value, write_interval, write_stack},
     default::{DefaultHost, HostLibrary},
 };
 pub use miden_core::{
     EMPTY_WORD, Felt, ONE, WORD_SIZE, Word, ZERO, crypto, field, mast,
     program::{
-        ExecutionClaim, InputError, KernelDescriptor, MIN_STACK_DEPTH, Program, ProgramInfo,
-        StackInputs, StackOutputs,
+        ExecutionClaim, ExecutionDescriptor, InputError, KernelDescriptor, MIN_STACK_DEPTH,
+        Program, ProgramInfo, StackInputs, StackOutputs,
     },
     serde, utils,
 };
-pub use trace::{ExecutionWitness, PrecompileWitness, VmWitness};
+pub use trace::{ExecutionWitness, PrecompileWitness, ReplayReadLimits, VmWitness};
+pub use tracer::{CycleProjection, KeyedEvent, KeyedEventKind, KeyedMode, KeyedTarget};
 
 pub mod advice {
     pub use miden_core::advice::{AdviceInputs, AdviceMap, AdviceStack};
@@ -281,6 +293,19 @@ pub trait Stopper {
     ///
     /// For live execution this is `Arc<MastForest>`; for replay it is `Arc<SparseMastForest>`.
     type Forest: ExecutableMastForest + Clone;
+
+    /// Checks known cycle limits before any VM, native-session or tracer publication.
+    ///
+    /// The projected clock and continuation count describe the entire prepared transition.
+    /// Implementations must not advance stop state here. An unexpected error from a later custom
+    /// callback terminally invalidates execution rather than making that transition retryable.
+    fn preflight_cycle(
+        &self,
+        _processor: &Self::Processor,
+        _projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
 
     /// Determines whether execution should be stopped at the end of each clock cycle.
     ///

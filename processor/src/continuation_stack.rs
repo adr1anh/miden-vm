@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use miden_core::{
     mast::{MastForestId, MastNodeId},
-    program::Program,
+    program::{ImplementationRoot, ProcedureKey, Program},
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
 };
 use miden_mast_package::debug_info::{DebugSourceInlineCall, DebugSourceNodeId, PackageDebugInfo};
@@ -153,8 +153,15 @@ pub enum Continuation<F> {
     FinishLoop(MastNodeId),
     /// Process the finish phase of a Call node.
     FinishCall(MastNodeId),
+    /// Finish a same-context keyed EXEC activation.
+    FinishExec(MastNodeId),
     /// Process the finish phase of a Dyn node.
     FinishDyn(MastNodeId),
+    /// The authenticated entry activation. Only its actual END can discharge this marker.
+    RootBoundary {
+        implementation: ImplementationRoot,
+        principal: ProcedureKey,
+    },
     /// Resume execution at the specified operation of the specified batch in the given basic block
     /// node.
     ResumeBasicBlock {
@@ -196,6 +203,7 @@ impl<F> Continuation<F> {
             | FinishSplit(_)
             | FinishLoop(_)
             | FinishCall(_)
+            | FinishExec(_)
             | FinishDyn(_)
             | ResumeBasicBlock {
                 node_id: _,
@@ -205,7 +213,7 @@ impl<F> Continuation<F> {
             | Respan { node_id: _, batch_index: _ }
             | FinishBasicBlock(_) => true,
 
-            EnterForest { .. } => false,
+            EnterForest { .. } | RootBoundary { .. } => false,
         }
     }
 
@@ -216,11 +224,12 @@ impl<F> Continuation<F> {
             | Self::FinishSplit(node_id)
             | Self::FinishLoop(node_id)
             | Self::FinishCall(node_id)
+            | Self::FinishExec(node_id)
             | Self::FinishDyn(node_id)
             | Self::ResumeBasicBlock { node_id, .. }
             | Self::Respan { node_id, .. }
             | Self::FinishBasicBlock(node_id) => Some(*node_id),
-            Self::EnterForest { .. } => None,
+            Self::EnterForest { .. } | Self::RootBoundary { .. } => None,
         }
     }
 }
@@ -261,6 +270,80 @@ impl<F> Default for ContinuationStack<F> {
 }
 
 impl<F> ContinuationStack<F> {
+    /// Starts the authenticated root selected by the environment, independently of Program hints.
+    pub(crate) fn for_root(
+        root: MastNodeId,
+        implementation: ImplementationRoot,
+        principal: ProcedureKey,
+        track_source: bool,
+        source_node_id: Option<DebugSourceNodeId>,
+    ) -> Result<Self, crate::ExecutionError> {
+        let mut result = Self::default();
+        if track_source {
+            result.source_node_ids = Some(Vec::new());
+            result.debug_activations = Some(DebugActivations::new(0));
+        }
+        result.prepare_push(2)?;
+        result.push_continuation(Continuation::RootBoundary { implementation, principal });
+        result.push_with_source_node_id(Continuation::StartNode(root), source_node_id);
+        Ok(result)
+    }
+
+    /// Reserves only the buffers changed by an upcoming transition.
+    pub(crate) fn prepare_push(&mut self, additional: usize) -> Result<(), crate::ExecutionError> {
+        let allocation_error =
+            |_| crate::ExecutionError::Internal("continuation allocation failed");
+        self.stack.try_reserve(additional).map_err(allocation_error)?;
+        if let Some(source) = &mut self.source_node_ids {
+            source.try_reserve(additional).map_err(allocation_error)?;
+        }
+        if let Some(activations) = &mut self.debug_activations {
+            activations.pending.try_reserve(additional).map_err(allocation_error)?;
+            let additional = u64::try_from(additional).map_err(|_| {
+                crate::ExecutionError::Internal("debug activation generation exhausted")
+            })?;
+            activations
+                .active
+                .execution
+                .load(Ordering::Relaxed)
+                .checked_add(additional)
+                .ok_or(crate::ExecutionError::Internal("debug activation generation exhausted"))?;
+        }
+        Ok(())
+    }
+
+    /// Finds a root boundary below the retained END, crossing only zero-cycle restorations.
+    pub(crate) fn root_boundary_after_next(&self) -> Option<(ImplementationRoot, ProcedureKey)> {
+        for (index, continuation) in self.stack.iter().enumerate().rev().skip(1) {
+            match continuation {
+                Continuation::EnterForest { .. } => {},
+                Continuation::RootBoundary { implementation, principal } => {
+                    // Real entry construction installs this first. A replay cannot hide later
+                    // executable work underneath its claimed entry boundary.
+                    return (index == 0).then_some((*implementation, *principal));
+                },
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// Removes the already checked entry marker while preserving zero-cycle forest restorations.
+    pub(crate) fn discharge_root_boundary(&mut self) {
+        let index = self
+            .stack
+            .iter()
+            .rposition(|c| matches!(c, Continuation::RootBoundary { .. }))
+            .expect("prepared root END has an entry boundary");
+        self.stack.remove(index);
+        if let Some(source) = &mut self.source_node_ids {
+            source.remove(index);
+        }
+        if let Some(activations) = &mut self.debug_activations {
+            activations.pending.remove(index);
+        }
+    }
+
     pub(crate) fn debug_activation_at(&self, position: usize) -> Option<DebugActivationId> {
         self.debug_activations.as_ref()?.activation_at(position)
     }
@@ -293,6 +376,7 @@ impl<F> ContinuationStack<F> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_source_node_id(
         program: &Program,
         source_node_id: DebugSourceNodeId,
@@ -300,6 +384,7 @@ impl<F> ContinuationStack<F> {
         Self::new_with_optional_source_node_id(program, Some(source_node_id))
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_optional_source_node_id(
         program: &Program,
         source_node_id: Option<DebugSourceNodeId>,
@@ -459,6 +544,7 @@ impl<F> ContinuationStack<F> {
         source_node_ids.pop().flatten()
     }
 
+    #[cfg(test)]
     pub(crate) fn start_tracking_source_nodes(
         &mut self,
         next_source_node_id: Option<DebugSourceNodeId>,
@@ -574,6 +660,8 @@ const TAG_RESUME_BASIC_BLOCK: u8 = 6;
 const TAG_RESPAN: u8 = 7;
 const TAG_FINISH_BASIC_BLOCK: u8 = 8;
 const TAG_ENTER_FOREST: u8 = 9;
+const TAG_FINISH_EXEC: u8 = 10;
+const TAG_ROOT_BOUNDARY: u8 = 11;
 
 // NOTE: `package_debug_info` is deliberately *not* serialized: it is reconstructable from the
 // package a witness was produced from and would bloat the wire with data irrelevant to proving.
@@ -602,6 +690,15 @@ impl Serializable for Continuation<MastForestId> {
             Self::FinishCall(node_id) => {
                 TAG_FINISH_CALL.write_into(target);
                 node_id.write_into(target);
+            },
+            Self::FinishExec(node_id) => {
+                TAG_FINISH_EXEC.write_into(target);
+                node_id.write_into(target);
+            },
+            Self::RootBoundary { implementation, principal } => {
+                TAG_ROOT_BOUNDARY.write_into(target);
+                implementation.write_into(target);
+                principal.write_into(target);
             },
             Self::FinishDyn(node_id) => {
                 TAG_FINISH_DYN.write_into(target);
@@ -643,6 +740,11 @@ impl Deserializable for Continuation<MastForestId> {
             TAG_FINISH_SPLIT => Ok(Self::FinishSplit(MastNodeId::read_from(source)?)),
             TAG_FINISH_LOOP => Ok(Self::FinishLoop(MastNodeId::read_from(source)?)),
             TAG_FINISH_CALL => Ok(Self::FinishCall(MastNodeId::read_from(source)?)),
+            TAG_FINISH_EXEC => Ok(Self::FinishExec(MastNodeId::read_from(source)?)),
+            TAG_ROOT_BOUNDARY => Ok(Self::RootBoundary {
+                implementation: ImplementationRoot::read_from(source)?,
+                principal: ProcedureKey::read_from(source)?,
+            }),
             TAG_FINISH_DYN => Ok(Self::FinishDyn(MastNodeId::read_from(source)?)),
             TAG_RESUME_BASIC_BLOCK => Ok(Self::ResumeBasicBlock {
                 node_id: MastNodeId::read_from(source)?,

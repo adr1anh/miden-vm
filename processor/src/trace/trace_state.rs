@@ -61,10 +61,7 @@ mod serialization_tests;
 /// (`package_debug_info` and `source_node_ids`), so the exact-equality round-trip test generated
 /// by `serde_test` does not apply to this type.
 #[derive(Debug, PartialEq, Eq)]
-#[cfg_attr(
-    all(feature = "arbitrary", test),
-    miden_test_serialization_macros::serialization_test
-)]
+
 pub struct CoreTraceFragmentContext {
     pub state: CoreTraceState,
     pub replay: ExecutionReplay,
@@ -257,27 +254,6 @@ impl StackState {
         self.last_overflow_addr = clk.into();
     }
 
-    /// Pops the top element from the overflow stack at the provided clock cycle, if any.
-    ///
-    /// If the overflow table is empty (i.e. stack depth is 16), the stack depth is unchanged, and
-    /// None is returned.
-    pub fn pop_overflow(
-        &mut self,
-        stack_overflow_replay: &mut StackOverflowReplay,
-    ) -> Result<Option<Felt>, OperationError> {
-        debug_assert!(self.stack_depth >= MIN_STACK_DEPTH);
-
-        if self.stack_depth > MIN_STACK_DEPTH {
-            let (stack_value, new_overflow_addr) = stack_overflow_replay.replay_pop_overflow()?;
-            self.stack_depth -= 1;
-            self.last_overflow_addr = new_overflow_addr;
-            Ok(Some(stack_value))
-        } else {
-            self.last_overflow_addr = ZERO;
-            Ok(None)
-        }
-    }
-
     /// Derives the denominator of the overflow helper (h0 helper column) from the current stack
     /// depth.
     ///
@@ -297,20 +273,14 @@ impl StackState {
         self.last_overflow_addr = ZERO;
     }
 
-    /// Restores the prior context for this stack.
-    ///
-    /// This has the effect bringing back items previously hidden from the overflow table.
-    pub fn restore_context(
+    /// Applies the checked overflow metadata prepared for a pop or caller return.
+    pub(crate) fn set_prepared_overflow_state(
         &mut self,
-        stack_overflow_replay: &mut StackOverflowReplay,
-    ) -> Result<(), OperationError> {
-        let (stack_depth, last_overflow_addr) =
-            stack_overflow_replay.replay_restore_context_overflow_addr()?;
-        // Restore stack depth to the value from before the context switch (parallel to Process
-        // Stack behavior)
+        stack_depth: usize,
+        last_overflow_addr: Felt,
+    ) {
         self.stack_depth = stack_depth;
         self.last_overflow_addr = last_overflow_addr;
-        Ok(())
     }
 }
 
@@ -322,11 +292,9 @@ impl StackState {
 /// also packages up all the necessary data for trace generators to generate trace fragments, which
 /// can be done on separate machines in parallel, for example.
 #[derive(Debug, Default, PartialEq, Eq)]
-#[cfg_attr(
-    all(feature = "arbitrary", test),
-    miden_test_serialization_macros::serialization_test
-)]
+
 pub struct ExecutionReplay {
+    pub(crate) keyed: super::keyed::KeyedReplay,
     pub block_stack: BlockStackReplay,
     pub execution_context: ExecutionContextReplay,
     pub stack_overflow: StackOverflowReplay,
@@ -352,12 +320,33 @@ pub struct ExecutionContextReplay {
 }
 
 impl ExecutionContextReplay {
+    /// Checks a saved system frame before either return queue is consumed.
+    pub(crate) fn peek_execution_context(
+        &self,
+    ) -> Result<&ExecutionContextSystemInfo, OperationError> {
+        self.execution_contexts
+            .front()
+            .ok_or(OperationError::Internal("no execution context recorded"))
+    }
+
+    /// Consumes the saved frame retained by an owned processor return preparation.
+    pub(crate) fn commit_execution_context(&mut self) {
+        self.execution_contexts.pop_front();
+    }
+
+    pub(crate) fn prepare_record(&mut self) -> Result<(), ExecutionError> {
+        self.execution_contexts
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("execution context replay allocation failed"))
+    }
+
     /// Records an execution context system info for a CALL/SYSCALL/DYNCALL operation.
     pub fn record_execution_context(&mut self, ctx_info: ExecutionContextSystemInfo) {
         self.execution_contexts.push_back(ctx_info);
     }
 
     /// Replays the next recorded execution context system info.
+    #[cfg(test)]
     pub fn replay_execution_context(
         &mut self,
     ) -> Result<ExecutionContextSystemInfo, OperationError> {
@@ -384,6 +373,35 @@ pub struct BlockStackReplay {
 }
 
 impl BlockStackReplay {
+    pub(crate) fn prepare_record_start(&mut self) -> Result<(), ExecutionError> {
+        self.node_start_parent_addr
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("block start replay allocation failed"))
+    }
+
+    pub(crate) fn prepare_record_end(&mut self) -> Result<(), ExecutionError> {
+        self.node_end
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("block end replay allocation failed"))
+    }
+
+    /// Checks the next start record without advancing replay.
+    pub(crate) fn peek_node_start_parent_addr(
+        &self,
+    ) -> Result<LogicalControllerAddress, ExecutionError> {
+        self.node_start_parent_addr
+            .front()
+            .copied()
+            .ok_or(ExecutionError::Internal("no node start parent address recorded"))
+    }
+
+    /// Checks the next END record without advancing replay.
+    pub(crate) fn peek_node_end(&self) -> Result<&NodeEndData, ExecutionError> {
+        self.node_end
+            .front()
+            .ok_or(ExecutionError::Internal("no node address and flags recorded"))
+    }
+
     /// Records the node's parent address
     pub fn record_node_start_parent_addr(&mut self, parent_addr: LogicalControllerAddress) {
         self.node_start_parent_addr.push_back(parent_addr);
@@ -561,7 +579,24 @@ pub struct MemoryReadsReplay {
     words_read: VecDeque<(Word, Felt, ContextId, RowIndex)>,
 }
 
+/// A validated write request. Replay supplies reads from observations and leaves RAM writes to
+/// the separately captured memory chiplet input, so no RAM entry is staged here.
+pub(crate) struct ReplayElementWrite {
+    request: (ContextId, u32, Felt),
+}
+
+/// The exact word observation checked before publication and consumed by its matching commit.
+pub(crate) struct ReplayWordRead {
+    observation: (Word, Felt, ContextId, RowIndex),
+}
+
 impl MemoryReadsReplay {
+    pub(crate) fn prepare_record_read_word(&mut self) -> Result<(), ExecutionError> {
+        self.words_read
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("memory read replay allocation failed"))
+    }
+
     // MUTATIONS (populated by the fast processor)
     // --------------------------------------------------------------------------------
 
@@ -593,12 +628,45 @@ impl MemoryReadsReplay {
         Ok(element)
     }
 
+    #[cfg(test)]
     pub fn replay_read_word(&mut self, addr: Felt) -> Result<Word, MemoryError> {
-        let (word, stored_addr, _ctx, _clk) = self
+        let (word, stored_addr, stored_ctx, _clk) = *self
             .words_read
-            .pop_front()
+            .front()
             .ok_or(MemoryError::MemoryReadFailed("memory words replay is empty".to_string()))?;
-        debug_assert_eq!(stored_addr, addr, "Address mismatch: expected {addr}, got {stored_addr}");
+        if stored_addr != addr {
+            return Err(MemoryError::MemoryReadFailed(
+                "memory word replay address differs from the requested address".to_string(),
+            ));
+        }
+        let address = replay_memory_address(addr)?;
+        if !address.is_multiple_of(miden_core::WORD_SIZE as u32) {
+            return Err(MemoryError::UnalignedWordAccess { addr: address, ctx: stored_ctx });
+        }
+        self.words_read.pop_front();
+        Ok(word)
+    }
+
+    /// Checks the exact dynamic selection read without consuming its recorded value.
+    pub(crate) fn peek_read_word(
+        &self,
+        ctx: ContextId,
+        addr: Felt,
+        clk: RowIndex,
+    ) -> Result<Word, MemoryError> {
+        let address = replay_memory_address(addr)?;
+        if !address.is_multiple_of(miden_core::WORD_SIZE as u32) {
+            return Err(MemoryError::UnalignedWordAccess { addr: address, ctx });
+        }
+        let (word, stored_addr, stored_ctx, stored_clk) = *self
+            .words_read
+            .front()
+            .ok_or(MemoryError::MemoryReadFailed("memory words replay is empty".to_string()))?;
+        if (stored_addr, stored_ctx, stored_clk) != (addr, ctx, clk) {
+            return Err(MemoryError::MemoryReadFailed(
+                "memory word replay differs from the requested context, address or row".to_string(),
+            ));
+        }
         Ok(word)
     }
 
@@ -636,6 +704,12 @@ pub struct MemoryWritesReplay {
 }
 
 impl MemoryWritesReplay {
+    pub(crate) fn prepare_record_write_element(&mut self) -> Result<(), ExecutionError> {
+        self.elements_written
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("memory write replay allocation failed"))
+    }
+
     /// Records a write element to memory
     pub fn record_write_element(
         &mut self,
@@ -674,25 +748,72 @@ impl MemoryWritesReplay {
 }
 
 impl MemoryInterface for MemoryReadsReplay {
+    type ElementWrite = ReplayElementWrite;
+    type WordRead = ReplayWordRead;
+
     fn read_element(&mut self, _ctx: ContextId, addr: Felt) -> Result<Felt, MemoryError> {
         self.replay_read_element(addr)
     }
 
     fn read_word(
         &mut self,
-        _ctx: ContextId,
+        ctx: ContextId,
         addr: Felt,
-        _clk: RowIndex,
+        clk: RowIndex,
     ) -> Result<Word, MemoryError> {
-        self.replay_read_word(addr)
+        let prepared = self.prepare_word_read(ctx, addr, clk)?;
+        Ok(self.commit_word_read(prepared))
+    }
+
+    fn prepare_word_read(
+        &self,
+        ctx: ContextId,
+        addr: Felt,
+        clk: RowIndex,
+    ) -> Result<Self::WordRead, MemoryError> {
+        let word = self.peek_read_word(ctx, addr, clk)?;
+        Ok(ReplayWordRead { observation: (word, addr, ctx, clk) })
+    }
+
+    fn word_read_value(prepared: &Self::WordRead) -> Word {
+        prepared.observation.0
+    }
+
+    fn commit_word_read(&mut self, prepared: Self::WordRead) -> Word {
+        self.words_read.pop_front();
+        prepared.observation.0
+    }
+
+    fn peek_word(&self, ctx: ContextId, addr: Felt, clk: RowIndex) -> Result<Word, MemoryError> {
+        self.peek_read_word(ctx, addr, clk)
+    }
+
+    fn prepare_write_element(
+        &self,
+        ctx: ContextId,
+        addr: Felt,
+        element: Felt,
+    ) -> Result<Self::ElementWrite, MemoryError> {
+        Ok(ReplayElementWrite {
+            request: (ctx, replay_memory_address(addr)?, element),
+        })
+    }
+
+    fn commit_write_element(&mut self, prepared: Self::ElementWrite) {
+        // Consume the complete checked request. Replay has no RAM: the shared execution path's
+        // write hook records this same context/address/value once into MemoryWritesReplay, which
+        // supplies the memory chiplet independently of core replay.
+        let _checked_write = prepared.request;
     }
 
     fn write_element(
         &mut self,
-        _ctx: ContextId,
-        _addr: Felt,
-        _element: Felt,
+        ctx: ContextId,
+        addr: Felt,
+        element: Felt,
     ) -> Result<(), MemoryError> {
+        let prepared = self.prepare_write_element(ctx, addr, element)?;
+        self.commit_write_element(prepared);
         Ok(())
     }
 
@@ -705,6 +826,11 @@ impl MemoryInterface for MemoryReadsReplay {
     ) -> Result<(), MemoryError> {
         Ok(())
     }
+}
+
+fn replay_memory_address(addr: Felt) -> Result<u32, MemoryError> {
+    let addr = addr.as_canonical_u64();
+    addr.try_into().map_err(|_| MemoryError::AddressOutOfBounds { addr })
 }
 
 // ADVICE REPLAY
@@ -1085,6 +1211,20 @@ pub struct BlockAddressReplay {
 }
 
 impl BlockAddressReplay {
+    pub(crate) fn prepare_record(&mut self) -> Result<(), ExecutionError> {
+        self.block_addresses
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("block address replay allocation failed"))
+    }
+
+    /// Checks the next Controller address without advancing replay.
+    pub(crate) fn peek_block_address(&self) -> Result<LogicalControllerAddress, ExecutionError> {
+        self.block_addresses
+            .front()
+            .copied()
+            .ok_or(ExecutionError::Internal("no block address operations recorded"))
+    }
+
     /// Records the address associated with a `Hasher::hash_control_block` or
     /// `Hasher::hash_basic_block` operation.
     pub fn record_block_address(&mut self, addr: LogicalControllerAddress) {
@@ -1345,6 +1485,19 @@ impl Default for HasherOpSink {
 }
 
 impl HasherRequestReplay {
+    pub(crate) fn prepare_record_control_block(&mut self) -> Result<(), ExecutionError> {
+        match &mut self.sink {
+            HasherOpSink::Buffered(ops) => ops
+                .try_reserve(1)
+                .map_err(|_| ExecutionError::Internal("hasher request replay allocation failed")),
+            #[cfg(feature = "std")]
+            HasherOpSink::Streamed(_) => Ok(()),
+        }
+    }
+
+    pub(crate) fn is_buffered(&self) -> bool {
+        matches!(self.sink, HasherOpSink::Buffered(_))
+    }
     /// Creates a replay that forwards each request, resolved, to the receiving end as it is
     /// recorded.
     ///
@@ -1585,6 +1738,36 @@ impl StackOverflowReplay {
         }
     }
 
+    pub(crate) fn prepare_record_pop(&mut self) -> Result<(), ExecutionError> {
+        self.overflow_values
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("overflow pop replay allocation failed"))
+    }
+
+    pub(crate) fn prepare_record_restore(&mut self) -> Result<(), ExecutionError> {
+        self.restore_context_info
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("overflow restore replay allocation failed"))
+    }
+
+    /// Checks the caller's overflow metadata without consuming the return record.
+    pub(crate) fn peek_restore_context(&self) -> Result<(usize, Felt), OperationError> {
+        self.restore_context_info
+            .front()
+            .copied()
+            .ok_or(OperationError::Internal("no overflow address operations recorded"))
+    }
+
+    /// Consumes the overflow metadata retained by an owned return preparation.
+    pub(crate) fn commit_restore_context(&mut self) {
+        self.restore_context_info.pop_front();
+    }
+
+    /// Consumes the overflow observation retained by an owned pop preparation.
+    pub(crate) fn commit_pop_overflow(&mut self) {
+        self.overflow_values.pop_front();
+    }
+
     // MUTATORS
     // --------------------------------------------------------------------------------
 
@@ -1620,6 +1803,7 @@ impl StackOverflowReplay {
     /// is, don't call if the stack depth is 16.
     ///
     /// See [Self::record_pop_overflow] for more details.
+    #[cfg(test)]
     pub fn replay_pop_overflow(&mut self) -> Result<(Felt, Felt), OperationError> {
         self.overflow_values
             .pop_front()
@@ -1627,6 +1811,7 @@ impl StackOverflowReplay {
     }
 
     /// Replays the overflow address when restoring a context
+    #[cfg(test)]
     pub fn replay_restore_context_overflow_addr(
         &mut self,
     ) -> Result<(usize, Felt), OperationError> {
@@ -2238,6 +2423,7 @@ mod arbitrary_replays {
                         mast_forest_resolution,
                     )| {
                         Self {
+                            keyed: super::super::keyed::KeyedReplay::default(),
                             block_stack,
                             execution_context,
                             stack_overflow,

@@ -109,7 +109,7 @@ Separate canonical declarations and optional body availability; add validated Na
 
 **Branch:** `adr1anh/librarytree-05-keyed-execution`. **Git base:** PR 04. **Semantic dependencies:** 01, 02; agree resolver/Resolve ledger schema with PRs 06–07.
 
-**Existing files:** `processor/src/execution/{mod,call,dyn,external}.rs`, `processor/src/fast/{mod,operation,execution_api,step}.rs`, processor/executor/options/errors/continuation stack, host/default/forest store and public exports. **New:** small shared resolver/EXEC modules and bounded environment witness provider; focused `processor/src/fast/tests/environment.rs`. Extend the core arbitrary fixture with an authenticated environment and migrate `processor/src/fast/tests/arbitrary_forest.rs` so executable generation covers actual keyed invocations again.
+**Existing files:** `processor/src/execution/{mod,call,dyn,external}.rs`, `processor/src/fast/{mod,operation,execution_api,step}.rs`, processor/executor/options/errors/continuation stack, host/default/forest store and public exports. **New:** small shared resolver/EXEC modules and bounded environment witness provider; focused public `processor/tests/keyed_execution.rs` and `processor/tests/keyed_witness.rs` with a shared single-Mast fixture. Extend the core arbitrary fixture with an authenticated environment and migrate `processor/src/fast/tests/arbitrary_forest.rs` so executable generation covers actual keyed invocations again.
 
 Resolve `(R_E,K)->(N,D,opening)` before typed D-indexed code loading. Share prepare/commit transitions across pure/source-aware and sync/async execution; authenticate before state changes and make retries idempotent. Implement ENTRY/all runtime modes, requested-key caller/principals, context/FMP/overflow/return behavior and checked budgets. Remove kernel-ROM/digest dispatch authority. Cache bindings by `(R_E,K)`, code by D, and preserve code-root checks/advice merge-once.
 
@@ -255,33 +255,59 @@ runtime digest dispatch or infer an authenticated binding from code availability
 require preserving child-ID invocation nodes, old serialized layouts or digest-based implementation
 lookup. Include existing source and stack/memory regressions in PRs 04/05/09 and final qualification.
 
-**D3 Interface identity, closure and external profile, reviewed with the user on 2 November 2026:**
-Protocol supplies immutable LibraryId I and authenticates its association with the canonical
-publisher-qualified descriptor and declaration commitment. Do not derive I from declarations or
-invent an identity hash. Closure metadata is the complete finite transitive LibraryId set excluding
-self; all direct external requirements are included, with self references implicit. This introduces
-no VM-level interface-cycle prohibition. Completeness needs authenticated contributing declarations.
-Publisher-descriptor canonicalization, permitted complete homes and the Protocol-local numbered-v1
-domain allocation remain **mandatory external profile inputs, with no permissive fallback**.
+**D3 Page-defined interface identity and required external profile, clarified by the user on
+2 November 2026:** this supersedes the earlier Protocol-assigned opaque-I decision and its historical
+wording below. Retain the LibraryTree Space's formulas:
 
-Implement the reviewed generic InterfaceArtifact/Home v1 framing under that required profile:
-canonical Word/label encodings; little-endian u32 lengths; exact EOF; declarations with nonempty
-semantic Text paths and absent/present UTF-8 ABI; strict envelope-byte path order and canonical-Word
-byte order for unique direct/closure sets. Artifact fields are version 1, I, declaration commitment,
-length-prefixed canonical descriptor Q0 and declaration bytes DB. Commit `B(Q0)||DB` using standard
-Eidos FeltSequence over `[1, byte_length, packed_u32_bytes]` in the profile-supplied Protocol domain;
-Q0 excludes I, commitment and association proofs. Home is version 1 plus an explicit complete typed
-path, including explicit empty N0. Require caller budgets and expected I/context; structurally valid
-bytes alone supply no authority. Reuse core label/hash helpers, add no default home/domain/profile,
-and do not activate package9 or a ReleaseRecord codec. Sources: assembly §§3.2, 5–7
-(cached lines 172–211, 347–405, 445–465, 554–562, 720–766), shared §2, vmprotocol §7.
-Production descriptor/domain/home fixtures remain external acceptance gates.
+```text
+LibraryId = H_LIBRARY(publisher_id, name, interface_version)
+interface_comm = CommitLibInterface(publisher_id, name, interface_version,
+    List(proc_exports), List(dynamic_deps), List(dynamic_deps_closure))
+```
+
+Registration permanently associates LibraryId with that interface commitment. LibraryId is derived
+from publisher/name/interface version, independently of implementation bodies, private helpers,
+release revision and pinned dependency choices. Public API or declared dynamic-dependency changes
+require a new interface version. Release revisions may change implementations, private helpers and
+pinned dependencies; retained Latest dependencies remain dynamic. The discussed
+`merge(user_supplied, assembler_derived_interface_or_code_hash)` alternative is rejected.
+
+Generic VM APIs may receive an opaque typed I, but the Protocol profile **must derive or verify the
+Page-defined I**, recognize the canonical publisher-qualified descriptor, and authenticate the permanent
+I/interface_comm registration binding. It may not arbitrarily assign I. Exact canonical identity bytes
+and H_LIBRARY domain allocation remain required Protocol-owner inputs; do not invent a VM identity
+hash, allocator, fallback or code-derived identity.
+
+The Page defines full dynamic closure **L(I), including I itself**; `external(I) = L(I) \ {I}`.
+The generic codec's stored dependency-closure field represents external(I), so its full logical
+closure is `{I} ∪ stored_external`. Document and validate that equivalence; never describe the Page's
+full closure as excluding self. Direct external requirements must be included, and completeness needs
+authenticated contributing declarations. No VM-level interface-cycle prohibition is introduced.
+
+Current generic InterfaceArtifact/Home v1 framing retains canonical Word/label encodings, little-endian
+u32 lengths, exact EOF, nonempty semantic Text declaration paths, exact optional UTF-8 ABI, and strict
+path-envelope/Word-byte ordering. Its transport fields are version 1, I, declaration commitment,
+B(Q0) and B(DB), with Q0 excluding I, commitment and association proofs. Its existing generic
+FeltSequence commitment over `[1, byte_length, packed_u32_bytes]` of `B(Q0)||DB` is not evidence of
+production equivalence to CommitLibInterface: owner-approved canonical encoding/domain and full-closure
+projection fixtures must establish that mapping before adoption. Home is version 1 plus an explicit
+complete typed path, including explicit empty N0. Caller budgets/expected I/context remain mandatory.
+Publisher/home/TypedId/profile validation, allocated domains, immutable registration, closure completeness
+and all security/acceptance gates remain required with **no permissive fallback**. Package9/ReleaseRecord
+activation and production profile fixtures remain separate gates. Keep profile Rustdoc aligned with
+this contract; production codec projections require a separate implementation/fixture checkpoint.
+
+Sources: [LibraryTree proposal](https://chatgpt.com/space/page_d5d09034b1e881919a4c425fe6429d0a)
+(identity/interface/registration blocks f83b18f1, 6d71b671, c1b6063f; closure blocks 88b6753b/b8c4a9c4)
+and [compiler/assembler contract](https://chatgpt.com/space/page_ad138e12f6cc8191a0e7af15a751dbf1)
+(block 996d90e2 explicitly retains the formula). Bounded excerpts and Page/block/date/SHA provenance
+are in the uncommitted reference cache; these selected semantics supersede earlier proposal wording.
 
 ## Open decisions and external gates
 
 | Gate | Required decision/evidence | Blocks |
 | --- | --- | --- |
-| Canonical cross-team wire contract | VM node preimages are resolved in D1; generic interface/home v1 and required external profile are recorded in D3. Obtain owner descriptor/domain/home fixtures; confirm remaining release/resource/user/random codecs and provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
+| Canonical cross-team wire contract | VM node preimages are resolved in D1; generic interface/home v1 and required external profile are recorded in D3. Obtain Page-derived identity/CommitLibInterface/full-closure projection and owner descriptor/domain/home fixtures; confirm remaining release/resource/user/random codecs and provenance. The VM owns generic labels/objects, not AccountId/registry parsing. | 01, 04, 10–12 |
 | Frontend syntax and eligibility | Preserve existing MASM name/path/word syntax under D2. Agree optional explicit key/inline extensions, fixed-body inline eligibility and diagnostics for genuinely invalid forms; source alias versus published alias versus wrapper semantics. | 04, 09 |
 | Private reusable-instance ABI | Freeze runtime-base handle transport, typed relative suffix/procref lowering and validation. C/D must remain identical across randomized user mounts; no implicit relocation or caller-derived namespace. | 11, private-instance acceptance |
 | Shared/fresh-context ABI | Specify supported value/pointer layouts, global/heap/function-table ownership, initialization and reentrancy for supported libraries. Namespace authentication supplies no RAM isolation. Do not guess a fresh-context-only/stateless-only scope. | 11, 13, final supported launch claim |
@@ -300,10 +326,10 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | --- | --- | --- | --- | --- |
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
-| 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Restore environment-aware executable generator at 05. D2 preserves existing MASM source. |
-| 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
-| 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required owner-approved descriptor/domain/home/association/closure fixtures remain external. Generic implementation and local checks are done. Executable lowering at 09; fuzz regeneration/smoke at16. |
-| 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
+| 02 MAST | implemented-awaiting-validation | Latest `364fbb35c`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, four explicit cycle/recursion cases, core seed generation, public API and full-feature Clippy pass | Processor witness checks await 05/09; fuzz smoke at 16. Environment-aware executable generator restored at 05 (`4bfa6fc94`, `15a9a07c0`). D2 preserves existing MASM source. |
+| 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; callable library compilation is restored at 05. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
+| 04 Toolchain contracts | implemented-awaiting-validation | Fixture `2a3f608e3`; decoder `5c9c78799`; encoding `a70fdc8b1`; Home `a4ceb8260`; syntax `8a02bc43c`; base `45be30b96` | Independent reviews; full package 208 passed/one manual seed test ignored, 52 interface-filter tests, syntax327, scoped/combined test-inclusive Clippy, no-default-features and formatting | Required Page-derived identity/full-closure codec projection and owner descriptor/domain/home/registration/closure fixtures remain external. Generic local checks do not clear production adoption. Executable lowering at 09; fuzz regeneration/smoke at16. |
+| 05 Runtime | implemented-awaiting-validation | Matrix `2f9394e19`; terminal callback `4ebcb72ee`; earlier implementation/fixture refs below; base `722392682` | Independent reviews; actual processor lib/default/no_std/strict Clippy; 16 public execution (40-case matrix) and five witness tests; core406; exact-source host/fixture10 and overflow4; strict harness Clippy; 52 earlier native tests | Migrate old processor context/serde/environment fixtures; inherited normal processor/parallel/address/state and fuzz gates remain. Normal dev graph stops at three assembly errors. Proof/AIR/statement activation is later. |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
 | 07 Core resolution | planned | — | — | Depends on 02,05,06; production needs12 |
 | 08 Replay/debug | planned | — | — | Depends on 05–07 |
@@ -834,3 +860,395 @@ complete homes and immutable association/authenticated closure fixtures. The pen
 does not authorize defaults or waive evidence. Validate accepted/rejected owner fixtures through both
 artifact and Home codecs and record provenance before clearing this gate. Continue the local stack
 with this unresolved validation owner explicit; no GitHub PR or push is authorized.
+
+### PR 05 Opening foundation starting boundary
+
+The branch `adr1anh/librarytree-05-keyed-execution` starts at PR 04 tip `722392682`; PR 04's
+production-profile evidence remains open. First implement bounded environment-opening candidate and
+private verified-result types in processor `src/environment/{mod,witness,tests}.rs`, with module/export
+wiring only. Reuse core EnvNode commitments, Namespace/ProcedureKey derivation and ExecutionDescriptor;
+verify selected Merkle paths and complete List material before exposing a binding. No deployment
+limits/defaults, full-enumeration requirement or root-admission authority are inferred.
+
+Implement occurrence opening/Resolve ledger and immutable-descriptor resolution session in the next
+focused slice, followed by host adapters and shared prepare/commit invocation transitions. Unit rooted
+Open edges, complete reverse Lists, per-invocation normal/syscall demand including root-END reserve,
+source occurrence and idempotent retries must remain compatible with PRs 06–08. Source/API findings
+are uncommitted references, not a second plan. The existing ten callable-cutover processor errors and
+PRs 02/03 deferred checks remain until real transitions/consumers are migrated; do not add digest or
+old child-ID adapters to create an intermediate passing build. Only actual validation clears gates.
+
+### PR 05 Opening checkpoint and superseding identity clarification
+
+Commit `d8972f02c` adds native bounded selective opening verification, immutable private verified
+results and exact retained preimages/slots. Entire-candidate limits cover nodes/depth, per-List and
+aggregate children, encoded lengths, native Vec capacities and maximum sequential hash scratch.
+Core commitments and N/K derivations are reused; membership grants no root/global-uniqueness/code/
+invocation authority. Independent source and test reviews found no issue; pinned formatting passed.
+
+After successful AC/heavy-work guards, the actual processor lib check still fails with the same six
+callee() uses and four missing Exec matches, with no new opening-module diagnostic. The uncommitted
+`.scratch/librarytree/opening-harness/` imports the exact production module/tests, supplying only
+normal alloc/std declarations and reexports, with no resolver implementation or compatibility stubs.
+Its 17 tests, test-inclusive Clippy with `-D warnings`, and no-default-features check passed; these are
+isolated unit evidence, not passing processor integration. The first harness attempt omitted the
+processor's alloc macro import; fixing the harness setup enabled the passing run. Logs remain separate.
+
+At this verified safe checkpoint, the user explicitly superseded the earlier opaque Protocol-assigned
+LibraryId choice with the two cited Pages' deterministic identity/interface formulas, permanent binding
+and full L(I)/external(I) distinction; D3 above is authoritative. Both Pages were read on 2 November
+2026, sequence 0; bounded relevant cache excerpts retain original block hashes and provenance. No
+implementation changes accompany this documentation correction, and PR 05 opening work is preserved.
+The user also directed continuation of the VM stack while production Protocol inputs remain pending;
+this does not authorize arbitrary identity assignment, merge/code-hash alternatives, defaults or gate
+waivers. Continue with occurrence ledger/session and staged invocation work; align profile Rustdoc and
+production codec/fixture equivalence separately before PR 04's external gate is cleared.
+
+### PR 05 Occurrence-ledger boundary and shared trace limit
+
+The next focused slice adds processor `src/environment/ledger.rs` and independent nested tests:
+merge authenticated prefixes by parent occurrence/slot, retain exact preimages/N/C/depth and selected
+unit edges, and stage all fallible work before allocation-free publication. A short-lived exclusive
+borrow guard prevents stale/cross-ledger publication; session/source/use-frequency/host transitions
+remain a later slice. The only opening-verifier change authorized here is a private consuming path
+accessor, preserving authentication and immutable public results.
+
+Reuse the existing MAX_TRACE_LEN safety ceiling through a small separate refactor: move its unchanged
+2^29 value into `processor/src/trace/limits.rs`, expose that module and preserve the parallel module's
+existing crate-private path by reexport. Ledger logical rows must respect this necessary ceiling even
+if caller policy is looser. Logical Library rows and conservative compression-request counts follow
+selected pair formulas; they are neither padded prefix size nor distinct interned Controller work.
+Actual prefix rounding/terminal PAD/combined T/no-wrap/degree/lookup gates remain PRs 06–07/16. Limits
+are explicit, not deployment defaults. Account retained native capacities and conservative prepare
+peak (old/input/staged/replacement overlap), and recheck returned capacities before publication; no
+allocator-excess/RSS guarantee or whole-ledger clone is implied. Commit the shared-owner refactor
+separately from ledger implementation and document actual checks without waiving inherited failures.
+
+### PR 05 Occurrence ledger validated in isolation
+
+Commit `99bfbe6d9` mechanically gives the unchanged MAX_TRACE_LEN constant a shared owner while
+preserving existing crate-private paths. Commit `739acedb7` adds bounded occurrence merging and
+atomic preparation/publication, plus only a private consuming accessor to the verified opening.
+Parent/slot provenance distinguishes equal commitments/N/depth at different positions; complete
+Lists and full inherited namespaces are retained. A borrowed guard owns staged/reserved buffers,
+so error/drop leaves published storage unchanged and commit allocates nothing. Logical row/request
+costs and native capacity/peak accounting are explicit; the shared necessary row ceiling does not
+clear final packed/global proof gates. No session, use frequency, host or invocation behavior is added.
+
+Independent production and 18-test reviews found no actionable issue. After successful AC/heavy-work
+guards, the exact-source uncommitted harness passed 35 tests (17 opening plus 18 ledger), test-inclusive
+Clippy with `-D warnings`, and no-default-features. It imports the real shared trace-limit source,
+not a substitute definition. Actual `cargo check --locked -p miden-processor --lib` still fails on
+exactly six callee() uses and four missing Exec matches, with no environment-module diagnostic.
+The capacity-excess test verifies sizing/rejection math directly; actual post-reservation calls are
+supported by source review rather than allocator-driven fault injection. Pinned formatting and
+whitespace checks pass. These are isolated unit results, not processor/proof integration acceptance.
+
+Continue with immutable ExecutionDescriptor-scoped resolution session, checked normal/syscall uses,
+entry reservation discharged at actual root END, and staged source/use records. Existing host loaders
+and all fallible VM transition preflights must precede final publication when integrated; do not infer
+runtime atomicity from native bookkeeping alone. Preserve the superseding D3 identity/closure contract
+and its external profile gates throughout subsequent work.
+
+The next session slice includes prepared entry, ordinary/syscall miss/cache-hit preparation, reserved
+normal entry demand, root-END-only discharge and strict finalization together; no permissive partial
+finish API is selected. Preserve OpeningLimits/LedgerLimits and add only explicit session cache/use/
+storage limits. Reuse immutable ExecutionDescriptor and existing RowIndex as an adapter-supplied source
+marker; actual-row binding and package-owned debug context remain transition/Core/replay obligations.
+The selected exclusive Core groups emit at most one request per row (execution lines 443–450), so
+committed invocations plus the reserved root demand must obey the necessary shared MAX_TRACE_LEN
+ceiling. This is native checked-integer accounting, not a new AIR frequency range or proof gate waiver.
+Rustdoc-only commit `71bf65973` separately aligned opaque VM I/profile requirements with superseding D3;
+non-Rustdoc lines were unchanged, and owner production projection/registration fixtures remain pending.
+
+Session peak composition additionally needs one private ledger hook: prepare_with_peak_limit applies
+min(stored policy, outer available peak), with no change to stored limits/counters or public prepare's
+accepted behavior. It shares existing sizing/preparation and checks the tighter ceiling before first
+reservation and after returned capacities. Session passes available outer bytes after old session
+buffers, then preflights its staged/replacement/root-reserved buffers against the actual ledger guard
+peak. Reserving the whole configured ledger cap is unnecessary and can falsely reject modest work.
+Commit this independently reviewed hook separately from the coherent native session lifecycle.
+The scratch harness reexports the actual miden-air-definitions RowIndex; no source type is substituted.
+
+### PR 05 Native descriptor session validated; execution integration next
+
+Commit `768a79319` independently adds the private composable ledger peak ceiling. Commit `f4b511056`
+adds immutable-descriptor native session phases, authenticated binding cache, normal/syscall use
+records and native counts, separately reserved entry demand/capacity, root-END-only discharge and
+strict read-only finalization. Ordinary/entry may target kernel exports; actual syscall checks exact
+full immediate N against N_kernel on misses and hits. Consuming borrowed guards publish only after
+all reservations/admission checks; drop/failure changes no published state. This is native bookkeeping,
+not an actual-VM completion certificate or integration of context/principal/stack transitions.
+
+Independent production and 17-test reviews found no remaining actionable issue. Review found an omitted
+phase helper, which was added; a nested-if Clippy lint was fixed without suppression. After successful
+AC/heavy-work guards the exact-source harness passed all 52 tests (35 prior plus 17 session), strict
+test-inclusive Clippy and no-default-features. It reexports the real miden-air-definitions RowIndex;
+actual row binding remains a transition/Core/replay gate. Allocator-excess tests exercise sizing/recheck
+inputs, not a real allocator over-return/OOM. Pinned formatting/whitespace pass. Actual processor lib
+check still fails exactly six callee() and four missing Exec matches, with no environment diagnostic.
+
+Next bind this infrastructure to real execution through a shared prepared-target path: ENTRY, keyed
+same-context EXEC and actual root END, followed by all CALL/SYSCALL/dynamic modes. Establish exact
+sans-IO pending request, explicit descriptor/limit input and bounded sync/async witness-provider seams
+before assigning disjoint host/execution/tracer owners. Authentication precedes D loading; retain code
+root/procedure-root and advice-once checks. Current loaders publish cache/advice before debug validation,
+and current tracer finalization can fail after VM mutation; those fallible seams require real preflight,
+not a session-commit call added after the old flow. Preserve all D2 semantics and later proof gates.
+
+### PR 05 Required execution/provider and retry boundary
+
+First integrate an explicit immutable ExecutionEnvironment containing descriptor and opening/ledger/
+session limits (no Default or digest-authority path), plus bounded sync/async environment-witness
+requests. DefaultHost may have no configured witness source: that is unavailable evidence and must
+fail closed, never authorize code by D. None from a provider does not prove cryptographic nonmembership.
+Keep provider failure, invalid opening, missing code and malformed requested-D root distinct.
+
+ResumeContext owns session and an owned pending key/binding across waits; step APIs borrow it rather
+than consuming it, so cancellation/prepublication retry cannot lose or replay a pop. Peek a retained
+keyed StartNode until one shared final transition consumes it. Authenticate fixed R_E/K and actual
+syscall N first, then prepare D-indexed local/host code, actual source/debug owner, advice-once work,
+VM stack/context/FMP/return/continuation and projected stopper/tracer checks. No whole-state clone or
+rollback claim. Known fallible checks precede publication. Unexpected arbitrary late tracer/stopper
+callback errors terminally invalidate that execution: no subsequent transition, successful output or
+proof/witness export; retry must not publish twice. Actual driver/transition tests must establish this.
+
+Assign host/config/source files before disjoint execution and tracer owners; shared API references
+are short findings, not another plan. First vertical slice is real ENTRY/EXEC/root END, then all modes.
+Distinguish invocation-node hash H(mode,K) from loaded body D and its END; outer invocation END keeps
+its own node digest. Root discharge uses actual entry activation/completed D, not empty continuations.
+When mandatory keyed records are added to replay persistence, bump **ExecutionWitness replay envelope
+to version 4** and reject previous/unknown layouts before payload parsing. Existing replay v3 has no
+resolution records; do not silently reuse it. This routine breaking-version migration is separate
+from the planned proof transport format 3 and execution claim v2, whose contracts are unchanged.
+
+
+### PR 05 Provider seam validated; code-supply preparation next
+
+Commit `1fdca8496` adds immutable explicit ExecutionEnvironment policies, bounded native witness
+requests, sync/async host forwarding, an explicitly configured DefaultHost source, and distinct
+unavailable/provider/invalid-opening errors. None is unavailable evidence, never nonmembership.
+Runtime entry/execute APIs do not yet consume this seam. Independent source and eight-test reviews
+found no remaining issue. AC/heavy guards passed; actual processor lib check still has exactly six
+old callee() and four missing Exec errors, with no new provider/config diagnostic. An optional
+reference-host blanket introduced one ambiguity and was removed before commit. Eight new host tests
+are authored but unrun behind the processor cutover; do not count them as passing. Pinned nightly
+formatting and whitespace checks pass.
+
+Before ENTRY/EXEC integration, refactor existing advice-map extension into an exclusive borrowed
+prepare/commit guard, preserving checked conflicts/budgets and the public extension behavior. Then
+share postfetch requested-D/root/debug validation between sync/async loaders, prepare advice before
+publishing cache/merge-once changes, and keep prepared code supply separate from environment authority.
+Commit these focused refactors independently. Existing BTree allocation behavior does not guarantee
+survival of allocator abort. No whole-state clone, digest-authority fallback or proof acceptance is
+introduced. Root/entry/trace preflights, all invocation modes and replay remain required integration.
+
+
+### PR 05 Advice/code publication refactors validated; live/replay integration next
+
+Commit `94d690f2e` shares ordered advice conflict/budget checks through an exclusive two-lifetime
+prepare/commit guard; drop does not publish, and commit returns no execution error. Commit `b3445530a`
+shares requested-D/local-root/debug preparation between sync/async loaders and preflights advice
+before cache/merge-marker publication. A host answer containing only External(D) now rejects as
+malformed code supply; an earlier external marker cannot hide a later exact local body. Structural
+external references remain supported. Independent production and four/five-test source reviews
+passed. After AC/heavy guards, actual processor lib check still reports exactly six callee() and four
+missing-Exec errors, with no new refactor diagnostic. The nine new tests are authored/unrun, as are
+the eight provider tests. Pinned nightly formatting and whitespace checks pass; no suite pass is
+claimed for this noncompiling intermediate branch.
+
+Next connect real ENTRY/EXEC/root END in shared live/replay transitions. Keep concrete native session
+in live outer drivers, owned pending resolution through waits, and generic transition functions for
+Sparse replay. ENTRY is zero-cycle authentication/reservation, not a fabricated row use. Peek finish
+continuations before pop/tracer start; a real FinishBasicBlock and RootBoundary may expose actual root
+END through only zero-cycle forest restorations. Separate fallible tracer/environment preparation
+from infallible publication; built-in stopper and return/controller errors must preflight, while
+unexpected late custom failures invalidate execution and prohibit success/export/reentry. Reconstruct
+private authenticated records from bounded untrusted replay evidence, not unchecked constructors.
+Commit shared contracts and actual consumers in focused reviewable slices; conditional replay v4,
+all invocation/context modes, later AIR/statement/resource gates and D3 remain required.
+
+
+### PR 05 Shared preparation contracts committed; consumer edits in flight
+
+Commit `967887de5` adds public keyed event/actual-target/global-cycle projection types, owned tracer
+reservations, separate entry preparation/publication, per-cycle preflight and stopper preflight.
+Independent source review passed; a stale trait overview was corrected, and pinned formatting plus
+whitespace checks pass. Required tracer implementations are deliberately migrated next; no compile
+or integration pass is claimed for this contract-only intermediate commit. The last processor check
+preceded this change and retained ten inherited callee/missing-Exec errors.
+
+Execution and tracer owners now implement disjoint real consumers; root owns error wiring and commits.
+Prefer focused control-hash/return/address preflight refactors before committing serialization-coupled
+queues. Do not add transient serializer panics, no-op execution arms or silent replay-v3 field loss.
+Compact occurrence snapshots, lazy path reconstruction and explicit caller wire/peak/work policies
+are the selected replay implementation direction; the exact bounded reader/validation API still
+requires source review. No unchecked authenticated-record constructors or serialized policy override.
+All D3, runtime-mode, replay-v4, actual root-END and later packed/proof acceptance gates remain open.
+
+
+### PR 05 ENTRY/EXEC/replay source integration committed; remaining modes next
+
+Commit `816742996` adds exact root-ID/digest checks for dense/sparse/Arc forests. Its external-first
+shared-digest regression passes, as does core test-inclusive Clippy with `-D warnings`. Commit
+`354880d7a` adds real EXEC/control-hash and checked source/Core trace preflights; `2757c6232` adds
+shared retained EXEC/actual root-END transitions, source restoration and END-frame reservation.
+Reviewed fixes address inherited inline context, pure-path restoration, exact root selection and
+prepublication capacity/type checks. No transition runtime test pass is claimed.
+
+Commit `fe5e06d45` adds explicit trace policies with no default; live peak is trace-owned, native
+limits remain independent. Commit `4cb37ebe9` binds every runnable/resume API to immutable authority,
+authenticates entry before code/advice selection, retains keyed evidence through waits and invalidates
+late failures. Legacy non-keyed async Emit/External cancellation is terminal rather than resumably
+losing a consumed continuation. Actual authenticated entry D supplies legacy ProgramInfo metadata;
+this neither activates the new claim nor grants authority to ProgramInfo/kernel-list metadata.
+
+Commit `b3323e3ad` adds bounded compact replay evidence and native revalidation; `8be2703c1` composes
+staged tracing, strict witness replay v4, explicit-budget readers/writers and validated build/export.
+Independent resource/composition reviews closed fragment placement, stale/cross-queue reservations,
+preallocation storage, repeat-validation revocation, work accounting and post-root replay findings.
+RootBoundary must be bottommost, actual root END must be the final executed row, and only zero-cycle
+forest restorations may remain. This is source-review evidence, not proof/AIR qualification.
+
+After AC/heavy guards, actual default and no-default-features processor lib checks fail only on four
+remaining `callee()` uses in `execution/call.rs`, with no warnings. The first integration check also
+found a streamed Result callsite and three warnings; these were corrected. Pinned formatting and
+whitespace pass. Seventeen provider/advice/loader tests remain authored/unrun; new driver/wire tests
+and old explicit-environment/serde/constructor fixture migrations remain required. In particular,
+old witness/TraceReplay and trace-state serialization tests still call removed unbudgeted APIs.
+Do not restore implicit policy or unchecked fixtures to pass those tests.
+
+Next implement CALL/SYSCALL/DYN/DYNCALL via the same retained bridge and prepared component tokens,
+including exact dynamic peek/consume, fresh/root/shared-context semantics and projected return
+principal. Immediate invocation hashes use K; **dynamic wrapper hashes stay static zero/zero**, while
+dynamic memory reads authenticate K and Resolve selects D (execution spec sections 3.2/5.2). Earlier
+agent shorthand H(mode,K) applied too broadly and is superseded by this distinction. No DynNode
+commitment redesign is selected. All pending PR 05 tests, source ABI, D3 and later packed/proof gates
+remain; PR 05 is still in progress.
+
+
+### PR 05 All invocation modes build; public execution regressions pass
+
+Commit `78adc658f` adds prepared stack/system/memory effects; `7fa01c810` routes all modes through the
+retained authenticated bridge, with full-N syscall authorization before any D lookup (cached too).
+`c22c423ef` composes replay, targeted trace queue reservations and terminal failure handling. Owned
+word-read/pop/context/write/return tokens avoid known fallible rechecks after publication; only
+affected overflow or a required replacement buffer is staged. Native and independent component/bridge
+reviews covered projected root return principal/depth, dynamic pop-before-save conventions and
+once-only read/FMP hooks. Static DYN/DYNCALL commitments remain unchanged.
+
+Dead runtime KernelDescriptor threading was removed after an independent caller audit; legacy
+ProgramInfo/chiplet transport remains pending its planned cutover and grants no native authority.
+ReplayProcessor consumes the existing ExecutionReplay bundle, forwarding its two tracer queues
+without replacement defaults. OpeningError is boxed inside contextual ExecutionError to keep ordinary
+Result size bounded. One targeted large-enum Clippy allowance preserves owned inline fixed-stack
+reservations rather than introducing an unbudgeted heap allocation. Other lints were fixed directly.
+
+After successful AC/heavy guards, actual `cargo check --locked -p miden-processor --lib`, the same
+no-default-features check, and lib Clippy with `-D warnings` pass without warnings. First mode compile
+found four FastProcessor/trait getter-shadowing errors; these were corrected through the shared
+Processor API. The first Clippy run exposed one oversized error variant and mechanical lints; the
+passing run follows their fixes. No failed attempt is counted as passing.
+
+Commits `051cc3274`/`157ff858e` add twelve public-API regressions. They run against the actual processor
+dependency through an uncommitted standalone harness pointing directly at the repository test file;
+there is no substitute VM. The harness uses the normal core arbitrary feature for public test builders
+and a lock derived from this repository; its first missing-feature setup failure was corrected. All
+twelve tests and strict test-target Clippy pass. Coverage includes entry authority/hint override,
+same-D aliases, exact deep kernel namespace and ordinary kernel exports, all context modes/RAM/FMP,
+retry/cancellation ownership, explicit budgets, replay-v4 roundtrip, and bounded keyed self-recursion
+whose entry reserve closes only at actual root END. A direct DynCall-only public entry fixture cannot
+seed RAM: coverage is terminal DYNCALL inside authenticated setup, not a claimed standalone case.
+
+This restores library compilation and supplies native runtime evidence, not proof acceptance or full
+PR 05 completion. The original seventeen host/advice/loader tests and address/state/parallel suites
+still need their normal dev graph, and older context/serde/constructor fixtures need explicit API
+migration. Restore the temporarily restricted environment-aware executable generator and its bounded
+invocation fixture; run required witness/fuzz checks at the recorded dependent stages. External D3
+profile fixtures, private ABI decisions and all later packed/AIR/statement/recursive gates remain.
+
+
+### PR 05 Executable-fixture ownership boundary
+
+The normal `cargo test --locked -p miden-processor --lib environment` attempt, after AC/heavy
+guards, stops in miden-assembly with three remaining keyed-MAST migration errors; it does not run
+processor tests. Record this concrete dev-graph blocker without restoring digest/child-ID adapters.
+
+Restore runtime generation through an `ExecutableForestFixture` that owns the forest, validated
+environment, stable label/key-to-body metadata and root openings. Core keeps processor policies out;
+its environment builder takes explicit caller limits. Synthetic nested namespace and full kernel
+namespace are fixture data, not Protocol defaults. Reuse existing EnvironmentBuilder validation and
+ID remapping; procedure labels/keys remain independent of implementation D. Generate bounded
+acyclic runtime targets with all retained modes and balanced dynamic setup.
+
+A bare MastForest cannot retain that environment. Make bare arbitrary defaults structure-only and
+reject explicit Executable requests with a clear fixture-API migration diagnostic; only the new
+owned fixture strategy carries the complete executable guarantee. Migrate the sole processor
+consumer to serve its openings and execute every root under an explicit descriptor/resource policy.
+This is a breaking testing API change, not a runtime or MASM scope reduction. Coverage must prove
+all modes remain retained and executable, same-D aliases, key stability, remapping and termination.
+Commit fixture implementation, consumer/tests and this boundary separately; do not close PR 05 on
+source generation alone. Existing normal test/assembly and later proof gates remain open.
+
+
+### PR 05 Executable fixture restored; overflow tests migrated
+
+`4bfa6fc94` adds the owned executable core fixture; `15a9a07c0` migrates its processor consumer.
+Every materialized root and invocation alias has a validated binding and actual opening under a
+full nested namespace; IDs are remapped before body commitments are selected. All five modes and
+structural externals execute in bounded acyclic graphs. Bare arbitrary forests now explicitly use
+StructureOnly; they cannot silently discard executable authority. Independent source reviews found
+no actionable issues.
+
+After AC/heavy guards, `cargo test --locked -p miden-core --lib --features arbitrary` passed
+406 tests (one manual seed test ignored); test-inclusive strict core Clippy and the arbitrary-feature
+no-default-features library check passed. The uncommitted runtime harness imports actual processor
+APIs and exact repository test sources: eight host-provider tests and both executable-fixture tests
+passed, including arbitrary canonical 0–16-element stacks and retained-mode coverage. Strict harness
+Clippy passed. These are isolated test results, not a passing normal processor suite.
+
+`d880ef50a` separately migrates overflow restoration tests to prepared tokens. Four exact-source
+tests passed, including stale caller-address rejection at matching frame/element counts without
+mutation; independent review and strict harness Clippy passed. Logs are under
+`.scratch/librarytree/logs/pr05-{executable-fixture-*,overflow-restore-token-*}`. The normal dev-graph
+assembly blocker, remaining advice/loader and legacy witness/context/environment test migrations,
+address/state/parallel/fuzz checks and all D3/packed/proof gates remain open. PR 05 stays in progress.
+
+
+### PR 05 Source-aware retries and explicit witness test migration
+
+`0906c91fe` migrates three fast restoration unit tests to checked component preparations before
+either commit; independent review and formatting passed, normal-graph execution remains deferred.
+`a4ae9b224` adds a shared native single-Mast fixture and five public witness tests; `9d083316a`
+separately migrates nine private continuation/AEAD/precompile mutation cases to bounded replay v4.
+The five public tests passed through actual processor APIs, including identical native AEAD trace
+matrices after byte-stable roundtrip; strict test-target Clippy passed. The nine private cases
+remain unrun behind the known three-error assembly dev-graph blocker.
+
+`2d8a3adf1` adds retained source-aware DYNCALL cancellation and unavailable/malformed-code retries.
+`542b8f9de` separately covers post-entry request exhaustion: requested 2 with limit 1 preserves
+full caller stack/RAM, source ownership and native demand state, then rejects further stepping.
+Independent review's full-memory snapshot finding was addressed. The fixture's explicit advice
+budget was corrected from 8 KiB to 64 KiB after observing the empty provider's 24,480-byte retained
+allocation; no production policy changed. All 14 public execution regressions and strict Clippy
+passed after AC/heavy guards. Logs: `pr05-{keyed-witness-*,source-dyncall-*}` under the scratch log
+directory. Next finish the native five-mode/local-host/source-aware/sync-async matrix and terminal
+late-callback regression; normal test, D3, packed/proof and subsequent stage gates remain open.
+
+
+### PR 05 Native mode/API matrix checkpoint
+
+`2f9394e19` adds the full 40-case native matrix: five invocation modes, local/host-supplied D,
+pure/source-aware execution and sync/async stepping. A local user-call wrapper makes SYSCALL's
+root-context transition observable. Exact operand/overflow restoration, RAM/FMP/principals, source
+owner/graph restoration, one witness per K and ordered native uses/tags are checked. `4ebcb72ee`
+separately verifies a host event error after target publication is terminal without repeated
+callbacks, host requests, state advancement or use publication. Independent review found no
+actionable issue; a missing test trait import was fixed before execution.
+
+After AC/heavy guards all 16 public execution tests passed, including every matrix case, and strict
+all-target harness Clippy passed. Logs: `pr05-native-mode-matrix-*`. PR 05 is
+implemented-awaiting-validation, not complete: normal processor/legacy/parallel/address/state and
+private mutation checks remain deferred through the recorded assembly/trace migrations; fuzz smoke
+is at 16. Keep every PR 05 acceptance gate. Continue the linear stack to PR06; native resolution
+and trace reconstruction do not establish the packed AIR or statement relation.

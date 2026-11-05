@@ -33,6 +33,19 @@ pub struct Memory {
     max_entries: usize,
 }
 
+/// A single checked element update, including its already normalized word address.
+pub(crate) struct PreparedElementWrite {
+    ctx: ContextId,
+    word_addr: u32,
+    index: u8,
+    element: Felt,
+}
+
+/// Fast reads do not mutate RAM; the token captures their already checked value.
+pub(crate) struct PreparedWordRead {
+    word: Word,
+}
+
 impl Default for Memory {
     fn default() -> Self {
         Self::new(ExecutionOptions::DEFAULT_MAX_MEMORY_ELEMENTS)
@@ -78,12 +91,21 @@ impl Memory {
         &self,
         ctx: ContextId,
         addr: Felt,
-        _clk: RowIndex,
+        clk: RowIndex,
     ) -> Result<Word, MemoryError> {
+        self.prepare_word_read(ctx, addr, clk).map(|prepared| prepared.word)
+    }
+
+    fn prepare_word_read(
+        &self,
+        ctx: ContextId,
+        addr: Felt,
+        _clk: RowIndex,
+    ) -> Result<PreparedWordRead, MemoryError> {
         let addr = clean_addr(addr)?;
         let word = self.read_word_impl(ctx, addr)?.unwrap_or(EMPTY_WORD);
 
-        Ok(word)
+        Ok(PreparedWordRead { word })
     }
 
     /// Writes an element to memory at the provided address in the provided context.
@@ -97,10 +119,37 @@ impl Memory {
         addr: Felt,
         element: Felt,
     ) -> Result<(), MemoryError> {
-        let (word_addr, idx) = split_addr(clean_addr(addr)?);
+        let prepared = self.prepare_write_element(ctx, addr, element)?;
+        self.commit_write_element(prepared);
+        Ok(())
+    }
 
-        // Reject writes that would grow the map beyond the configured maximum. Modifying an
-        // existing entry never grows the map, so it is always allowed.
+    fn commit_write_element(&mut self, prepared: PreparedElementWrite) {
+        let PreparedElementWrite { ctx, word_addr, index, element } = prepared;
+
+        self.memory
+            .entry((ctx, word_addr))
+            .and_modify(|word| {
+                let mut result: [Felt; WORD_SIZE];
+                result = (*word).into();
+                result[index as usize] = element;
+                *word = result.into();
+            })
+            .or_insert_with(|| {
+                let mut word = [ZERO; WORD_SIZE];
+                word[index as usize] = element;
+                word.into()
+            });
+    }
+
+    /// Validates a write without inserting or changing a memory word.
+    fn prepare_write_element(
+        &self,
+        ctx: ContextId,
+        addr: Felt,
+        element: Felt,
+    ) -> Result<PreparedElementWrite, MemoryError> {
+        let (word_addr, index) = split_addr(clean_addr(addr)?);
         if !self.memory.contains_key(&(ctx, word_addr)) && self.memory.len() >= self.max_entries {
             return Err(MemoryError::MemoryElementLimitExceeded {
                 ctx,
@@ -108,22 +157,12 @@ impl Memory {
                 max: self.max_element_limit(),
             });
         }
-
-        self.memory
-            .entry((ctx, word_addr))
-            .and_modify(|word| {
-                let mut result: [Felt; WORD_SIZE];
-                result = (*word).into();
-                result[idx as usize] = element;
-                *word = result.into();
-            })
-            .or_insert_with(|| {
-                let mut word = [ZERO; WORD_SIZE];
-                word[idx as usize] = element;
-                word.into()
-            });
-
-        Ok(())
+        Ok(PreparedElementWrite {
+            ctx,
+            word_addr,
+            index: index as u8,
+            element,
+        })
     }
 
     /// Writes a word to memory starting at the provided address in the provided context.
@@ -263,6 +302,43 @@ fn enforce_word_aligned_addr(ctx: ContextId, addr: u32) -> Result<u32, MemoryErr
 }
 
 impl MemoryInterface for Memory {
+    type WordRead = PreparedWordRead;
+    type ElementWrite = PreparedElementWrite;
+
+    fn prepare_word_read(
+        &self,
+        ctx: ContextId,
+        addr: Felt,
+        clk: RowIndex,
+    ) -> Result<Self::WordRead, MemoryError> {
+        Memory::prepare_word_read(self, ctx, addr, clk)
+    }
+
+    fn word_read_value(prepared: &Self::WordRead) -> Word {
+        prepared.word
+    }
+
+    fn commit_word_read(&mut self, prepared: Self::WordRead) -> Word {
+        prepared.word
+    }
+
+    fn peek_word(&self, ctx: ContextId, addr: Felt, clk: RowIndex) -> Result<Word, MemoryError> {
+        Memory::read_word(self, ctx, addr, clk)
+    }
+
+    fn prepare_write_element(
+        &self,
+        ctx: ContextId,
+        addr: Felt,
+        element: Felt,
+    ) -> Result<Self::ElementWrite, MemoryError> {
+        Memory::prepare_write_element(self, ctx, addr, element)
+    }
+
+    fn commit_write_element(&mut self, prepared: Self::ElementWrite) {
+        Memory::commit_write_element(self, prepared);
+    }
+
     fn read_element(&mut self, ctx: ContextId, addr: Felt) -> Result<Felt, MemoryError> {
         Memory::read_element(self, ctx, addr)
     }
@@ -273,7 +349,8 @@ impl MemoryInterface for Memory {
         addr: Felt,
         clk: RowIndex,
     ) -> Result<Word, MemoryError> {
-        Memory::read_word(self, ctx, addr, clk)
+        let prepared = self.prepare_word_read(ctx, addr, clk)?;
+        Ok(self.commit_word_read(prepared))
     }
 
     fn write_element(

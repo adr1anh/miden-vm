@@ -102,6 +102,26 @@ pub struct AdviceProvider {
     max_advice_size_bytes: usize,
 }
 
+/// An advice-map extension validated against an exclusively borrowed provider.
+///
+/// Dropping the extension leaves the provider's contents and byte accounting unchanged.
+#[must_use]
+pub(crate) struct PreparedAdviceMapExtension<'provider, 'map> {
+    provider: &'provider mut AdviceProvider,
+    other: &'map AdviceMap,
+    added: usize,
+}
+
+impl PreparedAdviceMapExtension<'_, '_> {
+    /// Adds the validated missing entries and updates the provider's byte accounting.
+    pub(crate) fn commit(self) {
+        for (key, values) in self.other.iter() {
+            self.provider.map.entry(*key).or_insert_with(|| values.clone());
+        }
+        self.provider.advice_size_bytes += self.added;
+    }
+}
+
 impl Default for AdviceProvider {
     fn default() -> Self {
         Self::empty(&ExecutionOptions::default())
@@ -542,6 +562,18 @@ impl AdviceProvider {
     /// Returns an error if any new entry already exists with the same key but a different value
     /// than the one currently stored. The current map remains unchanged.
     pub fn extend_map(&mut self, other: &AdviceMap) -> Result<(), AdviceError> {
+        self.prepare_extend_map(other)?.commit();
+        Ok(())
+    }
+
+    /// Validates an extension without changing the provider's contents or byte accounting.
+    ///
+    /// The returned guard keeps the provider exclusively borrowed and the source map immutable
+    /// until it is committed or dropped.
+    pub(crate) fn prepare_extend_map<'provider, 'map>(
+        &'provider mut self,
+        other: &'map AdviceMap,
+    ) -> Result<PreparedAdviceMapExtension<'provider, 'map>, AdviceError> {
         let mut added = 0usize;
         for (key, values) in other.iter() {
             if let Some(existing_values) = self.map.get(key) {
@@ -560,15 +592,7 @@ impl AdviceProvider {
         }
         self.check_advice_size_addition(added)?;
 
-        self.map.merge(other).map_err(|((key, prev_values), new_values)| {
-            AdviceError::MapKeyAlreadyPresent {
-                key,
-                prev_values: prev_values.to_vec(),
-                new_values: new_values.to_vec(),
-            }
-        })?;
-        self.advice_size_bytes += added;
-        Ok(())
+        Ok(PreparedAdviceMapExtension { provider: self, other, added })
     }
 
     // MERKLE STORE
@@ -771,6 +795,9 @@ impl AdviceProviderInterface for AdviceProvider {
         self.update_merkle_node(root, depth, index, value).map(|(path, _)| Some(path))
     }
 }
+
+#[cfg(test)]
+mod preparation_tests;
 
 #[cfg(test)]
 mod tests {

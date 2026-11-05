@@ -5,13 +5,13 @@ use alloc::{
     vec,
     vec::Vec,
 };
-use core::{cmp::min, ops::ControlFlow};
+use core::cmp::min;
 
 use miden_air_definitions::vm::trace::RowIndex;
 use miden_core::{
     EMPTY_WORD, Felt, WORD_SIZE, Word, ZERO,
     deferred::{DeferredState, Digest, PrecompileWitness},
-    mast::{ExecutableMastForest, MastForest},
+    mast::MastForest,
     program::{MIN_STACK_DEPTH, Program, StackInputs, StackOutputs},
     utils::range,
 };
@@ -21,8 +21,8 @@ use miden_mast_package::{
 };
 
 use crate::{
-    AdviceInputs, AdviceProvider, ContextId, ExecutionError, ExecutionOptions, LoadedMastForest,
-    ProcessorState,
+    AdviceInputs, AdviceProvider, ContextId, ExecutionEnvironment, ExecutionError,
+    ExecutionOptions, LoadedMastForest, ProcessorState,
     advice::AdviceError,
     continuation_stack::{Continuation, ContinuationStack},
     errors::MapExecErrNoCtx,
@@ -171,12 +171,18 @@ pub struct FastProcessor {
 
     /// Entrypoint source node configured through [`ProgramExecutor`](crate::ProgramExecutor).
     pub(crate) entrypoint_source_node: Option<DebugSourceNodeId>,
+    /// Binds the one owned resume context to this processor across all suspended operations.
+    execution_identity: Option<Arc<()>>,
+    invalid_execution: bool,
 }
 
 impl FastProcessor {
     /// Packages the processor state after successful execution into a public result type.
     #[inline(always)]
     fn into_execution_output(self, stack: StackOutputs) -> Result<ExecutionOutput, ExecutionError> {
+        if self.invalid_execution {
+            return Err(ExecutionError::InvalidExecutionState);
+        }
         let precompile_root = self.deferred_state.root();
         let precompile_witness = self
             .deferred_state
@@ -190,40 +196,6 @@ impl FastProcessor {
             precompile_root,
             precompile_witness,
         })
-    }
-
-    /// Converts the terminal result of a full execution run into [`ExecutionOutput`].
-    #[inline(always)]
-    fn execution_result_from_flow(
-        flow: ControlFlow<BreakReason<Arc<MastForest>>, StackOutputs>,
-        processor: Self,
-    ) -> Result<ExecutionOutput, ExecutionError> {
-        match flow {
-            ControlFlow::Continue(stack_outputs) => processor.into_execution_output(stack_outputs),
-            ControlFlow::Break(break_reason) => match break_reason {
-                BreakReason::Err(err) => Err(err),
-                BreakReason::Stopped(_) => {
-                    unreachable!("Execution never stops prematurely with NeverStopper")
-                },
-            },
-        }
-    }
-
-    /// Converts a testing-only execution result into stack outputs.
-    #[cfg(any(test, feature = "testing"))]
-    #[inline(always)]
-    fn stack_result_from_flow(
-        flow: ControlFlow<BreakReason<Arc<MastForest>>, StackOutputs>,
-    ) -> Result<StackOutputs, ExecutionError> {
-        match flow {
-            ControlFlow::Continue(stack_outputs) => Ok(stack_outputs),
-            ControlFlow::Break(break_reason) => match break_reason {
-                BreakReason::Err(err) => Err(err),
-                BreakReason::Stopped(_) => {
-                    unreachable!("Execution never stops prematurely with NeverStopper")
-                },
-            },
-        }
     }
 
     // CONSTRUCTORS
@@ -320,6 +292,8 @@ impl FastProcessor {
             .map_err(AdviceError::DeferredStateConfigurationFailed)?,
             package_debug_info: None,
             entrypoint_source_node: None,
+            execution_identity: None,
+            invalid_execution: false,
             options,
         })
     }
@@ -331,44 +305,20 @@ impl FastProcessor {
     pub fn get_initial_resume_context_for_package(
         &mut self,
         package: Arc<Package>,
+        environment: ExecutionEnvironment,
     ) -> Result<ResumeContext, ExecutionError> {
         let program = package.unwrap_program();
-        let package_debug_info = package.debug_info()?.map(Arc::new);
-        let current_forest = program.mast_forest().clone();
-        self.advice.extend_map(current_forest.advice_map()).map_exec_err_no_ctx()?;
-
-        let entrypoint_source_node_id = package.entrypoint_source_node();
-        let continuation_stack = if let Some(debug_info) = package_debug_info.as_deref() {
-            Self::source_aware_continuation_stack(&program, debug_info, entrypoint_source_node_id)?
-        } else {
-            ContinuationStack::new(&program)
-        };
-
-        Ok(ResumeContext {
-            current_forest,
-            continuation_stack,
-            kernel: program.kernel().clone(),
-            package_debug_info,
-            inline_call_contexts: Vec::new(),
-        })
+        let debug_info = package.debug_info()?.map(Arc::new);
+        self.new_resume_context(&program, environment, debug_info, package.entrypoint_source_node())
     }
 
     /// Returns the resume context to be used with the first call to `step_sync()`.
     pub fn get_initial_resume_context(
         &mut self,
         program: &Program,
+        environment: ExecutionEnvironment,
     ) -> Result<ResumeContext, ExecutionError> {
-        self.advice
-            .extend_map(program.mast_forest().advice_map())
-            .map_exec_err_no_ctx()?;
-
-        Ok(ResumeContext {
-            current_forest: program.mast_forest().clone(),
-            continuation_stack: ContinuationStack::new(program),
-            kernel: program.kernel().clone(),
-            package_debug_info: None,
-            inline_call_contexts: Vec::new(),
-        })
+        self.new_resume_context(program, environment, None, None)
     }
 
     // ACCESSORS
@@ -606,12 +556,6 @@ impl FastProcessor {
         Ok(())
     }
 
-    fn ensure_stack_capacity_for_top_idx(&mut self, top_idx: usize) {
-        if top_idx >= self.stack.len() {
-            self.grow_stack_buffer(top_idx + 1);
-        }
-    }
-
     fn grow_stack_buffer(&mut self, requested_min_len: usize) {
         // The maximum allocation is tied to the logical operand stack depth, not to the current
         // buffer position. Using `stack_bot_idx` here would make the allocation ceiling drift when
@@ -744,6 +688,39 @@ pub struct NoopTracer;
 impl Tracer for NoopTracer {
     type Processor = FastProcessor;
     type Forest = Arc<MastForest>;
+    type KeyedReservation = ();
+
+    fn prepare_environment(
+        &mut self,
+        _descriptor: &miden_core::program::ExecutionDescriptor,
+        _entry: crate::SessionBinding,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
+    fn commit_environment(&mut self, _reservation: ()) {}
+
+    fn prepare_environment_completion(
+        &mut self,
+        _environment: &ExecutionEnvironment,
+        _session: &crate::ResolutionSession,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
+    fn commit_environment_completion(&mut self, _reservation: ()) {}
+
+    fn prepare_keyed_transition(
+        &mut self,
+        _processor: &FastProcessor,
+        _event: &crate::KeyedEvent,
+        _target: crate::KeyedTarget<'_, Arc<MastForest>>,
+        _projection: crate::CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
+    fn commit_keyed_transition(&mut self, _reservation: (), _event: crate::KeyedEvent) {}
 
     #[inline(always)]
     fn start_clock_cycle(

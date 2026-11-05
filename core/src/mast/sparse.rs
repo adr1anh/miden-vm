@@ -291,6 +291,11 @@ impl ExecutableMastForest for SparseMastForest {
     }
 
     #[inline(always)]
+    fn is_procedure_root_with_exact_digest(&self, node_id: MastNodeId, digest: Word) -> bool {
+        self.roots.contains(&node_id) && self.get_digest_by_id(node_id) == Some(digest)
+    }
+
+    #[inline(always)]
     fn advice_map(&self) -> &AdviceMap {
         &self.advice_map
     }

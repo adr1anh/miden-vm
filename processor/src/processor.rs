@@ -48,6 +48,9 @@ pub(crate) trait Processor: Sized {
 
 /// Trait representing the system state of the processor.
 pub(crate) trait SystemInterface {
+    /// The full saved caller frame retained through return publication.
+    type CallRestore;
+
     // ACCESSORS
     // --------------------------------------------------------------------------------------------
 
@@ -86,13 +89,22 @@ pub(crate) trait SystemInterface {
     // CALL STATE
     // --------------------------------------------------------------------------------------------
 
+    /// Reserves the saved system frame without changing context or principal.
+    fn prepare_save_call_state(&mut self) -> Result<(), ExecutionError>;
+
+    /// Checks and retains the full saved system frame without popping it.
+    fn prepare_restore_call_state(&self) -> Result<Self::CallRestore, OperationError>;
+
+    /// The principal established by committing the saved frame.
+    fn restored_caller_hash(prepared: &Self::CallRestore) -> Word;
+
     /// Saves the current context ID and CALLER_HASH onto an internal call-state stack, so they can
-    /// later be restored by [`SystemInterface::restore_call_state`] when returning from a `call`,
-    /// `syscall` or `dyncall`.
+    /// later be restored by [`SystemInterface::commit_restore_call_state`] when returning from a
+    /// `call`, `syscall` or `dyncall`.
     fn save_call_state(&mut self);
 
-    /// Restores the most recently saved context ID and CALLER_HASH.
-    fn restore_call_state(&mut self) -> Result<(), OperationError>;
+    /// Consumes the prepared caller frame without repeating fallible checks.
+    fn commit_restore_call_state(&mut self, prepared: Self::CallRestore);
 }
 
 // STACK INTERFACE
@@ -105,6 +117,13 @@ pub(crate) trait SystemInterface {
 /// the top element, `stack_get(1)` returns the second element from the top, and so on. The stack is
 /// always at least 16 elements deep.
 pub(crate) trait StackInterface {
+    /// Owned preparation for saving only the affected caller overflow segment.
+    type ContextStart;
+    /// Owned preparation for restoring the saved caller overflow and any replacement buffer.
+    type ContextRestore;
+    /// A checked operand pop retained until a keyed or root-END row commits.
+    type StackPop;
+
     /// Returns the top 16 elements of the stack, such that the top of the stack is at the last
     /// index of the returned slice.
     fn top(&self) -> &[Felt];
@@ -222,18 +241,35 @@ pub(crate) trait StackInterface {
     /// (since the stack size can never be less than 16).
     fn decrement_size(&mut self) -> Result<(), OperationError>;
 
+    /// Checks a pending pop without mutating registers or consuming overflow replay.
+    fn preflight_decrement_size(&self) -> Result<(), OperationError>;
+
+    /// Prepares the exact overflow value needed by a pending pop without consuming it.
+    fn prepare_decrement_size(&self) -> Result<Self::StackPop, OperationError>;
+
+    /// Performs the prepared pop without repeating fallible replay checks.
+    fn commit_decrement_size(&mut self, prepared: Self::StackPop);
+
     // CONTEXT MANAGEMENT
     // --------------------------------------------------------------------------------------------
 
-    /// Starts a new execution context: saves the current overflow stack onto an internal stack of
-    /// saved overflows, and truncates the operand stack to 16 elements in preparation to start a
-    /// new execution context.
-    fn start_context(&mut self);
+    /// Stages the caller overflow after an optional dynamic-address pop, without changing it.
+    fn prepare_start_context(
+        &mut self,
+        drop_top: bool,
+    ) -> Result<Self::ContextStart, ExecutionError>;
 
-    /// Restores the most recently saved overflow stack (popped from the internal stack of saved
-    /// overflows). The operand stack is expected to have exactly 16 elements at the time of this
-    /// call.
-    fn restore_context(&mut self) -> Result<(), OperationError>;
+    /// Saves the prepared overflow after the caller has performed the prepared optional pop.
+    fn commit_start_context(&mut self, prepared: Self::ContextStart);
+
+    /// Checks the return depth and saved frame, staging restoration capacity without popping.
+    fn prepare_restore_context(&self) -> Result<Self::ContextRestore, ExecutionError>;
+
+    /// The operand-stack depth established by committing the saved frame.
+    fn restored_context_depth(prepared: &Self::ContextRestore) -> usize;
+
+    /// Restores the prepared frame, preserving the callee's top sixteen return values.
+    fn commit_restore_context(&mut self, prepared: Self::ContextRestore);
 }
 
 // ADVICE PROVIDER INTERFACE
@@ -295,12 +331,45 @@ pub(crate) trait AdviceProviderInterface {
 
 /// Trait representing the memory subsystem of the processor.
 pub(crate) trait MemoryInterface {
+    /// A checked memory read retained until its row commits.
+    type WordRead;
+    /// A checked element write retained through transition publication.
+    type ElementWrite;
+
     /// Reads an element from memory at the provided address in the provided context.
     fn read_element(&mut self, ctx: ContextId, addr: Felt) -> Result<Felt, MemoryError>;
 
     /// Reads a word from memory starting at the provided address in the provided context.
     fn read_word(&mut self, ctx: ContextId, addr: Felt, clk: RowIndex)
     -> Result<Word, MemoryError>;
+
+    /// Peeks at a word without consuming a replay access or publishing a memory operation.
+    fn peek_word(&self, ctx: ContextId, addr: Felt, clk: RowIndex) -> Result<Word, MemoryError>;
+
+    /// Prepares one exact read without consuming replay evidence.
+    fn prepare_word_read(
+        &self,
+        ctx: ContextId,
+        addr: Felt,
+        clk: RowIndex,
+    ) -> Result<Self::WordRead, MemoryError>;
+
+    /// Returns the captured word without consuming the prepared read.
+    fn word_read_value(prepared: &Self::WordRead) -> Word;
+
+    /// Consumes one prepared read without repeating address or replay checks.
+    fn commit_word_read(&mut self, prepared: Self::WordRead) -> Word;
+
+    /// Checks a pending element write, including address and memory-growth limits.
+    fn prepare_write_element(
+        &self,
+        ctx: ContextId,
+        addr: Felt,
+        element: Felt,
+    ) -> Result<Self::ElementWrite, MemoryError>;
+
+    /// Publishes the checked write without repeating address or resource checks.
+    fn commit_write_element(&mut self, prepared: Self::ElementWrite);
 
     /// Writes an element to memory at the provided address in the provided context.
     fn write_element(

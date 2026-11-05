@@ -1,4 +1,4 @@
-use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 
 use miden_air_definitions::vm::trace::chiplets::hasher::{
     CONTROLLER_ROWS_PER_HASHER_OP, STATE_WIDTH,
@@ -6,12 +6,17 @@ use miden_air_definitions::vm::trace::chiplets::hasher::{
 use miden_core::{
     FMP_ADDR, FMP_INIT_VALUE,
     operations::Operation,
+    program::ProcedureKey,
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
 };
 
 use super::{
     block_stack::{BlockInfo, BlockStack, ExecutionContextInfo},
-    stack::OverflowTable,
+    keyed::{
+        EnvironmentReplay, KeyedReplay, PreparedEnvironmentReplay, PreparedKeyedRecord,
+        ReplayReadBudget, ReplayReadLimits,
+    },
+    stack::{OverflowTable, PreparedOverflowRestore},
     trace_state::{
         AceReplay, AdviceReplay, BitwiseReplay, BlockAddressReplay, BlockStackReplay,
         CoreTraceFragmentContext, CoreTraceState, DecoderState, ExecutionContextReplay,
@@ -22,20 +27,24 @@ use super::{
     utils::split_u32_into_u16,
 };
 use crate::{
-    AceError, ContextId, EMPTY_WORD, ExecutionError, FastProcessor, Felt, MIN_STACK_DEPTH, ONE,
-    RowIndex, Word, ZERO,
+    AceError, ContextId, EMPTY_WORD, EnvironmentTraceLimits, ExecutionEnvironment, ExecutionError,
+    FastProcessor, Felt, MIN_STACK_DEPTH, ONE, ResolutionSession, RowIndex, SessionBinding, Word,
+    ZERO,
     continuation_stack::{Continuation, ContinuationStack},
     crypto::merkle::MerklePath,
     mast::{
-        BasicBlockNode, JoinNode, LoopNode, MastForest, MastForestId, MastNode, MastNodeExt,
-        MastNodeId, SparseMastForest, SparseMastForestBuilder, SplitNode, VisitKind,
+        BasicBlockNode, ExecNode, JoinNode, LoopNode, MastForest, MastForestId, MastNode,
+        MastNodeExt, MastNodeId, SparseMastForest, SparseMastForestBuilder, SplitNode, VisitKind,
     },
     processor::{Processor, StackInterface, SystemInterface},
     trace::chiplets::{
         CircuitEvaluation, PTR_OFFSET_ELEM, PTR_OFFSET_WORD,
         layout::{ControllerRow, LogicalControllerAddress},
     },
-    tracer::{OperationHelperRegisters, Tracer},
+    tracer::{
+        CycleProjection, KeyedEvent, KeyedEventKind, KeyedMode, KeyedTarget,
+        OperationHelperRegisters, Tracer,
+    },
     utils::Idx,
 };
 
@@ -58,6 +67,7 @@ struct StateSnapshot {
 
 #[derive(Debug)]
 pub(crate) struct TraceReplay {
+    pub(crate) environment: EnvironmentReplay,
     /// The list of trace fragment contexts built during execution.
     pub(crate) core_trace_contexts: Vec<CoreTraceFragmentContext>,
 
@@ -91,8 +101,54 @@ pub(crate) struct TraceReplay {
     pub(crate) max_stack_depth: usize,
 }
 
-impl Serializable for TraceReplay {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
+impl TraceReplay {
+    pub(crate) fn validate_export(
+        &self,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<(), DeserializationError> {
+        self.require_validated()
+            .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?;
+        if !self.hasher_for_chiplet.is_buffered() {
+            return Err(DeserializationError::InvalidValue(
+                "streamed hasher replay cannot be exported".into(),
+            ));
+        }
+        let mut bytes = self
+            .environment
+            .retained_bytes()
+            .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?;
+        let mut events = 0usize;
+        for fragment in &self.core_trace_contexts {
+            bytes = bytes
+                .checked_add(
+                    fragment
+                        .replay
+                        .keyed
+                        .retained_bytes()
+                        .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?,
+                )
+                .ok_or_else(|| {
+                    DeserializationError::InvalidValue("keyed export size overflow".into())
+                })?;
+            events = events.checked_add(fragment.replay.keyed.len()).ok_or_else(|| {
+                DeserializationError::InvalidValue("keyed event count overflow".into())
+            })?;
+        }
+        if bytes > trace_limits.max_retained_bytes
+            || bytes > read_limits.max_validation_peak_bytes
+            || events > trace_limits.max_events
+        {
+            return Err(DeserializationError::InvalidValue(
+                "keyed export exceeds caller limits".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn write_payload<W: ByteWriter>(&self, target: &mut W) {
+        target.write_u8(1);
+        self.environment.write_into(target);
         target.write_usize(self.mast_forest_store.len());
         for forest in &self.mast_forest_store {
             forest.write_into(target);
@@ -109,8 +165,21 @@ impl Serializable for TraceReplay {
     }
 }
 
-impl Deserializable for TraceReplay {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+impl TraceReplay {
+    pub(crate) fn read_with_limits<R: ByteReader>(
+        source: &mut R,
+        environment: &ExecutionEnvironment,
+        trace_limits: EnvironmentTraceLimits,
+        read_limits: ReplayReadLimits,
+    ) -> Result<Self, DeserializationError> {
+        if source.read_u8()? != 1 {
+            return Err(DeserializationError::InvalidValue(
+                "missing keyed environment metadata".into(),
+            ));
+        }
+        let mut budget = ReplayReadBudget::new(trace_limits, read_limits);
+        let environment_replay = EnvironmentReplay::read_with_limits(source, &mut budget)
+            .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?;
         let store_len = source.read_usize()?;
         let max_store_len = source.max_alloc(SparseMastForest::min_serialized_size());
         if store_len > max_store_len {
@@ -124,9 +193,24 @@ impl Deserializable for TraceReplay {
             mast_forest_store.push(Arc::new(SparseMastForest::read_from(source)?));
         }
 
-        let context = Self {
+        let fragment_count = source.read_usize()?;
+        if fragment_count > source.max_alloc(CoreTraceFragmentContext::min_serialized_size()) {
+            return Err(DeserializationError::InvalidValue(
+                "trace fragment count exceeds reader bound".into(),
+            ));
+        }
+        let mut core_trace_contexts = Vec::new();
+        core_trace_contexts.try_reserve_exact(fragment_count).map_err(|_| {
+            DeserializationError::InvalidValue("trace fragment allocation failed".into())
+        })?;
+        for _ in 0..fragment_count {
+            core_trace_contexts
+                .push(CoreTraceFragmentContext::read_with_limits(source, &mut budget)?);
+        }
+        let mut context = Self {
+            environment: environment_replay,
             mast_forest_store,
-            core_trace_contexts: Vec::<CoreTraceFragmentContext>::read_from(source)?,
+            core_trace_contexts,
             range_checker_replay: RangeCheckerReplay::read_from(source)?,
             memory_writes: MemoryWritesReplay::read_from(source)?,
             bitwise_replay: BitwiseReplay::read_from(source)?,
@@ -138,7 +222,33 @@ impl Deserializable for TraceReplay {
         };
         validate_trace_generation_context_invariants(&context)?;
         validate_trace_generation_context_forest_ids(&context)?;
+        context
+            .environment
+            .revalidate(
+                environment,
+                &mut context.core_trace_contexts,
+                trace_limits,
+                read_limits,
+                context.fragment_size,
+            )
+            .map_err(|e| DeserializationError::InvalidValue(format!("{e}")))?;
         Ok(context)
+    }
+}
+
+impl TraceReplay {
+    pub(crate) fn require_validated(&self) -> Result<(), ExecutionError> {
+        self.environment.require_validated().map_err(keyed_error)?;
+        for context in &self.core_trace_contexts {
+            context.replay.keyed.require_validated().map_err(keyed_error)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn entry_implementation(
+        &self,
+    ) -> Result<miden_core::program::ImplementationRoot, ExecutionError> {
+        Ok(self.environment.entry().map_err(keyed_error)?.implementation_root())
     }
 }
 
@@ -235,6 +345,21 @@ fn validate_mast_forest_id(
 /// value rather than querying the memory chiplet).
 #[derive(Debug)]
 pub struct ExecutionTracer {
+    trace_limits: EnvironmentTraceLimits,
+    entry: Option<(miden_core::program::ExecutionDescriptor, SessionBinding)>,
+    environment: Option<EnvironmentReplay>,
+    keyed: KeyedReplay,
+    keyed_events: usize,
+    keyed_retained_bytes: usize,
+    validation_work: usize,
+    pending_keyed: Option<(PreparedKeyedRecord, KeyedEvent, Option<KeyedReplay>)>,
+    prepared_keyed_cycle: Option<(KeyedEventKind, ProcedureKey)>,
+    active_keyed_event: Option<KeyedEvent>,
+    prepared_fragment_replays: Option<PreparedFragmentReplays>,
+    keyed_reservation_pending: bool,
+    keyed_invalidated: bool,
+    pending_environment: Option<PreparedEnvironmentReplay>,
+    prepared_snapshot: Option<StateSnapshot>,
     // State stored at the start of a core trace fragment.
     //
     // This field is only set to `None` at initialization, and is populated when starting a new
@@ -282,7 +407,7 @@ pub struct ExecutionTracer {
     /// Pointer identity is sound here because the trace-generation flow never crosses a process
     /// boundary: the tracer builds the store and the replay processor consumes it in the same
     /// run.
-    mast_forest_ids: BTreeMap<*const MastForest, MastForestId>,
+    mast_forest_ids: Vec<(*const MastForest, MastForestId)>,
 
     /// The number of rows per core trace fragment.
     fragment_size: usize,
@@ -291,11 +416,10 @@ pub struct ExecutionTracer {
     /// context.
     max_stack_depth: usize,
 
-    /// Flag set in `start_clock_cycle` when a Call/Syscall/Dyncall END is encountered, consumed
-    /// in `finalize_clock_cycle` to call `overflow_table.restore_context()`. This is deferred to
-    /// `finalize_clock_cycle` because `finalize_clock_cycle` is only called when the operation
-    /// succeeds (i.e., the stack depth check passes).
-    pending_restore_context: bool,
+    /// Caller overflow frame checked before a Call/Syscall/Dyncall END is published.
+    prepared_restore_context: Option<PreparedOverflowRestore>,
+    /// Prepared frame moved here at start and consumed after the VM return commits.
+    pending_restore_context: Option<PreparedOverflowRestore>,
 
     /// Flag set in `start_clock_cycle` when an `EvalCircuit` operation is encountered, consumed
     /// in `finalize_clock_cycle` to record the memory reads performed by the operation.
@@ -303,6 +427,16 @@ pub struct ExecutionTracer {
 
     /// Infallible Tracer hooks report checked address failures at cycle finalization.
     pending_address_error: Option<ExecutionError>,
+}
+
+/// Empty replacement queues reserved for the first row after a fragment drain.
+#[derive(Debug, Default)]
+struct PreparedFragmentReplays {
+    block_addresses: BlockAddressReplay,
+    block_stack: BlockStackReplay,
+    execution_context: ExecutionContextReplay,
+    overflow: StackOverflowReplay,
+    memory_reads: MemoryReadsReplay,
 }
 
 impl ExecutionTracer {
@@ -314,16 +448,39 @@ impl ExecutionTracer {
         fragment_size: usize,
         max_stack_depth: usize,
         hasher_sender: std::sync::mpsc::Sender<crate::trace::ResolvedHasherOp<'static>>,
-    ) -> Self {
-        let mut tracer = Self::new(fragment_size, max_stack_depth);
+        trace_limits: EnvironmentTraceLimits,
+    ) -> Result<Self, ExecutionError> {
+        let mut tracer = Self::new(fragment_size, max_stack_depth, trace_limits)?;
         tracer.hasher_for_chiplet = HasherRequestReplay::streamed(hasher_sender);
-        tracer
+        Ok(tracer)
     }
 
     /// Creates a new `ExecutionTracer` with the given fragment size.
     #[inline(always)]
-    pub fn new(fragment_size: usize, max_stack_depth: usize) -> Self {
-        Self {
+    pub fn new(
+        fragment_size: usize,
+        max_stack_depth: usize,
+        trace_limits: EnvironmentTraceLimits,
+    ) -> Result<Self, ExecutionError> {
+        if fragment_size == 0 || max_stack_depth < MIN_STACK_DEPTH {
+            return Err(ExecutionError::Internal("invalid keyed trace configuration"));
+        }
+        Ok(Self {
+            trace_limits,
+            entry: None,
+            environment: None,
+            keyed: KeyedReplay::default(),
+            keyed_events: 0,
+            keyed_retained_bytes: 0,
+            validation_work: 0,
+            pending_keyed: None,
+            prepared_keyed_cycle: None,
+            active_keyed_event: None,
+            prepared_fragment_replays: None,
+            keyed_reservation_pending: false,
+            keyed_invalidated: false,
+            pending_environment: None,
+            prepared_snapshot: None,
             state_snapshot: None,
             overflow_table: OverflowTable::default(),
             overflow_replay: StackOverflowReplay::default(),
@@ -342,13 +499,14 @@ impl ExecutionTracer {
             external: MastForestResolutionReplay::default(),
             fragment_contexts: Vec::new(),
             mast_forest_builders: Vec::new(),
-            mast_forest_ids: BTreeMap::new(),
+            mast_forest_ids: Vec::new(),
             fragment_size,
             max_stack_depth,
-            pending_restore_context: false,
+            prepared_restore_context: None,
+            pending_restore_context: None,
             is_eval_circuit_op: false,
             pending_address_error: None,
-        }
+        })
     }
 
     /// Returns the [`MastForestId`] of `forest` in [`Self::mast_forest_builders`], creating a new
@@ -356,13 +514,14 @@ impl ExecutionTracer {
     #[inline]
     fn forest_id(&mut self, forest: &Arc<MastForest>) -> MastForestId {
         let key = Arc::as_ptr(forest);
-        if let Some(&id) = self.mast_forest_ids.get(&key) {
-            return id;
-        }
-
+        let position =
+            match self.mast_forest_ids.binary_search_by_key(&key, |(pointer, _)| *pointer) {
+                Ok(position) => return self.mast_forest_ids[position].1,
+                Err(position) => position,
+            };
         let id = MastForestId::from(self.mast_forest_builders.len() as u32);
         self.mast_forest_builders.push(SparseMastForestBuilder::new(forest.clone()));
-        self.mast_forest_ids.insert(key, id);
+        self.mast_forest_ids.insert(position, (key, id));
         id
     }
 
@@ -415,6 +574,10 @@ impl ExecutionTracer {
                 Continuation::FinishLoop(node_id) => Continuation::FinishLoop(node_id),
                 Continuation::FinishCall(id) => Continuation::FinishCall(id),
                 Continuation::FinishDyn(id) => Continuation::FinishDyn(id),
+                Continuation::FinishExec(id) => Continuation::FinishExec(id),
+                Continuation::RootBoundary { implementation, principal } => {
+                    Continuation::RootBoundary { implementation, principal }
+                },
                 Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
                     Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch }
                 },
@@ -431,7 +594,20 @@ impl ExecutionTracer {
     /// Converts the `ExecutionTracer` into a [`TraceReplay`] using the data accumulated during
     /// execution.
     #[inline(always)]
-    pub(crate) fn into_trace_replay(mut self) -> TraceReplay {
+    pub(crate) fn into_trace_replay(mut self) -> Result<TraceReplay, ExecutionError> {
+        if self.pending_keyed.is_some()
+            || self.keyed_reservation_pending
+            || self.keyed_invalidated
+            || self.pending_address_error.is_some()
+            || self.pending_restore_context.is_some()
+            || self.active_keyed_event.is_some()
+            || self.prepared_keyed_cycle.is_some()
+            || self.prepared_restore_context.is_some()
+            || self.prepared_fragment_replays.is_some()
+            || self.prepared_snapshot.is_some()
+        {
+            return Err(ExecutionError::InvalidExecutionState);
+        }
         // If there is an ongoing trace state being built, finish it
         self.finish_current_fragment_context();
 
@@ -444,7 +620,13 @@ impl ExecutionTracer {
             .map(|builder| Arc::new(builder.finalize()))
             .collect();
 
-        TraceReplay {
+        let environment = self.environment.take().ok_or(ExecutionError::InvalidExecutionState)?;
+        environment.require_validated().map_err(keyed_error)?;
+        for fragment in &self.fragment_contexts {
+            fragment.replay.keyed.require_validated().map_err(keyed_error)?;
+        }
+        Ok(TraceReplay {
+            environment,
             core_trace_contexts: self.fragment_contexts,
             mast_forest_store,
             range_checker_replay: self.range_checker,
@@ -455,7 +637,7 @@ impl ExecutionTracer {
             ace_replay: self.ace,
             fragment_size: self.fragment_size,
             max_stack_depth: self.max_stack_depth,
-        }
+        })
     }
 
     // HELPERS
@@ -585,14 +767,18 @@ impl ExecutionTracer {
 
                 None
             },
-            MastNode::Call(node) => {
-                let callee_hash = current_forest
-                    .get_node_by_id(node.callee())
-                    .expect("call node's callee expected to be in the forest")
-                    .digest();
-
+            MastNode::Exec(node) => {
                 self.hasher_for_chiplet.record_hash_control_block(
-                    callee_hash,
+                    node.target().into_word(),
+                    EMPTY_WORD,
+                    ExecNode::DOMAIN,
+                    node.digest(),
+                );
+                None
+            },
+            MastNode::Call(node) => {
+                self.hasher_for_chiplet.record_hash_control_block(
+                    node.target().into_word(),
                     EMPTY_WORD,
                     node.domain(),
                     node.digest(),
@@ -630,7 +816,7 @@ impl ExecutionTracer {
                     // the depth and the overflow address is ZERO — mirroring the same guard
                     // already present in the parallel-tracer path.  See #2813 / PR #2904.
                     let (stack_depth_after_drop, overflow_addr) =
-                        if processor.stack().depth() > MIN_STACK_DEPTH as u32 {
+                        if Processor::stack(processor).depth() > MIN_STACK_DEPTH as u32 {
                             (
                                 processor.stack().depth() - 1,
                                 self.overflow_table.clk_after_pop_in_current_ctx(),
@@ -712,6 +898,7 @@ impl ExecutionTracer {
             let trace_state = CoreTraceFragmentContext {
                 state: snapshot.state,
                 replay: ExecutionReplay {
+                    keyed: core::mem::take(&mut self.keyed),
                     hasher: hasher_replay,
                     block_address: block_addr_replay,
                     memory_reads: memory_reads_replay,
@@ -748,9 +935,516 @@ impl ExecutionTracer {
     }
 }
 
+/// Owned reservations are unpublished until their matching infallible hook consumes them.
+pub struct ExecutionTraceReservation(ExecutionTraceReservationKind);
+
+// Keep the unpublished reservation inline: boxing would introduce a separate allocation outside
+// trace preparation's checked resource reservations. Its bounded stack footprint is deliberate.
+#[allow(clippy::large_enum_variant)]
+enum ExecutionTraceReservationKind {
+    Entry(miden_core::program::ExecutionDescriptor, SessionBinding),
+    Completion,
+    Event {
+        record: PreparedKeyedRecord,
+        forest: Option<(MastForestId, SparseMastForestBuilder)>,
+        queue: Option<KeyedReplay>,
+    },
+}
+
+fn keyed_error(_: super::keyed::KeyedReplayError) -> ExecutionError {
+    ExecutionError::Internal("keyed trace preparation or validation failed")
+}
+
 impl Tracer for ExecutionTracer {
     type Processor = FastProcessor;
     type Forest = Arc<MastForest>;
+    type KeyedReservation = ExecutionTraceReservation;
+
+    fn prepare_environment(
+        &mut self,
+        descriptor: &miden_core::program::ExecutionDescriptor,
+        entry: SessionBinding,
+    ) -> Result<Self::KeyedReservation, ExecutionError> {
+        if self.entry.is_some() || entry.procedure_key() != descriptor.entry_key() {
+            return Err(ExecutionError::InvalidExecutionState);
+        }
+        let bytes = size_of::<miden_core::program::ExecutionDescriptor>()
+            .checked_add(size_of::<SessionBinding>())
+            .ok_or(ExecutionError::InvalidExecutionState)?;
+        if bytes > self.trace_limits.max_retained_bytes
+            || bytes > self.trace_limits.max_prepare_peak_bytes
+        {
+            return Err(ExecutionError::Internal("keyed entry metadata exceeds trace limits"));
+        }
+        Ok(ExecutionTraceReservation(ExecutionTraceReservationKind::Entry(
+            *descriptor,
+            entry,
+        )))
+    }
+
+    fn commit_environment(&mut self, reservation: Self::KeyedReservation) {
+        let ExecutionTraceReservationKind::Entry(descriptor, entry) = reservation.0 else {
+            unreachable!("entry reservation kind");
+        };
+        self.keyed_retained_bytes =
+            size_of::<miden_core::program::ExecutionDescriptor>() + size_of::<SessionBinding>();
+        self.entry = Some((descriptor, entry));
+    }
+
+    fn prepare_environment_completion(
+        &mut self,
+        environment: &ExecutionEnvironment,
+        session: &ResolutionSession,
+    ) -> Result<Self::KeyedReservation, ExecutionError> {
+        if self.keyed_reservation_pending || self.pending_keyed.is_some() || self.keyed_invalidated
+        {
+            return Err(ExecutionError::InvalidExecutionState);
+        }
+        self.pending_environment = None;
+        let (descriptor, entry) = self.entry.ok_or(ExecutionError::InvalidExecutionState)?;
+        if descriptor != environment.descriptor() || self.environment.is_some() {
+            return Err(ExecutionError::InvalidExecutionState);
+        }
+        let staged = EnvironmentReplay::prepare_capture(
+            session,
+            entry,
+            self.trace_limits,
+            self.keyed_retained_bytes,
+            self.keyed_retained_bytes,
+            self.validation_work,
+        )
+        .map_err(keyed_error)?;
+        self.pending_environment = Some(staged);
+        Ok(ExecutionTraceReservation(ExecutionTraceReservationKind::Completion))
+    }
+
+    fn commit_environment_completion(&mut self, reservation: Self::KeyedReservation) {
+        let ExecutionTraceReservationKind::Completion = reservation.0 else {
+            unreachable!("completion reservation kind");
+        };
+        let staged = self.pending_environment.take().expect("prepared environment snapshot");
+        self.keyed_retained_bytes += staged.retained_bytes();
+        self.validation_work = staged.validation_work();
+        self.environment = Some(staged.commit());
+    }
+
+    fn prepare_keyed_transition(
+        &mut self,
+        processor: &FastProcessor,
+        event: &KeyedEvent,
+        target: KeyedTarget<'_, Arc<MastForest>>,
+        projection: CycleProjection,
+    ) -> Result<Self::KeyedReservation, ExecutionError> {
+        if self.pending_keyed.is_some()
+            || self.keyed_reservation_pending
+            || self.keyed_invalidated
+            || event.use_record.row() != projection.row
+            || processor.system().clock() != projection.row
+            || event.use_record.implementation_root() != target.implementation
+            || processor.system().caller_hash() != *event.principal_before.as_word()
+            || target.forest.get_node_by_id(target.root).is_none_or(|node| {
+                node.is_external() || node.digest() != *target.implementation.as_word()
+            })
+            || !target
+                .forest
+                .is_procedure_root_with_exact_digest(target.root, *target.implementation.as_word())
+        {
+            return Err(ExecutionError::Internal(
+                "keyed trace target or row differs from activation",
+            ));
+        }
+        if self.prepared_keyed_cycle != Some((event.kind, event.use_record.procedure_key()))
+            || match event.kind {
+                KeyedEventKind::Invoke(KeyedMode::Call | KeyedMode::DynCall) => {
+                    event.principal_after != event.use_record.procedure_key()
+                },
+                KeyedEventKind::Invoke(_) => event.principal_before != event.principal_after,
+                KeyedEventKind::RootEnd => {
+                    Some(event.principal_after)
+                        != self.prepared_keyed_cycle.map(|(_, principal)| principal)
+                },
+            }
+        {
+            return Err(ExecutionError::Internal("keyed event differs from actual trace mode"));
+        }
+        if matches!(event.kind, KeyedEventKind::RootEnd) != self.pending_environment.is_some() {
+            return Err(ExecutionError::InvalidExecutionState);
+        }
+        let existing_forest = self
+            .mast_forest_ids
+            .binary_search_by_key(&Arc::as_ptr(target.forest), |(pointer, _)| *pointer)
+            .ok()
+            .map(|position| self.mast_forest_ids[position].1);
+        let (forest, staged_forest) = if let Some(id) = existing_forest {
+            (id, None)
+        } else {
+            let id = u32::try_from(self.mast_forest_builders.len())
+                .map(MastForestId::from)
+                .map_err(|_| ExecutionError::Internal("MAST forest ID exhausted"))?;
+            self.mast_forest_builders
+                .try_reserve(1)
+                .map_err(|_| ExecutionError::Internal("forest builder allocation failed"))?;
+            self.mast_forest_ids
+                .try_reserve(1)
+                .map_err(|_| ExecutionError::Internal("forest index allocation failed"))?;
+            (id, Some((id, SparseMastForestBuilder::new(target.forest.clone()))))
+        };
+        let staged_bytes = self.pending_environment.as_ref().map_or(0, |p| p.retained_bytes());
+        let total_bytes = self
+            .keyed_retained_bytes
+            .checked_add(staged_bytes)
+            .ok_or(ExecutionError::InvalidExecutionState)?;
+        let mut prospective_queue = projection
+            .row
+            .as_usize()
+            .is_multiple_of(self.fragment_size)
+            .then(KeyedReplay::default);
+        let queue = prospective_queue.as_mut().unwrap_or(&mut self.keyed);
+        let reservation = queue
+            .prepare_record(
+                *event,
+                forest,
+                target.root,
+                self.trace_limits,
+                self.keyed_events,
+                total_bytes,
+            )
+            .map_err(keyed_error)?;
+        reservation.check_queue(queue).map_err(keyed_error)?;
+        self.keyed_reservation_pending = true;
+        Ok(ExecutionTraceReservation(ExecutionTraceReservationKind::Event {
+            record: reservation,
+            forest: staged_forest,
+            queue: prospective_queue,
+        }))
+    }
+
+    fn commit_keyed_transition(&mut self, reservation: Self::KeyedReservation, event: KeyedEvent) {
+        let ExecutionTraceReservationKind::Event { record, forest, queue } = reservation.0 else {
+            unreachable!("event reservation kind");
+        };
+        if !self.keyed_reservation_pending
+            || self.pending_keyed.is_some()
+            || record.check_queue(queue.as_ref().unwrap_or(&self.keyed)).is_err()
+        {
+            self.keyed_invalidated = true;
+            self.keyed_reservation_pending = false;
+            return;
+        }
+        self.keyed_reservation_pending = false;
+        if let Some((id, builder)) = forest {
+            let pointer = Arc::as_ptr(builder.source());
+            let position = self
+                .mast_forest_ids
+                .binary_search_by_key(&pointer, |(pointer, _)| *pointer)
+                .expect_err("prepared forest is absent until commit");
+            self.mast_forest_ids.insert(position, (pointer, id));
+            self.mast_forest_builders.push(builder);
+        }
+        self.keyed_events = record.event_count();
+        self.keyed_retained_bytes += record.retained_bytes_delta();
+        self.pending_keyed = Some((record, event, queue));
+    }
+
+    fn prepare_clock_cycle(
+        &mut self,
+        processor: &FastProcessor,
+        continuation: &Continuation<Arc<MastForest>>,
+        continuation_stack: &ContinuationStack<Arc<MastForest>>,
+        current_forest: &Arc<MastForest>,
+        projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        if projection.row != processor.system().clock()
+            || projection.row.as_usize().checked_add(1) != Some(projection.next_clock.as_usize())
+        {
+            return Err(ExecutionError::Internal("trace cycle projection does not match clock"));
+        }
+        if self.fragment_size == 0 {
+            return Err(ExecutionError::Internal("trace fragment size must be non-zero"));
+        }
+        if self.keyed_invalidated
+            || self.keyed_reservation_pending
+            || self.pending_keyed.is_some()
+            || self.pending_address_error.is_some()
+            || self.pending_restore_context.is_some()
+            || self.active_keyed_event.is_some()
+        {
+            return Err(ExecutionError::Internal("previous trace cycle was not finalized"));
+        }
+        let mut prepared_keyed_cycle = None;
+        let mut prepared_restore_context = None;
+        let mut prepared_fragment_replays = projection
+            .row
+            .as_usize()
+            .is_multiple_of(self.fragment_size)
+            .then(PreparedFragmentReplays::default);
+        if projection.row.as_usize().is_multiple_of(self.fragment_size) {
+            self.fragment_contexts
+                .try_reserve(1)
+                .map_err(|_| ExecutionError::Internal("trace fragment allocation failed"))?;
+        }
+        if matches!(continuation, Continuation::FinishLoop(_))
+            && Processor::stack(processor).depth() > MIN_STACK_DEPTH as u32
+        {
+            prepared_fragment_replays
+                .as_mut()
+                .map(|replays| &mut replays.overflow)
+                .unwrap_or(&mut self.overflow_replay)
+                .prepare_record_pop()?;
+        }
+        match continuation {
+            Continuation::StartNode(node_id) => {
+                let node = current_forest
+                    .get_node_by_id(*node_id)
+                    .ok_or(ExecutionError::Internal("trace start node is missing"))?;
+                if matches!(node, MastNode::External(_)) {
+                    return Err(ExecutionError::Internal("external trace node was not resolved"));
+                }
+                let mut missing_child = false;
+                node.for_each_child(|child| {
+                    missing_child |= current_forest.get_node_by_id(child).is_none();
+                });
+                if missing_child {
+                    return Err(ExecutionError::Internal("trace control child is missing"));
+                }
+                let count = match node {
+                    MastNode::Block(block) => {
+                        if block.op_batches().is_empty() {
+                            return Err(ExecutionError::Internal(
+                                "trace basic block has no batches",
+                            ));
+                        }
+                        block.num_op_batches()
+                    },
+                    _ => 1,
+                };
+                self.hasher_chiplet_shim.preflight_rows(count, CONTROLLER_ROWS_PER_HASHER_OP)?;
+                self.block_stack.prepare_push()?;
+                let mode_and_key = match node {
+                    MastNode::Exec(node) => Some((KeyedMode::Exec, node.target())),
+                    MastNode::Call(node) => Some((
+                        if node.is_syscall() {
+                            KeyedMode::Syscall
+                        } else {
+                            KeyedMode::Call
+                        },
+                        node.target(),
+                    )),
+                    MastNode::Dyn(node) => {
+                        let word = processor
+                            .memory()
+                            .read_word(
+                                processor.system().ctx(),
+                                processor.stack_get(0),
+                                projection.row,
+                            )
+                            .map_err(ExecutionError::MemoryErrorNoCtx)?;
+                        Some((
+                            if node.is_dyncall() {
+                                KeyedMode::DynCall
+                            } else {
+                                KeyedMode::Dyn
+                            },
+                            ProcedureKey::new(word),
+                        ))
+                    },
+                    _ => None,
+                };
+                if let Some((mode, key)) = mode_and_key {
+                    prepared_keyed_cycle = Some((KeyedEventKind::Invoke(mode), key));
+                    prepared_fragment_replays
+                        .as_mut()
+                        .map(|replays| &mut replays.block_addresses)
+                        .unwrap_or(&mut self.hasher_chiplet_shim.block_addr_replay)
+                        .prepare_record()?;
+                    self.hasher_for_chiplet.prepare_record_control_block()?;
+                    prepared_fragment_replays
+                        .as_mut()
+                        .map(|replays| &mut replays.block_stack)
+                        .unwrap_or(&mut self.block_stack_replay)
+                        .prepare_record_start()?;
+                    if matches!(mode, KeyedMode::Call | KeyedMode::Syscall | KeyedMode::DynCall) {
+                        self.overflow_table.prepare_start_context()?;
+                    }
+                    if matches!(mode, KeyedMode::Dyn | KeyedMode::DynCall) {
+                        prepared_fragment_replays
+                            .as_mut()
+                            .map(|replays| &mut replays.memory_reads)
+                            .unwrap_or(&mut self.memory_reads)
+                            .prepare_record_read_word()?;
+                        if Processor::stack(processor).depth() > MIN_STACK_DEPTH as u32 {
+                            prepared_fragment_replays
+                                .as_mut()
+                                .map(|replays| &mut replays.overflow)
+                                .unwrap_or(&mut self.overflow_replay)
+                                .prepare_record_pop()?;
+                        }
+                    }
+                    if matches!(mode, KeyedMode::Call | KeyedMode::DynCall) {
+                        self.memory_writes.prepare_record_write_element()?;
+                    }
+                }
+            },
+            Continuation::Respan { .. } => {
+                self.block_stack
+                    .prepare_pop()?
+                    .addr
+                    .checked_advance(CONTROLLER_ROWS_PER_HASHER_OP)?;
+            },
+            Continuation::FinishLoop(_) if processor.stack_get(0) == ONE => {},
+            Continuation::FinishJoin(_)
+            | Continuation::FinishSplit(_)
+            | Continuation::FinishLoop(_)
+            | Continuation::FinishCall(_)
+            | Continuation::FinishDyn(_)
+            | Continuation::FinishExec(_)
+            | Continuation::FinishBasicBlock(_) => {
+                if self.block_stack.prepare_pop()?.ctx_info.is_some() {
+                    prepared_restore_context =
+                        Some(self.overflow_table.prepare_restore_context().map_err(|_| {
+                            ExecutionError::Internal("trace overflow context cannot be restored")
+                        })?);
+                    prepared_fragment_replays
+                        .as_mut()
+                        .map(|replays| &mut replays.execution_context)
+                        .unwrap_or(&mut self.execution_context_replay)
+                        .prepare_record()?;
+                    prepared_fragment_replays
+                        .as_mut()
+                        .map(|replays| &mut replays.overflow)
+                        .unwrap_or(&mut self.overflow_replay)
+                        .prepare_record_restore()?;
+                }
+                prepared_fragment_replays
+                    .as_mut()
+                    .map(|replays| &mut replays.block_stack)
+                    .unwrap_or(&mut self.block_stack_replay)
+                    .prepare_record_end()?;
+            },
+            Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
+                let block = current_forest
+                    .get_node_by_id(*node_id)
+                    .and_then(|node| match node {
+                        MastNode::Block(block) => Some(block),
+                        _ => None,
+                    })
+                    .ok_or(ExecutionError::Internal("trace basic block is missing"))?;
+                let op = block
+                    .op_batches()
+                    .get(*batch_index)
+                    .and_then(|batch| batch.ops().get(*op_idx_in_batch))
+                    .ok_or(ExecutionError::Internal("trace operation index is out of bounds"))?;
+                let rows = match op {
+                    Operation::Compress | Operation::LogDeferred => 1,
+                    Operation::MpVerify(_) => usize::try_from(
+                        processor.stack_get(4).as_canonical_u64(),
+                    )
+                    .map_err(|_| ExecutionError::Internal("Merkle depth is out of bounds"))?,
+                    Operation::MrUpdate => {
+                        usize::try_from(processor.stack_get(4).as_canonical_u64())
+                            .ok()
+                            .and_then(|depth| depth.checked_mul(2))
+                            .ok_or(ExecutionError::Internal("Merkle depth is out of bounds"))?
+                    },
+                    _ => 0,
+                };
+                self.hasher_chiplet_shim.preflight_rows(rows, CONTROLLER_ROWS_PER_HASHER_OP)?;
+            },
+            Continuation::EnterForest { .. } | Continuation::RootBoundary { .. } => {
+                return Err(ExecutionError::Internal("zero-cycle continuation cannot be traced"));
+            },
+        }
+        if matches!(
+            continuation,
+            Continuation::FinishBasicBlock(_)
+                | Continuation::FinishJoin(_)
+                | Continuation::FinishSplit(_)
+                | Continuation::FinishExec(_)
+                | Continuation::FinishLoop(_)
+                | Continuation::FinishCall(_)
+                | Continuation::FinishDyn(_)
+        ) && !matches!(continuation, Continuation::FinishLoop(_)
+            if processor.stack_get(0) == ONE)
+            && let Some((_, principal)) = continuation_stack.root_boundary_after_next()
+        {
+            prepared_keyed_cycle = Some((KeyedEventKind::RootEnd, principal));
+        }
+        if projection.row.as_usize().is_multiple_of(self.fragment_size)
+            && (matches!(continuation, Continuation::StartNode(id)
+                if matches!(current_forest.get_node_by_id(*id),
+                    Some(MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_))))
+                || continuation_stack.root_boundary_after_next().is_some())
+        {
+            self.prepared_snapshot = None;
+            let mut translated = ContinuationStack::default();
+            translated.prepare_push(continuation_stack.len())?;
+            for (continuation, _) in continuation_stack.iter_with_source_node_ids() {
+                let continuation = match continuation {
+                    Continuation::EnterForest {
+                        forest,
+                        package_debug_info,
+                        inline_context_depth,
+                    } => Continuation::EnterForest {
+                        forest: self.forest_id(forest),
+                        package_debug_info: package_debug_info.clone(),
+                        inline_context_depth: *inline_context_depth,
+                    },
+                    Continuation::StartNode(id) => Continuation::StartNode(*id),
+                    Continuation::FinishJoin(id) => Continuation::FinishJoin(*id),
+                    Continuation::FinishSplit(id) => Continuation::FinishSplit(*id),
+                    Continuation::FinishLoop(id) => Continuation::FinishLoop(*id),
+                    Continuation::FinishCall(id) => Continuation::FinishCall(*id),
+                    Continuation::FinishDyn(id) => Continuation::FinishDyn(*id),
+                    Continuation::FinishExec(id) => Continuation::FinishExec(*id),
+                    Continuation::FinishBasicBlock(id) => Continuation::FinishBasicBlock(*id),
+                    Continuation::RootBoundary { implementation, principal } => {
+                        Continuation::RootBoundary {
+                            implementation: *implementation,
+                            principal: *principal,
+                        }
+                    },
+                    Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
+                        Continuation::ResumeBasicBlock {
+                            node_id: *node_id,
+                            batch_index: *batch_index,
+                            op_idx_in_batch: *op_idx_in_batch,
+                        }
+                    },
+                    Continuation::Respan { node_id, batch_index } => Continuation::Respan {
+                        node_id: *node_id,
+                        batch_index: *batch_index,
+                    },
+                };
+                translated.push_continuation(continuation);
+            }
+            let (current_addr, parent_addr) = if self.block_stack.is_empty() {
+                (LogicalControllerAddress::ABSENT, LogicalControllerAddress::ABSENT)
+            } else {
+                let block = self.block_stack.peek();
+                (block.addr, block.parent_addr)
+            };
+            self.prepared_snapshot = Some(StateSnapshot {
+                state: CoreTraceState {
+                    system: SystemState::from_processor(processor),
+                    decoder: DecoderState { current_addr, parent_addr },
+                    stack: StackState::new(
+                        processor
+                            .stack_top()
+                            .try_into()
+                            .map_err(|_| ExecutionError::Internal("invalid stack top width"))?,
+                        MIN_STACK_DEPTH + self.overflow_table.num_elements_in_current_ctx(),
+                        self.overflow_table.last_update_clk_in_current_ctx(),
+                    ),
+                },
+                continuation_stack: translated,
+                initial_mast_forest_id: self.forest_id(current_forest),
+            });
+        }
+        self.prepared_keyed_cycle = prepared_keyed_cycle;
+        self.prepared_restore_context = prepared_restore_context;
+        self.prepared_fragment_replays = prepared_fragment_replays;
+        Ok(())
+    }
 
     /// When sufficiently many clock cycles have elapsed, starts a new trace state. Also updates the
     /// internal block stack.
@@ -762,18 +1456,60 @@ impl Tracer for ExecutionTracer {
         continuation_stack: &ContinuationStack<Arc<MastForest>>,
         current_forest: &Arc<MastForest>,
     ) {
+        if matches!(&continuation, Continuation::StartNode(id)
+            if matches!(current_forest.get_node_by_id(*id),
+                Some(MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_))))
+            && self.pending_keyed.is_none()
+        {
+            self.keyed_invalidated = true;
+            return;
+        }
         // check if we need to start a new trace state
         if processor.system().clock().as_usize().is_multiple_of(self.fragment_size) {
-            self.start_new_fragment_context(
-                SystemState::from_processor(processor),
-                processor
-                    .stack_top()
-                    .try_into()
-                    .expect("stack_top expected to be MIN_STACK_DEPTH elements"),
-                continuation_stack.clone(),
-                continuation.clone(),
-                current_forest.clone(),
-            );
+            if self.prepared_snapshot.is_some() {
+                self.finish_current_fragment_context();
+                self.state_snapshot = self.prepared_snapshot.take();
+            } else {
+                self.start_new_fragment_context(
+                    SystemState::from_processor(processor),
+                    processor
+                        .stack_top()
+                        .try_into()
+                        .expect("stack_top expected to be MIN_STACK_DEPTH elements"),
+                    continuation_stack.clone(),
+                    continuation.clone(),
+                    current_forest.clone(),
+                );
+            }
+            if let Some(replays) = self.prepared_fragment_replays.take() {
+                self.hasher_chiplet_shim.block_addr_replay = replays.block_addresses;
+                self.block_stack_replay = replays.block_stack;
+                self.execution_context_replay = replays.execution_context;
+                self.overflow_replay = replays.overflow;
+                self.memory_reads = replays.memory_reads;
+            }
+        }
+
+        let expected_keyed = self.prepared_keyed_cycle.take();
+        let pending_keyed = self.pending_keyed.take();
+        if expected_keyed.is_some() != pending_keyed.is_some() {
+            self.keyed_invalidated = true;
+            return;
+        }
+        if let Some((record, event, queue)) = pending_keyed {
+            if expected_keyed != Some((event.kind, event.use_record.procedure_key()))
+                || event.use_record.row() != processor.system().clock()
+                || *event.principal_before.as_word() != processor.system().caller_hash()
+            {
+                self.keyed_invalidated = true;
+                return;
+            }
+            if let Some(queue) = queue {
+                self.keyed = queue;
+            }
+            record.commit(&mut self.keyed);
+            self.keyed_invalidated |= self.keyed.is_invalidated();
+            self.active_keyed_event = Some(event);
         }
 
         // Record that the node being executed at this cycle was visited inside `current_forest`.
@@ -802,7 +1538,7 @@ impl Tracer for ExecutionTracer {
                 }
             },
             Continuation::StartNode(mast_node_id) => match &current_forest[mast_node_id] {
-                MastNode::Join(_) | MastNode::Loop(_) => {
+                MastNode::Join(_) | MastNode::Loop(_) | MastNode::Exec(_) => {
                     self.record_control_node_start(
                         &current_forest[mast_node_id],
                         processor,
@@ -878,6 +1614,7 @@ impl Tracer for ExecutionTracer {
             | Continuation::FinishSplit(_)
             | Continuation::FinishCall(_)
             | Continuation::FinishDyn(_)
+            | Continuation::FinishExec(_)
             | Continuation::FinishLoop(_) // not a REPEAT, which is handled separately above
             | Continuation::FinishBasicBlock(_) => {
                 // The END of a loop drops the condition from the stack (the body always pushes it).
@@ -898,10 +1635,13 @@ impl Tracer for ExecutionTracer {
                         parent_fn_hash: ctx_info.parent_fn_hash,
                     });
 
-                    self.pending_restore_context = true;
+                    self.pending_restore_context = self.prepared_restore_context.take();
+                    if self.pending_restore_context.is_none() {
+                        self.keyed_invalidated = true;
+                    }
                 }
             },
-            Continuation::EnterForest { .. } => {
+            Continuation::EnterForest { .. } | Continuation::RootBoundary { .. } => {
                 panic!("EnterForest continuations are guaranteed not to be passed here")
             },
         }
@@ -1178,26 +1918,32 @@ impl Tracer for ExecutionTracer {
         _op_helper_registers: OperationHelperRegisters,
         _current_forest: &Arc<MastForest>,
     ) -> Result<(), ExecutionError> {
+        if self.keyed_invalidated || self.keyed.is_invalidated() {
+            self.keyed_invalidated = true;
+            return Err(ExecutionError::InvalidExecutionState);
+        }
         if let Some(error) = self.pending_address_error.take() {
+            self.keyed_invalidated = true;
             return Err(error);
         }
-        // Restore the overflow table context for Call/Syscall/Dyncall END. This is deferred
-        // from start_clock_cycle because finalize_clock_cycle is only called when the operation
-        // succeeds (i.e., the stack depth check in processor.restore_context() passes).
-        if self.pending_restore_context {
+        if let Some(event) = self.active_keyed_event.take()
+            && processor.system().caller_hash() != *event.principal_after.as_word()
+        {
+            self.keyed_invalidated = true;
+            return Err(ExecutionError::InvalidExecutionState);
+        }
+        // Restore the checked overflow frame only after the prepared VM return commits.
+        if let Some(prepared) = self.pending_restore_context.take() {
             // Restore context for call/syscall/dyncall: pop the current context's
             // (empty) overflow stack and restore the previous context's overflow state.
-            self.overflow_table.restore_context().map_err(|_| {
-                ExecutionError::Internal(
-                    "overflow table restore_context failed during trace finalization",
-                )
-            })?;
+            if !self.overflow_table.commit_restore_context(prepared) {
+                self.keyed_invalidated = true;
+                return Err(ExecutionError::InvalidExecutionState);
+            }
             self.overflow_replay.record_restore_context_overflow_addr(
                 MIN_STACK_DEPTH + self.overflow_table.num_elements_in_current_ctx(),
                 self.overflow_table.last_update_clk_in_current_ctx(),
             );
-
-            self.pending_restore_context = false;
         }
 
         // Record all memory reads performed during EvalCircuit operations. We run this in
@@ -1250,12 +1996,13 @@ fn node_id_for_visit<F>(continuation: &Continuation<F>) -> Option<MastNodeId> {
         | Continuation::FinishSplit(id)
         | Continuation::FinishCall(id)
         | Continuation::FinishDyn(id)
+        | Continuation::FinishExec(id)
         | Continuation::FinishBasicBlock(id) => Some(id),
         Continuation::FinishLoop(id) => Some(id),
         Continuation::ResumeBasicBlock { node_id, .. } | Continuation::Respan { node_id, .. } => {
             Some(node_id)
         },
-        Continuation::EnterForest { .. } => None,
+        Continuation::EnterForest { .. } | Continuation::RootBoundary { .. } => None,
     }
 }
 
@@ -1285,6 +2032,11 @@ impl HasherChipletShim {
             hasher_replay: HasherResponseReplay::default(),
             block_addr_replay: BlockAddressReplay::default(),
         }
+    }
+
+    fn preflight_rows(&self, count: usize, rows_per_item: usize) -> Result<(), ExecutionError> {
+        self.next_row.checked_advance_many(count, rows_per_item)?;
+        Ok(())
     }
 
     /// Records the address returned from a call to `Hasher::hash_control_block()`.

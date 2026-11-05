@@ -1,8 +1,10 @@
+use alloc::{vec, vec::Vec};
+
 use miden_air_definitions::vm::trace::RowIndex;
 use miden_utils_indexing::IndexVec;
 
 use super::{Felt, ZERO};
-use crate::operation::OperationError;
+use crate::{ExecutionError, operation::OperationError};
 
 // OVERFLOW TABLE
 // ================================================================================================
@@ -25,7 +27,6 @@ impl OverflowStackEntry {
         self.value
     }
 }
-
 /// Represents an overflow stack at a given context.
 #[derive(Debug, Default, Clone)]
 struct OverflowStack {
@@ -82,7 +83,15 @@ impl OverflowStack {
 /// called whenever the clock cycle is incremented globally.
 #[derive(Debug, Clone)]
 pub struct OverflowTable {
-    overflow: IndexVec<RowIndex, OverflowStack>,
+    overflow: Vec<OverflowStack>,
+}
+
+/// The exact empty child frame and caller metadata checked before an END is published.
+#[derive(Debug)]
+pub(crate) struct PreparedOverflowRestore {
+    context_count: usize,
+    parent_elements: usize,
+    parent_addr: Felt,
 }
 
 impl OverflowTable {
@@ -91,8 +100,7 @@ impl OverflowTable {
     /// If `save_history` is set to true, the table will keep track of the history of the overflow
     /// table at every clock cycle. This is used for debugging purposes.
     pub fn new() -> Self {
-        let mut overflow = IndexVec::new();
-        let _ = overflow.push(OverflowStack::new()); // discard returned index
+        let overflow = vec![OverflowStack::new()];
 
         Self { overflow }
     }
@@ -167,15 +175,25 @@ impl OverflowTable {
     /// Note: It is possible to return to context 0 with a syscall; in this case, each instantiation
     /// of context 0 will get a separate overflow table.
     pub fn start_context(&mut self) {
-        let _ = self.overflow.push(OverflowStack::new()); // discard returned index
+        self.overflow.push(OverflowStack::new());
     }
 
-    /// Restores the specified context.
+    /// Reserves the new caller frame before the VM or replay queues publish an invocation.
+    pub(crate) fn prepare_start_context(&mut self) -> Result<(), ExecutionError> {
+        if self.overflow.len() >= u32::MAX as usize {
+            return Err(ExecutionError::Internal("trace overflow context count exhausted"));
+        }
+        self.overflow
+            .try_reserve(1)
+            .map_err(|_| ExecutionError::Internal("trace overflow context allocation failed"))
+    }
+
+    /// Checks restoration of the previous context without consuming either stack.
     ///
     /// Returns an error if the overflow table has no stacks (i.e. there is no current context)
     /// or if the overflow stack for the current context is not empty (i.e. the caller should
     /// have drained it before calling this function).
-    pub fn restore_context(&mut self) -> Result<(), OperationError> {
+    fn preflight_restore_context(&self) -> Result<(), OperationError> {
         let len = self.overflow.len();
 
         if len <= 1 {
@@ -191,8 +209,37 @@ impl OverflowTable {
             ));
         }
 
-        self.overflow.swap_remove(len - 1);
         Ok(())
+    }
+
+    /// Retains the exact caller frame checked before either the VM or tracer restores it.
+    pub(crate) fn prepare_restore_context(
+        &self,
+    ) -> Result<PreparedOverflowRestore, OperationError> {
+        self.preflight_restore_context()?;
+        let parent = &self.overflow[self.overflow.len() - 2];
+        Ok(PreparedOverflowRestore {
+            context_count: self.overflow.len(),
+            parent_elements: parent.num_elements(),
+            parent_addr: parent.last().map_or(ZERO, |entry| Felt::from(entry.clk)),
+        })
+    }
+
+    /// Commits only the retained frame. A stale token is terminal to the owning tracer.
+    pub(crate) fn commit_restore_context(&mut self, prepared: PreparedOverflowRestore) -> bool {
+        if self.overflow.len() != prepared.context_count
+            || self.overflow.last().is_none_or(|child| !child.is_empty())
+        {
+            return false;
+        }
+        let parent = &self.overflow[self.overflow.len() - 2];
+        if parent.num_elements() != prepared.parent_elements
+            || parent.last().map_or(ZERO, |entry| Felt::from(entry.clk)) != prepared.parent_addr
+        {
+            return false;
+        }
+        self.overflow.pop();
+        true
     }
 
     // HELPERS
@@ -217,7 +264,7 @@ impl OverflowTable {
                 "the current context should always have an overflow stack initialized",
             ));
         }
-        Ok(&mut self.overflow[RowIndex::from(len - 1)])
+        Ok(&mut self.overflow[len - 1])
     }
 }
 
@@ -235,11 +282,12 @@ mod tests {
 
     #[test]
     fn restore_context_rejects_root_only_table() {
-        let mut table = OverflowTable::new();
+        let table = OverflowTable::new();
         // Table has only the root stack (len == 1), restore should fail.
-        let result = table.restore_context();
-        assert!(result.is_err(), "restore_context should reject root-only table");
+        let result = table.prepare_restore_context();
+        assert!(result.is_err(), "prepare_restore_context should reject root-only table");
         // Table should be unchanged: still has 1 stack.
+        assert_eq!(table.overflow.len(), 1);
         assert_eq!(table.num_elements_in_current_ctx(), 0);
     }
 
@@ -249,10 +297,13 @@ mod tests {
         table.start_context();
         table.push(Felt::new(42).unwrap(), RowIndex::from(1));
         // Child stack is not empty, restore should fail.
-        let result = table.restore_context();
-        assert!(result.is_err(), "restore_context should reject non-empty child stack");
+        let result = table.prepare_restore_context();
+        assert!(result.is_err(), "prepare_restore_context should reject non-empty child stack");
         // Table should be unchanged: child stack still has 1 element.
+        assert_eq!(table.overflow.len(), 2);
         assert_eq!(table.num_elements_in_current_ctx(), 1);
+        assert_eq!(table.last_update_clk_in_current_ctx(), Felt::new(1).unwrap());
+        assert_eq!(table.overflow[1].last().unwrap().value(), Felt::new(42).unwrap());
     }
 
     #[test]
@@ -260,13 +311,42 @@ mod tests {
         let mut table = OverflowTable::new();
         table.start_context();
         // Child stack is empty, restore should succeed.
-        let result = table.restore_context();
-        assert!(result.is_ok(), "restore_context should succeed with empty child stack");
+        let prepared = table
+            .prepare_restore_context()
+            .expect("prepare_restore_context should succeed with empty child stack");
+        assert_eq!(table.overflow.len(), 2);
+        assert!(table.commit_restore_context(prepared));
         // Back to root stack.
+        assert_eq!(table.overflow.len(), 1);
         assert_eq!(table.num_elements_in_current_ctx(), 0);
 
         // Second call should fail — only root stack remains.
-        let result2 = table.restore_context();
-        assert!(result2.is_err(), "restore_context on root stack should fail");
+        let result2 = table.prepare_restore_context();
+        assert!(result2.is_err(), "prepare_restore_context on root stack should fail");
+    }
+
+    #[test]
+    fn restore_context_rejects_stale_parent_address_without_mutation() {
+        let mut table = OverflowTable::new();
+        table.push(Felt::new(42).unwrap(), RowIndex::from(1));
+        table.start_context();
+        let stale = table.prepare_restore_context().unwrap();
+
+        // Replace the caller entry while retaining the original context and element counts.
+        let current = table.prepare_restore_context().unwrap();
+        assert!(table.commit_restore_context(current));
+        assert_eq!(table.pop(), Some(Felt::new(42).unwrap()));
+        let replacement = Felt::new(43).unwrap();
+        table.push(replacement, RowIndex::from(2));
+        table.start_context();
+
+        assert!(!table.commit_restore_context(stale));
+        assert_eq!(table.overflow.len(), 2);
+        assert_eq!(table.num_elements_in_current_ctx(), 0);
+        let parent = &table.overflow[0];
+        assert_eq!(parent.num_elements(), 1);
+        let entry = parent.last().unwrap();
+        assert_eq!(entry.value(), replacement);
+        assert_eq!(entry.clk, RowIndex::from(2));
     }
 }

@@ -3,12 +3,17 @@
 use alloc::{sync::Arc, vec::Vec};
 use core::ops::ControlFlow;
 
-use miden_core::{mast::MastForest, program::KernelDescriptor};
+use miden_core::{
+    mast::{MastForest, MastNodeId},
+    program::ProcedureKey,
+};
 use miden_mast_package::debug_info::{DebugSourceNodeId, PackageDebugInfo};
 
 use crate::{
-    ExecutionError, FastProcessor, SourceInlineCallContext, Stopper,
+    CycleProjection, ExecutionEnvironment, ExecutionError, FastProcessor, LoadedMastForest,
+    ResolutionSession, ResolvedBinding, SessionBinding, SourceInlineCallContext, Stopper,
     continuation_stack::{Continuation, ContinuationStack},
+    execution::KeyedRequest,
 };
 
 // RESUME CONTEXT
@@ -20,12 +25,67 @@ use crate::{
 pub struct ResumeContext {
     pub(crate) current_forest: Arc<MastForest>,
     pub(crate) continuation_stack: ContinuationStack<Arc<MastForest>>,
-    pub(crate) kernel: KernelDescriptor,
     pub(crate) package_debug_info: Option<Arc<PackageDebugInfo>>,
     pub(crate) inline_call_contexts: Vec<Option<SourceInlineCallContext>>,
+    pub(crate) environment: ExecutionEnvironment,
+    pub(crate) session: ResolutionSession,
+    pub(crate) pending: Option<PendingResolution>,
+    pub(crate) lifecycle: ExecutionLifecycle,
+    pub(crate) identity: Arc<()>,
+    pub(crate) program_hint: LoadedMastForest,
+    pub(crate) entrypoint_hint: MastNodeId,
+    pub(crate) entry_source_hint: Option<DebugSourceNodeId>,
+    pub(crate) source_aware: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExecutionLifecycle {
+    Active,
+    Complete,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingKey {
+    Entry(ProcedureKey),
+    Invoke(KeyedRequest),
+}
+
+impl PendingKey {
+    pub(crate) fn key(self) -> ProcedureKey {
+        match self {
+            Self::Entry(key) => key,
+            Self::Invoke(request) => request.key,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum PendingBinding {
+    Verified(ResolvedBinding),
+    Cached(SessionBinding),
+}
+
+#[derive(Debug)]
+pub(crate) struct PendingResolution {
+    pub(crate) request: PendingKey,
+    pub(crate) binding: Option<PendingBinding>,
 }
 
 impl ResumeContext {
+    /// The authority fixed when this execution was created. Resuming cannot replace it.
+    pub fn environment(&self) -> &ExecutionEnvironment {
+        &self.environment
+    }
+
+    /// Authenticated bindings and committed demand accounting for this execution.
+    pub fn resolution_session(&self) -> &ResolutionSession {
+        &self.session
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.lifecycle == ExecutionLifecycle::Complete
+    }
     /// Returns a reference to the continuation stack.
     pub fn continuation_stack(&self) -> &ContinuationStack<Arc<MastForest>> {
         &self.continuation_stack
@@ -55,7 +115,6 @@ impl ResumeContext {
             self.inline_call_contexts.len(),
             |depth, continuation| match continuation {
                 Continuation::EnterForest { inline_context_depth, .. } => *inline_context_depth,
-                Continuation::FinishDyn(_) => depth.saturating_sub(1),
                 _ => depth,
             },
         );
@@ -63,11 +122,6 @@ impl ResumeContext {
             .iter()
             .rev()
             .filter_map(Option::as_ref)
-    }
-
-    /// Returns a reference to the kernel being currently executed.
-    pub fn kernel(&self) -> &KernelDescriptor {
-        &self.kernel
     }
 }
 
@@ -81,6 +135,14 @@ pub struct NeverStopper;
 impl Stopper for NeverStopper {
     type Processor = FastProcessor;
     type Forest = Arc<MastForest>;
+
+    fn preflight_cycle(
+        &self,
+        processor: &FastProcessor,
+        projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        preflight_builtin_cycle(processor, projection)
+    }
 
     #[inline(always)]
     fn should_stop(
@@ -105,6 +167,14 @@ impl Stopper for StepStopper {
     type Processor = FastProcessor;
     type Forest = Arc<MastForest>;
 
+    fn preflight_cycle(
+        &self,
+        processor: &FastProcessor,
+        projection: CycleProjection,
+    ) -> Result<(), ExecutionError> {
+        preflight_builtin_cycle(processor, projection)
+    }
+
     #[inline(always)]
     fn should_stop(
         &self,
@@ -120,6 +190,31 @@ impl Stopper for StepStopper {
 
         ControlFlow::Break(BreakReason::Stopped(continuation_after_stop()))
     }
+}
+
+fn preflight_builtin_cycle(
+    processor: &FastProcessor,
+    projection: CycleProjection,
+) -> Result<(), ExecutionError> {
+    if projection.row != processor.clk
+        || projection.next_clock.as_u32()
+            != projection
+                .row
+                .as_u32()
+                .checked_add(1)
+                .ok_or(ExecutionError::Internal("execution clock overflow"))?
+    {
+        return Err(ExecutionError::Internal("cycle projection does not match processor clock"));
+    }
+    if projection.next_clock.as_u32() > processor.options.max_cycles() {
+        return Err(ExecutionError::CycleLimitExceeded(processor.options.max_cycles()));
+    }
+    if projection.continuation_len > processor.options.max_num_continuations() {
+        return Err(ExecutionError::Internal(
+            "continuation stack size exceeded the allowed maximum",
+        ));
+    }
+    Ok(())
 }
 
 /// Checks if the maximum cycle count has been exceeded, returning a `BreakReason::Err` if so.

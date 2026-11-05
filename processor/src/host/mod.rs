@@ -9,7 +9,7 @@ use miden_core::{
 };
 use miden_debug_types::{Location, SourceFile, SourceSpan};
 
-use crate::ProcessorState;
+use crate::{ProcessorState, ResolutionWitness};
 
 pub(super) mod advice;
 
@@ -19,6 +19,11 @@ pub mod default;
 
 pub mod handlers;
 use handlers::{EventError, TraceError};
+
+mod environment_source;
+pub use environment_source::{
+    EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+};
 
 mod mast_forest_store;
 pub use mast_forest_store::{LoadedMastForest, MastForestStore, MemMastForestStore};
@@ -62,9 +67,10 @@ impl AdviceMutation {
 
 /// Defines the host functionality shared by both sync and async execution.
 ///
-/// There are two main categories of interactions between the VM and the host:
-/// 1. getting a library's MAST forest,
-/// 2. handling VM events (regular events can mutate the process' advice provider, while trace
+/// There are three main categories of interactions between the VM and the host:
+/// 1. retrieving untrusted environment witnesses,
+/// 2. getting a library's MAST forest,
+/// 3. handling VM events (regular events can mutate the process' advice provider, while trace
 ///    events are read-only),
 pub trait BaseHost {
     // REQUIRED METHODS
@@ -115,6 +121,18 @@ impl<T: BaseHost + ?Sized> BaseHost for &mut T {
 
 /// Defines a synchronous interface by which the VM can interact with the host during execution.
 pub trait SyncHost: BaseHost {
+    /// Returns untrusted evidence for the requested key under the fixed environment root.
+    ///
+    /// The caller must independently verify every candidate against the request and its limits.
+    /// `Ok(None)`, including this default implementation, means evidence is unavailable. It does
+    /// not prove nonmembership or permit execution from available code without a verified binding.
+    fn get_environment_witness(
+        &mut self,
+        _request: EnvironmentWitnessRequest,
+    ) -> Result<Option<ResolutionWitness>, EnvironmentSourceError> {
+        Ok(None)
+    }
+
     /// Returns MAST forest corresponding to the specified digest, or None if the MAST forest for
     /// this digest could not be found in this host.
     fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest>;
@@ -156,8 +174,17 @@ pub trait SyncHost: BaseHost {
 /// This mirrors the historic async host surface while allowing the sync-first core to depend on
 /// [`BaseHost`].
 pub trait Host: BaseHost {
-    // REQUIRED METHODS
-    // --------------------------------------------------------------------------------------------
+    /// Returns untrusted evidence for the requested key under the fixed environment root.
+    ///
+    /// The caller must independently verify every candidate against the request and its limits.
+    /// `Ok(None)`, including this default implementation, means evidence is unavailable. It does
+    /// not prove nonmembership or permit execution from available code without a verified binding.
+    fn get_environment_witness(
+        &mut self,
+        _request: EnvironmentWitnessRequest,
+    ) -> impl FutureMaybeSend<Result<Option<ResolutionWitness>, EnvironmentSourceError>> {
+        async move { Ok(None) }
+    }
 
     /// Returns MAST forest corresponding to the specified digest, or None if the MAST forest for
     /// this digest could not be found in this host.
@@ -205,6 +232,14 @@ impl<T> Host for T
 where
     T: SyncHost,
 {
+    fn get_environment_witness(
+        &mut self,
+        request: EnvironmentWitnessRequest,
+    ) -> impl FutureMaybeSend<Result<Option<ResolutionWitness>, EnvironmentSourceError>> {
+        let result = SyncHost::get_environment_witness(self, request);
+        async move { result }
+    }
+
     fn get_mast_forest(
         &self,
         node_digest: &Word,

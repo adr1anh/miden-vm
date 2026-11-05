@@ -28,8 +28,8 @@ use super::{
     execution_tracer::TraceReplay,
     trace_state::{
         AceReplay, BitwiseOp, BitwiseReplay, BitwiseReplayEntry, CoreTraceFragmentContext,
-        CoreTraceState, ExecutionReplay, HasherRequestReplay, KernelReplay, MemoryWritesReplay,
-        RangeCheckerReplay, ResolvedBasicBlockGroups, ResolvedHasherOp,
+        CoreTraceState, HasherRequestReplay, KernelReplay, MemoryWritesReplay, RangeCheckerReplay,
+        ResolvedBasicBlockGroups, ResolvedHasherOp,
     },
 };
 use crate::{
@@ -53,12 +53,12 @@ pub const CORE_STORAGE_WIDTH: usize = CORE_TRACE_WIDTH;
 
 /// `build_trace()` uses this as a hard cap on trace rows, independent of the memory budget.
 ///
-/// The code checks `core_trace_contexts.len() * fragment_size` before allocation. It checks the
-/// same cap again while replaying chiplet activity, and once more against each padded per-AIR
-/// height once they're known (see [`validate_heights_within_max_trace_len`]). Row indices are
-/// `u32`-backed, so this bound must hold regardless of budget; the actual memory bound is the
-/// tiered check in `build_trace_inner` using the supplied [`ProvingBudget`].
-pub(crate) const MAX_TRACE_LEN: usize = 1 << 29;
+/// The code checks `core_trace_contexts.len() * fragment_size` before allocation. It checks
+/// the same cap again while replaying chiplet activity, and once more against each padded
+/// per-AIR height once they're known (see [`validate_heights_within_max_trace_len`]). Row
+/// indices are `u32`-backed, so this bound must hold regardless of budget; the actual memory
+/// bound is the tiered check in `build_trace_inner` using the supplied [`ProvingBudget`].
+pub(crate) use super::limits::MAX_TRACE_LEN;
 
 pub(crate) mod core_trace_fragment;
 
@@ -130,6 +130,7 @@ fn build_trace_inner(
     prebuilt_hasher: Option<Hasher>,
     budget: &ProvingBudget<MIDEN_AIR_COUNT>,
 ) -> Result<VmTrace, ExecutionError> {
+    witness.require_validated()?;
     let VmWitness {
         program_info,
         stack_inputs,
@@ -139,6 +140,7 @@ fn build_trace_inner(
     } = witness;
 
     let TraceReplay {
+        environment: _,
         core_trace_contexts,
         mast_forest_store,
         range_checker_replay,
@@ -199,7 +201,6 @@ fn build_trace_inner(
 
     let mut core_trace_data = generate_core_trace_row_major(
         core_trace_contexts,
-        program_info.kernel().clone(),
         fragment_size,
         &mast_forest_store,
         max_stack_depth,
@@ -327,7 +328,6 @@ fn validate_heights_within_max_trace_len(
 /// Generates row-major core trace in parallel from the provided trace fragment contexts.
 fn generate_core_trace_row_major(
     core_trace_contexts: Vec<CoreTraceFragmentContext>,
-    kernel: KernelDescriptor,
     fragment_size: usize,
     mast_forest_store: &[Arc<SparseMastForest>],
     max_stack_depth: usize,
@@ -367,12 +367,7 @@ fn generate_core_trace_row_major(
                     layout,
                 )?;
 
-            processor.execute(
-                &mut continuation_stack,
-                &mut current_forest,
-                &kernel,
-                &mut tracer,
-            )?;
+            processor.execute(&mut continuation_stack, &mut current_forest, &mut tracer)?;
 
             tracer.into_final_state()
         })
@@ -1010,17 +1005,7 @@ fn split_trace_fragment_context<'a>(
 ) -> Result<SplitFragmentContext<'a>, ExecutionError> {
     let CoreTraceFragmentContext {
         state: CoreTraceState { system, decoder, stack },
-        replay:
-            ExecutionReplay {
-                block_stack: block_stack_replay,
-                execution_context: execution_context_replay,
-                stack_overflow: stack_overflow_replay,
-                memory_reads: memory_reads_replay,
-                advice: advice_replay,
-                hasher: hasher_response_replay,
-                block_address: block_address_replay,
-                mast_forest_resolution: mast_forest_resolution_replay,
-            },
+        replay,
         continuation,
         initial_mast_forest_id,
     } = fragment_context;
@@ -1031,15 +1016,10 @@ fn split_trace_fragment_context<'a>(
     let initial_mast_forest =
         lookup_mast_forest(mast_forest_store, initial_mast_forest_id)?.clone();
 
-    let processor = ReplayProcessor::new(
+    let (processor, block_stack_replay, block_address_replay) = ReplayProcessor::from_replay(
         system,
         stack,
-        stack_overflow_replay,
-        execution_context_replay,
-        advice_replay,
-        memory_reads_replay,
-        hasher_response_replay,
-        mast_forest_resolution_replay,
+        replay,
         mast_forest_store.to_vec(),
         max_stack_depth,
         fragment_size.into(),
@@ -1082,6 +1062,10 @@ fn translate_snapshot_continuation_stack(
             Continuation::FinishLoop(node_id) => Continuation::FinishLoop(node_id),
             Continuation::FinishCall(id) => Continuation::FinishCall(id),
             Continuation::FinishDyn(id) => Continuation::FinishDyn(id),
+            Continuation::FinishExec(id) => Continuation::FinishExec(id),
+            Continuation::RootBoundary { implementation, principal } => {
+                Continuation::RootBoundary { implementation, principal }
+            },
             Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
                 Continuation::ResumeBasicBlock { node_id, batch_index, op_idx_in_batch }
             },

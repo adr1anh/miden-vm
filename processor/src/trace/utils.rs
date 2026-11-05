@@ -1,7 +1,7 @@
 #[cfg(test)]
 use alloc::vec::Vec;
 
-use crate::{Felt, ONE, trace::chiplets::layout::ChipletBand};
+use crate::{ExecutionError, Felt, ONE, trace::chiplets::layout::ChipletBand};
 #[cfg(test)]
 use crate::{operation::Operation, utils::ToElements};
 
@@ -33,6 +33,18 @@ impl<'a, E: Copy> RowMajorTraceWriter<'a, E> {
         debug_assert!(stride >= payload, "stride must be >= payload");
         debug_assert_eq!(data.len() % stride, 0, "buffer length must be a multiple of stride");
         Self { data, payload, stride }
+    }
+
+    /// Checks the complete destination span before a clock-cycle transition is published.
+    pub(crate) fn preflight_write_row(&self, row: usize) -> Result<(), ExecutionError> {
+        let end = row
+            .checked_mul(self.stride)
+            .and_then(|start| start.checked_add(self.payload))
+            .ok_or(ExecutionError::Internal("core trace writer row overflow"))?;
+        if self.stride == 0 || self.payload > self.stride || end > self.data.len() {
+            return Err(ExecutionError::Internal("core trace writer row is out of bounds"));
+        }
+        Ok(())
     }
 
     /// Writes one row's payload; `values.len()` must equal `payload`.
@@ -78,7 +90,7 @@ impl<'a> ChipletTraceFragment<'a> {
 
     /// Adds the chiplets-trace overheads: per-row ONEs at `prefix_one_cols` and `chip_clk` at
     /// column `stride - 1` (when there's room), using the layout's checked physical band.
-    pub fn with_overheads(
+    pub(crate) fn with_overheads(
         band: &'a mut [Felt],
         stride: usize,
         col_start: usize,

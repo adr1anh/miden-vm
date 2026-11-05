@@ -1,4 +1,5 @@
 use alloc::{sync::Arc, vec::Vec};
+use core::fmt;
 
 use miden_core::{
     Word,
@@ -12,8 +13,9 @@ use super::handlers::{
     EventError, EventHandler, EventHandlerRegistry, TraceError, TraceHandler, TraceHandlerRegistry,
 };
 use crate::{
-    BaseHost, ExecutionError, LoadedMastForest, MastForestStore, MemMastForestStore,
-    ProcessorState, SyncHost, advice::AdviceMutation,
+    BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,
+    ExecutionError, LoadedMastForest, MastForestStore, MemMastForestStore, ProcessorState,
+    ResolutionWitness, SyncHost, advice::AdviceMutation,
 };
 
 // DEFAULT HOST IMPLEMENTATION
@@ -26,6 +28,15 @@ pub struct DefaultHost<S: SourceManager = DefaultSourceManager> {
     event_handlers: EventHandlerRegistry,
     trace_handlers: TraceHandlerRegistry,
     source_manager: Arc<S>,
+    environment_source: Option<EnvironmentSource>,
+}
+
+struct EnvironmentSource(Arc<dyn EnvironmentWitnessSource>);
+
+impl fmt::Debug for EnvironmentSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("EnvironmentWitnessSource").finish_non_exhaustive()
+    }
 }
 
 impl Default for DefaultHost {
@@ -35,6 +46,7 @@ impl Default for DefaultHost {
             event_handlers: EventHandlerRegistry::default(),
             trace_handlers: TraceHandlerRegistry::default(),
             source_manager: Arc::new(DefaultSourceManager::default()),
+            environment_source: None,
         }
     }
 }
@@ -54,7 +66,18 @@ where
             event_handlers: self.event_handlers,
             trace_handlers: self.trace_handlers,
             source_manager,
+            environment_source: self.environment_source,
         }
+    }
+
+    /// Uses an explicit source of untrusted environment witnesses.
+    ///
+    /// The host forwards each bounded request; its caller must authenticate returned candidates.
+    /// An absent source or `None` response means evidence is unavailable, not nonmembership or
+    /// authority to execute code by implementation digest.
+    pub fn with_environment_source(mut self, source: Arc<dyn EnvironmentWitnessSource>) -> Self {
+        self.environment_source = Some(EnvironmentSource(source));
+        self
     }
 
     /// Loads a [`HostLibrary`] containing a [`MastForest`] with its list of event handlers.
@@ -188,6 +211,16 @@ impl<S> SyncHost for DefaultHost<S>
 where
     S: SourceManager,
 {
+    fn get_environment_witness(
+        &mut self,
+        request: EnvironmentWitnessRequest,
+    ) -> Result<Option<ResolutionWitness>, EnvironmentSourceError> {
+        match &self.environment_source {
+            Some(source) => source.0.get(request),
+            None => Ok(None),
+        }
+    }
+
     fn get_mast_forest(&self, node_digest: &Word) -> Option<LoadedMastForest> {
         self.store.get(node_digest)
     }

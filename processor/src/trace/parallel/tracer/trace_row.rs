@@ -12,8 +12,8 @@ use miden_air_definitions::vm::{
 use miden_core::{
     Felt, ONE, Word, ZERO,
     mast::{
-        BasicBlockNode, CallNode, JoinNode, LoopNode, MastNodeExt, OpBatch, SparseMastForest,
-        SplitNode,
+        BasicBlockNode, CallNode, ExecNode, JoinNode, LoopNode, MastNodeExt, OpBatch,
+        SparseMastForest, SplitNode,
     },
     operations::{Operation, opcodes},
     program::MIN_STACK_DEPTH,
@@ -22,9 +22,15 @@ use miden_core::{
 use super::{ExecutionContextInfo, StackState, SystemState, get_digest_in_forest};
 use crate::{
     ExecutionError,
+    continuation_stack::Continuation,
+    errors::MapExecErrNoCtx,
+    mast::{ExecutableMastForest, MastNode},
     trace::{
         chiplets::layout::{ChipletsLayout, LogicalControllerAddress},
-        parallel::{core_trace_fragment::BasicBlockContext, tracer::CoreTraceGenerationTracer},
+        parallel::{
+            core_trace_fragment::BasicBlockContext, processor::ReplayProcessor,
+            tracer::CoreTraceGenerationTracer,
+        },
     },
 };
 
@@ -149,6 +155,112 @@ enum BasicBlockStartOperation {
 // ================================================================================================
 
 impl<'a> CoreTraceGenerationTracer<'a> {
+    /// Checks the exact address and decoder work without consuming replay queues.
+    pub(super) fn preflight_trace_row(
+        &self,
+        continuation: &Continuation<Arc<SparseMastForest>>,
+        processor: &ReplayProcessor,
+        forest: &Arc<SparseMastForest>,
+    ) -> Result<(), ExecutionError> {
+        use Continuation::*;
+
+        match continuation {
+            StartNode(node_id) => {
+                let node = super::get_node_in_forest(forest, *node_id)?;
+                let address = self.block_address_replay.peek_block_address()?;
+                let parent = self.block_stack_replay.peek_node_start_parent_addr()?;
+                self.layout.controller_address(address)?;
+                self.layout.controller_address(parent)?;
+                let mut missing_child = false;
+                node.for_each_child(|child| {
+                    missing_child |= forest.get_digest_by_id(child).is_none();
+                });
+                if missing_child {
+                    return Err(ExecutionError::Internal("core replay control child is missing"));
+                }
+                if let MastNode::Block(block) = node {
+                    let context =
+                        BasicBlockContext::new_at_batch_start(block, 0).map_exec_err_no_ctx()?;
+                    get_op_batch_encoding(context.group_count_in_block)?;
+                } else if matches!(node, MastNode::External(_)) {
+                    return Err(ExecutionError::Internal("external replay node was not resolved"));
+                }
+            },
+            ResumeBasicBlock { node_id, batch_index, op_idx_in_batch } => {
+                let MastNode::Block(block) = super::get_node_in_forest(forest, *node_id)? else {
+                    return Err(ExecutionError::Internal("core replay basic block is missing"));
+                };
+                BasicBlockContext::new_at_op(block, *batch_index, *op_idx_in_batch)
+                    .map_exec_err_no_ctx()?;
+                self.layout.controller_address(self.decoder_state.current_addr)?;
+                self.layout.controller_address(self.decoder_state.parent_addr)?;
+            },
+            Respan { node_id, batch_index } => {
+                let MastNode::Block(block) = super::get_node_in_forest(forest, *node_id)? else {
+                    return Err(ExecutionError::Internal("core replay basic block is missing"));
+                };
+                let context = BasicBlockContext::new_at_batch_start(block, *batch_index)
+                    .map_exec_err_no_ctx()?;
+                get_op_batch_encoding(context.group_count_in_block)?;
+                self.layout.controller_address(self.decoder_state.current_addr)?;
+                self.decoder_state.current_addr.checked_advance(CONTROLLER_ROWS_PER_HASHER_OP)?;
+            },
+            FinishLoop(node_id) if processor.stack.get(0) == ONE => {
+                let MastNode::Loop(node) = super::get_node_in_forest(forest, *node_id)? else {
+                    return Err(ExecutionError::Internal("core replay loop node is missing"));
+                };
+                get_digest_in_forest(forest, node.body())?;
+                self.layout.controller_address(self.decoder_state.current_addr)?;
+            },
+            FinishJoin(node_id)
+            | FinishSplit(node_id)
+            | FinishLoop(node_id)
+            | FinishCall(node_id)
+            | FinishDyn(node_id)
+            | FinishExec(node_id)
+            | FinishBasicBlock(node_id) => {
+                let node = super::get_node_in_forest(forest, *node_id)?;
+                match continuation {
+                    FinishExec(_) if !matches!(node, MastNode::Exec(_)) => {
+                        return Err(ExecutionError::Internal(
+                            "expected exec node in FinishExec continuation",
+                        ));
+                    },
+                    FinishBasicBlock(_) if !matches!(node, MastNode::Block(_)) => {
+                        return Err(ExecutionError::Internal(
+                            "expected basic block node in FinishBasicBlock continuation",
+                        ));
+                    },
+                    _ => {},
+                }
+                self.compute_end_block_flags(continuation, forest)?;
+                let end = self.block_stack_replay.peek_node_end()?;
+                self.layout.controller_address(end.ended_node_addr)?;
+                self.layout.controller_address(end.prev_addr)?;
+                self.layout.controller_address(end.prev_parent_addr)?;
+            },
+            EnterForest { .. } | RootBoundary { .. } => {
+                return Err(ExecutionError::Internal("zero-cycle continuation cannot be traced"));
+            },
+        }
+        Ok(())
+    }
+
+    /// Writes the literal key committed by a same-context EXEC wrapper.
+    pub fn fill_exec_start_trace_row(
+        &mut self,
+        system: &SystemState,
+        stack: &StackState,
+        exec_node: &ExecNode,
+    ) -> Result<(), ExecutionError> {
+        let decoder_row = DecoderRow::new_control_flow(
+            opcodes::EXEC,
+            (exec_node.target().into_word(), Word::default()),
+            self.decoder_state.parent_addr,
+        );
+        self.fill_trace_row(system, stack, decoder_row)
+    }
+
     /// Fills a trace row for SPAN start operation to the main trace fragment.
     ///
     /// This method creates a trace row that corresponds to the SPAN operation that starts
@@ -279,12 +391,12 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         system: &SystemState,
         stack: &StackState,
         call_node: &CallNode,
-        current_forest: &Arc<SparseMastForest>,
+        _current_forest: &Arc<SparseMastForest>,
     ) -> Result<(), ExecutionError> {
         // For CALL/SYSCALL operations, the hasher state in start operations contains the callee
         // hash in the first half, and zeros in the second half (since CALL only has one
         // child)
-        let callee_hash: Word = get_digest_in_forest(current_forest, call_node.callee())?;
+        let callee_hash = call_node.target().into_word();
         let zero_hash = Word::default();
 
         let decoder_row = DecoderRow::new_control_flow(

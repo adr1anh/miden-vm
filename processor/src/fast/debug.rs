@@ -443,6 +443,7 @@ impl DebugCallFrameResolver {
                     | Continuation::FinishSplit(_)
                     | Continuation::FinishLoop(_)
                     | Continuation::FinishCall(_)
+                    | Continuation::FinishExec(_)
                     | Continuation::FinishDyn(_)
                     | Continuation::EnterForest { .. }
             );

@@ -121,21 +121,8 @@ impl Serializable for CoreTraceFragmentContext {
     }
 }
 
-impl Deserializable for CoreTraceFragmentContext {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
-        Ok(Self {
-            state: CoreTraceState::read_from(source)?,
-            replay: ExecutionReplay::read_from(source)?,
-            continuation: ContinuationStack::<MastForestId>::read_from(source)?,
-            initial_mast_forest_id: MastForestId::read_from(source)?,
-        })
-    }
-
-    fn min_serialized_size() -> usize {
-        // A wire-derived lower bound for the fixed state and forest ID. Replay queues and the
-        // continuation contribute additional bytes; omit them rather than use their in-memory
-        // sizes. In particular, logical addresses retain the Felt wire size despite the larger
-        // nullable in-memory representation.
+impl CoreTraceFragmentContext {
+    pub(crate) fn min_serialized_size() -> usize {
         RowIndex::min_serialized_size()
             + ContextId::min_serialized_size()
             + 2 * Word::min_serialized_size()
@@ -144,6 +131,20 @@ impl Deserializable for CoreTraceFragmentContext {
             + usize::min_serialized_size()
             + Felt::min_serialized_size()
             + MastForestId::min_serialized_size()
+    }
+}
+
+impl CoreTraceFragmentContext {
+    pub(crate) fn read_with_limits<R: ByteReader>(
+        source: &mut R,
+        budget: &mut crate::trace::keyed::ReplayReadBudget,
+    ) -> Result<Self, DeserializationError> {
+        Ok(Self {
+            state: CoreTraceState::read_from(source)?,
+            replay: ExecutionReplay::read_with_limits(source, budget)?,
+            continuation: ContinuationStack::<MastForestId>::read_from(source)?,
+            initial_mast_forest_id: MastForestId::read_from(source)?,
+        })
     }
 }
 
@@ -641,6 +642,7 @@ impl Deserializable for StackOverflowReplay {
 
 impl Serializable for ExecutionReplay {
     fn write_into<W: ByteWriter>(&self, target: &mut W) {
+        self.keyed.write_into(target);
         self.block_stack.write_into(target);
         self.execution_context.write_into(target);
         self.stack_overflow.write_into(target);
@@ -652,9 +654,14 @@ impl Serializable for ExecutionReplay {
     }
 }
 
-impl Deserializable for ExecutionReplay {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
+impl ExecutionReplay {
+    pub(crate) fn read_with_limits<R: ByteReader>(
+        source: &mut R,
+        budget: &mut crate::trace::keyed::ReplayReadBudget,
+    ) -> Result<Self, DeserializationError> {
         Ok(Self {
+            keyed: crate::trace::keyed::KeyedReplay::read_with_limits(source, budget)
+                .map_err(|error| DeserializationError::InvalidValue(format!("{error}")))?,
             block_stack: BlockStackReplay::read_from(source)?,
             execution_context: ExecutionContextReplay::read_from(source)?,
             stack_overflow: StackOverflowReplay::read_from(source)?,

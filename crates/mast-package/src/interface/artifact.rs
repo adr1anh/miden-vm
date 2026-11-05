@@ -48,7 +48,13 @@ macro_rules! word_role {
 }
 
 word_role! {
-    /// An externally assigned immutable interface identity, independent of its declarations.
+    /// An opaque interface identity whose Protocol value is
+    /// `H_LIBRARY(publisher_id, name, interface_version)`.
+    ///
+    /// Identity is independent of implementation bodies, private helpers, release revision and
+    /// pinned dependency choices. Public API or declared dynamic-dependency changes require a new
+    /// interface version; retained Latest dependencies remain dynamic across release revisions.
+    /// Wrapping a word does not derive or authenticate this value.
     LibraryId
 }
 
@@ -57,27 +63,45 @@ word_role! {
     DeclarationCommitment
 }
 
-/// Required Protocol ownership, publisher, association and closure checks.
+/// Required Protocol identity, publisher, registration and closure checks.
 ///
-/// The domain must be externally allocated by the Protocol owner for this exact numbered-v1
-/// FeltSequence construction. The generic codec checks its namespace and version, not allocation
-/// ownership or registry membership. There is no default domain, descriptor codec or policy.
+/// A production profile must derive or verify the Page-defined LibraryId from the canonical
+/// publisher-qualified descriptor using Protocol-owner identity bytes and the H_LIBRARY domain.
+/// Receiving an opaque typed ID does not permit arbitrary assignment. That identity hash/domain is
+/// separate from this generic declaration transport's numbered-v1 FeltSequence construction.
+///
+/// The declaration domain must be externally allocated by the Protocol owner for this exact
+/// construction. The generic codec checks its namespace and version, not allocation ownership or
+/// registry membership. There is no default domain, descriptor codec or policy.
+///
+/// The generic transport commitment has not been validated as the Page's CommitLibInterface.
+/// Production adoption requires owner-approved encoding/domain mapping and full-closure projection
+/// fixtures, plus descriptor, identity-domain, home, registration and closure fixtures. Publisher,
+/// home and typed-ID validation remain required; test-only synthetic profiles do not clear these
+/// gates.
 pub trait InterfaceProfile: TypedIdProfile {
     type DeclarationDomain: EidosDomain<Encoding = FeltSequence>;
 
-    /// Supplies the externally allocated domain for the canonical declaration commitment.
+    /// Supplies the externally allocated domain for the generic declaration transport commitment.
     fn declaration_domain(&self) -> Self::DeclarationDomain;
 
     /// Recognizes and validates the exact canonical publisher-qualified descriptor Q0.
     ///
-    /// Q0 must exclude the LibraryId, declaration commitment and association proofs.
+    /// A production descriptor must supply the publisher_id, name and interface_version needed to
+    /// derive or verify the Page-defined I. Q0 must exclude I, the declaration commitment and
+    /// association proofs.
     fn validate_publisher_descriptor(
         &self,
         context: &Self::Context,
         descriptor: &[u8],
     ) -> Result<(), Self::Error>;
 
-    /// Authenticates the immutable association of Q0, supplied I and computed Cdecl.
+    /// Derives or verifies the Page-defined I and authenticates its permanent registration binding.
+    ///
+    /// A production profile must authenticate the association of Q0 and I with the Page's
+    /// CommitLibInterface, and validate the owner-approved mapping from computed generic Cdecl to
+    /// that commitment. Canonical identity bytes/domain and mapping/registration fixtures are
+    /// mandatory owner inputs, not defaults supplied by this transport.
     fn validate_association(
         &self,
         context: &Self::Context,
@@ -88,9 +112,11 @@ pub trait InterfaceProfile: TypedIdProfile {
 
     /// Establishes complete transitive requirements from authenticated contributing declarations.
     ///
-    /// Both ID slices are strictly ordered by canonical Word bytes. The generic codec checks
-    /// self exclusion and direct inclusion, but cannot establish transitive completeness. Cycles
-    /// are not forbidden; self references are implicit and excluded from both external ID sets.
+    /// Both ID slices are strictly ordered by canonical Word bytes and exclude I. Here `closure`
+    /// stores external(I) = L(I) minus {I}; the Page's full L(I) includes I. A production profile
+    /// must reconstruct {I} union closure, validate its projection into the owner commitment and
+    /// establish authenticated completeness. The generic codec checks self exclusion and direct
+    /// inclusion, but cannot establish transitive completeness. Cycles are not forbidden.
     /// Authenticated contributing declarations and completeness evidence belong in `context`.
     /// Uncommitted tooling signatures are deliberately absent from these authority inputs.
     fn validate_dependency_closure(
@@ -347,6 +373,7 @@ impl InterfaceArtifactV1 {
     pub fn direct_requirements(&self) -> &[LibraryId] {
         &self.direct_requirements
     }
+    /// Returns external(I) = L(I) minus {I}; the Page's full closure is {I} union this slice.
     pub fn dependency_closure(&self) -> &[LibraryId] {
         &self.dependency_closure
     }

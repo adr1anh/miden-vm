@@ -1168,7 +1168,6 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
         let layout = ChipletsLayout::new(prefix, 16, 0, 0, 0, 0).unwrap();
         generate_core_trace_row_major(
             contexts,
-            KernelDescriptor::default(),
             fragment_size,
             &mast_forest_store,
             max_stack_depth,
