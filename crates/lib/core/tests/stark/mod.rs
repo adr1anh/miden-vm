@@ -39,6 +39,7 @@ mod pvm_sigma_scatter;
 mod pvm_verifier;
 mod pvm_wrapper;
 mod random_coin;
+mod resource_lengths;
 mod security;
 mod security_math;
 mod security_proven;

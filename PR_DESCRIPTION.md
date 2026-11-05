@@ -1,30 +1,24 @@
-# PR10: explicit project naming, instances and code supply
+# PR11: exact immutable advice resource lengths
 
-Projects can import the same source package and semantic version under distinct explicit bindings
-and source routes. Dependency aliases, actual package provenance, supplied opaque library IDs,
-canonical callable homes and available code remain separate. Catalog references resolve before
-assembly; target naming and independent artifact callable expectations are explicit. Kernel naming
-shares the fixed-root public-export/private-helper convention.
+Fixed-format resource loaders consumed a compiled prefix without checking the complete advice-map
+value length. They now reject short or appended values before copying or semantic use: both ACE
+streams, eight VM/PVM query rows and the FRI row. The shared ACE renderer and checked-in wrappers
+carry the same length assertion; existing hash, Merkle, codec and domain checks remain intact.
+Arbitrary/private/transaction advice keys and calling conventions remain supported. No optional ABI,
+initialization or resource-inventory schema is introduced.
 
-Component-aware source mounts preserve defining/private/reexport keys and inner runtime calls.
-Graph-local instances, full exact runtime records and local build candidates let distinct bound
-artifacts coexist without overwriting canonical registry publications. Cache checks retain exact
-compiler/source provenance, selected homes, profile admission and public expectations. Ambiguous
-binding contexts reject deterministically with alias guidance. Returned dependency code travels
-with exact naming and grants no environment authority.
+**Stack base:** PR10 `eefae17e7be44b130044bb5e53b6d1eec3dc2b9b`.
 
-**Stack base:** PR09 `0ec317994771993823dd504a1eb5f4c614ad7de3`. Semantic dependencies: PR04/09.
+Central guarded validation:
 
-Central AC/heavy-guarded checks with 16MiB stacks:
+- Eight actual-loader tests run: seven pass, one VM valid control remains failing. All 33 malformed
+  length/hash cases pass independently; PVM, query-row and FRI valid controls pass.
+- Renderer alignment and mixed advice-key transport tests pass. The latter removes real debug data
+  and checks values/stable dependency commitments through trusted and normal readers.
+- Core-library test target and ACE/package all-target strict Clippy pass; independent reviews pass.
 
-- Project: 90 passed. Assembly: 596 unit plus two packaging tests passed; six existing skips.
-- Package and both registries: 379 passed; one existing skip.
-- Three native processor regressions pass: distinct pinned K/equal D, bundled/external execution,
-  private/reexport/retained Latest calls and conflicting owner selections.
-- Mast-package, both registries, project and assembly pass all-target strict Clippy; the native target passes focused strict
-  Clippy. Four shared crates pass no-default-features checks. Independent reviews/signatures pass.
-
-PR10 remains implemented-awaiting-validation. Public-statement/proof cutover at PR12, recursive
-identity/compatibility work at PR14, selected external publication profiles and all inherited
-security, guest/project, fuzz, performance and final qualification gates remain open. No GitHub
-PRs or pushes; no proof-constant refresh or release-readiness claim.
+**Open qualification:** the VM embeds 7,920 circuit felts while its wrapper expects 6,992. The valid
+control stays unignored. Full generation check fails; the generator refuses to write because its
+pinned ACE digest is stale. No identity, proof constant or compatibility whitelist was refreshed.
+PR12/PR14 must complete coherent relation/statement/recursive qualification; all inherited security
+and final gates remain open. No GitHub PRs or pushes.

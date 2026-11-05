@@ -496,7 +496,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 08 Replay/debug | implemented-awaiting-validation | Fixture `11465c4f2`; snapshot fix `96adee6a6`; replay tests `63dde7907`; runtime debug `7afd90af7`; tests `fbac6f48b`; base `12e78f953` | Independent source/test/projection reviews; execution22/witness9 default, testing and testing+concurrent; strict processor/source/public Clippy, no_std | PR09 normal package-entry API4 now passes; full unit crate now compiles and runs: 1,866 pass/24 legacy-public-statement failures/one existing ignore; 49 integrations and 69 concurrent replay tests pass. Normal private/relocation/sidecar, complete forged relocation/global lookup/native/generated/MASM/recursive/security and inherited gates remain |
 | 09 Assembly/packages | implemented-awaiting-validation | Final review `0ec317994`; CLI `fb4d1c7be`; VM benches `7bd9765b1`; native estimator `953eed44b`; fixture homes `c9b9c7b44`; prior SHAs below; base `82935d673` | Independent reviews; package 289 pass/one existing ignore; standard assembly 544 pass/six existing skips; estimator two/native file admission one pass; VM benches compile; integration source including precompile fixtures passes strict Clippy; prior evidence below | Full CLI runtime and constraints/proofs await PR12 statement cutover; guest/project E2E/full fuzz campaigns; PR10 artifact expectations/target naming/distinct instances; renewed valid-principal counterfactual evidence. All inherited native/generated/MASM/recursive/security/fuzz gates remain open |
 | 10 Projects/imports | implemented-awaiting-validation | Native `82e671c01`; assembly `e151d65c5`; instances `116a2d736`; supply `049d9ea68`; prior SHAs below; base `0ec317994` | Independent reviews; project90, assembly598/six existing skips, supply379/one existing skip and native3 pass; mast-package/both registries/project/assembly all-target strict Clippy, native-target Clippy and four shared no_std checks pass | Inherited public-statement/proof/recursive/security and final qualification remain; selected publication-profile behavior is not claimed |
-| 11 ABI/resources | planned | — | — | Exact immutable resource lengths and preserved calling/advice conventions; optional profiles deferred |
+| 11 ABI/resources | implemented-awaiting-validation | Length checks `2ebb415f0`; tests `a554ca332`; base `eefae17e7` | Independent reviews; 7/8 actual-loader tests pass, all 33 malformed cases pass independently; renderer/package transport tests and scoped strict Clippy pass | VM valid control embeds 7920 versus wrapper 6992; generation refuses stale pinned ACE digest. Coherent PR12/14 qualification and all inherited gates remain; optional profiles deferred |
 | 12 Native statement | planned | — | — | Depends on 01,06,07; fixtures09 |
 | 13 Core library | planned | — | — | Depends on 09–12 and supported ABI |
 | 14 Recursive verifier | planned | — | — | Depends on settled06–07,09,12–13 |
@@ -2970,3 +2970,20 @@ supply379/one existing skip, native3; mast-package, both registries, project and
 the native target passes focused strict Clippy, and four shared crates pass no_std. Independent
 reviews and signatures pass. PR10 is implemented-awaiting-validation; inherited PR12/PR14/M1 and
 all security/final qualification gates remain open. No PRs or pushes.
+
+
+### PR11 immutable resource checkpoint, 3 November 2026
+
+`2ebb415f0` checks full advice-map lengths before copying in two ACE streams, eight VM/PVM query
+rows and the FRI row; the shared renderer emits the same assertion. Existing hash/codec/Merkle/
+domain/stack checks remain. No global advice-key policy or optional ABI schema is introduced.
+`a554ca332` executes actual private production bodies through test-only wrappers and checks
+mixed arbitrary/content-addressed advice retention through trusted/normal readers and real debug removal.
+
+Central guarded resource tests run 8: seven pass; all 33 malformed-length/hash cases run independently
+and pass, with PVM/query/FRI valid controls. The VM valid control remains unignored and fails on
+embedded 7920 versus wrapper 6992 felts. Full generation --check fails; --write refuses before mutation
+because the pinned VM ACE digest is stale. No identity/proof constants were refreshed. Focused
+renderer and final transport tests pass; core-lib test-target and ACE/package all-target strict
+Clippy pass. Independent reviews/signatures pass. PR11 remains implemented-awaiting-validation;
+coherent PR12/14 generation/proof qualification and every inherited gate remain open.
