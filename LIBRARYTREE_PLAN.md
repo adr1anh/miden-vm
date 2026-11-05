@@ -279,7 +279,7 @@ All implementation rows begin planned. The first plan commit SHA and later exact
 | 00 Plan | complete | `1411d8581` initial plan-only commit | Two independent source/design reviews; PR/branch structure and whitespace checks; staged `git diff --cached --check`; SSH signature verified | No Rust build/test needed for documentation-only scope |
 | 01 Identities | complete | Latest `8152f9a34`; prior slice SHAs in evidence below | Independent reviews; 86 program tests including registry disjointness; final verifier fixture tests 12/12; public API fixtures; no-default-features, scoped rustfmt/Clippy; 36 shared vectors | None for PR 01; Protocol-specific codecs/authority remain outside this unit. |
 | 02 MAST | in-progress | Latest `9ebac7cc1`; generator `91d52f92c`; base `4f6cda599` | Independent reviews; 398 arbitrary-feature core tests, 198 default MAST tests, core seed generation, public API and full-feature Clippy pass | Final audit: add explicit structural-cycle/keyed-recursion cases. Processor witness checks await 05/09; fuzz smoke at 16. D2 preserves existing MASM source. |
-| 03 Chiplet foundation | planned | — | — | Address/layout contract |
+| 03 Chiplet foundation | implemented-awaiting-validation | Latest `a8e0daec9`; state `997c5edae`; Memory `411b22f8b`; base `7602d32ed` | Memory unit/generated/Clippy checks pass; independent logical/physical/state/acceptance reviews and formatting | Twenty-five address/state tests authored, unrun; processor has ten known callable-cutover errors. Execute processor/parallel/serde suites after 05/09; actual Library prefix/alignment at 06. |
 | 04 Toolchain contracts | planned | — | — | Interface/syntax gates |
 | 05 Runtime | planned | — | — | Depends on 01–02, shared ledger contract |
 | 06 Library | planned | — | — | Depends on 01,03, ledger; degree/soundness gates |
@@ -607,3 +607,76 @@ required cross-graph checks run. After PRs 05/09 close old invocation consumers,
 and related witness round trips. `tools/miden-core-fuzz/Cargo.toml` directly depends on that
 processor and assembly graph, so its build/smoke remains PR 16, not a claimed current pass.
 The local stack may continue under the workflow's intentional intermediate-build allowance.
+
+### PR 03 Memory inverse and delta simplification
+
+Commit `411b22f8b` constrains the existing same-context/address flag directly and reuses it for
+delta selection. Independent algebra review establishes the same accepted assignments in both
+context cases; the old/new delta difference vanishes under the unchanged flag definition.
+All six inverse/flag/delta emission positions and all other Memory equations remain unchanged.
+The finite 7,560-assignment regression matrix complements that proof; it is not exhaustive field
+enumeration. It retains non-Boolean address ratios on context changes and arbitrary same-key
+read/read clock inverses. No helper columns or trace/writer layout changed.
+
+Passed after successful AC/heavy-work guards:
+
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-air-definitions --lib vm::constraints::chiplets`:
+  eighteen tests.
+- `CARGO_NET_OFFLINE=true cargo test --locked -p miden-air --test constraint_capture --test generated_drift --test ace_codegen`:
+  eighteen tests; one manual timing benchmark ignored. Generated/native values, degrees, capture
+  structure and ACE lowering agree for the current relation.
+- `CARGO_NET_OFFLINE=true cargo clippy --locked -p miden-air-definitions --lib --tests -- -D warnings`.
+- Pinned-nightly formatting and staged whitespace checks.
+
+Logs stay separate under uncommitted `.scratch/librarytree/logs/pr03-*.log`. These checks do not
+establish future packed Library dimensions/degrees/lookup bounds; those remain later measured gates.
+
+### PR 03 Checked logical Controller-address owner
+
+Commit `48896072b` distinguishes nullable one-based logical addresses from zero-based row cursors
+and operation-log indices. Existing trace caps/errors bound checked span arithmetic before
+append/replay/cache mutations. Hasher errors propagate; infallible hook failures reach the existing
+clock-finalization error boundary. Exact-cap end cursors and absent zero remain representable.
+Private row-count invariants and aligned MAX_TRACE_LEN justify infallible padding rounding.
+No physical relocation, saved-state codec or global-clock conversion is activated in this slice.
+
+Independent review found no concrete issue in the eight-file change and fourteen authored
+boundary/atomicity tests. Pinned formatting and staged whitespace checks pass. After successful
+AC/heavy-work guards, `CARGO_NET_OFFLINE=true cargo check --locked -p miden-processor --lib`
+failed with ten known callable-cutover errors: six old callee() uses and four missing Exec arms
+in execution/call.rs, execution/mod.rs, execution_tracer.rs and parallel/tracer/{mod,trace_row}.rs.
+No address-type diagnostic was emitted. This is not a successful processor build or test pass.
+The compiler log stays uncommitted at `.scratch/librarytree/logs/pr03-controller-owner-check.log`.
+
+Address tests/processor Clippy remain deferred until PRs 05/09 close that graph. Final
+materialization conversion is the next PR 03 slice; saved/replayed state must remain logical.
+
+### PR 03 Final materialization boundary and validation disposition
+
+Commit `997c5edae` makes saved decoder/block-stack/node-end/Hasher replay addresses nominally
+logical with the existing canonical Felt wire encoding. Compact wire-size bounds remain explicit
+for budgeted readers. Commit `a8e0daec9` shares one checked immutable ChipletsLayout after
+buffered/prebuilt convergence, applying physical conversion only at final Core/helper/chiplet
+row emission. Only Controller address roles change; VM clocks, context/RAM/overflow values and
+unrelated inverses remain untouched. Current decoder has no Controller-address inverse helper.
+The final host into_traces writer is crate-private/fallible, with its sole repo caller updated;
+no infallible compatibility wrapper bypasses layout errors.
+
+Independent saved-state, final-sink and acceptance reviews found no concrete remaining gap.
+Pinned formatting and staged whitespace checks passed. Eleven additional physical/state cases
+join the fourteen logical-owner cases, all authored but unrun. Production prefix is zero; synthetic
+17/11 prefixes test coordinate ownership, not valid Library AIR. PR 06 must implement actual
+P_L=8*ceil((R+2)/8), terminal PAD pair, phase-seven exit and nonzero-prefix proof checks.
+
+After successful AC/heavy-work guards, the integrated
+`CARGO_NET_OFFLINE=true cargo check --locked -p miden-processor --lib` again reports exactly the
+same six callee() and four missing-Exec cutover errors, with no address diagnostic. No standalone
+build is claimed for the intermediate nominal-state commit. Full log is uncommitted at
+`.scratch/librarytree/logs/pr03-physical-layout-check.log`.
+
+PR 03 remains implemented-awaiting-validation. After PRs 05/09 close consumers, run processor
+lib filters trace::chiplets::layout::tests, trace::chiplets::hasher, trace::chiplets::memory,
+trace::execution_tracer::controller_address_tests, tracer::physical_helper_tests and trace::trace_state;
+run `cargo test -p miden-processor --lib --features concurrent trace::parallel` and processor Clippy.
+Apply the standard AC/heavy-work guards to every command. Final packed shape/degree/lookup/four-AIR,
+D2 source/stack/memory regressions and clean regeneration remain PRs 06/later/16 gates.

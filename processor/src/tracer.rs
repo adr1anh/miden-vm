@@ -11,7 +11,13 @@ use miden_core::{
 use crate::{
     AceError, ContextId, ExecutionError,
     continuation_stack::{Continuation, ContinuationStack},
-    trace::{chiplets::CircuitEvaluation, utils::split_u32_into_u16},
+    trace::{
+        chiplets::{
+            CircuitEvaluation,
+            layout::{ChipletsLayout, LogicalControllerAddress},
+        },
+        utils::split_u32_into_u16,
+    },
 };
 
 // TRACER TRAIT
@@ -515,6 +521,25 @@ pub enum OperationHelperRegisters {
 }
 
 impl OperationHelperRegisters {
+    /// Materializes only typed Controller-address helpers; all other helper roles retain their
+    /// operation semantics. The public helper codec remains logical for producers and replay.
+    pub(crate) fn to_physical_user_op_helpers(
+        &self,
+        layout: ChipletsLayout,
+    ) -> Result<[Felt; NUM_USER_OP_HELPERS], ExecutionError> {
+        let mut helpers = self.to_user_op_helpers();
+        match self {
+            Self::Compress { addr }
+            | Self::MerklePath { addr, .. }
+            | Self::LogDeferred { addr, .. } => {
+                let logical = LogicalControllerAddress::from_felt(*addr)?;
+                helpers[0] = layout.controller_address(logical)?.to_felt();
+            },
+            _ => {},
+        }
+        Ok(helpers)
+    }
+
     pub fn to_user_op_helpers(&self) -> [Felt; NUM_USER_OP_HELPERS] {
         match self {
             Self::Eq { stack_second, stack_first } => {
@@ -688,4 +713,66 @@ pub(crate) fn merkle_index_helper_values(index: Felt) -> (Felt, [u16; 4]) {
 
     debug_assert!(limbs[3] < 1 << 15);
     (Felt::from_u64(direction_bit), limbs)
+}
+
+#[cfg(test)]
+mod physical_helper_tests {
+    use super::*;
+
+    #[test]
+    fn physical_materialization_changes_only_controller_address_roles() {
+        let state_prev = [Felt::from_u8(1), Felt::from_u8(2), ZERO, Felt::from_u8(3)].into();
+        let helpers = [
+            OperationHelperRegisters::Compress { addr: Felt::from_u8(1) },
+            OperationHelperRegisters::MerklePath {
+                addr: Felt::from_u8(2),
+                index: Felt::from_u8(3),
+            },
+            OperationHelperRegisters::LogDeferred { addr: Felt::from_u8(3), state_prev },
+        ];
+        for prefix in [0, 17] {
+            let layout = ChipletsLayout::new(prefix, 3, 0, 0, 0, 0).unwrap();
+            for helper in &helpers {
+                let logical = helper.to_user_op_helpers();
+                let physical = helper.to_physical_user_op_helpers(layout).unwrap();
+                assert_eq!(physical[0], logical[0] + Felt::from_u32(prefix as u32));
+                assert_eq!(physical[1..], logical[1..]);
+            }
+            let absent = OperationHelperRegisters::Compress { addr: ZERO };
+            assert_eq!(
+                absent.to_physical_user_op_helpers(layout).unwrap(),
+                [ZERO; NUM_USER_OP_HELPERS]
+            );
+            for helper in [
+                OperationHelperRegisters::Eq {
+                    stack_second: Felt::from_u8(1),
+                    stack_first: Felt::from_u8(2),
+                },
+                OperationHelperRegisters::Eqz { top: Felt::from_u8(3) },
+                OperationHelperRegisters::U32Split {
+                    lo: Felt::from_u8(1),
+                    hi: Felt::from_u8(2),
+                },
+                OperationHelperRegisters::Expacc { acc_update_val: Felt::from_u8(1) },
+                OperationHelperRegisters::Empty,
+            ] {
+                assert_eq!(
+                    helper.to_physical_user_op_helpers(layout).unwrap(),
+                    helper.to_user_op_helpers()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn physical_helpers_reject_addresses_outside_the_controller_band() {
+        let layout = ChipletsLayout::new(11, 1, 0, 0, 0, 0).unwrap();
+        for addr in [Felt::from_u8(2), Felt::from_u64(u64::MAX - (1 << 32))] {
+            assert!(
+                OperationHelperRegisters::Compress { addr }
+                    .to_physical_user_op_helpers(layout)
+                    .is_err()
+            );
+        }
+    }
 }

@@ -1,7 +1,8 @@
 use alloc::vec::Vec;
 
-use miden_core::{Felt, Word, ZERO};
+use miden_core::{Felt, Word};
 
+use super::chiplets::layout::LogicalControllerAddress;
 use crate::ContextId;
 
 // BLOCK STACK
@@ -29,10 +30,14 @@ impl BlockStack {
     ///
     /// When the block is later popped (on END), the flags for the trace row are fully reconstructed
     /// from the continuation stack, and hence do not need to be stored in this data structure.
-    pub fn push(&mut self, addr: Felt, ctx_info: Option<ExecutionContextInfo>) -> Felt {
+    pub fn push(
+        &mut self,
+        addr: LogicalControllerAddress,
+        ctx_info: Option<ExecutionContextInfo>,
+    ) -> LogicalControllerAddress {
         let parent_addr = match self.blocks.last() {
             Some(parent) => parent.addr,
-            None => ZERO,
+            None => LogicalControllerAddress::ABSENT,
         };
 
         self.blocks.push(BlockInfo { addr, parent_addr, ctx_info });
@@ -61,8 +66,9 @@ impl BlockStack {
 
 #[derive(Debug, Clone)]
 pub struct BlockInfo {
-    pub addr: Felt,
-    pub parent_addr: Felt,
+    /// Logical addresses are retained across snapshots and fragment replay.
+    pub addr: LogicalControllerAddress,
+    pub parent_addr: LogicalControllerAddress,
     pub ctx_info: Option<ExecutionContextInfo>,
 }
 

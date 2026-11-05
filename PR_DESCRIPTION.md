@@ -1,29 +1,32 @@
-# Keyed MAST invocations and canonical v0.0.6 transport
+# Chiplet Memory and checked Controller-address foundations
 
-Branch: `adr1anh/librarytree-02-keyed-mast`
+Branch: `adr1anh/librarytree-03-chiplet-foundation`
 
-Stack base and semantic dependency: `adr1anh/librarytree-01-identities` (`4f6cda599`).
+Git base: `adr1anh/librarytree-02-keyed-mast` (`7602d32ed`). Semantic dependencies: PR 00 and
+the selected chiplet layout/address contracts.
 
-Immediate invocations previously followed callee node IDs and committed the selected implementation.
-Call/SysCall now store typed ProcedureKeys; Exec is a childless same-context invocation node with
-reserved control opcode 0x5f. Structural traversal, remapping and merging preserve keys independently
-of available code. External(D) remains a structural node.
+Library prefix placement needs a single address boundary and lower-degree Memory equations.
+This branch simplifies existing Memory conditional inverses without changing accepted assignments
+or its six inverse/selection emission positions. One checked logical Controller owner prevents
+span overflow and preserves absence, row zero and exact-cap cursors. Saved/replayed state uses
+nominal logical addresses with the existing canonical Felt bytes.
 
-Dense MAST v0.0.6 stores one canonical target slot per immediate invocation in a separate key
-section, retained in hashless transport. One shared scanner checks all reader/view paths. Sparse
-replay stores direct keys under ExecutionWitness v3. This branch also migrates generators, malformed
-wire regressions, fuzz oracles/seeds and explicit structural-cycle/keyed-recursion fixtures.
+A shared immutable ChipletsLayout now drives final Core/helper/chiplet materialization after
+buffered/prebuilt convergence. Only Controller address roles translate; VM clocks, context/RAM,
+overflow and unrelated helpers retain their values. Production Library prefix remains zero.
+Nonzero prefixes are synthetic tests; actual Library rows and alignment/proof gates belong to PR 06.
+The final into_traces host writer is crate-private/fallible and its sole repo caller is updated.
 
-Validation: independent node/codec/fixture/fuzz/acceptance reviews; 198 default MAST tests; 398
-full-core tests with arbitrary enabled; four final focused cycle/recursion cases; focused core seed
-generation; public API fixtures; full-feature test-inclusive Clippy; core no-default-features check;
-pinned formatting and staged whitespace checks. Rust checks ran after successful power guards.
-Generated corpus output stays local. Exact commands/checkpoints are in the plan ledger.
+Validation: independent algebra, address, state, final-sink and acceptance reviews; eighteen
+chiplet definition tests; eighteen generated capture/drift/ACE tests, with one manual timing test
+ignored; definitions test-inclusive Clippy; pinned formatting and whitespace checks. Rust checks
+ran after successful power guards. The finite 7,560-assignment matrix complements the algebraic
+equivalence argument; it is not exhaustive field enumeration.
 
-Status remains implemented-awaiting-validation. Processor witness tests require PRs 05/09 to
-migrate downstream invocation consumers; fuzz compilation/smoke remains PR 16. Existing MASM syntax
-and stack/memory conventions remain requirements for that integration; identities/hash/cycle-count
-expectations and rebuilt MAST formats may change. Environment-backed executable generation is a
-tracked PR 05 obligation. Runtime/proof integration is outside this core branch.
+Status remains implemented-awaiting-validation. Twenty-five address/state tests are authored
+but unrun. The processor library check emits the same six old callee() and four missing Exec
+cutover errors. PRs 05/09 must close those consumers before processor/parallel/serde tests and
+Clippy run. The plan ledger records exact commands, checkpoints and deferred owners. Final packed
+dimensions, degree/lookup gates and D2 MASM syntax/stack/memory regressions remain required.
 
 No GitHub PR has been created. Creating any PR requires the user's explicit instruction.

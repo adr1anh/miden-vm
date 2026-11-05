@@ -1127,6 +1127,169 @@ fn chiplet_preflight_caps_combined_trace_len() {
     );
 }
 
+/// Synthetic physical prefixes exercise the real parallel core writer. This does not construct
+/// a Library witness or claim that the current AIR authenticates a nonzero prefix.
+#[test]
+fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments() {
+    use miden_core::serde::{Deserializable, Serializable};
+
+    fn core(prefix: usize, fragment_size: usize, root_block: bool) -> Vec<Felt> {
+        let program = if root_block {
+            let mut forest = MastForest::new();
+            let root = BasicBlockNodeBuilder::new(vec![Operation::Swap, Operation::Swap])
+                .add_to_forest(&mut forest)
+                .unwrap();
+            forest.make_root(root);
+            Program::new(Arc::new(forest), root)
+        } else {
+            join_program()
+        };
+        let processor = FastProcessor::new_with_options(
+            StackInputs::new(DEFAULT_STACK).unwrap(),
+            AdviceInputs::default(),
+            ExecutionOptions::default()
+                .with_core_trace_fragment_size(fragment_size)
+                .unwrap(),
+        )
+        .unwrap();
+        let mut host = DefaultHost::default();
+        let VmWitness { trace, .. } =
+            processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+        let TraceReplay {
+            core_trace_contexts,
+            mast_forest_store,
+            max_stack_depth,
+            ..
+        } = trace;
+        let contexts = core_trace_contexts
+            .into_iter()
+            .map(|context| CoreTraceFragmentContext::read_from_bytes(&context.to_bytes()).unwrap())
+            .collect();
+        let layout = ChipletsLayout::new(prefix, 16, 0, 0, 0, 0).unwrap();
+        generate_core_trace_row_major(
+            contexts,
+            KernelDescriptor::default(),
+            fragment_size,
+            &mast_forest_store,
+            max_stack_depth,
+            layout,
+        )
+        .unwrap()
+    }
+
+    for root_block in [false, true] {
+        let logical = core(0, 3, root_block);
+        let physical = core(17, 3, root_block);
+        assert_eq!(physical, core(17, 32, root_block));
+        assert_eq!(logical.len(), physical.len());
+        let relocate = |address| {
+            if address == ZERO {
+                ZERO
+            } else {
+                address + Felt::from_u8(17)
+            }
+        };
+        let mut saw_absent_parent = false;
+        let mut saw_present_parent = false;
+        for (logical, physical) in logical
+            .chunks_exact(CORE_STORAGE_WIDTH)
+            .zip(physical.chunks_exact(CORE_STORAGE_WIDTH))
+        {
+            let logical: &CoreCols<Felt> = logical.borrow();
+            let physical: &CoreCols<Felt> = physical.borrow();
+            let mut expected = (*logical).clone();
+            expected.decoder.addr = relocate(logical.decoder.addr);
+            if logical.decoder.in_span == ONE {
+                let parent = logical.decoder.hasher_state[1];
+                expected.decoder.hasher_state[1] = relocate(parent);
+                saw_absent_parent |= parent == ZERO;
+                saw_present_parent |= parent != ZERO;
+            }
+            assert_eq!(physical.as_slice(), expected.as_slice());
+        }
+        // The root's absent address and a root block's absent parent remain zero.
+        assert!(logical.chunks_exact(CORE_STORAGE_WIDTH).any(|row| {
+            let row: &CoreCols<Felt> = row.borrow();
+            row.decoder.addr == ZERO
+        }));
+        assert_eq!(saw_present_parent, !root_block);
+        assert_eq!(saw_absent_parent, root_block);
+    }
+}
+
+#[test]
+fn buffered_and_prebuilt_controllers_share_the_checked_physical_writer() {
+    use miden_air_definitions::vm::trace::{CHIPLETS_CLK_COL, CHIPLETS_WIDTH};
+
+    use crate::trace::chiplets::layout::ControllerRow;
+
+    for prefix in [0, 11] {
+        let mut results = Vec::new();
+        for prebuilt in [false, true] {
+            let state = [Felt::from_u8(3); 12];
+            let mut hasher_requests = HasherRequestReplay::default();
+            hasher_requests.record_compress_input(state);
+            let prebuilt_hasher = if prebuilt {
+                let mut hasher = Hasher::default();
+                assert_eq!(hasher.compress(state).unwrap().0, ONE);
+                Some(hasher)
+            } else {
+                None
+            };
+            let mut bitwise = BitwiseReplay::default();
+            bitwise.record_u32xor(ONE, ONE);
+            let mut memory = MemoryWritesReplay::default();
+            memory.record_write_element(
+                ONE,
+                Felt::from_u8(4),
+                ContextId::root(),
+                RowIndex::from(0),
+            );
+            let chiplets = initialize_chiplets(
+                KernelDescriptor::default(),
+                &[],
+                memory,
+                bitwise,
+                KernelReplay::default(),
+                hasher_requests,
+                prebuilt_hasher,
+                AceReplay::default(),
+                &[],
+                MAX_TRACE_LEN,
+            )
+            .unwrap();
+            let layout = chiplets.layout(prefix).unwrap();
+            let eidos_height = pad_to_trace_length(chiplets.eidos_compression_trace_len());
+            let (chiplets, eidos, counts) = chiplets
+                .into_traces(layout, pad_to_trace_length(layout.trace_len()), eidos_height)
+                .unwrap();
+            for row in layout.controller().start()..layout.trace_len() {
+                assert_eq!(
+                    chiplets.trace[row * CHIPLETS_WIDTH + CHIPLETS_CLK_COL],
+                    Felt::from_u32(row as u32 + 1)
+                );
+            }
+            let row_zero = ControllerRow::default().logical_address();
+            assert_eq!(
+                layout.controller_address(row_zero).unwrap().to_felt(),
+                chiplets.trace[prefix * CHIPLETS_WIDTH + CHIPLETS_CLK_COL]
+            );
+            assert_eq!(
+                layout
+                    .controller_address(
+                        crate::trace::chiplets::layout::LogicalControllerAddress::ABSENT
+                    )
+                    .unwrap()
+                    .to_felt(),
+                ZERO
+            );
+            assert!(chiplets.trace[..prefix * CHIPLETS_WIDTH].iter().all(|&cell| cell == ZERO));
+            results.push((chiplets.trace, eidos.trace, counts));
+        }
+        assert_eq!(results[0], results[1]);
+    }
+}
+
 /// Verifies that `validate_heights_within_max_trace_len` rejects any padded per-AIR height above
 /// `MAX_TRACE_LEN`, independent of the memory budget.
 #[test]

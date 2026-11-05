@@ -54,7 +54,7 @@ fn hasher_compress_one() {
     let mut hasher = Hasher::default();
     let init_state = random_state_with_packed_cv();
 
-    let (addr, final_state) = hasher.compress(init_state);
+    let (addr, final_state) = hasher.compress(init_state).unwrap();
     assert_eq!(ONE, addr);
 
     let expected_state = compress_state(init_state);
@@ -78,8 +78,8 @@ fn hasher_compress_two() {
     let init_state1 = random_state_with_packed_cv();
     let init_state2 = random_state_with_packed_cv();
 
-    let (addr1, final_state1) = hasher.compress(init_state1);
-    let (addr2, final_state2) = hasher.compress(init_state2);
+    let (addr1, final_state1) = hasher.compress(init_state1).unwrap();
+    let (addr2, final_state2) = hasher.compress(init_state2).unwrap();
 
     assert_eq!(ONE, addr1);
     assert_eq!(Felt::from_u8(2), addr2);
@@ -117,7 +117,7 @@ fn hasher_build_merkle_root_depth_1() {
 
     let mut hasher = Hasher::default();
     let path0 = tree.get_path(NodeIndex::new(1, 0).unwrap()).unwrap();
-    let (_, root) = hasher.build_merkle_root(leaves[0], &path0, ZERO);
+    let (_, root) = hasher.build_merkle_root(leaves[0], &path0, ZERO).unwrap();
 
     assert_eq!(root, compute_path_root(leaves[0], &path0, 0));
 
@@ -148,7 +148,7 @@ fn hasher_build_merkle_root_depth_3() {
 
     let mut hasher = Hasher::default();
     let path = tree.get_path(NodeIndex::new(3, 5).unwrap()).unwrap();
-    let (_, root) = hasher.build_merkle_root(leaves[5], &path, Felt::from_u8(5));
+    let (_, root) = hasher.build_merkle_root(leaves[5], &path, Felt::from_u8(5)).unwrap();
 
     assert_eq!(root, compute_path_root(leaves[5], &path, 5));
 
@@ -172,12 +172,9 @@ fn hasher_update_merkle_root() {
     let path = tree.get_path(NodeIndex::new(2, index).unwrap()).unwrap();
     let new_leaf: Digest = [Felt::from_u8(100), ZERO, ZERO, ZERO].into();
 
-    let update = hasher.update_merkle_root(
-        leaves[index as usize],
-        new_leaf,
-        &path,
-        Felt::new_unchecked(index),
-    );
+    let update = hasher
+        .update_merkle_root(leaves[index as usize], new_leaf, &path, Felt::new_unchecked(index))
+        .unwrap();
 
     assert_eq!(update.get_old_root(), compute_path_root(leaves[index as usize], &path, index));
 
@@ -220,7 +217,7 @@ fn compression_segment_structure() {
     // One COMPRESS yields one compression block with multiplicity 1.
     let mut hasher = Hasher::default();
     let init_state = random_state_with_packed_cv();
-    let (addr, result) = hasher.compress(init_state);
+    let (addr, result) = hasher.compress(init_state).unwrap();
 
     // Verify returned address and compressed state
     assert_eq!(addr, ONE, "first compression should start at address 1");
@@ -276,8 +273,8 @@ fn compression_deduplication() {
     // Two identical COMPRESS inputs collapse to one compression block with multiplicity 2.
     let mut hasher = Hasher::default();
     let init_state = random_state_with_packed_cv();
-    let (addr1, result1) = hasher.compress(init_state);
-    let (addr2, result2) = hasher.compress(init_state); // same state
+    let (addr1, result1) = hasher.compress(init_state).unwrap();
+    let (addr2, result2) = hasher.compress(init_state).unwrap(); // same state
 
     // Both should produce the same result but at different addresses
     assert_eq!(result1, result2, "same input should produce same output");
@@ -310,8 +307,8 @@ fn hash_memoization_control_blocks() {
 
     let mut hasher = Hasher::default();
 
-    let (addr1, digest1) = hasher.hash_control_block(h1, h2, domain, expected_hash);
-    let (addr2, digest2) = hasher.hash_control_block(h1, h2, domain, expected_hash);
+    let (addr1, digest1) = hasher.hash_control_block(h1, h2, domain, expected_hash).unwrap();
+    let (addr2, digest2) = hasher.hash_control_block(h1, h2, domain, expected_hash).unwrap();
 
     assert_eq!(digest1, digest2);
     assert_eq!(digest1, expected_hash);
@@ -342,8 +339,8 @@ fn hash_memoization_basic_blocks_single_batch() {
     let batches = make_single_batch();
     let expected_hash = compute_basic_block_hash(&batches);
 
-    let (addr1, digest1) = hasher.hash_basic_block(&batches, expected_hash);
-    let (addr2, digest2) = hasher.hash_basic_block(&batches, expected_hash);
+    let (addr1, digest1) = hasher.hash_basic_block(&batches, expected_hash).unwrap();
+    let (addr2, digest2) = hasher.hash_basic_block(&batches, expected_hash).unwrap();
 
     assert_eq!(digest1, digest2, "memoized digest should match original");
     assert_eq!(digest1, expected_hash);
@@ -384,8 +381,8 @@ fn hash_memoization_basic_blocks_multi_batch() {
     let batches = make_multi_batch(3);
     let expected_hash = compute_basic_block_hash(&batches);
 
-    let (addr1, digest1) = hasher.hash_basic_block(&batches, expected_hash);
-    let (addr2, digest2) = hasher.hash_basic_block(&batches, expected_hash);
+    let (addr1, digest1) = hasher.hash_basic_block(&batches, expected_hash).unwrap();
+    let (addr2, digest2) = hasher.hash_basic_block(&batches, expected_hash).unwrap();
 
     assert_eq!(digest1, digest2);
     assert_eq!(digest1, expected_hash);
@@ -444,11 +441,12 @@ fn hash_memoization_basic_blocks_check() {
     let loop_body_hash = compute_basic_block_hash(&loop_body_batches);
 
     // BB1: 2-batch basic block
-    let (bb1_addr, bb1_digest) = hasher.hash_basic_block(&batches, bb_hash);
+    let (bb1_addr, bb1_digest) = hasher.hash_basic_block(&batches, bb_hash).unwrap();
     assert_eq!(bb1_digest, bb_hash);
 
     // Loop body: different block in between
-    let (_loop_addr, loop_digest) = hasher.hash_basic_block(&loop_body_batches, loop_body_hash);
+    let (_loop_addr, loop_digest) =
+        hasher.hash_basic_block(&loop_body_batches, loop_body_hash).unwrap();
     assert_eq!(loop_digest, loop_body_hash);
 
     // Hash Join2 = hash(BB1, Loop)
@@ -456,12 +454,13 @@ fn hash_memoization_basic_blocks_check() {
         super::init_state_from_words_with_domain(&bb1_digest, &loop_digest, Felt::from_u8(7));
     let join2_compressed = compress_state(join2_state);
     let join2_hash = get_digest(&join2_compressed);
-    let (_join2_addr, join2_digest) =
-        hasher.hash_control_block(bb1_digest, loop_digest, Felt::from_u8(7), join2_hash);
+    let (_join2_addr, join2_digest) = hasher
+        .hash_control_block(bb1_digest, loop_digest, Felt::from_u8(7), join2_hash)
+        .unwrap();
     assert_eq!(join2_digest, join2_hash);
 
     // BB2: identical to BB1 -- should be memoized
-    let (bb2_addr, bb2_digest) = hasher.hash_basic_block(&batches, bb_hash);
+    let (bb2_addr, bb2_digest) = hasher.hash_basic_block(&batches, bb_hash).unwrap();
     assert_eq!(bb2_digest, bb_hash);
     assert_ne!(bb1_addr, bb2_addr, "memoized BB2 should have a different address");
 
@@ -470,8 +469,9 @@ fn hash_memoization_basic_blocks_check() {
         super::init_state_from_words_with_domain(&join2_digest, &bb2_digest, Felt::from_u8(7));
     let join1_compressed = compress_state(join1_state);
     let join1_hash = get_digest(&join1_compressed);
-    let (_join1_addr, join1_digest) =
-        hasher.hash_control_block(join2_digest, bb2_digest, Felt::from_u8(7), join1_hash);
+    let (_join1_addr, join1_digest) = hasher
+        .hash_control_block(join2_digest, bb2_digest, Felt::from_u8(7), join1_hash)
+        .unwrap();
     assert_eq!(join1_digest, join1_hash);
 
     let trace = build_trace(hasher);

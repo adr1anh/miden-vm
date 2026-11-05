@@ -5,7 +5,7 @@ use alloc::sync::Arc;
 use miden_air_definitions::vm::{
     CoreCols, DecoderCols, StackCols, SystemCols,
     trace::{
-        chiplets::hasher::CONTROLLER_ROWS_PER_HASHER_OP_FELT,
+        chiplets::hasher::CONTROLLER_ROWS_PER_HASHER_OP,
         decoder::{NUM_OP_BATCH_ENCODING_COLS, NUM_OP_BITS, NUM_USER_OP_HELPERS},
     },
 };
@@ -22,7 +22,10 @@ use miden_core::{
 use super::{ExecutionContextInfo, StackState, SystemState, get_digest_in_forest};
 use crate::{
     ExecutionError,
-    trace::parallel::{core_trace_fragment::BasicBlockContext, tracer::CoreTraceGenerationTracer},
+    trace::{
+        chiplets::layout::{ChipletsLayout, LogicalControllerAddress},
+        parallel::{core_trace_fragment::BasicBlockContext, tracer::CoreTraceGenerationTracer},
+    },
 };
 
 // DECODER ROW
@@ -32,7 +35,7 @@ use crate::{
 #[derive(Debug)]
 struct DecoderRow {
     /// The address field to write into trace
-    pub addr: Felt,
+    pub addr: LogicalControllerAddress,
     /// The operation code for start operations
     pub opcode: u8,
     /// The two child hashes for start operations (first hash, second hash)
@@ -54,7 +57,11 @@ impl DecoderRow {
     ///
     /// Control flow operations do not occur within basic blocks, so the relevant fields are set
     /// to their default values.
-    pub fn new_control_flow(opcode: u8, hasher_state: (Word, Word), addr: Felt) -> Self {
+    pub fn new_control_flow(
+        opcode: u8,
+        hasher_state: (Word, Word),
+        addr: LogicalControllerAddress,
+    ) -> Self {
         Self {
             opcode,
             hasher_state,
@@ -72,7 +79,7 @@ impl DecoderRow {
     pub fn new_basic_block_batch(
         start_op: BasicBlockStartOperation,
         op_batch: &OpBatch,
-        addr: Felt,
+        addr: LogicalControllerAddress,
         group_count: Felt,
     ) -> Result<Self, ExecutionError> {
         let opcode = match start_op {
@@ -99,16 +106,17 @@ impl DecoderRow {
     /// Creates a new `DecoderRow` for an operation within a basic block.
     pub fn new_operation(
         operation: Operation,
-        current_addr: Felt,
-        parent_addr: Felt,
+        current_addr: LogicalControllerAddress,
+        parent_addr: LogicalControllerAddress,
         op_idx_in_group: usize,
         basic_block_ctx: &BasicBlockContext,
         user_op_helpers: [Felt; NUM_USER_OP_HELPERS],
-    ) -> Self {
+        layout: ChipletsLayout,
+    ) -> Result<Self, ExecutionError> {
         let hasher_state: (Word, Word) = {
             let word1 = [
                 basic_block_ctx.current_op_group,
-                parent_addr,
+                layout.controller_address(parent_addr)?.to_felt(),
                 user_op_helpers[0],
                 user_op_helpers[1],
             ];
@@ -118,7 +126,7 @@ impl DecoderRow {
             (word1.into(), word2.into())
         };
 
-        Self {
+        Ok(Self {
             opcode: operation.op_code(),
             hasher_state,
             addr: current_addr,
@@ -126,7 +134,7 @@ impl DecoderRow {
             group_count: basic_block_ctx.group_count_in_block,
             op_index: Felt::from_u32(op_idx_in_group as u32),
             op_batch_encoding: [ZERO; NUM_OP_BATCH_ENCODING_COLS],
-        }
+        })
     }
 }
 
@@ -163,7 +171,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             self.decoder_state.parent_addr,
             group_count_for_block,
         )?;
-        self.fill_trace_row(system, stack, decoder_row);
+        self.fill_trace_row(system, stack, decoder_row)?;
         Ok(())
     }
 
@@ -186,7 +194,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             ended_node_addr,
         );
 
-        self.fill_trace_row(system, stack, decoder_row);
+        self.fill_trace_row(system, stack, decoder_row)?;
         Ok(())
     }
 
@@ -205,6 +213,8 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         op_batch: &OpBatch,
         basic_block_context: &mut BasicBlockContext,
     ) -> Result<(), ExecutionError> {
+        let next_address =
+            self.decoder_state.current_addr.checked_advance(CONTROLLER_ROWS_PER_HASHER_OP)?;
         // Add RESPAN trace row
         {
             let decoder_row = DecoderRow::new_basic_block_batch(
@@ -213,11 +223,11 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                 self.decoder_state.current_addr,
                 basic_block_context.group_count_in_block,
             )?;
-            self.fill_trace_row(system, stack, decoder_row);
+            self.fill_trace_row(system, stack, decoder_row)?;
         }
 
         // Update block address for the upcoming block
-        self.decoder_state.current_addr += CONTROLLER_ROWS_PER_HASHER_OP_FELT;
+        self.decoder_state.current_addr = next_address;
 
         // Update basic block context
         basic_block_context.group_count_in_block -= ONE;
@@ -238,7 +248,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         op_idx_in_group: usize,
         user_op_helpers: [Felt; NUM_USER_OP_HELPERS],
         basic_block_context: &mut BasicBlockContext,
-    ) {
+    ) -> Result<(), ExecutionError> {
         // update operations left to be executed in the group
         basic_block_context.remove_operation_from_current_op_group();
 
@@ -250,8 +260,9 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             op_idx_in_group,
             basic_block_context,
             user_op_helpers,
-        );
-        self.fill_trace_row(system, stack, decoder_row);
+            self.layout,
+        )?;
+        self.fill_trace_row(system, stack, decoder_row)
     }
 }
 
@@ -286,7 +297,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             self.decoder_state.parent_addr,
         );
 
-        self.fill_trace_row(system, stack, decoder_row);
+        self.fill_trace_row(system, stack, decoder_row)?;
         Ok(())
     }
 
@@ -299,7 +310,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         system: &SystemState,
         stack: &StackState,
         callee_hash: Word,
-    ) {
+    ) -> Result<(), ExecutionError> {
         let decoder_row = DecoderRow::new_control_flow(
             opcodes::DYN,
             (callee_hash, Word::default()),
@@ -321,7 +332,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         stack: &StackState,
         callee_hash: Word,
         ctx_info: ExecutionContextInfo,
-    ) {
+    ) -> Result<(), ExecutionError> {
         let second_hasher_state: Word = [
             Felt::from_u32(ctx_info.parent_stack_depth),
             ctx_info.parent_next_overflow_addr,
@@ -359,7 +370,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             self.decoder_state.parent_addr,
         );
 
-        self.fill_trace_row(system, stack, decoder_row);
+        self.fill_trace_row(system, stack, decoder_row)?;
         Ok(())
     }
 
@@ -385,7 +396,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             self.decoder_state.parent_addr,
         );
 
-        self.fill_trace_row(system, stack, decoder_row);
+        self.fill_trace_row(system, stack, decoder_row)?;
         Ok(())
     }
 
@@ -396,7 +407,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         stack: &StackState,
         loop_node: &LoopNode,
         current_forest: &Arc<SparseMastForest>,
-        current_addr: Felt,
+        current_addr: LogicalControllerAddress,
     ) -> Result<(), ExecutionError> {
         // For REPEAT operations, the hasher state in start operations contains the loop body hash
         // in the first half.
@@ -409,7 +420,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             current_addr,
         );
 
-        self.fill_trace_row(system, stack, decoder_row);
+        self.fill_trace_row(system, stack, decoder_row)?;
         Ok(())
     }
 
@@ -434,7 +445,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             self.decoder_state.parent_addr,
         );
 
-        self.fill_trace_row(system, stack, decoder_row);
+        self.fill_trace_row(system, stack, decoder_row)?;
         Ok(())
     }
 
@@ -457,7 +468,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             ended_node_addr,
         );
 
-        self.fill_trace_row(system, stack, decoder_row);
+        self.fill_trace_row(system, stack, decoder_row)?;
         Ok(())
     }
 }
@@ -477,7 +488,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         system: &SystemState,
         stack: &StackState,
         decoder_row: DecoderRow,
-    ) {
+    ) -> Result<(), ExecutionError> {
         let mut row = CoreCols::<Felt>::default();
         if let Some(system) = &self.system_cols {
             row.system = system.clone();
@@ -485,7 +496,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         if let Some(stack) = &self.stack_cols {
             row.stack = stack.clone();
         }
-        Self::write_decoder(&mut row.decoder, &decoder_row);
+        Self::write_decoder(&mut row.decoder, &decoder_row, self.layout)?;
 
         self.writer.write_row(self.row_write_index, row.as_slice());
 
@@ -495,11 +506,16 @@ impl<'a> CoreTraceGenerationTracer<'a> {
 
         // Increment the row write index
         self.row_write_index += 1;
+        Ok(())
     }
 
-    fn write_decoder(decoder: &mut DecoderCols<Felt>, decoder_row: &DecoderRow) {
+    fn write_decoder(
+        decoder: &mut DecoderCols<Felt>,
+        decoder_row: &DecoderRow,
+        layout: ChipletsLayout,
+    ) -> Result<(), ExecutionError> {
         // Block address
-        decoder.addr = decoder_row.addr;
+        decoder.addr = layout.controller_address(decoder_row.addr)?.to_felt();
 
         // Decompose operation into bits
         let opcode = decoder_row.opcode;
@@ -533,6 +549,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         let bit4 = Felt::from_u8((opcode >> 4) & 1);
         decoder.extra[0] = bit6 * (ONE - bit5) * bit4;
         decoder.extra[1] = bit6 * bit5;
+        Ok(())
     }
 
     fn build_system_cols(system: &SystemState) -> SystemCols<Felt> {
@@ -580,5 +597,204 @@ fn get_op_batch_encoding(
         _ => Err(ExecutionError::Internal(
             "invalid number of groups in a batch, must be 1, 2, 4, or 8",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::borrow::Borrow;
+
+    use miden_core::mast::BasicBlockNodeBuilder;
+
+    use super::*;
+    use crate::{
+        ContextId,
+        trace::{
+            parallel::{CORE_TRACE_WIDTH, MAX_TRACE_LEN},
+            trace_state::{BlockAddressReplay, BlockStackReplay, DecoderState},
+            utils::RowMajorTraceWriter,
+        },
+    };
+
+    fn respan_batch() -> OpBatch {
+        BasicBlockNodeBuilder::new(alloc::vec![Operation::Pad])
+            .build()
+            .unwrap()
+            .op_batches()[0]
+            .clone()
+    }
+
+    fn tracer(
+        buffer: &mut [Felt],
+        current_addr: LogicalControllerAddress,
+    ) -> CoreTraceGenerationTracer<'_> {
+        CoreTraceGenerationTracer::new(
+            RowMajorTraceWriter::new(buffer, CORE_TRACE_WIDTH),
+            DecoderState {
+                current_addr,
+                parent_addr: LogicalControllerAddress::from_felt(Felt::from_u8(7)).unwrap(),
+            },
+            BlockAddressReplay::default(),
+            BlockStackReplay::default(),
+            ChipletsLayout::new(0, MAX_TRACE_LEN - 1, 0, 0, 0, 0).unwrap(),
+        )
+    }
+
+    fn system() -> SystemState {
+        SystemState {
+            clk: 0u32.into(),
+            ctx: ContextId::root(),
+            fn_hash: Word::default(),
+            deferred_root: Word::default(),
+        }
+    }
+
+    #[test]
+    fn respan_advances_materializable_rows_while_preserving_absence() {
+        let batch = respan_batch();
+        let stack = StackState::new([ZERO; MIN_STACK_DEPTH], MIN_STACK_DEPTH, ZERO);
+        for (address, next_address) in [
+            (ONE, Felt::from_u32(1 + CONTROLLER_ROWS_PER_HASHER_OP as u32)),
+            (ZERO, ZERO),
+            (
+                Felt::from_u32((MAX_TRACE_LEN - CONTROLLER_ROWS_PER_HASHER_OP) as u32),
+                Felt::from_u32(MAX_TRACE_LEN as u32),
+            ),
+        ] {
+            let mut buffer = [ZERO; CORE_TRACE_WIDTH];
+            {
+                let mut tracer =
+                    tracer(&mut buffer, LogicalControllerAddress::from_felt(address).unwrap());
+                let mut context = BasicBlockContext {
+                    current_op_group: Felt::from_u8(99),
+                    group_count_in_block: ONE,
+                };
+                tracer.fill_respan_trace_row(&system(), &stack, &batch, &mut context).unwrap();
+
+                assert_eq!(tracer.row_write_index, 1);
+                assert_eq!(tracer.decoder_state.current_addr.to_felt(), next_address);
+                assert_eq!(tracer.decoder_state.parent_addr.to_felt(), Felt::from_u8(7));
+                assert_eq!(context.current_op_group, batch.groups()[0]);
+                assert_eq!(context.group_count_in_block, ZERO);
+            }
+            let row: &CoreCols<Felt> = buffer.as_slice().borrow();
+            assert_eq!(row.decoder.addr, address);
+            assert_eq!(row.decoder.group_count, ONE);
+        }
+    }
+
+    #[test]
+    fn respan_overflow_preserves_trace_decoder_and_block_context() {
+        let batch = respan_batch();
+        let stack = StackState::new([ZERO; MIN_STACK_DEPTH], MIN_STACK_DEPTH, ZERO);
+        for address in [Felt::from_u32(MAX_TRACE_LEN as u32 + 1)] {
+            let untouched = [Felt::from_u8(99); CORE_TRACE_WIDTH];
+            let mut buffer = untouched;
+            {
+                let mut tracer =
+                    tracer(&mut buffer, LogicalControllerAddress::from_felt(address).unwrap());
+                let mut context = BasicBlockContext {
+                    current_op_group: Felt::from_u8(11),
+                    group_count_in_block: ONE,
+                };
+
+                let result = tracer.fill_respan_trace_row(&system(), &stack, &batch, &mut context);
+                assert!(matches!(result, Err(ExecutionError::TraceLenExceeded(MAX_TRACE_LEN))));
+                assert_eq!(tracer.row_write_index, 0);
+                assert_eq!(
+                    tracer.decoder_state,
+                    DecoderState {
+                        current_addr: LogicalControllerAddress::from_felt(address).unwrap(),
+                        parent_addr: LogicalControllerAddress::from_felt(Felt::from_u8(7)).unwrap()
+                    },
+                );
+                assert!(tracer.system_cols.is_none());
+                assert!(tracer.stack_cols.is_none());
+                assert_eq!(context.current_op_group, Felt::from_u8(11));
+                assert_eq!(context.group_count_in_block, ONE);
+            }
+            assert_eq!(buffer, untouched);
+        }
+    }
+
+    #[test]
+    fn physical_row_writer_maps_parent_and_typed_helpers_without_changing_vm_values() {
+        use crate::tracer::OperationHelperRegisters;
+
+        let row_zero = LogicalControllerAddress::from_felt(ONE).unwrap();
+        let state_prev = [ONE, Felt::from_u8(2), ZERO, Felt::from_u8(4)].into();
+        for parent in [LogicalControllerAddress::ABSENT, row_zero] {
+            for (operation, helper) in [
+                (Operation::Compress, OperationHelperRegisters::Compress { addr: ONE }),
+                (
+                    Operation::MpVerify(ZERO),
+                    OperationHelperRegisters::MerklePath { addr: ONE, index: ONE },
+                ),
+                (
+                    Operation::LogDeferred,
+                    OperationHelperRegisters::LogDeferred { addr: ONE, state_prev },
+                ),
+            ] {
+                let layout = ChipletsLayout::new(7, 2, 0, 0, 0, 0).unwrap();
+                let mut system = system();
+                system.clk = 23u32.into();
+                system.ctx = ContextId::from(3);
+                system.fn_hash = state_prev;
+                let stack = StackState::new([ONE; MIN_STACK_DEPTH], MIN_STACK_DEPTH + 2, ONE);
+                let expected_system = CoreTraceGenerationTracer::build_system_cols(&system);
+                let expected_stack = CoreTraceGenerationTracer::build_stack_cols(&stack);
+                let mut buffer = [ZERO; CORE_TRACE_WIDTH];
+                {
+                    let mut tracer = CoreTraceGenerationTracer::new(
+                        RowMajorTraceWriter::new(&mut buffer, CORE_TRACE_WIDTH),
+                        DecoderState {
+                            current_addr: row_zero,
+                            parent_addr: parent,
+                        },
+                        BlockAddressReplay::default(),
+                        BlockStackReplay::default(),
+                        layout,
+                    );
+                    tracer.system_cols = Some(expected_system.clone());
+                    tracer.stack_cols = Some(expected_stack.clone());
+                    let mut context = BasicBlockContext {
+                        current_op_group: Felt::from_u8(operation.op_code()),
+                        group_count_in_block: ONE,
+                    };
+                    tracer
+                        .fill_operation_trace_row(
+                            &system,
+                            &stack,
+                            operation,
+                            0,
+                            helper.to_physical_user_op_helpers(layout).unwrap(),
+                            &mut context,
+                        )
+                        .unwrap();
+                    assert_eq!(tracer.decoder_state.current_addr, row_zero);
+                    assert_eq!(tracer.decoder_state.parent_addr, parent);
+                }
+                let row: &CoreCols<Felt> = buffer.as_slice().borrow();
+                assert_eq!(row.decoder.addr, Felt::from_u8(8));
+                assert_eq!(
+                    row.decoder.hasher_state[1],
+                    if parent == LogicalControllerAddress::ABSENT {
+                        ZERO
+                    } else {
+                        Felt::from_u8(8)
+                    }
+                );
+                let mut expected_helpers = helper.to_user_op_helpers();
+                expected_helpers[0] = Felt::from_u8(8);
+                assert_eq!(row.decoder.user_op_helpers(), expected_helpers);
+                assert_eq!(row.system.clk, expected_system.clk);
+                assert_eq!(row.system.ctx, expected_system.ctx);
+                assert_eq!(row.system.fn_hash, expected_system.fn_hash);
+                assert_eq!(row.stack.top, expected_stack.top);
+                assert_eq!(row.stack.b0, expected_stack.b0);
+                assert_eq!(row.stack.b1, ONE);
+                assert_eq!(row.stack.h0, Felt::from_u8(2));
+            }
+        }
     }
 }

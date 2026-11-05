@@ -47,7 +47,7 @@ use crate::vm::{
 ///
 /// The memory trace is ordered by (ctx, addr, clk). Consecutive rows are compared
 /// via deltas to enforce monotonicity of this ordering. A select mechanism
-/// using `ctx_changed` and `addr_changed` (docs: `n0`, `n1`) determines which delta
+/// using `ctx_changed` and the same-context/address flag determines which delta
 /// is active: context change takes precedence over address change, which takes
 /// precedence over clock change.
 pub fn enforce_memory_constraints<AB>(
@@ -113,8 +113,8 @@ pub fn enforce_memory_constraints<AB>(
 
     // --- delta inverse ---
     // d_inv (docs: column `t`) is shared across all three delta levels (ctx, addr, clk).
-    // The assert_bool + assert_zero pairs below form conditional inverses that force d_inv
-    // to the correct value at each level.
+    // The Booleanity and closure constraints below force d_inv to the correct value
+    // when the context or address changes.
     let d_inv_next = cols_next.d_inv;
 
     // Context: prover sets d_inv = 1/ctx_delta → ctx_changed = 1.
@@ -133,18 +133,8 @@ pub fn enforce_memory_constraints<AB>(
     let addr_changed = addr_delta.clone() * d_inv_next;
     let same_addr = addr_changed.not();
 
-    // When context is unchanged (same_ctx = 1):
-    {
-        let builder = &mut builder.when(same_ctx.clone());
-        // Completes the ctx_changed enforcement: ctx_delta must be zero.
-        builder.assert_zero(ctx_delta.clone());
-        // addr_changed must be boolean. Same enforcement as ctx_changed: when
-        // addr_delta ≠ 0, this + the assert_zero(addr_delta) below forces
-        // addr_changed = 1, i.e. d_inv = 1/addr_delta.
-        builder.assert_bool(addr_changed.clone());
-        // Completes the addr_changed enforcement: addr_delta must be zero.
-        builder.when(same_addr.clone()).assert_zero(addr_delta.clone());
-    }
+    // Completes the ctx_changed enforcement: unchanged context requires ctx_delta = 0.
+    builder.when(same_ctx.clone()).assert_zero(ctx_delta.clone());
 
     // --- same context/addr flag ---
     // f_sca' = 1 when both context and word address are unchanged between rows.
@@ -153,6 +143,11 @@ pub fn enforce_memory_constraints<AB>(
     // Not constrained in the first row (intentional — first-row constraints use
     // not_written flags directly, not f_sca).
     let same_ctx_and_addr = cols_next.is_same_ctx_and_addr;
+    // When same_ctx = 1, f_sca' = 1 - addr_changed, so Booleanity and closure of
+    // f_sca' are equivalent to the conditional address inverse constraints.
+    // When same_ctx = 0, f_sca' = 0 and addr_changed may be non-Boolean.
+    builder.assert_bool(same_ctx_and_addr);
+    builder.when(same_ctx_and_addr).assert_zero(addr_delta.clone());
     builder.assert_eq(same_ctx_and_addr, same_ctx.clone() * same_addr.clone());
 
     // --- monotonicity ---
@@ -166,9 +161,10 @@ pub fn enforce_memory_constraints<AB>(
     let clk_delta = cols_next.clk - cols.clk;
     let computed_delta = {
         let ctx_term = ctx_changed * ctx_delta;
-        let addr_term = addr_changed * addr_delta;
-        let clk_term = same_addr * clk_delta.clone();
-        ctx_term + same_ctx * (addr_term + clk_term)
+        // The flag definition gives same_ctx - f_sca' = same_ctx * addr_changed.
+        let addr_term = (same_ctx - same_ctx_and_addr) * addr_delta;
+        let clk_term = same_ctx_and_addr * clk_delta.clone();
+        ctx_term + addr_term + clk_term
     };
     let delta_next = cols_next.d1 * TWO_POW_16 + cols_next.d0;
     builder.assert_eq(computed_delta, delta_next);
@@ -531,6 +527,175 @@ mod tests {
             next_is_first: Felt::ZERO,
         };
         eval_memory_window(local, next, &flags)
+    }
+
+    /// Reference polynomials from before the inverse/selected-delta refactor. The remaining
+    /// constraints are unchanged; the equivalence fixtures below make all of them zero by using
+    /// valid addresses and read-only zero-valued rows.
+    fn legacy_inverse_and_delta_constraints(
+        local: &ChipletCols<Felt>,
+        next: &ChipletCols<Felt>,
+    ) -> [Felt; 6] {
+        let local = local.memory();
+        let next = next.memory();
+        let ctx_delta = next.ctx - local.ctx;
+        let addr_delta = next.word_addr - local.word_addr;
+        let clk_delta = next.clk - local.clk;
+        let ctx_changed = ctx_delta * next.d_inv;
+        let same_ctx = Felt::ONE - ctx_changed;
+        let addr_changed = addr_delta * next.d_inv;
+        let same_addr = Felt::ONE - addr_changed;
+        let selected_delta = ctx_changed * ctx_delta
+            + same_ctx * (addr_changed * addr_delta + same_addr * clk_delta);
+        let decomposed_delta = next.d1 * Felt::new_unchecked(1 << 16) + next.d0;
+
+        [
+            ctx_changed * (ctx_changed - Felt::ONE),
+            same_ctx * ctx_delta,
+            same_ctx * addr_changed * (addr_changed - Felt::ONE),
+            same_ctx * same_addr * addr_delta,
+            next.is_same_ctx_and_addr - same_ctx * same_addr,
+            selected_delta - decomposed_delta,
+        ]
+    }
+
+    fn inverse_test_memory_rows(
+        ctx_step: u64,
+        next_word_addr: u64,
+        clk_step: u64,
+    ) -> (ChipletCols<Felt>, ChipletCols<Felt>) {
+        assert_eq!(next_word_addr % 4, 0);
+        let (mut local, mut next) = same_key_memory_rows(AccessType::Read, AccessType::Read);
+        for row in [&mut local, &mut next] {
+            let cols = memory_cols(row);
+            cols.ctx = Felt::new_unchecked(3);
+            cols.values = [Felt::ZERO; 4];
+        }
+        {
+            let cols = memory_cols(&mut next);
+            cols.ctx += Felt::new_unchecked(ctx_step);
+            cols.word_addr = Felt::new_unchecked(next_word_addr);
+            cols.clk += Felt::new_unchecked(clk_step);
+        }
+        set_word_addr_limbs(&mut next, next_word_addr / 4, 0);
+        (local, next)
+    }
+
+    #[test]
+    fn memory_inverse_refactor_preserves_old_zero_set_for_adversarial_assignments() {
+        let two = Felt::new_unchecked(2);
+        let four = Felt::new_unchecked(4);
+        let eight = Felt::new_unchecked(8);
+        let inverses = [
+            Felt::ZERO,
+            Felt::ONE,
+            two,
+            -Felt::ONE,
+            two.inverse(),
+            four.inverse(),
+            eight.inverse(),
+        ];
+
+        for ctx_step in [0, 1, 2] {
+            for next_word_addr in [0, 4, 8, 12] {
+                for clk_step in [0, 1, 3] {
+                    let (local, mut next) =
+                        inverse_test_memory_rows(ctx_step, next_word_addr, clk_step);
+                    let ctx_delta = next.memory().ctx - local.memory().ctx;
+                    let addr_delta = next.memory().word_addr - local.memory().word_addr;
+                    let clk_delta = next.memory().clk - local.memory().clk;
+
+                    for d_inv in inverses {
+                        let ctx_changed = ctx_delta * d_inv;
+                        let same_ctx = Felt::ONE - ctx_changed;
+                        let addr_changed = addr_delta * d_inv;
+                        let same_addr = Felt::ONE - addr_changed;
+                        let legacy_delta = ctx_changed * ctx_delta
+                            + same_ctx * (addr_changed * addr_delta + same_addr * clk_delta);
+
+                        // Include forged Boolean flags, non-Boolean flags, and the legacy flag
+                        // expression even when a malicious inverse makes that expression invalid.
+                        for flag in [Felt::ZERO, Felt::ONE, two, -Felt::ONE, same_ctx * same_addr] {
+                            // An inverse/flag error must still reject when the claimed delta is
+                            // chosen to satisfy the old monotonicity equation exactly.
+                            for delta in [
+                                Felt::ZERO,
+                                ctx_delta,
+                                addr_delta,
+                                clk_delta,
+                                legacy_delta,
+                                legacy_delta + Felt::ONE,
+                            ] {
+                                let cols = memory_cols(&mut next);
+                                cols.d_inv = d_inv;
+                                cols.is_same_ctx_and_addr = flag;
+                                cols.d0 = delta;
+
+                                let legacy = legacy_inverse_and_delta_constraints(&local, &next);
+                                let legacy_accepts =
+                                    legacy.iter().all(|value| *value == Felt::ZERO);
+                                let evaluations = eval_memory_transition(&local, &next);
+                                let refactored_accepts =
+                                    evaluations.iter().all(|value| *value == QuadFelt::ZERO);
+
+                                // Independently describe the accepted relation by the first
+                                // changed key. Clock-only reads deliberately allow any d_inv.
+                                let should_accept = if ctx_delta != Felt::ZERO {
+                                    ctx_delta * d_inv == Felt::ONE
+                                        && flag == Felt::ZERO
+                                        && delta == ctx_delta
+                                } else if addr_delta != Felt::ZERO {
+                                    addr_delta * d_inv == Felt::ONE
+                                        && flag == Felt::ZERO
+                                        && delta == addr_delta
+                                } else {
+                                    flag == Felt::ONE && delta == clk_delta
+                                };
+                                assert_eq!(
+                                    legacy_accepts, should_accept,
+                                    "legacy relation: ctx_delta={ctx_delta:?}, \
+                                     addr_delta={addr_delta:?}, clk_delta={clk_delta:?}, \
+                                     d_inv={d_inv:?}, flag={flag:?}, delta={delta:?}; \
+                                     constraints={legacy:?}",
+                                );
+                                assert_eq!(
+                                    refactored_accepts, legacy_accepts,
+                                    "old/new zero sets differ: ctx_delta={ctx_delta:?}, \
+                                     addr_delta={addr_delta:?}, clk_delta={clk_delta:?}, \
+                                     d_inv={d_inv:?}, flag={flag:?}, delta={delta:?}; \
+                                     constraints={evaluations:?}",
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn changed_context_allows_non_boolean_address_change_ratio() {
+        let (local, mut next) = inverse_test_memory_rows(2, 8, 3);
+        let two = Felt::new_unchecked(2);
+        {
+            let cols = memory_cols(&mut next);
+            cols.d_inv = two.inverse();
+            cols.d0 = two;
+            cols.is_same_ctx_and_addr = Felt::ZERO;
+        }
+        let addr_changed =
+            (next.memory().word_addr - local.memory().word_addr) * next.memory().d_inv;
+        assert_eq!(addr_changed, two);
+        assert!(
+            legacy_inverse_and_delta_constraints(&local, &next)
+                .iter()
+                .all(|value| *value == Felt::ZERO),
+        );
+        let evaluations = eval_memory_transition(&local, &next);
+        assert!(
+            evaluations.iter().all(|value| *value == QuadFelt::ZERO),
+            "a context change must allow a non-Boolean address-change ratio; got {evaluations:?}",
+        );
     }
 
     /// Ensures that repeating `(ctx, word_addr, clk)` is valid only when both accesses are reads.

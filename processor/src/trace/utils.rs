@@ -1,7 +1,7 @@
 #[cfg(test)]
 use alloc::vec::Vec;
 
-use crate::{Felt, ONE};
+use crate::{Felt, ONE, trace::chiplets::layout::ChipletBand};
 #[cfg(test)]
 use crate::{operation::Operation, utils::ToElements};
 
@@ -59,8 +59,8 @@ pub struct ChipletTraceFragment<'a> {
     col_start: usize,
     num_rows: usize,
     num_cols: usize,
-    /// Global row offset of `band[0]` in the chiplets trace; used to compute `chip_clk`.
-    row_offset: usize,
+    /// Checked physical placement for the global `chip_clk`, absent in bare unit-test fragments.
+    physical_band: Option<ChipletBand>,
     /// Columns `< col_start` to set to ONE on every row in this band.
     prefix_one_cols: &'static [usize],
 }
@@ -73,17 +73,29 @@ impl<'a> ChipletTraceFragment<'a> {
         col_start: usize,
         num_cols: usize,
     ) -> Self {
-        Self::with_overheads(band, stride, col_start, num_cols, 0, &[])
+        Self::new(band, stride, col_start, num_cols, None, &[])
     }
 
     /// Adds the chiplets-trace overheads: per-row ONEs at `prefix_one_cols` and `chip_clk` at
-    /// column `stride - 1` (when there's room), using `row_offset` as `band[0]`'s global row.
+    /// column `stride - 1` (when there's room), using the layout's checked physical band.
     pub fn with_overheads(
         band: &'a mut [Felt],
         stride: usize,
         col_start: usize,
         num_cols: usize,
-        row_offset: usize,
+        physical_band: ChipletBand,
+        prefix_one_cols: &'static [usize],
+    ) -> Self {
+        debug_assert_eq!(band.len() / stride, physical_band.len());
+        Self::new(band, stride, col_start, num_cols, Some(physical_band), prefix_one_cols)
+    }
+
+    fn new(
+        band: &'a mut [Felt],
+        stride: usize,
+        col_start: usize,
+        num_cols: usize,
+        physical_band: Option<ChipletBand>,
         prefix_one_cols: &'static [usize],
     ) -> Self {
         debug_assert_eq!(band.len() % stride, 0, "band length must be a multiple of stride");
@@ -99,7 +111,7 @@ impl<'a> ChipletTraceFragment<'a> {
             col_start,
             num_rows,
             num_cols,
-            row_offset,
+            physical_band,
             prefix_one_cols,
         }
     }
@@ -143,7 +155,8 @@ impl<'a> ChipletTraceFragment<'a> {
             row_offset + chunk_rows <= self.num_rows,
             "chunk overruns fragment row range",
         );
-        let write_chip_clk = self.stride > self.col_start + self.num_cols;
+        let clock_band =
+            self.physical_band.filter(|_| self.stride > self.col_start + self.num_cols);
         let clk_col = self.stride - 1;
         for r in 0..chunk_rows {
             let dst_row = row_offset + r;
@@ -154,8 +167,8 @@ impl<'a> ChipletTraceFragment<'a> {
             }
             row[self.col_start..self.col_start + self.num_cols]
                 .copy_from_slice(&src[r * self.num_cols..(r + 1) * self.num_cols]);
-            if write_chip_clk {
-                row[clk_col] = Felt::from_u32((self.row_offset + dst_row + 1) as u32);
+            if let Some(band) = clock_band {
+                row[clk_col] = band.clock_at(dst_row);
             }
         }
     }
