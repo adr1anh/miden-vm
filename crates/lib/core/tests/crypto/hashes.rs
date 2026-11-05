@@ -81,20 +81,21 @@ fn core_hash_wrapper_cycle_baselines() {
     let short = b"core hash compatibility";
 
     let mut mismatches = Vec::new();
-    // Core invokes the bundled precompile wrappers. Eidos content addressing makes deferred-node
-    // registration compression-based, so pin the resulting wrapper choreography explicitly.
+    // Strict measured snapshots include keyed procedure ENTRY/END execution and runtime calls
+    // through the bundled wrappers, including deferred-node registration. They retain runtime
+    // overhead relative to legacy snapshots and are not performance caps.
     for (name, source, expected) in [
-        ("eidos_init_8", cycle_eidos_init_source(8), 33),
-        ("eidos_precomputed_init_8", cycle_eidos_precomputed_init_source(8), 25),
-        ("eidos_domain_init_8", cycle_eidos_domain_init_source(42, 8), 34),
+        ("eidos_init_8", cycle_eidos_init_source(8), 35),
+        ("eidos_precomputed_init_8", cycle_eidos_precomputed_init_source(8), 27),
+        ("eidos_domain_init_8", cycle_eidos_domain_init_source(42, 8), 36),
         (
             "eidos_precomputed_domain_init_8",
             cycle_eidos_precomputed_domain_init_source(42, 8),
-            25,
+            27,
         ),
-        ("core_keccak_hash", cycle_fixed_hash_source("keccak256", &input), 195),
-        ("core_keccak_merge", cycle_merge_source("keccak256", &left, &right), 219),
-        ("core_keccak_hash_bytes_short", cycle_hash_bytes_source("keccak256", short), 243),
+        ("core_keccak_hash", cycle_fixed_hash_source("keccak256", &input), 254),
+        ("core_keccak_merge", cycle_merge_source("keccak256", &left, &right), 270),
+        ("core_keccak_hash_bytes_short", cycle_hash_bytes_source("keccak256", short), 285),
     ] {
         let output =
             run_core_program(&source).unwrap_or_else(|err| panic!("{name} failed: {err:?}"));

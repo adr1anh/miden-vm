@@ -166,7 +166,8 @@ impl OodScatterPlan {
     /// Renders pipe helpers, the supplied proof-order map pass, table staging, and OOD ingest.
     ///
     /// The enclosing MASM module must import `constants`, `types`, and its relation's `layout`.
-    /// The layout supplies the scatter-table and proof-order map accessors.
+    /// The layout supplies the scatter-table and proof-order map accessors. The fixed push-only
+    /// scatter-table accessor is explicitly inlined at its repeated row lookups.
     pub fn render(&self, proof_order_maps: &str) -> String {
         let mut out = String::new();
         for &blocks in &self.lengths {
@@ -199,7 +200,7 @@ end
 #! Outputs: []
 #! Invocation: exec
 pub proc stage_ood_scatter_table()
-    exec.layout::ood_scatter_table_ptr
+    inline.layout::ood_scatter_table_ptr
     # => [table]
 "#,
         );
@@ -260,7 +261,7 @@ pub proc process_row_ood_evaluations(
     state: types::EidosState,
     evaluation: types::HornerState,
 ) -> (types::EidosState, types::HornerState)
-    dup.12 exec.layout::ood_scatter_table_ptr mem_store
+    dup.12 inline.layout::ood_scatter_table_ptr mem_store
 "#,
             row_felts = self.row_felts
         )
@@ -273,9 +274,9 @@ pub proc process_row_ood_evaluations(
                         writeln!(
                             out,
                             r#"    # {group} group, proof position {position}
-    exec.layout::ood_scatter_table_ptr dup add.{pair} mem_load swap mem_load add
+    inline.layout::ood_scatter_table_ptr dup add.{pair} mem_load swap mem_load add
     swap.13 drop
-    exec.layout::ood_scatter_table_ptr add.{digest} mem_load
+    inline.layout::ood_scatter_table_ptr add.{digest} mem_load
     dynexec"#,
                             group = group.name,
                             digest = pair + 1,
@@ -286,7 +287,7 @@ pub proc process_row_ood_evaluations(
                         writeln!(
                             out,
                             r#"    # {group} group, sole occupant: {blocks} blocks at row offset {dst}
-    exec.layout::ood_scatter_table_ptr mem_load{offset}
+    inline.layout::ood_scatter_table_ptr mem_load{offset}
     swap.13 drop
     exec.pipe_{blocks}"#,
                             group = group.name,
@@ -305,7 +306,7 @@ pub proc process_row_ood_evaluations(
         }
         writeln!(
             out,
-            "    exec.layout::ood_scatter_table_ptr mem_load add.{}\n    swap.13 drop\nend",
+            "    inline.layout::ood_scatter_table_ptr mem_load add.{}\n    swap.13 drop\nend",
             self.row_felts
         )
         .expect("writing to String cannot fail");

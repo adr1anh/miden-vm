@@ -426,13 +426,13 @@ proc load_and_verify_public_key(
     # => [BLOCK_LO=0w, BLOCK_HI=0w, CV, write_ptr=pubkey_ptr, PK_COMM, ...]
     adv_pipe
     # => [QX_BLOCK[8], CV, write_ptr=pubkey_ptr+8, PK_COMM, ...]
-    exec.eidos::compress
+    inline.eidos::compress
     # => [BLOCK_LO, BLOCK_HI, CV, write_ptr=pubkey_ptr+8, PK_COMM, ...]
     adv_pipe
     # => [QY_BLOCK[8], CV, write_ptr=pubkey_ptr+16, PK_COMM, ...]
-    exec.eidos::compress
+    inline.eidos::compress
     # => [BLOCK_LO, BLOCK_HI, CV, write_ptr=pubkey_ptr+16, PK_COMM, ...]
-    exec.eidos::digest
+    inline.eidos::digest
     # => [PK_HASH, write_ptr=pubkey_ptr+16, PK_COMM, ...]
     movup.4 movdn.8
     # => [PK_HASH, PK_COMM, write_ptr=pubkey_ptr+16, ...]
@@ -451,7 +451,7 @@ end
 proc load_keccak_digest_as_z(digest_ptr: ptr<Prehash>) -> Prehash
     repeat.8
         dup mem_load
-        exec.reverse_u32_bytes
+        inline.reverse_u32_bytes
         swap add.1
     end
     # => [read_ptr=digest_ptr+8, PREHASH_U32[8], ...]

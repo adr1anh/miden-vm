@@ -14,7 +14,6 @@ use miden_assembly::{
 };
 
 mod naming_sidecar;
-mod source_naming;
 // CONSTANTS
 // ================================================================================================
 
@@ -216,7 +215,6 @@ fn main() -> Result<(), Report> {
     // generated core-library MASM, or the builder changed:
     println!("cargo:rerun-if-changed=asm");
     println!("cargo:rerun-if-changed=codegen");
-    println!("cargo:rerun-if-changed=source_naming.rs");
     println!("cargo:rerun-if-changed=naming_sidecar.rs");
     println!("cargo:rerun-if-env-changed=MIDEN_BUILD_LIB_DOCS");
     // NOTE: path is relative to the package root (crates/lib/core/), so we need
@@ -243,12 +241,6 @@ fn main() -> Result<(), Report> {
     let assembler = Assembler::default();
     let mut project_assembler =
         assembler.for_project_at_path(asm_dir.join("miden-project.toml"), &mut registry)?;
-    project_assembler.with_namespace_inputs_provider(|_, sources, _| {
-        source_naming::source_namespace_inputs(
-            miden_mast_package::NamespacePlan::new(vec![]),
-            core::iter::once(sources.root.as_ref()).chain(sources.support.iter().map(Box::as_ref)),
-        )
-    });
     let core = project_assembler
         .assemble_with_naming(miden_assembly::ProjectTargetSelector::Library, "release")?;
 

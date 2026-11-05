@@ -489,21 +489,24 @@ fn hash_precompile_cycle_baselines() {
     let short = b"hash wrapper coverage";
 
     let mut mismatches = Vec::new();
+    // Strict measured snapshots include keyed procedure ENTRY/END execution and runtime calls
+    // through the precompile wrappers. They retain overhead relative to legacy execution and
+    // are not caps.
     for (name, source, expected) in [
         (
             "keccak_hash_1_chunk_mem",
             cycle_hash_mem_source("keccak256", "hash_1_chunk_mem", &input),
-            136,
+            184,
         ),
         (
             "keccak_hash_2_chunks_mem",
             cycle_hash_mem_source("keccak256", "hash_2_chunks_mem", &bytes64),
-            136,
+            183,
         ),
         (
             "keccak_hash_bytes_mem_short",
             cycle_hash_mem_source("keccak256", "hash_bytes_mem", short),
-            195,
+            235,
         ),
     ] {
         let output =

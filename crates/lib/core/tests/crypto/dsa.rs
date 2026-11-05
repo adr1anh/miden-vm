@@ -333,12 +333,10 @@ fn core_ecdsa_k256_keccak_verify_cycle_baseline() {
     let output = run_core_program_with_advice(&verify_cycle_source(&fixture), &fixture.advice)
         .expect("valid core ECDSA K256/Keccak signature must verify");
     let cycles = output.stack.get_element(0).expect("cycle count").as_canonical_u64();
-    // This includes the deferred-node registration and hashing performed by the Keccak and
-    // secp256k1 precompile wrappers.
-    // The parent fixture used 1191 cycles. Independent obligation roots compose into one
-    // signature subgraph, which the native wrapper logs once. Primitive native hashing
-    // baselines remain separate.
-    assert_eq!(cycles, 1249);
+    // Strict measured snapshot for keyed procedure ENTRY/END execution, including runtime calls and
+    // deferred-node registration/hashing in the Keccak and secp256k1 wrappers. Keyed execution
+    // retains runtime overhead relative to the legacy snapshot; this is not a performance cap.
+    assert_eq!(cycles, 1887);
 }
 
 #[test]
