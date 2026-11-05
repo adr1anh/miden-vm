@@ -39,7 +39,10 @@ mod operation;
 mod step;
 
 pub use basic_block::SystemEventError;
-pub use debug::{DebugCallFrame, DebugCallFrameResolver, DebugFrameOrigin};
+pub use debug::{
+    DebugCallFrame, DebugCallFrameResolver, DebugFrameOrigin, DebugRuntimeFrame,
+    DebugRuntimeFrameKind,
+};
 pub use memory::Memory;
 pub use step::{BreakReason, ResumeContext};
 

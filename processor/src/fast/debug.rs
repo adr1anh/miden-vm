@@ -8,13 +8,78 @@ use alloc::{
 use miden_core::{
     Word,
     mast::{MastForest, MastNodeExt, MastNodeId},
+    program::{ImplementationRoot, ProcedureKey},
 };
 use miden_mast_package::debug_info::{
     DebugFunctionIdx, DebugFunctionInfo, DebugSourceNode, DebugSourceNodeId, DebugStringIdx,
     PackageDebugInfo,
 };
 
-use crate::{Continuation, ResumeContext, continuation_stack::DebugActivationId};
+use crate::{
+    Continuation, KeyedMode, OpeningId, ResumeContext, continuation_stack::DebugActivationId,
+    trace::RowIndex,
+};
+
+/// An actual runtime activation, independently of source-frame recovery confidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugRuntimeFrameKind {
+    /// Authenticated entry, whose native use is committed only at its actual root END.
+    Entry,
+    /// A committed keyed invocation. Source inline calls do not create these frames.
+    Invoke(KeyedMode),
+}
+
+/// A diagnostic snapshot of an active runtime frame for the next clock.
+///
+/// Requested identity and the resolved body are read from the existing native session, never
+/// inferred from source metadata. These observations cannot authorize execution. Source-level
+/// inline frames remain available separately through [`DebugCallFrameResolver`].
+#[derive(Clone, Debug)]
+pub struct DebugRuntimeFrame {
+    execution: Arc<()>,
+    kind: DebugRuntimeFrameKind,
+    requested_key: ProcedureKey,
+    resolved_implementation: ImplementationRoot,
+    opening_id: OpeningId,
+    invocation_row: Option<RowIndex>,
+    native_use_index: Option<usize>,
+}
+
+impl DebugRuntimeFrame {
+    pub fn kind(&self) -> DebugRuntimeFrameKind {
+        self.kind
+    }
+
+    pub fn requested_key(&self) -> ProcedureKey {
+        self.requested_key
+    }
+
+    pub fn resolved_implementation(&self) -> ImplementationRoot {
+        self.resolved_implementation
+    }
+
+    /// The opening already retained by this execution's native session.
+    pub fn opening_id(&self) -> OpeningId {
+        self.opening_id
+    }
+
+    /// The committed invocation row. Entry has no invocation row.
+    pub fn invocation_row(&self) -> Option<RowIndex> {
+        self.invocation_row
+    }
+
+    /// The stable ordinal in [`crate::ResolutionSession::uses`]. Active entry has no native use
+    /// until root END, which also removes its frame.
+    pub fn native_use_index(&self) -> Option<usize> {
+        self.native_use_index
+    }
+
+    /// Compares activation identities across stops; repeated and recursive uses stay distinct.
+    pub fn is_same_frame(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.execution, &other.execution)
+            && self.invocation_row == other.invocation_row
+    }
+}
 
 /// Evidence used to recover a source-level frame. Inferred frames are best-effort and may omit
 /// optimized callers; consumers must distinguish them from frames identified by source identity.
@@ -602,6 +667,47 @@ impl DebugCallFrameResolver {
 }
 
 impl ResumeContext {
+    /// Actual runtime activations for the next clock, ordered from entry to innermost callee.
+    ///
+    /// Pending resolution does not create an activation. A published invocation remains active
+    /// through its retained return row and disappears once that row executes. This view works
+    /// without source metadata and does not turn inferred source inline calls into activations.
+    pub fn debug_runtime_frames(&self) -> Vec<DebugRuntimeFrame> {
+        let mut frames = Vec::new();
+        let Some((implementation, entry)) = self.continuation_stack.runtime_entry() else {
+            return frames;
+        };
+        let Some(binding) = self.session.bindings().iter().find(|binding| {
+            binding.procedure_key() == entry && binding.implementation_root() == implementation
+        }) else {
+            return frames;
+        };
+        frames.push(DebugRuntimeFrame {
+            execution: self.identity.clone(),
+            kind: DebugRuntimeFrameKind::Entry,
+            requested_key: binding.procedure_key(),
+            resolved_implementation: binding.implementation_root(),
+            opening_id: binding.opening_id(),
+            invocation_row: None,
+            native_use_index: None,
+        });
+        for (row, mode) in self.continuation_stack.iter_runtime_activations() {
+            let Some((index, invocation)) = self.session.invocation_use_at_row(row) else {
+                continue;
+            };
+            frames.push(DebugRuntimeFrame {
+                execution: self.identity.clone(),
+                kind: DebugRuntimeFrameKind::Invoke(mode),
+                requested_key: invocation.procedure_key(),
+                resolved_implementation: invocation.implementation_root(),
+                opening_id: invocation.opening_id(),
+                invocation_row: Some(invocation.row()),
+                native_use_index: Some(index),
+            });
+        }
+        frames
+    }
+
     /// Recover frames without retaining an index. Repeated queries should use a
     /// [`DebugCallFrameResolver`] to avoid rebuilding the derived lookup tables.
     pub fn debug_call_frames(&self) -> Vec<DebugCallFrame> {

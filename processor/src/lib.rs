@@ -72,8 +72,8 @@ pub use execution_options::{
 };
 pub use executor::ProgramExecutor;
 pub use fast::{
-    BreakReason, DebugCallFrame, DebugCallFrameResolver, DebugFrameOrigin, ExecutionOutput,
-    FastProcessor, ResumeContext,
+    BreakReason, DebugCallFrame, DebugCallFrameResolver, DebugFrameOrigin, DebugRuntimeFrame,
+    DebugRuntimeFrameKind, ExecutionOutput, FastProcessor, ResumeContext,
 };
 pub use host::{
     BaseHost, EnvironmentSourceError, EnvironmentWitnessRequest, EnvironmentWitnessSource,

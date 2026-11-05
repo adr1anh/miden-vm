@@ -26,17 +26,21 @@ use miden_core::{
         Namespace, ProcedureKey,
     },
 };
-use miden_debug_types::{Location, SourceFile, SourceSpan};
+use miden_debug_types::{
+    ByteIndex, ColumnNumber, LineNumber, Location, SourceFile, SourceSpan, Uri,
+};
 use miden_mast_package::debug_info::{
-    DebugSourceAsmOp, DebugSourceNode, DebugSourceNodeId, PackageDebugInfo, PackageDebugInfoBuilder,
+    DebugFunctionInfo, DebugSourceAsmOp, DebugSourceInlineCall, DebugSourceNode, DebugSourceNodeId,
+    PackageDebugInfo, PackageDebugInfoBuilder,
 };
 use miden_processor::{
-    BaseHost, ContextId, Continuation, EnvironmentSourceError, EnvironmentTraceLimits,
-    EnvironmentWitnessRequest, ExecutionEnvironment, ExecutionError, ExecutionOptions,
-    ExecutionWitness, FastProcessor, Felt, FutureMaybeSend, Host, InvocationTag, LedgerLimits,
-    LoadedMastForest, OpeningError, OpeningLimits, OpeningResource, OpeningStep, ProcessorState,
-    Program, ReplayReadLimits, ResolutionWitness, SessionError, SessionLimits, SessionPhase,
-    SessionResource, StackInputs, SyncHost, Word,
+    BaseHost, ContextId, Continuation, DebugRuntimeFrame, DebugRuntimeFrameKind,
+    EnvironmentSourceError, EnvironmentTraceLimits, EnvironmentWitnessRequest,
+    ExecutionEnvironment, ExecutionError, ExecutionOptions, ExecutionWitness, FastProcessor, Felt,
+    FutureMaybeSend, Host, InvocationTag, KeyedMode, LedgerLimits, LoadedMastForest, OpeningError,
+    OpeningLimits, OpeningResource, OpeningStep, ProcessorState, Program, ReplayReadLimits,
+    ResolutionWitness, SessionError, SessionLimits, SessionPhase, SessionResource, StackInputs,
+    SyncHost, Word,
     advice::AdviceMutation,
     event::{EventError, EventId},
     operation::OperationError,
@@ -848,7 +852,8 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
         let configuration = environment.configuration(entry, namespace(&["lib"]));
         let expected: Vec<_> = keys.into_iter().map(|key| (opcode, key, callee.hash())).collect();
         let mut baseline = None;
-        for fragment_size in [3, 64] {
+        // A one-row fragment places a cut on both sides of every invocation and return.
+        for fragment_size in [1, 3, 64] {
             let options = ExecutionOptions::default()
                 .with_environment_trace_limits(trace_limits())
                 .with_core_trace_fragment_size(fragment_size)
@@ -870,8 +875,10 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
                 read_limits(),
             )
             .unwrap();
-            for witness in [witness, restored] {
-                let trace = build_trace(witness.into_parts().0, &budget).unwrap();
+            for (imported, witness) in [(false, witness), (true, restored)] {
+                let trace = build_trace(witness.into_parts().0, &budget).unwrap_or_else(|error| {
+                    panic!("{mode:?}, fragment_size={fragment_size}, imported={imported}: {error}")
+                });
                 assert_native_core_bindings(&trace, entry, &expected);
                 let main = trace.main_trace();
                 for (key, count) in [(entry, 1), (aliases[0], 2), (aliases[1], 1)] {
@@ -896,7 +903,7 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
                     baseline = Some(matrices);
                 }
             }
-            if fragment_size == 3 {
+            if fragment_size <= 3 {
                 for explicit_root in [false, true] {
                     let mut host = CountingHost::new(&environment, &[&callee]);
                     host.forests.insert(
@@ -955,13 +962,113 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
 }
 
 #[test]
+fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay() {
+    use miden_air_definitions::vm::trace::chiplets::library::MAST;
+    use miden_core::operations::opcodes;
+    use miden_processor::trace::{RowIndex, build_trace};
+
+    let entry = key(&["app"], "entry");
+    let target = key(&["kernel"], "shared");
+    let callee = body(vec![Operation::Noop]);
+    let modes = [Mode::Exec, Mode::Syscall, Mode::Call, Mode::Syscall];
+    let mut forest = MastForest::new();
+    let mut root = invocation(&mut forest, modes[0], target);
+    for mode in modes.into_iter().skip(1) {
+        let next = invocation(&mut forest, mode, target);
+        root = join(&mut forest, root, next);
+    }
+    let program = finish_program(forest, root);
+    let environment = EnvironmentFixture::new(&[
+        (&["app"], "entry", program.hash()),
+        (&["kernel"], "shared", callee.hash()),
+    ]);
+    let configuration = environment.configuration(entry, namespace(&["kernel"]));
+    let expected = [opcodes::EXEC, opcodes::SYSCALL, opcodes::CALL, opcodes::SYSCALL]
+        .map(|opcode| (opcode, target, callee.hash()));
+    let budget = miden_vm_stark::memory::default_budget();
+    let mut baseline = None;
+    // One-row fragments save a continuation at every invocation, callee entry and return row.
+    for fragment_size in [1, 3, 64] {
+        let options = ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_core_trace_fragment_size(fragment_size)
+            .unwrap();
+        let mut host = CountingHost::new(&environment, &[&callee]);
+        let witness = FastProcessor::new(StackInputs::default())
+            .with_options(options.clone())
+            .unwrap()
+            .execute_for_proving_sync(&program, configuration, &mut host)
+            .unwrap();
+        assert_eq!(host.requests_for(entry), 1);
+        assert_eq!(host.requests_for(target), 1, "both tags must reuse the same opening");
+        assert_eq!(*host.code_requests.borrow(), vec![callee.hash()]);
+        let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
+        let restored = ExecutionWitness::read_from_bytes_with_limits(
+            &bytes,
+            &configuration,
+            trace_limits(),
+            read_limits(),
+        )
+        .unwrap();
+        assert_eq!(restored.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
+        for witness in [witness, restored] {
+            let trace = build_trace(witness.into_parts().0, &budget).unwrap();
+            assert_native_core_bindings(&trace, entry, &expected);
+            let main = trace.main_trace();
+            for (key, normal, syscall) in [(entry, 1, 0), (target, 2, 2)] {
+                let responses: Vec<_> = (0..main.chiplets_height())
+                    .map(RowIndex::from)
+                    .filter(|&row| main.is_library_row(row))
+                    .map(|row| main.chiplet_cols(row).library())
+                    .filter(|row| row.k == MAST && row.z == key.into_word().into_elements())
+                    .collect();
+                assert_eq!(responses.len(), 1, "one occurrence must serve both invocation tags");
+                assert_eq!((responses[0].a, responses[0].b), (felt(normal), felt(syscall)));
+            }
+            let matrices = main.clone_air_matrices();
+            if let Some(expected) = &baseline {
+                assert_eq!(&matrices, expected);
+            } else {
+                baseline = Some(matrices);
+            }
+        }
+        #[cfg(feature = "std")]
+        if fragment_size == 1 {
+            let (trace, precompile) = FastProcessor::new(StackInputs::default())
+                .with_options(options)
+                .unwrap()
+                .execute_and_build_trace_sync(
+                    &program,
+                    configuration,
+                    &mut CountingHost::new(&environment, &[&callee]),
+                    &budget,
+                )
+                .unwrap();
+            assert!(precompile.is_none());
+            assert_native_core_bindings(&trace, entry, &expected);
+            assert_eq!(&trace.main_trace().clone_air_matrices(), baseline.as_ref().unwrap());
+        }
+    }
+}
+
+#[test]
 fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
     use miden_core::serde::{DeserializationError, Serializable};
 
     let entry = key(&["app"], "entry");
     let target = key(&["lib"], "child");
-    let callee = body(vec![Operation::Noop]);
-    let program = invocation_program(Mode::Call, target);
+    // Both forests contain distinct nodes at IDs zero and two. A wrong existing ID must reach
+    // the actual body/digest check rather than being rejected only because a node is absent.
+    let mut callee_forest = MastForest::new();
+    let alternate_root = block(&mut callee_forest, vec![Operation::Noop]);
+    let callee_tail = block(&mut callee_forest, vec![Operation::Push(felt(7)), Operation::Drop]);
+    let callee_root = join(&mut callee_forest, alternate_root, callee_tail);
+    let callee = finish_program(callee_forest, callee_root);
+    let mut caller_forest = MastForest::new();
+    let caller_head = block(&mut caller_forest, vec![Operation::Noop]);
+    let called = invocation(&mut caller_forest, Mode::Call, target);
+    let caller_root = join(&mut caller_forest, caller_head, called);
+    let program = finish_program(caller_forest, caller_root);
     let environment = EnvironmentFixture::new(&[
         (&["app"], "entry", program.hash()),
         (&["lib"], "child", callee.hash()),
@@ -983,14 +1090,14 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
         trace_limits(),
         read_limits(),
     )
-    .expect("unmodified root CALL evidence must pass bounded native revalidation");
+    .expect("unmodified CALL evidence must pass bounded native revalidation");
     assert_eq!(restored.claim(), witness.claim());
     assert_eq!(restored.execution_descriptor(), configuration.descriptor());
     let budget = miden_vm_stark::memory::default_budget();
     let original_trace = miden_processor::trace::build_trace(witness.into_parts().0, &budget)
-        .expect("unmodified captured root CALL evidence must build a trace");
+        .expect("unmodified captured CALL evidence must build a trace");
     let restored_trace = miden_processor::trace::build_trace(restored.into_parts().0, &budget)
-        .expect("unmodified imported root CALL evidence must build a trace");
+        .expect("unmodified imported CALL evidence must build a trace");
     assert_native_core_bindings(
         &restored_trace,
         entry,
@@ -1015,12 +1122,14 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
     let offset = offsets[0];
     const RECORD_BYTES: usize = 150;
     assert_eq!(&bytes[offset - 8..offset], &2u64.to_le_bytes());
-    assert_eq!(bytes[offset + RECORD_BYTES], 5, "root END follows the root CALL");
+    assert_eq!(bytes[offset + RECORD_BYTES], 5, "root END follows the CALL record");
 
     #[derive(Clone, Copy)]
     enum Rejection {
         NativeRecord(&'static str),
+        NativeOpening(OpeningError),
         InvocationTransition,
+        Replay(&'static str),
     }
     let rejects = |name: &str, bytes: &[u8], expected: Rejection| {
         let decoded = ExecutionWitness::read_from_bytes_with_limits(
@@ -1037,13 +1146,25 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
                 Err(error) => panic!("{name} failed outside native keyed validation: {error}"),
                 Ok(_) => panic!("{name} unexpectedly passed native keyed validation"),
             },
-            Rejection::InvocationTransition => {
+            Rejection::NativeOpening(expected) => match decoded {
+                Err(DeserializationError::InvalidValue(actual)) => {
+                    assert_eq!(actual, expected.to_string(), "{name}");
+                },
+                Err(error) => panic!("{name} failed outside native opening validation: {error}"),
+                Ok(_) => panic!("{name} unexpectedly passed native opening validation"),
+            },
+            Rejection::InvocationTransition | Rejection::Replay(_) => {
+                let expected_reason = match expected {
+                    Rejection::InvocationTransition => "invocation differs from keyed replay event",
+                    Rejection::Replay(reason) => reason,
+                    _ => unreachable!(),
+                };
                 let witness = decoded.unwrap_or_else(|error| {
                     panic!("{name} must reach actual Core replay, but import failed: {error}")
                 });
                 match miden_processor::trace::build_trace(witness.into_parts().0, &budget) {
                     Err(ExecutionError::Internal(reason)) => {
-                        assert_eq!(reason, "invocation differs from keyed replay event", "{name}");
+                        assert_eq!(reason, expected_reason, "{name}");
                     },
                     Err(error) => panic!("{name} failed outside actual invocation replay: {error}"),
                     Ok(_) => panic!("{name} unexpectedly built a Core trace"),
@@ -1076,6 +1197,84 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
         forged[offset + field] ^= 1;
         assert_ne!(forged, bytes, "{name} mutation must change the observation");
         rejects(name, &forged, expected);
+    }
+    // V4 IDs are required scalar fields. "Missing" below selects the first ID without a
+    // retained occurrence/forest/node; distant out-of-range and wrong existing IDs are separate.
+    let root_end = offset + RECORD_BYTES;
+    let opening = u64::from_le_bytes(bytes[offset + 66..offset + 74].try_into().unwrap());
+    let entry_opening = u64::from_le_bytes(bytes[root_end + 66..root_end + 74].try_into().unwrap());
+    let target_forest = u32::from_le_bytes(bytes[offset + 142..offset + 146].try_into().unwrap());
+    let entry_forest =
+        u32::from_le_bytes(bytes[root_end + 142..root_end + 146].try_into().unwrap());
+    let target_root = u32::from_le_bytes(bytes[offset + 146..offset + 150].try_into().unwrap());
+    let entry_root = u32::from_le_bytes(bytes[root_end + 146..root_end + 150].try_into().unwrap());
+    assert!(entry_opening < opening, "target opening is the final selected occurrence");
+    assert_eq!((entry_forest, target_forest), (0, 1));
+    assert_eq!((entry_root, target_root), (2, 2));
+    for (name, id, expected) in [
+        (
+            "missing opening ID",
+            opening + 1,
+            Rejection::NativeRecord("opening index is outside occurrence tree"),
+        ),
+        (
+            "out-of-range opening ID",
+            u64::from(u32::MAX),
+            Rejection::NativeRecord("opening index is outside occurrence tree"),
+        ),
+        (
+            "wrong existing opening ID",
+            entry_opening,
+            Rejection::NativeOpening(OpeningError::KeyMismatch { expected: target, actual: entry }),
+        ),
+    ] {
+        let mut forged = bytes.clone();
+        forged[offset + 66..offset + 74].copy_from_slice(&id.to_le_bytes());
+        assert_ne!(forged, bytes, "{name} mutation must change the observation");
+        rejects(name, &forged, expected);
+    }
+    for (name, field, id, reason) in [
+        (
+            "missing target forest ID",
+            142,
+            target_forest + 1,
+            "MastForestId out of range of mast_forest_store",
+        ),
+        (
+            "out-of-range target forest ID",
+            142,
+            u32::MAX,
+            "MastForestId out of range of mast_forest_store",
+        ),
+        (
+            "wrong existing target forest ID",
+            142,
+            entry_forest,
+            "resolved invocation body does not match its implementation",
+        ),
+        (
+            "missing target root ID",
+            146,
+            target_root + 1,
+            "resolved invocation root is missing",
+        ),
+        (
+            "out-of-range target root ID",
+            146,
+            u32::MAX,
+            "resolved invocation root is missing",
+        ),
+        (
+            "wrong existing target root ID",
+            146,
+            0,
+            "resolved invocation body does not match its implementation",
+        ),
+    ] {
+        let mut forged = bytes.clone();
+        forged[offset + field..offset + field + 4].copy_from_slice(&id.to_le_bytes());
+        assert_ne!(forged, bytes, "{name} mutation must change the observation");
+        rejects(name, &forged, Rejection::Replay(reason));
     }
     let mut omitted = bytes.clone();
     omitted[offset - 8..offset].copy_from_slice(&1u64.to_le_bytes());
@@ -2133,6 +2332,390 @@ fn mode_matrix_host(fixture: &ModeMatrixFixture, local_target: bool) -> AsyncCod
     AsyncCodeHost {
         inner,
         suspend_code: AtomicBool::new(false),
+    }
+}
+
+fn runtime_debug_inline_info(
+    info: PackageDebugInfo,
+    source: DebugSourceNodeId,
+    implementation: Word,
+) -> PackageDebugInfo {
+    let mut builder = PackageDebugInfoBuilder::from(Box::new(info));
+    let uri = Uri::new("file:///native-fixture/inline.masm");
+    let file = builder.add_file(uri.clone(), None);
+    let location = builder.add_location(Location::new(uri, ByteIndex::new(0), ByteIndex::new(1)));
+    let name = builder.add_string("source::inline_only");
+    let function = builder.add_function(DebugFunctionInfo::new(
+        None,
+        name,
+        file,
+        LineNumber::new(1).unwrap(),
+        ColumnNumber::new(1).unwrap(),
+        implementation,
+    ));
+    let op_end = builder[source].op_end;
+    builder[source].inline_calls.push(DebugSourceInlineCall {
+        op_idx: 0,
+        op_end,
+        callee_idx: function,
+        loc_idx: location,
+    });
+    *builder.build()
+}
+
+type RuntimeDebugObservation = (
+    DebugRuntimeFrameKind,
+    ProcedureKey,
+    ImplementationRoot,
+    Option<u32>,
+    Option<usize>,
+);
+
+fn runtime_debug_observation(frames: &[DebugRuntimeFrame]) -> Vec<RuntimeDebugObservation> {
+    frames
+        .iter()
+        .map(|frame| {
+            (
+                frame.kind(),
+                frame.requested_key(),
+                frame.resolved_implementation(),
+                frame.invocation_row().map(|row| row.as_u32()),
+                frame.native_use_index(),
+            )
+        })
+        .collect()
+}
+
+fn assert_runtime_debug_native_uses(
+    frames: &[DebugRuntimeFrame],
+    resume: &miden_processor::ResumeContext,
+) {
+    for frame in frames {
+        if let Some(index) = frame.native_use_index() {
+            let invocation = resume.resolution_session().uses().nth(index).unwrap();
+            assert_eq!(frame.requested_key(), invocation.procedure_key());
+            assert_eq!(frame.resolved_implementation(), invocation.implementation_root());
+            assert_eq!(frame.opening_id(), invocation.opening_id());
+            assert_eq!(frame.invocation_row(), Some(invocation.row()));
+        } else {
+            assert_eq!(frame.kind(), DebugRuntimeFrameKind::Entry);
+            assert_eq!(frame.invocation_row(), None);
+            let entry = resume
+                .resolution_session()
+                .bindings()
+                .iter()
+                .find(|binding| binding.procedure_key() == frame.requested_key())
+                .unwrap();
+            assert_eq!(frame.resolved_implementation(), entry.implementation_root());
+            assert_eq!(frame.opening_id(), entry.opening_id());
+        }
+    }
+}
+
+#[test]
+fn runtime_debug_frames_separate_real_modes_and_inline_sources_at_every_return_cut() {
+    for (mode, expected_mode) in [
+        (Mode::Exec, KeyedMode::Exec),
+        (Mode::Call, KeyedMode::Call),
+        (Mode::Syscall, KeyedMode::Syscall),
+        (Mode::Dyn, KeyedMode::Dyn),
+        (Mode::DynCall, KeyedMode::DynCall),
+    ] {
+        let mut fixture = mode_matrix_fixture(mode, false);
+        fixture.callee_debug = runtime_debug_inline_info(
+            fixture.callee_debug,
+            fixture.points[2].1,
+            fixture.callee.hash(),
+        );
+        assert_ne!(fixture.target.into_word(), fixture.callee.hash());
+        let mut baseline = None;
+        let mut other_execution = None::<(DebugRuntimeFrame, DebugRuntimeFrame)>;
+        for source_aware in [false, true] {
+            for asynchronous in [false, true] {
+                let mut host = mode_matrix_host(&fixture, false);
+                let mut processor = source_dyncall_processor();
+                let mut resume = processor
+                    .get_initial_resume_context(
+                        &fixture.program,
+                        fixture.environment.configuration(
+                            fixture.entry,
+                            namespace(&["native_fixture", "kernel", "v7"]),
+                        ),
+                    )
+                    .unwrap();
+                assert!(resume.debug_runtime_frames().is_empty());
+                let mut previous = Vec::<DebugRuntimeFrame>::new();
+                let mut observations = Vec::new();
+                let mut saw_target = 0;
+                let mut saw_inline = false;
+                let mut saw_return = false;
+                let mut saw_root_end = false;
+                let mut entry_activation = None;
+                let mut target_activation = None;
+                for _ in 0..1024 {
+                    let frames = resume.debug_runtime_frames();
+                    assert_runtime_debug_native_uses(&frames, &resume);
+                    if let Some(entry) = frames.first() {
+                        entry_activation.get_or_insert_with(|| entry.clone());
+                    }
+                    for (old, current) in previous.iter().zip(&frames) {
+                        assert!(old.is_same_frame(current), "{mode:?}: caller identity changed");
+                    }
+                    observations.push(runtime_debug_observation(&frames));
+                    let target =
+                        frames.iter().find(|frame| frame.requested_key() == fixture.target);
+                    if let Some(target) = target {
+                        target_activation.get_or_insert_with(|| target.clone());
+                        saw_target += 1;
+                        assert_eq!(frames.len(), 3, "source inline rows are not runtime frames");
+                        assert_eq!(target.kind(), DebugRuntimeFrameKind::Invoke(expected_mode));
+                        assert_eq!(
+                            target.resolved_implementation().into_word(),
+                            fixture.callee.hash()
+                        );
+                        assert_eq!(target.native_use_index(), Some(1));
+                        if source_aware
+                            && Arc::ptr_eq(resume.current_forest(), fixture.callee.mast_forest())
+                        {
+                            let source = resume.next_source_node_id().unwrap();
+                            assert_eq!(source, fixture.points[2].1);
+                            assert_eq!(
+                                resume
+                                    .debug_info()
+                                    .unwrap()
+                                    .inline_calls_for_operation(source, 0)
+                                    .count(),
+                                1
+                            );
+                            saw_inline = true;
+                        }
+                    }
+                    let root_end = matches!(
+                        resume.continuation_stack().peek_continuation(),
+                        Some(Continuation::FinishJoin(root)) if *root == fixture.program.entrypoint()
+                    );
+                    if root_end {
+                        saw_root_end = true;
+                        assert_eq!(frames.len(), 1, "entry survives until its actual root END");
+                        assert_eq!(frames[0].kind(), DebugRuntimeFrameKind::Entry);
+                        assert_eq!(frames[0].requested_key(), fixture.entry);
+                        assert_eq!(
+                            frames[0].resolved_implementation().into_word(),
+                            fixture.program.hash()
+                        );
+                        assert_eq!(frames[0].native_use_index(), None);
+                        let session = resume.resolution_session();
+                        assert_eq!(session.phase(), SessionPhase::PendingEntry);
+                        assert_eq!(session.counters().reserved_requests, 1);
+                        assert!(
+                            session.uses().all(|record| record.procedure_key() != fixture.entry)
+                        );
+                    }
+                    let returning = target.is_some()
+                        && matches!(
+                            resume.continuation_stack().peek_continuation(),
+                            Some(
+                                Continuation::FinishExec(_)
+                                    | Continuation::FinishCall(_)
+                                    | Continuation::FinishDyn(_)
+                            )
+                        );
+                    previous = frames;
+                    let complete = match (source_aware, asynchronous) {
+                        (false, false) => processor.step_sync(&mut host.inner, &mut resume),
+                        (false, true) => poll_ready(processor.step(&mut host, &mut resume)),
+                        (true, false) => processor.step_with_package_debug_info_sync(
+                            &mut host.inner,
+                            &mut resume,
+                            &fixture.debug,
+                        ),
+                        (true, true) => poll_ready(processor.step_with_package_debug_info(
+                            &mut host,
+                            &mut resume,
+                            &fixture.debug,
+                        )),
+                    }
+                    .unwrap();
+                    if root_end {
+                        assert!(complete, "actual root END discharges the final entry frame");
+                        let entry = *resume.resolution_session().uses().next_back().unwrap();
+                        assert_eq!(entry.procedure_key(), fixture.entry);
+                        assert_eq!(entry.implementation_root().into_word(), fixture.program.hash());
+                    }
+                    if returning {
+                        saw_return = true;
+                        assert!(
+                            resume
+                                .debug_runtime_frames()
+                                .iter()
+                                .all(|frame| { frame.requested_key() != fixture.target })
+                        );
+                    }
+                    if complete {
+                        break;
+                    }
+                }
+                assert!(resume.is_complete(), "{mode:?}/{source_aware}/{asynchronous}");
+                assert!(resume.debug_runtime_frames().is_empty());
+                assert!(saw_target > 1 && saw_return && saw_root_end);
+                assert_eq!(saw_inline, source_aware);
+                let entry = entry_activation.unwrap();
+                let target = target_activation.unwrap();
+                if let Some((other_entry, other_target)) = &other_execution {
+                    assert!(!entry.is_same_frame(other_entry));
+                    assert_eq!(target.invocation_row(), other_target.invocation_row());
+                    assert!(
+                        !target.is_same_frame(other_target),
+                        "equal rows in separate executions are distinct"
+                    );
+                }
+                other_execution = Some((entry, target));
+                if let Some(baseline) = &baseline {
+                    assert_eq!(&observations, baseline, "{mode:?}/{source_aware}/{asynchronous}");
+                } else {
+                    baseline = Some(observations);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn runtime_debug_frames_publish_once_after_pending_witness_code_and_async_cancellation() {
+    let fixture = source_dyncall_fixture();
+    let mut inner = CountingHost::new(&fixture.environment, &[]);
+    inner.forests.insert(
+        fixture.callee.hash(),
+        LoadedMastForest::with_package_debug_info(
+            fixture.callee.mast_forest().clone(),
+            Ok(Some(fixture.callee_debug.clone())),
+        ),
+    );
+    let mut host = AsyncCodeHost {
+        inner,
+        suspend_code: AtomicBool::new(false),
+    };
+    let mut processor = source_dyncall_processor();
+    let mut resume = processor
+        .get_initial_resume_context(
+            &fixture.program,
+            fixture.environment.configuration(fixture.entry, namespace(&["kernel"])),
+        )
+        .unwrap();
+    reach_source_dyncall(&mut processor, &mut host, &mut resume, &fixture);
+    let before = resume.debug_runtime_frames();
+    assert_eq!(before.len(), 1);
+    let clock = processor.state().clock();
+    host.inner.unavailable_keys.insert(fixture.target);
+    assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
+        Err(ExecutionError::EnvironmentWitnessUnavailable { key, .. }) if key == fixture.target));
+    host.inner.unavailable_keys.clear();
+    host.suspend_code.store(true, Ordering::Relaxed);
+    {
+        let mut future = Box::pin(processor.step(&mut host, &mut resume));
+        assert!(future.as_mut().poll(&mut Context::from_waker(Waker::noop())).is_pending());
+    }
+    let pending = resume.debug_runtime_frames();
+    assert_eq!(runtime_debug_observation(&pending), runtime_debug_observation(&before));
+    assert!(before[0].is_same_frame(&pending[0]));
+    assert_eq!(processor.state().clock(), clock);
+    assert_eq!(resume.resolution_session().uses().count(), 0);
+    host.suspend_code.store(false, Ordering::Relaxed);
+    host.inner.unavailable_code.insert(fixture.callee.hash());
+    assert!(matches!(poll_ready(processor.step(&mut host, &mut resume)),
+        Err(ExecutionError::ProcedureNotFound { root_digest, .. }) if root_digest == fixture.callee.hash()));
+    assert_eq!(
+        runtime_debug_observation(&resume.debug_runtime_frames()),
+        runtime_debug_observation(&before)
+    );
+    host.inner.unavailable_code.clear();
+    assert!(!poll_ready(processor.step(&mut host, &mut resume)).unwrap());
+    let frames = resume.debug_runtime_frames();
+    assert_eq!(frames.len(), 2);
+    assert!(before[0].is_same_frame(&frames[0]));
+    assert_eq!(frames[1].kind(), DebugRuntimeFrameKind::Invoke(KeyedMode::DynCall));
+    assert_eq!(frames[1].requested_key(), fixture.target);
+    assert_ne!(frames[1].requested_key().into_word(), fixture.callee.hash());
+    assert_eq!(frames[1].resolved_implementation().into_word(), fixture.callee.hash());
+    assert_eq!(frames[1].invocation_row(), Some(clock));
+    assert_eq!(frames[1].native_use_index(), Some(0));
+    assert_runtime_debug_native_uses(&frames, &resume);
+    run_steps(&mut processor, &mut host.inner, &mut resume);
+    assert!(resume.debug_runtime_frames().is_empty());
+    assert_eq!(resume.resolution_session().uses().count(), 2);
+    assert_eq!(host.inner.requests_for(fixture.target), 2);
+}
+
+#[test]
+fn runtime_debug_frames_keep_cached_recursive_exec_activations_distinct() {
+    let recursive = key(&["native_fixture"], "recursive_exec");
+    let mut forest = MastForest::new();
+    let condition = block(&mut forest, vec![Operation::Dup0, Operation::Eqz, Operation::Not]);
+    let decrement = block(&mut forest, vec![Operation::Push(-felt(1)), Operation::Add]);
+    let exec_self = invocation(&mut forest, Mode::Exec, recursive);
+    let on_nonzero = join(&mut forest, decrement, exec_self);
+    let on_zero = block(&mut forest, vec![Operation::Noop]);
+    let branch = SplitNodeBuilder::new([on_nonzero, on_zero]).add_to_forest(&mut forest).unwrap();
+    let root = join(&mut forest, condition, branch);
+    let program = finish_program(forest, root);
+    let environment =
+        EnvironmentFixture::new(&[(&["native_fixture"], "recursive_exec", program.hash())]);
+    assert_ne!(recursive.into_word(), program.hash());
+    for asynchronous in [false, true] {
+        let mut host = AsyncCodeHost {
+            inner: CountingHost::new(&environment, &[]),
+            suspend_code: AtomicBool::new(false),
+        };
+        let mut processor = FastProcessor::new(StackInputs::new(&[felt(3)]).unwrap());
+        let mut resume = processor
+            .get_initial_resume_context(
+                &program,
+                environment.configuration(recursive, namespace(&["kernel"])),
+            )
+            .unwrap();
+        let mut previous = Vec::<DebugRuntimeFrame>::new();
+        let mut invocations = Vec::<DebugRuntimeFrame>::new();
+        let mut maximum_depth = 0;
+        for _ in 0..512 {
+            let frames = resume.debug_runtime_frames();
+            maximum_depth = maximum_depth.max(frames.len());
+            assert_runtime_debug_native_uses(&frames, &resume);
+            for (old, current) in previous.iter().zip(&frames) {
+                assert!(old.is_same_frame(current));
+            }
+            for frame in &frames {
+                assert_eq!(frame.requested_key(), recursive);
+                assert_eq!(frame.resolved_implementation().into_word(), program.hash());
+                if let Some(index) = frame.native_use_index() {
+                    assert_eq!(frame.kind(), DebugRuntimeFrameKind::Invoke(KeyedMode::Exec));
+                    if index == invocations.len() {
+                        assert!(invocations.iter().all(|old| !old.is_same_frame(frame)));
+                        invocations.push(frame.clone());
+                    } else {
+                        assert!(invocations[index].is_same_frame(frame));
+                    }
+                }
+            }
+            previous = frames;
+            let complete = if asynchronous {
+                poll_ready(processor.step(&mut host, &mut resume))
+            } else {
+                processor.step_sync(&mut host.inner, &mut resume)
+            }
+            .unwrap();
+            if complete {
+                break;
+            }
+        }
+        assert!(resume.is_complete());
+        assert!(resume.debug_runtime_frames().is_empty());
+        assert_eq!(maximum_depth, 4);
+        assert_eq!(invocations.len(), 3);
+        assert_eq!(host.inner.requests_for(recursive), 1);
+        assert!(host.inner.code_requests.borrow().is_empty());
+        assert_eq!(resume.resolution_session().bindings()[0].counts().normal, 4);
+        assert_eq!(resume.resolution_session().uses().count(), 4);
+        assert!(processor.state().ctx().is_root());
     }
 }
 

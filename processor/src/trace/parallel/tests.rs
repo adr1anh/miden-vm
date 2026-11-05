@@ -1130,13 +1130,18 @@ fn chiplet_preflight_caps_combined_trace_len() {
     );
 }
 
-/// Synthetic physical prefixes exercise the real parallel core writer. This does not construct
-/// a Library witness or claim that the current AIR authenticates a nonzero prefix.
+/// Synthetic physical prefixes exercise the real parallel core writer after authenticated
+/// execution. The selected prefixes are writer/serde evidence, not proof-acceptance evidence.
 #[test]
 fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments() {
     use miden_core::serde::{Deserializable, Serializable};
 
-    fn core(prefix: usize, fragment_size: usize, root_block: bool) -> Vec<Felt> {
+    #[allow(dead_code)]
+    mod common {
+        include!("../../../tests/common/keyed_witness.rs");
+    }
+
+    fn core(prefix: u8, fragment_size: usize, root_block: bool) -> Vec<Felt> {
         let program = if root_block {
             let mut forest = MastForest::new();
             let root = BasicBlockNodeBuilder::new(vec![Operation::Swap, Operation::Swap])
@@ -1147,20 +1152,26 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
         } else {
             join_program()
         };
+        let common::ExecutionFixture { program, environment, mut host } =
+            common::execution_fixture_for_program(program);
         let processor = FastProcessor::new_with_options(
             StackInputs::new(DEFAULT_STACK).unwrap(),
             AdviceInputs::default(),
             ExecutionOptions::default()
+                .with_environment_trace_limits(common::trace_limits())
                 .with_core_trace_fragment_size(fragment_size)
                 .unwrap(),
         )
         .unwrap();
-        let mut host = DefaultHost::default();
-        let VmWitness { trace, .. } =
-            processor.execute_for_proving_sync(&program, &mut host).unwrap().into_parts().0;
+        let VmWitness { trace, .. } = processor
+            .execute_for_proving_sync(&program, environment, &mut host)
+            .unwrap()
+            .into_parts()
+            .0;
         let TraceReplay {
             core_trace_contexts,
             mast_forest_store,
+            hasher_for_chiplet,
             max_stack_depth,
             ..
         } = trace;
@@ -1168,7 +1179,14 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
             .into_iter()
             .map(|context| CoreTraceFragmentContext::read_from_bytes(&context.to_bytes()).unwrap())
             .collect();
-        let layout = ChipletsLayout::new(prefix, 16, 0, 0, 0, 0).unwrap();
+        let hasher = build_hasher_chiplet(
+            hasher_for_chiplet.into_resolved_ops(&mast_forest_store),
+            MAX_TRACE_LEN,
+            MAX_TRACE_LEN,
+        )
+        .unwrap();
+        let layout =
+            ChipletsLayout::new(usize::from(prefix), hasher.trace_len(), 0, 0, 0, 0).unwrap();
         generate_core_trace_row_major(
             contexts,
             fragment_size,
@@ -1180,42 +1198,61 @@ fn physical_controller_prefix_is_applied_once_across_resumed_parallel_fragments(
     }
 
     for root_block in [false, true] {
-        let logical = core(0, 3, root_block);
-        let physical = core(16, 3, root_block);
-        assert_eq!(physical, core(16, 32, root_block));
-        assert_eq!(logical.len(), physical.len());
-        let relocate = |address| {
-            if address == ZERO {
-                ZERO
-            } else {
-                address + Felt::from_u8(16)
+        let logical = core(0, 32, root_block);
+        let executed_rows = logical.len() / CORE_STORAGE_WIDTH - 1;
+        for prefix in [0, 8, 16] {
+            let physical = core(prefix, 32, root_block);
+            // Each possible first cut resumes at that clock; this includes block starts,
+            // operations and END rows in both root forms. The final HALT row is appended.
+            for fragment_size in 1..executed_rows {
+                assert_eq!(
+                    physical,
+                    core(prefix, fragment_size, root_block),
+                    "prefix={prefix}, fragment_size={fragment_size}, root_block={root_block}"
+                );
             }
-        };
-        let mut saw_absent_parent = false;
-        let mut saw_present_parent = false;
-        for (logical, physical) in logical
-            .chunks_exact(CORE_STORAGE_WIDTH)
-            .zip(physical.chunks_exact(CORE_STORAGE_WIDTH))
-        {
-            let logical: &CoreCols<Felt> = logical.borrow();
-            let physical: &CoreCols<Felt> = physical.borrow();
-            let mut expected = (*logical).clone();
-            expected.decoder.addr = relocate(logical.decoder.addr);
-            if logical.decoder.in_span == ONE {
-                let parent = logical.decoder.hasher_state[1];
-                expected.decoder.hasher_state[1] = relocate(parent);
-                saw_absent_parent |= parent == ZERO;
-                saw_present_parent |= parent != ZERO;
+            assert_eq!(logical.len(), physical.len());
+            // This independent row oracle adds the synthetic prefix exactly once to the
+            // one-based Controller address encoding; zero is the absent sentinel.
+            let relocate = |address| {
+                if address == ZERO {
+                    ZERO
+                } else {
+                    address + Felt::from_u8(prefix)
+                }
+            };
+            let mut saw_absent_parent = false;
+            let mut saw_present_parent = false;
+            for (logical, physical) in logical
+                .as_chunks::<CORE_STORAGE_WIDTH>()
+                .0
+                .iter()
+                .zip(physical.as_chunks::<CORE_STORAGE_WIDTH>().0)
+            {
+                let logical: &CoreCols<Felt> = logical.as_slice().borrow();
+                let physical: &CoreCols<Felt> = physical.as_slice().borrow();
+                let mut expected = (*logical).clone();
+                expected.decoder.addr = relocate(logical.decoder.addr);
+                if logical.decoder.in_span == ONE {
+                    let parent = logical.decoder.hasher_state[1];
+                    expected.decoder.hasher_state[1] = relocate(parent);
+                    saw_absent_parent |= parent == ZERO;
+                    saw_present_parent |= parent != ZERO;
+                }
+                assert_eq!(physical.as_slice(), expected.as_slice());
             }
-            assert_eq!(physical.as_slice(), expected.as_slice());
+            assert_eq!(saw_present_parent, !root_block);
+            assert_eq!(saw_absent_parent, root_block);
         }
-        // The root's absent address and a root block's absent parent remain zero.
-        assert!(logical.chunks_exact(CORE_STORAGE_WIDTH).any(|row| {
-            let row: &CoreCols<Felt> = row.borrow();
+        // Exercise both the absent sentinel and the present zero-based Controller row.
+        assert!(logical.as_chunks::<CORE_STORAGE_WIDTH>().0.iter().any(|row| {
+            let row: &CoreCols<Felt> = row.as_slice().borrow();
             row.decoder.addr == ZERO
         }));
-        assert_eq!(saw_present_parent, !root_block);
-        assert_eq!(saw_absent_parent, root_block);
+        assert!(logical.as_chunks::<CORE_STORAGE_WIDTH>().0.iter().any(|row| {
+            let row: &CoreCols<Felt> = row.as_slice().borrow();
+            row.decoder.addr == ONE
+        }));
     }
 }
 
