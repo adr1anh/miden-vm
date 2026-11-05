@@ -2889,9 +2889,11 @@ dependencies = [
 name = "miden-vm-blake3-bench"
 version = "1.0.0-rc.1"
 dependencies = [
+ "blake3",
  "clap",
  "codspeed-criterion-compat",
  "insta",
+ "miden-core",
  "miden-core-lib",
  "miden-test-utils",
  "miden-vm",

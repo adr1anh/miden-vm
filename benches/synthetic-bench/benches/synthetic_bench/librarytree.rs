@@ -7,6 +7,8 @@
 //! `/usr/bin/time` to measure whole-process peak RSS (including setup and verification).
 //! Shape and session modes are separate diagnostic executions, not observations of the
 //! private session inside a timed proof. No configured resource budget is a memory measurement.
+//! List/Merkle scenarios describe explicitly selected fragments. Each case mounts exactly one
+//! complete fragment, so the fixture's singleton collection preserves that fragment's root.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -84,6 +86,8 @@ impl Scenario {
         json!({
             "scenario": self.name,
             "grouping": if self.merkle { "selective-merkle" } else { "shallow-list" },
+            "grouping_scope": "explicit_fragment",
+            "fixture_collection": "singleton_fragment_root",
             "unused_data_leaves": self.unused,
             "runtime_invocations": self.calls,
             "invocation": if self.call { "CALL" } else { "EXEC" },
@@ -299,15 +303,22 @@ fn fixture(scenario: Scenario) -> Case {
     let environment = FixtureEnvironment::new_with_fragments(
         naming.entry_key().expect("caller-selected compiled entry"),
         [naming.as_ref()],
-        &[fragment],
+        core::slice::from_ref(&fragment),
     )
     .expect("mount exact benchmark fragment");
+    assert_eq!(
+        environment.validated_environment().root(),
+        fragment.root(),
+        "a singleton fragment must retain its selected collection shape without an outer edge",
+    );
     Case { code, environment }
 }
 
 fn merkle_root(builder: &mut EnvironmentBuilder, children: &[EnvironmentRoot]) -> EnvironmentRoot {
-    if children.len() == 1 {
-        return children[0];
+    match children {
+        [] => return builder.insert(EnvNode::List(Vec::new())).expect("insert empty collection"),
+        [root] => return *root,
+        _ => {},
     }
     let midpoint = children.len() / 2;
     let left = merkle_root(builder, &children[..midpoint]);

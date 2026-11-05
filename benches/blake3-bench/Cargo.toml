@@ -12,6 +12,8 @@ publish = false
 workspace = true
 
 [dependencies]
+blake3 = { workspace = true, features = ["std"] }
+miden-core.workspace = true
 miden-vm-stark.workspace = true
 clap = { workspace = true, features = ["derive", "std"] }
 miden-core-lib = { workspace = true }
@@ -43,4 +45,9 @@ harness = false
 [[bin]]
 name = "vm-performance"
 path = "src/bin/vm-performance.rs"
+bench = false
+
+[[bin]]
+name = "librarytree-blake3"
+path = "src/bin/librarytree-blake3.rs"
 bench = false
