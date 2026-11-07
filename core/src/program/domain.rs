@@ -6,6 +6,9 @@
 //!
 //! Local ID `0x0000` and tag `0x0100_0001` (numbered version 1) belonged to the retired
 //! kernel-inventory commitment. This allocation remains reserved and must never be reused.
+//! Local ID `0x0107` and tag `0x0101_0701` belonged to the retired environment Merkle domain.
+//! That allocation also remains reserved. Binary environment collections now use the native
+//! Merkle compression frame, whose four injected lanes are zero and which is not registered.
 
 pub use miden_crypto::hash::eidos::DomainTag;
 #[cfg(test)]
@@ -161,13 +164,8 @@ miden_crypto::eidos_domain_registry! {
                 description: "Typed labeled environment-data commitment.",
                 schema: "param0 = 9; param1 = 0; param2 = 0; payload = type u32 || local label commitment || value word",
             }
-            pub ENV_MERKLE: EnvMerkleDomain {
-                local_id: 0x0107,
-                version: DomainVersion::numbered(1),
-                encoding: FeltSequence,
-                description: "Binary environment-collection commitment.",
-                schema: "param0 = 8; param1 = 0; param2 = 0; payload = left child commitment || right child commitment",
-            }
+            // Local ID 0x0107 / tag 0x0101_0701 is retired and must never be reused.
+            // Binary environment collections use the reserved native Merkle frame instead.
             pub ENV_LIST: EnvListDomain {
                 local_id: 0x0108,
                 version: DomainVersion::numbered(1),
@@ -228,7 +226,6 @@ mod tests {
             (EnvEnvironmentDomain::TAG, "object_env"),
             (EnvMastDomain::TAG, "object_mast"),
             (EnvDataDomain::TAG, "object_data_zero"),
-            (EnvMerkleDomain::TAG, "object_merkle"),
             (EnvListDomain::TAG, "object_list_0"),
             (ExecutionVerifierIdentityDomain::TAG, "domain_verifier_identity_sequential"),
             (ExecutionVerifierConfigDomain::TAG, "domain_verifier_config_empty_mounts"),
@@ -251,7 +248,6 @@ mod tests {
         assert_framing(ENV_ENVIRONMENT, "object_env", &[8]);
         assert_framing(ENV_MAST, "object_mast", &[8]);
         assert_framing(ENV_DATA, "object_data_zero", &[9]);
-        assert_framing(ENV_MERKLE, "object_merkle", &[8]);
         assert_framing(ENV_LIST, "object_list_0", &[0, 4, 8, 12, 16]);
         assert_framing(EXEC_VERIFIER_IDENTITY, "domain_verifier_identity_sequential", &[12]);
         assert_framing(EXEC_VERIFIER_CONFIG, "domain_verifier_config_empty_mounts", &[10, 18, 26]);
@@ -303,6 +299,21 @@ mod tests {
         }
         assert_vector(EXEC_VERIFIER_IDENTITY, "domain_verifier_identity_sequential");
         assert_vector(EXEC_VERIFIER_CONFIG, "domain_verifier_config_empty_mounts");
+    }
+
+    #[test]
+    fn retired_environment_merkle_allocation_remains_unregistered() {
+        let legacy = DomainTag::from_u32(0x0101_0701).unwrap();
+        assert!(MidenVmDomainRegistry::resolve(legacy).is_none());
+        assert!(MidenCryptoDomainRegistry::resolve(legacy).is_none());
+        assert!(
+            MidenVmDomainRegistry::domains()
+                .iter()
+                .all(|domain| domain.tag.local_id() != 0x0107)
+        );
+        // Zero denotes the reserved native Merkle frame in the fixture, not a registered tag.
+        assert_eq!(vector("object_merkle").domain_tag, 0);
+        assert!(DomainTag::from_u32(0).is_none());
     }
 
     fn assert_vector<D: EidosDomain<Encoding = FeltSequence>>(domain: D, id: &str) {

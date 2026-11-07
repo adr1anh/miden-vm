@@ -491,7 +491,7 @@ fn assert_object_requests(
             ));
         },
         EnvNode::Merkle { .. } => {
-            expected.push(state(x, y, Eidos::init_chaining_word(domain::ENV_MERKLE, 8)))
+            expected.push(state(x, y, Eidos::merkle_node_init_chaining_word()))
         },
         EnvNode::List(children) => {
             let pairs = children.len().div_ceil(2);

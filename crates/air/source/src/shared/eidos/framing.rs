@@ -39,7 +39,7 @@ mod tests {
     }
 
     #[test]
-    fn registered_library_frames_match_core_commitments() {
+    fn library_frames_match_core_commitments() {
         let label = LabelCommitment::new(word([1, 2, 3, 4]));
         let child = EnvironmentRoot::new(word([5, 6, 7, 8]));
         let implementation = ImplementationRoot::new(word([9, 10, 11, 12]));
@@ -57,11 +57,16 @@ mod tests {
             EnvNode::Mast { label, implementation }.commitment().unwrap().into_word(),
             [0x2687b2281f2392c3, 0x64ce1d2a50a7f266, 0x78bcbc41290b68bb, 0x3d3dbe71acd140d3],
         );
-        assert_felt_sequence_frame(
-            domain::ENV_MERKLE,
-            &[child.into_word(), right.into_word()],
-            EnvNode::Merkle { left: child, right }.commitment().unwrap().into_word(),
-            [0x1cdf4ce08689e5c9, 0x529cfa7528422cac, 0x5c8af375df4bbcaf, 0x6441dc497ffac51d],
+        // Binary collections use exactly the native Merkle frame used by mtree_verify:
+        // every injected framing lane is zero, including the message-length lane.
+        let native_cv = initial_cv_from_frame([Felt::ZERO; 4]);
+        assert_eq!(native_cv, Eidos::merkle_node_init_chaining_word().into_elements());
+        let payload = [child.into_word(), right.into_word()];
+        let commitment = EnvNode::Merkle { left: child, right }.commitment().unwrap().into_word();
+        assert_eq!(commitment, Eidos::merge(&payload));
+        assert_ne!(
+            native_cv,
+            initial_cv_from_frame([Felt::ZERO, Felt::from_u8(8), Felt::ZERO, Felt::ZERO])
         );
 
         let namespace = Namespace::new(label.into_word());

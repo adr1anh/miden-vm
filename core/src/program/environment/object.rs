@@ -1,4 +1,4 @@
-//! Owned environment objects and their domain-separated commitments.
+//! Owned environment objects and their typed commitments.
 
 use alloc::vec::Vec;
 use core::alloc::Layout;
@@ -10,7 +10,8 @@ mod encoding;
 
 /// An environment object whose children are opaque object or subtree commitments.
 ///
-/// Computing a commitment binds these fields under the object's registered Eidos domain. It
+/// Labeled and list objects use their registered Eidos domains. Binary collections use the
+/// reserved native Merkle frame, compatible with the VM's Merkle instructions. A commitment
 /// does not validate referenced preimages, establish a complete environment, prove global
 /// executable-path uniqueness, or grant authority to the resulting root.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +36,9 @@ pub enum EnvNode {
         value: Word,
     },
     /// An ordered binary collection preserving the inherited namespace.
+    ///
+    /// Its commitment is the native Eidos Merkle merge of the two children, so a consecutive
+    /// binary path can be authenticated by the VM's Merkle instructions.
     Merkle {
         left: EnvironmentRoot,
         right: EnvironmentRoot,
@@ -44,7 +48,10 @@ pub enum EnvNode {
 }
 
 impl EnvNode {
-    /// Commits to this object's fields using standard Eidos Felt-sequence framing.
+    /// Commits to this object's fields using its selected Eidos framing.
+    ///
+    /// Binary collections use native Merkle-node compression, with all four injected frame
+    /// lanes zero. Every other variant uses registered standard Felt-sequence framing.
     ///
     /// Lists hash the concatenated child words, with their Felt count in the standard framing;
     /// no additional count or header enters the payload. This operation checks the list's
@@ -73,13 +80,7 @@ impl EnvNode {
                 payload[5..].copy_from_slice(value.as_slice());
                 hasher::hash_elements_in_domain(&payload, domain::ENV_DATA)
             },
-            Self::Merkle { left, right } => {
-                let payload = [left.into_word(), right.into_word()];
-                hasher::hash_elements_in_domain(
-                    Word::words_as_elements(&payload),
-                    domain::ENV_MERKLE,
-                )
-            },
+            Self::Merkle { left, right } => hasher::merge(&[left.into_word(), right.into_word()]),
             Self::List(children) => {
                 let element_len = checked_list_element_len(children.len())?;
                 let mut payload = Vec::<Felt>::new();
@@ -145,6 +146,19 @@ mod tests {
             },
             "object_merkle",
         );
+    }
+
+    #[test]
+    fn merkle_collections_match_native_paths_and_reject_legacy_framing() {
+        let left = root([5, 6, 7, 8]);
+        let right = root([17, 18, 19, 20]);
+        let commitment = EnvNode::Merkle { left, right }.commitment().unwrap();
+        let path = crate::crypto::merkle::MerklePath::new(alloc::vec![right.into_word()]);
+        path.verify(0, left.into_word(), commitment.as_word()).unwrap();
+        assert!(path.verify(1, left.into_word(), commitment.as_word()).is_err());
+
+        let legacy_commitment = word(vector("legacy_object_merkle").digest);
+        assert!(path.verify(0, left.into_word(), &legacy_commitment).is_err());
     }
 
     #[test]

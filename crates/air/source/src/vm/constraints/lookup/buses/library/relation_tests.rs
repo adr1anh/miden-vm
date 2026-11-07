@@ -146,18 +146,18 @@ fn ordinary_pair(
     depth: usize,
 ) -> [SharedRow; 2] {
     let mut pair = [row(kind), row(kind)];
-    let tag = if kind == ENV {
-        domain::domain_tag(domain::ENV_ENVIRONMENT)
+    let input = if kind == ENV {
+        fixed_input(domain::domain_tag(domain::ENV_ENVIRONMENT))
     } else if kind == MAST {
-        domain::domain_tag(domain::ENV_MAST)
+        fixed_input(domain::domain_tag(domain::ENV_MAST))
     } else {
         assert_eq!(kind, MERKLE);
-        domain::domain_tag(domain::ENV_MERKLE)
+        Eidos::merkle_node_init_chaining_word().into_elements()
     };
     let a = cols_mut(&mut pair[0]);
     a.x = x;
     a.y = y;
-    a.z = compress(fixed_input(tag), x, y);
+    a.z = compress(input, x, y);
     a.w = namespace;
     a.d = Felt::from_usize(depth);
     let b = cols_mut(&mut pair[1]);
@@ -412,9 +412,7 @@ fn compression_responses(rows: &[SharedRow], challenges: &Challenges<QuadFelt>) 
             continue;
         }
         let c = cols(row);
-        let tag = if index % 2 == 0 && c.k == MERKLE {
-            Some(domain::domain_tag(domain::ENV_MERKLE))
-        } else if c.k == ENV {
+        let tag = if c.k == ENV {
             Some(if index % 2 == 0 {
                 domain::domain_tag(domain::ENV_ENVIRONMENT)
             } else {
@@ -429,7 +427,9 @@ fn compression_responses(rows: &[SharedRow], challenges: &Challenges<QuadFelt>) 
         } else {
             None
         };
-        let input = if let Some(tag) = tag {
+        let input = if index % 2 == 0 && c.k == MERKLE {
+            Eidos::merkle_node_init_chaining_word().into_elements()
+        } else if let Some(tag) = tag {
             fixed_input(tag)
         } else if index % 2 == 0 && [LIST_START, LIST_CONTINUE, EMPTY_LIST].contains(&c.k) {
             cols(&rows[index + 1]).z
