@@ -314,7 +314,7 @@ fn visit_object<'a>(
             MERKLE,
             left.into_word(),
             right.into_word(),
-            Eidos::init_chaining_word(domain::ENV_MERKLE, 8),
+            Eidos::merkle_node_init_chaining_word(),
         ),
         EnvNode::Mast { label, implementation } => (
             MAST,

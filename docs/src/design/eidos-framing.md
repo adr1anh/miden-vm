@@ -386,13 +386,18 @@ The declarations in `core::program::domain` are normative and are the source for
 | `0x0104` | 1       | `ENV_ENVIRONMENT`     | `FeltSequence` |
 | `0x0105` | 1       | `ENV_MAST`            | `FeltSequence` |
 | `0x0106` | 1       | `ENV_DATA`            | `FeltSequence` |
-| `0x0107` | 1       | `ENV_MERKLE`          | `FeltSequence` |
+| `0x0107` | 1       | `ENV_MERKLE` (retired; allocation reserved) | `FeltSequence` |
 | `0x0108` | 1       | `ENV_LIST`            | `FeltSequence` |
 | `0x0109` | 1       | `EXEC_VERIFIER_IDENTITY` | `FeltSequence` |
 | `0x010a` | 3       | `EXEC_VERIFIER_CONFIG` | `FeltSequence` |
 
-The retired kernel-commitment local ID `0x0000`, execution-claim v1, proof-request v1 and
-configurable-kernel verifier-configuration v2 remain reserved. Request v2 hashes exactly
+The retired kernel-commitment local ID `0x0000`, environment-Merkle local ID `0x0107`,
+execution-claim v1, proof-request v1 and configurable-kernel verifier-configuration v2 remain
+reserved. Binary environment collections use the native Merkle-node frame `(0, [0, 0, 0])`,
+shared with `mtree_verify`, rather than a registered Felt-sequence domain. The zero parameters
+include the length lane: an eight-Felt payload does not inject the value eight into this frame.
+The D1 node encoding is unchanged; binary collection roots and their ancestors change.
+Request v2 hashes exactly
 `claim_commitment[4] || expected_verifier_identity[4]` in one FeltSequence block; the expected
 identity commits to the relation, entry key and exact configuration. Neither an implementation
 root nor a `procref` key alone supplies that identity or authorizes the execution environment.

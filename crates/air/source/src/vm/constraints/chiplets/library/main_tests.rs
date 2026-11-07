@@ -64,7 +64,7 @@ fn object_pair(kind: [Felt; 3]) -> [SharedRow; 2] {
     a.w = initial_namespace();
     a.d = Felt::from_u8(3);
     let init = if kind == MERKLE {
-        Eidos::init_chaining_word(domain::ENV_MERKLE, 8)
+        Eidos::merkle_node_init_chaining_word()
     } else if kind == ENV {
         Eidos::init_chaining_word(domain::ENV_ENVIRONMENT, 8)
     } else {

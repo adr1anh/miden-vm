@@ -1,6 +1,7 @@
 use miden::core::stark::types
 use miden::core::crypto::hashes::eidos
 
+pub mod environment
 pub mod pvm
 pub mod vm
 

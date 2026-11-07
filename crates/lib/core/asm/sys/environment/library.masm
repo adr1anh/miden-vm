@@ -1,0 +1,401 @@
+#! Construction and complete verification of a flat procedure library in one namespace.
+#! Entries contain label commitments, callable keys, and implementation commitments. Keys must
+#! be strictly increasing in core::word order. A nonempty library is an ordered binary tree:
+#! each round pairs adjacent children and promotes an unpaired final child without padding.
+#! The empty library is an empty typed List. Every constructed node's raw hash payload is
+#! retained in the advice map under its commitment, for subsequent inspection.
+#!
+#! Cycles below count raw successful-body VM operations, including callee bodies, generated
+#! no-ops, and local-frame allocation/deallocation. They exclude control rows, block framing,
+#! operation packing/padding, invocation overhead, and host/chiplet work.
+
+use miden::core::sys::environment
+use {EMPTY_LIST} from miden::core::sys::environment
+use miden::core::word
+
+const BUILD_TREE_EVENT = event("miden::core::sys::environment::library::build_tree")
+const MAX_LIBRARY_ENTRIES = 65536
+# Measured small-tree cutoff: direct construction avoids frontier overhead through seven leaves.
+const DIRECT_TREE_ENTRIES = 7
+
+#! Checks the key in an entry against its immediately preceding entry's key.
+#! Input: [entry_ptr, ...]. Output: [...]. Both twelve-Felt entries must already be in bounds.
+#!
+#! Word ordering compares coordinate 3 first. The common case reads only those two Felts;
+#! equal leading coordinates take the complete word comparison, so all lower-coordinate ties
+#! and duplicate keys retain their exact ordering semantics. No digest-distribution assumption
+#! is used for correctness.
+#!
+#! Cycles: 30 when leading key coordinates differ; 162 when they are equal.
+proc assert_increasing_key
+    dup sub.5 mem_load
+    dup.1 add.7 mem_load
+    # => [current_key[3], previous_key[3], entry_ptr, ...]
+    dup.1 dup.1 eq
+    if.true
+        drop drop
+        # => [entry_ptr, ...]; equal leading coordinates require the full comparison.
+        padw dup.4 sub.8 mem_loadw_le
+        dup.4 padw movup.4 add.4 mem_loadw_le
+        # => [CURRENT_KEY, PREVIOUS_KEY, entry_ptr, ...]
+        inline.word::lt
+    else
+        lt
+    end
+    # => [previous_key < current_key, entry_ptr, ...]
+    assert.err="environment procedure keys must be strictly increasing"
+    drop
+end
+
+#! Verifies a complete pair-and-promote leaf frontier against an untrusted candidate root.
+#! Input: [count, read_ptr, ROOT, ...]. Output: [ROOT, ...]. count is in 2..=65536.
+#! The caller has bounded the immutable leaf array. This helper has no locals or memory writes.
+#!
+#! Descending power-of-two blocks enumerate exactly the canonical tree's leaves. Nonfinal blocks
+#! take the next left branch; the remaining blocks continue down the right branch. A final block
+#! uses the remaining prefix directly. Their positions form a complete, prefix-free frontier,
+#! so verifying every distinct position proves complete coverage rather than mere membership.
+#!
+#! Cycles: `26*count + 127*popcount(count) + 6`. Each set bit identifies one perfect frontier
+#! block. Merkle-path chiplet work is excluded.
+proc verify_frontier
+    push.0 movdn.2 push.0 movdn.3
+    # => [remaining=count, read_ptr, prefix=0, prefix_depth=0, ROOT, ...]
+    push.1
+    while.true
+        # Outer invariant: the preceding leaves have been checked at their exact positions.
+        # prefix/prefix_depth identify the remaining right subtree; remaining is positive.
+        dup u32clz push.31 swap sub
+        # => [k=floor(log2(remaining)), remaining, read_ptr, prefix, prefix_depth, ROOT, ...]
+        dup pow2
+        # => [block=2^k, k, remaining, read_ptr, prefix, prefix_depth, ROOT, ...]
+        dup.2 dup.1 sub movup.3 drop
+        # => [remaining'=remaining-block, block, k, read_ptr, prefix, prefix_depth, ROOT, ...]
+        dup neq.0
+        if.true
+            movup.4 mul.2 dup add.1
+            movup.6 add.1 dup movdn.7
+            # => [block_prefix_depth=d+1, next_prefix=2*p+1, block_prefix=2*p,
+            #     remaining', block, k, read_ptr, next_depth=d+1, ROOT, ...]
+        else
+            movup.4 dup movup.6 dup movdn.7
+            # => [block_prefix_depth=d, next_prefix=p, block_prefix=p,
+            #     remaining'=0, block, k, read_ptr, next_depth=d, ROOT, ...]
+        end
+        movup.5 add
+        # => [depth=block_prefix_depth+k, next_prefix, block_prefix,
+        #     remaining', block, read_ptr, next_depth, ROOT, ...]
+        movup.2 dup.4 mul
+        # => [index=block_prefix*block, depth, next_prefix,
+        #     remaining', block, read_ptr, next_depth, ROOT, ...]
+        push.0 movdn.7 movupw.2
+        movup.5 movup.5 swap
+        movup.9 movdn.6 movup.9 movdn.7
+        # => [depth, index, ROOT, read_ptr, block_left, next_prefix, remaining', next_depth, 0, ...]
+        # The root and geometry remain in the opcode's own operand slots throughout this
+        # perfect block. They are neither duplicated before verification nor dropped after it.
+
+        push.1
+        while.true
+            # Inner invariant: block_left leaves remain in this perfect subtree. The root
+            # and all geometry come from VM state, never from handler-supplied indices.
+            dup.6 padw movup.4 mem_loadw_le
+            # => [LEAF, depth, index, ROOT, read_ptr, block_left, next_prefix,
+            #     remaining', next_depth, 0, ...]
+            mtree_verify.err="environment library leaf is not at its canonical position"
+            dropw
+            # => [depth, index, ROOT, read_ptr, block_left, next_prefix,
+            #     remaining', next_depth, 0, ...]
+            swap add.1 swap
+            movup.6 add.4 movdn.6
+            movup.7 sub.1 movdn.7 dup.7 neq.0
+        end
+        # => [depth, index', ROOT, read_ptr', 0, next_prefix, remaining', next_depth, 0, ...]
+        drop drop movup.5 drop movup.8 drop swapw movup.2
+        # => [remaining', read_ptr', next_prefix, next_depth, ROOT, ...]
+        dup neq.0
+    end
+    dropw
+    # => [ROOT, ...]
+end
+
+#! Merges the pair at read_ptr, retaining both native-store and raw-map witnesses.
+#! Input: [read_ptr, ...]. Output: [PARENT, read_ptr+8, ...]. The checked pair occupies eight Felts.
+#! The source pair remains intact until after advice insertion, even during in-place reduction.
+#!
+#! Cycles: 46.
+proc merge_pair
+    padw dup.4 add.4 mem_loadw_le
+    dup.4 padw movup.4 mem_loadw_le
+    # => [LEFT, RIGHT, read_ptr, ...]
+    mtree_merge
+    # => [PARENT, read_ptr, ...]; the native Merkle store now contains this parent.
+    dup.4 add.8 dup.5 movdn.5 movdn.5
+    # => [PARENT, read_ptr, read_ptr+8, read_ptr, ...]
+    adv.insert_mem
+    movup.6 drop movup.4 drop
+    # => [PARENT, read_ptr+8, ...]; advice[PARENT] contains the exact [LEFT, RIGHT].
+end
+
+#! Constructs a small canonical tree directly, avoiding a build event and repeated path checks.
+#! Input: [count, scratch_start, ...]. Output: [ROOT, ...]. count is in 2..=DIRECT_TREE_ENTRIES.
+#! Every merge is independently computed by the VM. Native-store and raw-map witnesses are
+#! recorded before their source pair is overwritten; off-path children remain available.
+#!
+#! Cycles: 54, 123, 177, 285, 334, 399 for count = 2, 3, 4, 5, 6, 7, respectively.
+proc reduce_small
+    dup neq.2
+    while.true
+        # Round invariant: scratch_start contains count ordered roots. Writes trail reads;
+        # an unpaired final root is promoted without padding.
+        dup u32lte.4
+        if.true
+            eq.3
+            if.true
+                # => [scratch_start, ...]; exactly three ordered roots remain.
+                inline.merge_pair
+                # => [PARENT_01, scratch_start+8, ...]
+                dup.4 sub.4 mem_storew_le dropw sub.4 push.2
+                # => [2, scratch_start+4, ...]; the adjacent final pair is [PARENT_01, CHILD_2].
+            else
+                # => [scratch_start, ...]; count>2 and count<=4 prove exactly four roots.
+                inline.merge_pair
+                dup.4 sub.8 mem_storew_le dropw
+                # => [scratch_start+8, ...]; PARENT_01 occupies scratch_start.
+                inline.merge_pair
+                dup.4 sub.12 mem_storew_le dropw sub.16 push.2
+                # => [2, scratch_start, ...]; the adjacent final pair is [PARENT_01, PARENT_23].
+            end
+        else
+            u32divmod.2
+            # => [odd, pair_count, scratch_start, ...]
+            dup.1 dup.1 add
+            # => [next_count=pair_count+odd, odd, pair_count, scratch_start, ...]
+            movup.2 mul.8 dup.3 add
+            dup.3 dup.4
+            # => [read_ptr, write_ptr, pairs_end, next_count, odd, scratch_start, ...]
+            push.1
+            while.true
+                inline.merge_pair
+                dup.5 mem_storew_le dropw
+                # => [read_ptr, write_ptr, pairs_end, next_count, odd, scratch_start, ...]
+                # merge_pair already advanced the read cursor by one complete pair.
+                swap add.4 swap
+                dup dup.3 neq
+            end
+            movup.2 drop movup.3
+            # => [odd, read_ptr=pairs_end, write_ptr, next_count, scratch_start, ...]
+            if.true
+                padw dup.4 mem_loadw_le
+                dup.5 mem_storew_le dropw
+            end
+            drop drop
+        end
+        # => [next_count, scratch_start, ...]
+        dup neq.2
+    end
+    drop inline.merge_pair movup.4 drop
+    # => [ROOT, ...]; the final pair needs neither another round nor a scratch write/reload.
+end
+
+#! Constructs a library and checks every supplied callable key against its label and namespace.
+#!
+#! Input:  [NAMESPACE, entries_ptr, count, scratch_ptr, ...]
+#! Output: [ROOT, ...]
+#!
+#! Each entry occupies twelve Felts: [LABEL, KEY, IMPLEMENTATION], all in word element order.
+#! Entries must have strictly increasing KEYs, preventing duplicate keys in this library.
+#! scratch_ptr reserves count words and is overwritten; entries are preserved. Both pointers
+#! must be word-aligned u32s, both exclusive end pointers must fit in u32, and their ranges
+#! must not overlap. Empty ranges do not overlap. Unwritten input memory reads as zero.
+#! Neither this procedure nor its inlined helpers allocate local frames. Input and scratch
+#! may occupy caller locals or higher addresses, provided their ranges remain disjoint.
+#!
+#! This checks the complete flat library, not any enclosing environment. The caller must supply
+#! its intended namespace and authorize ROOT before using it as an execution environment.
+#! count must not exceed 65536. Small trees are constructed directly with mtree_merge; larger
+#! trees use a bounded handler to prepare an untrusted root and witnesses. MASM verifies every
+#! larger-tree leaf at its canonical position with mtree_verify; the complete frontier authenticates
+#! the exact library shape and leaf count. Both paths record native-store and raw-map witnesses.
+#! Empty and singleton libraries use direct root checks because Merkle opcodes require depth>0.
+#! Namespace, loop cursors, and counts remain on the stack; no local frame is allocated.
+#!
+#! Cycles: 74 for count=0; 190 for count=1. For count in 2..=7:
+#! `61 + 129*count + 132*t + R`, where R is 54, 123, 177, 285, 334, 399, respectively.
+#! For count>=8: `79 + 155*count + 127*popcount(count) + 132*t`.
+#! Here `t` is the number of adjacent key pairs whose coordinate 3 is equal, requiring the
+#! full-word comparison. `popcount(count)` is the number of perfect frontier blocks.
+pub proc create(namespace: word, entries_ptr: ptr<felt>, count: u32, scratch_ptr: ptr<word>) -> word
+    # Check both ranges before the first scratch write. All working state stays on the stack.
+    # Masking by 3 costs two raw operations, versus four for u32mod.4; bounds precede masking.
+    dup.4 u32assert.err="environment entries pointer must fit in u32"
+    dup push.3 u32and assertz.err="environment entries must be word-aligned"
+    dup.6 u32assert.err="environment entry count must fit in u32"
+    dup u32lte.MAX_LIBRARY_ENTRIES assert.err="environment library exceeds 65536 entries"
+    mul.12 add u32assert.err="environment entries range exceeds u32"
+    # => [entries_end, NAMESPACE, entries_ptr, count, scratch_ptr, ...]
+    dup.7 u32assert.err="environment scratch pointer must fit in u32"
+    dup push.3 u32and assertz.err="environment scratch must be word-aligned"
+    dup.7 mul.4 add u32assert.err="environment scratch range exceeds u32"
+    # => [scratch_end, entries_end, NAMESPACE, entries_ptr, count, scratch_ptr, ...]
+    movdn.8 movdn.7
+    # => [NAMESPACE, entries_ptr, count, scratch_ptr, entries_end, scratch_end, ...]
+    swapw
+    # => [entries_ptr, count, scratch_ptr, entries_end, NAMESPACE, scratch_end, ...]
+
+    dup.1 eq.0
+    if.true
+        # Empty ranges need no disjointness check and no scratch write.
+        movup.8 drop drop drop swap drop
+        repeat.4 swap drop end
+        # => [scratch_ptr, ...]
+        # Both ranges are already checked, so hash_list's empty-range preflight is redundant.
+        dup push.EMPTY_LIST
+        # => [ROOT, scratch_ptr, scratch_ptr, ...]; the selected memory range is empty.
+        adv.insert_mem
+        movup.4 drop movup.4 drop
+        # => [ROOT, ...]; advice[ROOT] contains the exact empty payload.
+    else
+        # Consume scratch_end while checking entries_ptr >= scratch_end.
+        movup.8 dup.1 swap u32gte
+        # => [entries_after_scratch, entries_ptr, count, scratch_ptr, entries_end, NAMESPACE, ...]
+        dup.3 dup.5 u32gte
+        or assert.err="environment entries and scratch must not overlap"
+        # => [entries_ptr, count, scratch_ptr, entries_end, NAMESPACE, ...]
+        swap movdn.7 dup.1 movdn.3
+        # => [entry_ptr, write_ptr, entries_end, scratch_start, NAMESPACE, count, ...]
+
+        push.1
+        while.true
+            # Leaf-loop invariant: the consumed entries have validated, strictly increasing keys;
+            # [scratch_start, write_ptr) contains their Mast roots. Remaining input is untouched.
+            padw dup.4 mem_loadw_le
+            dupw.2
+            # => [NAMESPACE, LABEL, entry_ptr, write_ptr, entries_end, scratch_start, NAMESPACE, count, ...]
+            inline.environment::procedure_key
+            dup.4 padw movup.4 add.4 mem_loadw_le
+            # => [EXPECTED_KEY, DERIVED_KEY, entry_ptr, write_ptr, entries_end, scratch_start, NAMESPACE, count, ...]
+            assert_eqw.err="environment procedure key does not match namespace and label"
+
+            dup.1 dup.4 neq
+            if.true
+                # A preceding entry exists exactly when write_ptr != scratch_start.
+                dup inline.assert_increasing_key
+            end
+
+            padw dup.4 add.8 mem_loadw_le
+            dup.4 padw movup.4 mem_loadw_le
+            # => [LABEL, IMPLEMENTATION, entry_ptr, write_ptr, entries_end, scratch_start, NAMESPACE, count, ...]
+            inline.environment::hash_mast
+            dup.5 mem_storew_le dropw
+            # => [entry_ptr, write_ptr, entries_end, scratch_start, NAMESPACE, count, ...]
+            add.12 swap add.4 swap
+            dup dup.3 neq
+            # => [entry_ptr' != entries_end, entry_ptr', write_ptr', entries_end, scratch_start, NAMESPACE, count, ...]
+        end
+        drop drop drop movup.5
+        repeat.4 movup.2 drop end
+        # => [count, scratch_start, ...]
+
+        dup eq.1
+        if.true
+            drop padw movup.4 mem_loadw_le
+            # => [ROOT, ...]; the sole typed leaf needs no host event or depth-zero opening.
+        else
+            dup u32lte.DIRECT_TREE_ENTRIES
+            if.true
+                inline.reduce_small
+                # => [ROOT, ...]; every native parent was computed directly by the VM.
+            else
+                swap emit.BUILD_TREE_EVENT adv_pushw
+                # => [CANDIDATE_ROOT, scratch_start, count, ...]; host root and store are untrusted.
+                movup.5 movup.5 swap inline.verify_frontier
+                # => [ROOT, ...]; every canonical leaf position has authenticated.
+            end
+        end
+    end
+end
+
+#! Replaces one authenticated leaf in a native binary environment collection.
+#! Input: [descriptor_ptr, ROOT, KEY, NAMESPACE, ...]. Output: [NEW_ROOT, ...].
+#!
+#! The aligned sixteen-Felt descriptor is [LABEL, OLD_IMPLEMENTATION, NEW_IMPLEMENTATION,
+#! depth, index, 0, 0]. It must end at or below this procedure's local frame; caller-local
+#! descriptors remain supported. depth is in 0..=64, index is a canonical Felt interpreted as
+#! an unsigned integer and must fit the selected depth. At depth zero index must be zero.
+#!
+#! MASM derives KEY from NAMESPACE and LABEL, hashes both typed leaves, and authenticates
+#! OLD_IMPLEMENTATION using the old leaf returned by mtree_set. The update opcode verifies
+#! the old root and preserves every off-path sibling; no redundant mtree_verify is performed.
+#! A singleton is checked and replaced directly because the opcode does not accept depth zero.
+#! New internal nodes enter the Merkle store; the new Mast's raw payload enters the advice map.
+#!
+#! Cycles: 315 at depth zero; 351 at depths 1..=64, including 14 local-frame operations.
+#! The native update's old and new Merkle-path chiplet work grows with depth.
+@locals(24)
+pub proc update_at(descriptor_ptr: ptr<felt>, root: word, key: word, namespace: word) -> word
+    # Locals: 0=D; 1=depth; 2=index; 3=padding; 4..7=ROOT; 8..11=KEY;
+    # 12..15=NAMESPACE; 16..19=OLD_LEAF; 20..23=NEW_LEAF.
+    u32assert.err="environment update descriptor pointer must fit in u32"
+    dup push.3 u32and assertz.err="environment update descriptor must be word-aligned"
+    dup add.16 u32assert.err="environment update descriptor range exceeds u32"
+    locaddr.0 u32lte assert.err="environment update descriptor must precede working locals"
+    # => [D, ROOT, KEY, NAMESPACE, ...]; no local slot has been written before preflight.
+    loc_store.0 loc_storew_le.4 dropw loc_storew_le.8 dropw loc_storew_le.12 dropw
+
+    padw loc_load.0 add.12 mem_loadw_le
+    # => [depth, index, reserved0, reserved1, ...]
+    movup.2 assertz.err="environment update reserved elements must be zero"
+    movup.2 assertz.err="environment update reserved elements must be zero"
+    u32assert.err="environment update depth must fit in u32"
+    dup u32lte.64 assert.err="environment update depth must not exceed 64"
+    loc_store.1 loc_store.2
+
+    padw loc_load.0 mem_loadw_le padw loc_loadw_le.12
+    inline.environment::procedure_key
+    padw loc_loadw_le.8 assert_eqw.err="environment update key does not match namespace and label"
+
+    padw loc_load.0 add.4 mem_loadw_le padw loc_load.0 mem_loadw_le
+    inline.environment::hash_mast loc_storew_le.16 dropw
+    padw loc_load.0 add.8 mem_loadw_le padw loc_load.0 mem_loadw_le
+    inline.environment::hash_mast loc_storew_le.20 dropw
+    # The expected old and replacement leaves are now independently bound to their descriptor data.
+
+    loc_load.1 eq.0
+    if.true
+        loc_load.2 assertz.err="environment singleton update index must be zero"
+        padw loc_loadw_le.16 padw loc_loadw_le.4
+        assert_eqw.err="environment singleton update does not match the old leaf"
+        padw loc_loadw_le.20
+    else
+        padw loc_loadw_le.20 padw loc_loadw_le.4 loc_load.2 loc_load.1
+        # => [depth, index, ROOT, NEW_LEAF, ...]
+        mtree_set
+        # => [RETURNED_OLD_LEAF, NEW_ROOT, ...]; the old root and actual off-path siblings authenticate.
+        padw loc_loadw_le.16
+        assert_eqw.err="environment update does not match the old leaf"
+    end
+    # => [NEW_ROOT, ...]
+end
+
+#! Checks an expected library root against the complete supplied entries and namespace.
+#!
+#! Input:  [ROOT, NAMESPACE, entries_ptr, count, scratch_ptr, ...]
+#! Output: [...]
+#!
+#! Uses the same memory, ordering, and advice-map contracts as create. ROOT can be supplied
+#! as a public input. Every entry is checked, so an omitted, extra, or altered entry fails.
+#!
+#! Cycles: create's raw body cost + 18 (seven argument-permutation operations and eleven
+#! for the final word assertion).
+pub proc verify(root: word, namespace: word, entries_ptr: ptr<felt>, count: u32, scratch_ptr: ptr<word>)
+    # The first tail Felt t is borrowed only for this permutation and restored exactly.
+    movdnw.2
+    # => [NAMESPACE, entries_ptr, count, scratch_ptr, t, ROOT, tail_after_t...]
+    movup.7 movdn.11
+    # => [NAMESPACE, entries_ptr, count, scratch_ptr, ROOT, t, tail_after_t...]
+    # Seven raw permutation operations, versus sixteen for repeat.4 movdn.10.
+    inline.create
+    # => [COMPUTED_ROOT, ROOT, ...]
+    assert_eqw.err="environment library root does not match its entries"
+end

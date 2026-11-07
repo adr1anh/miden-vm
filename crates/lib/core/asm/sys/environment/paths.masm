@@ -1,0 +1,281 @@
+#! Selective membership and implementation upgrades in typed binary environments.
+#!
+#! A binding descriptor occupies twelve aligned elements:
+#! `[leaf_label: word, implementation: word, path_ptr, path_len, 0, 0]`.
+#! Its path contains `path_len` aligned eight-element records, ordered from the leaf's parent
+#! toward the root. A record is `[kind, selector, 0, 0, payload: word]`:
+#! - `kind = 0`: an Env ancestor; payload is its label and selector must be zero.
+#! - `kind = 1`: a Merkle ancestor; payload is the sibling commitment and selector is zero
+#!   when the selected child is left, or one when it is right.
+#!
+#! A zero-length path opens a Mast directly at the root. List ancestors are not supported by
+#! this binary-path format. Namespace derivation starts at the fixed initial namespace and
+#! visits Env labels from root to leaf. Collection edges preserve the namespace.
+#!
+#! These procedures authenticate one occurrence. The caller must authorize the supplied root;
+#! selective membership does not establish global procedure-key uniqueness or code availability.
+#!
+#! Cycle counts are raw VM operations on successful paths, including inlined bodies and local
+#! frame setup/cleanup. They exclude control rows, block framing, padding, retained invocation
+#! boundaries, and host/chiplet work. In the formulas, `e` and `m` count Env and Merkle records;
+#! `z` is 1 for an empty path and 0 otherwise, counting the nop executed by each skipped loop.
+
+use miden::core::sys::environment
+use {ENV_INIT_CV, MAST_INIT_CV, MERKLE_INIT_CV} from miden::core::sys::environment
+
+#! Checks both input ranges against the public caller's local frame before any locals are written.
+#! Input: [descriptor_ptr, local_start, ...]. Output: [path_start, path_end, descriptor_ptr, ...].
+#! This helper has no locals or writes. It reads the descriptor only after bounding all twelve
+#! elements, then checks the complete path before any caller allocates or writes working locals.
+#! Cycles: 65 raw VM operations.
+proc assert_binding_ranges
+    # => [D, limit, ...]
+    u32assert.err="environment descriptor pointer must fit in u32"
+    dup push.3 u32and assertz.err="environment descriptor must be word-aligned"
+    dup add.12 u32assert.err="environment descriptor range exceeds u32"
+    dup.2 u32lte assert.err="environment descriptor must stay below the local frame"
+    # => [D, limit, ...]
+
+    # Load the aligned descriptor header once; unconstrained reserved Felts must each be zero.
+    padw dup.4 add.8 mem_loadw_le
+    # => [path_start, path_len, reserved0, reserved1, D, limit, ...]
+    movup.2 assertz.err="environment descriptor reserved elements must be zero"
+    movup.2 assertz.err="environment descriptor reserved elements must be zero"
+    u32assert2.err="environment path pointer and length must fit in u32"
+    dup push.3 u32and assertz.err="environment path must be word-aligned"
+    dup.1 mul.8 u32assert.err="environment path length exceeds u32"
+    dup.1 add u32assert.err="environment path range exceeds u32"
+    # => [path_end, path_start, path_len, D, limit, ...]
+    dup dup.5 u32lte assert.err="environment path must stay below the local frame"
+    movup.2 drop movup.3 drop swap
+    # => [path_start, path_end, D, ...]
+end
+
+#! Validates every path record and derives the terminal parent namespace.
+#! The caller has already checked the descriptor header and the entire path's memory range.
+#!
+#! Input: [path_end, path_start, ...]
+#! Output: [NAMESPACE, ...]
+#! Both pointers remain on the operand stack; no local frame is allocated.
+#! Cycles: `12 + 48*e + 23*m + z` raw VM operations.
+proc namespace_for_binding
+    inline.environment::initial_namespace
+    # => [NAMESPACE, cursor=path_end, path_start, ...]
+
+    # The checked span is a multiple of eight. Decrementing by eight reaches start exactly,
+    # so equality is sufficient and cheaper than an unsigned comparison on every iteration.
+    dup.4 dup.6 neq
+    while.true
+        # Loop invariant: [NAMESPACE, cursor, path_start, ...], start <= cursor <= end.
+        movup.4 sub.8 movdn.4
+        dup.4 padw movup.4 mem_loadw_le
+        # => [kind, selector, reserved0, reserved1, NAMESPACE, cursor', path_start, ...]
+        movup.2 assertz.err="environment path reserved elements must be zero"
+        movup.2 assertz.err="environment path reserved elements must be zero"
+        # => [kind, selector, NAMESPACE, cursor', path_start, ...]
+
+        # The control instruction itself rejects nonbinary kinds; no u32 comparison is needed.
+        if.false
+            assertz.err="Env path selector must be zero"
+            dup.4 add.4 padw movup.4 mem_loadw_le
+            # => [LABEL, NAMESPACE, cursor', path_start, ...]
+            swapw inline.environment::child_namespace
+            # => [NAMESPACE', cursor', path_start, ...]
+        else
+            # not rejects nonbinary selectors, then drop consumes the validated bit.
+            not drop
+            # => [NAMESPACE, cursor', path_start, ...]
+        end
+
+        dup.4 dup.6 neq
+    end
+    movup.4 drop movup.4 drop
+    # => [NAMESPACE, ...]
+end
+
+#! Reconstructs a root from a validated descriptor and a supplied implementation.
+#! The internal caller must have validated the entire descriptor and path using
+#! `namespace_for_binding` before entering this procedure.
+#!
+#! Input: [IMPLEMENTATION, descriptor_ptr, path_start, path_end, ...]
+#! Output: [ROOT, ...]
+#! The current root and both path pointers stay on the stack throughout the fold.
+#! This verification fold has no advice-map writes. The separate recording fold below has
+#! the same stack invariant, specialized at assembly time to avoid a runtime flag at each node.
+#! Cycles: `29 + 34*e + 40*m + z` raw VM operations.
+proc root_for_binding
+    padw movup.8 mem_loadw_le
+    # => [LABEL, IMPLEMENTATION, path_start, path_end, ...]
+    push.MAST_INIT_CV movdnw.2 compress dropw dropw
+    # => [ROOT, cursor=path_start, path_end, ...]
+
+    dup.4 dup.6 neq
+    while.true
+        # Loop invariant: [ROOT, cursor, path_end, ...], start <= cursor <= end.
+        dup.4 mem_load
+        if.false
+            dup.4 add.4 padw movup.4 mem_loadw_le
+            # => [LABEL, ROOT, cursor, path_end, ...]
+            push.ENV_INIT_CV movdnw.2 compress dropw dropw
+        else
+            dup.4 add.1 mem_load
+            dup.5 add.4 padw movup.4 mem_loadw_le
+            # => [SIBLING, selector, ROOT, cursor, path_end, ...]
+            movup.4 not cswapw
+            # selector 0: [ROOT, SIBLING, cursor, end, ...]; selector 1: [SIBLING, ROOT, ...].
+            push.MERKLE_INIT_CV movdnw.2 compress dropw dropw
+        end
+        # => [ROOT', cursor, path_end, ...]; each typed hash omits the three-op advice event.
+
+        movup.4 add.8 movdn.4
+        dup.4 dup.6 neq
+    end
+    movup.4 drop movup.4 drop
+    # => [ROOT, ...]
+end
+
+#! Reconstructs and records the replacement root after the old binding has authenticated.
+#! Input: [IMPLEMENTATION, descriptor_ptr, path_start, path_end, ...]. Output: [ROOT, ...].
+#! This fold records the leaf and every updated ancestor. It intentionally mirrors the pure
+#! root_for_binding fold, avoiding any extra branch or record flag inside the loop.
+#! Cycles: `32 + 37*e + 43*m + z` raw VM operations.
+proc record_root_for_binding
+    # Consume D while loading LABEL above the supplied implementation.
+    padw movup.8 mem_loadw_le
+    # => [LABEL, IMPLEMENTATION, path_start, path_end, ...]
+    inline.environment::hash_mast
+    # => [ROOT, cursor=path_start, path_end, ...]
+
+    dup.4 dup.6 neq
+    while.true
+        # Loop invariant: [ROOT, cursor, path_end, ...], start <= cursor <= end.
+        dup.4 mem_load
+        if.false
+            dup.4 add.4 padw movup.4 mem_loadw_le
+            # => [LABEL, ROOT, cursor, path_end, ...]
+            inline.environment::hash_env
+        else
+            # Load selector before the payload: shallow dup.4/dup.5 each cost one operation,
+            # whereas dup.8 after loading SIBLING would expand into three operations.
+            dup.4 add.1 mem_load
+            dup.5 add.4 padw movup.4 mem_loadw_le
+            # => [SIBLING, selector, ROOT, cursor, path_end, ...]
+            movup.4 not cswapw
+            # selector 0: [ROOT, SIBLING, cursor, end, ...]; selector 1: [SIBLING, ROOT, ...].
+            inline.environment::hash_merkle
+        end
+        # => [ROOT', cursor, path_end, ...]
+
+        movup.4 add.8 movdn.4
+        dup.4 dup.6 neq
+    end
+    movup.4 drop movup.4 drop
+    # => [ROOT, ...]
+end
+
+#! Checks a binding after its public caller has validated both input ranges.
+#! Input: [path_start, path_end, descriptor_ptr, ROOT, KEY, ...]
+#! Output: [descriptor_ptr, NAMESPACE, ...]
+#! Locals: 0=D; 1=start; 2=end; 4..7=expected ROOT; 8..11=expected KEY; 12..15=NAMESPACE.
+#! Local slot 3 is unused padding. No input can alias this frame or any nested working frame.
+#! Cycles: `221 + 82*e + 63*m + 2*z` raw VM operations, including its local frame.
+@locals(16)
+proc verify_checked_binding
+    loc_store.1 loc_store.2 loc_store.0
+    loc_storew_le.4 dropw
+    loc_storew_le.8 dropw
+    # => [...]
+
+    loc_load.1 loc_load.2 inline.namespace_for_binding
+    loc_storew_le.12 dropw
+    # => [...], with every record's kind, selector and reserved fields checked.
+
+    padw loc_load.0 mem_loadw_le
+    padw loc_loadw_le.12
+    # => [NAMESPACE, LABEL, ...]
+    inline.environment::procedure_key
+    padw loc_loadw_le.8
+    assert_eqw.err="environment path does not bind the requested procedure key"
+    # => [...]
+
+    loc_load.2 loc_load.1 loc_load.0
+    padw dup.4 add.4 mem_loadw_le
+    # => [OLD_IMPLEMENTATION, D, path_start, path_end, ...]
+    inline.root_for_binding
+    padw loc_loadw_le.4
+    assert_eqw.err="environment path does not match the expected root"
+    # => [...]
+
+    padw loc_loadw_le.12 loc_load.0
+    # => [D, NAMESPACE, ...]
+end
+
+#! Authenticates one procedure binding against an expected environment root and callable key.
+#!
+#! Input: [descriptor_ptr, ROOT, KEY, ...]
+#! Output: [IMPLEMENTATION, NAMESPACE, ...]
+#!
+#! The descriptor and binary path use the module-level encoding. All pointers, lengths,
+#! kinds, selectors, and reserved elements are checked before deriving the key and root.
+#! Both input ranges must end at or below the caller's frame end, where the checked helper's
+#! working frame begins. Descriptors and paths in the caller's locals remain supported.
+#! The returned namespace is the full immediate parent namespace of the procedure.
+#! Root authorization, global key uniqueness, and executable code availability remain caller
+#! obligations. The supplied ROOT may, for example, be an authorized public input.
+#!
+#! Cycles: `313 + 82*e + 63*m + 2*z` raw VM operations, including both local frames.
+@locals(4)
+pub proc verify_binding(descriptor_ptr: ptr<felt>, root: word, key: word) -> (word, word)
+    # The reserved local word establishes a boundary through the supported locals API.
+    # No local slot is written before both inputs are proved below this and all nested frames.
+    locaddr.0 swap inline.assert_binding_ranges
+    # => [path_start, path_end, D, ROOT, KEY, ...]
+    inline.verify_checked_binding
+    # => [D, NAMESPACE, ...]
+    padw movup.4 add.4 mem_loadw_le
+    # => [IMPLEMENTATION, NAMESPACE, ...]
+end
+
+#! Replaces the implementation of one authenticated procedure occurrence.
+#!
+#! Input: [NEW_IMPLEMENTATION, descriptor_ptr, ROOT, KEY, ...]
+#! Output: [NEW_ROOT, ...]
+#!
+#! First authenticates the descriptor's old implementation, leaf label, namespace and exact
+#! ancestor slots against ROOT and KEY. Then rehashes only that leaf and its ancestors with
+#! NEW_IMPLEMENTATION. Labels, siblings, selectors and topology remain fixed, preserving an
+#! already-admitted environment's procedure keys. Unrelated subtrees are not opened.
+#! Repeating this procedure against successive returned roots supports a batch upgrade.
+#! Cost is linear in path length, hence logarithmic for a balanced binary library tree.
+#! The new root's two-word node preimages are added to the advice map by the hash helpers.
+#!
+#! Cycles: `402 + 119*e + 106*m + 3*z` raw VM operations, including both local frames.
+@locals(8)
+pub proc update_binding(
+    implementation: word,
+    descriptor_ptr: ptr<felt>,
+    root: word,
+    key: word,
+) -> word
+    # Check against this frame's base before writing NEW_IMPLEMENTATION or descriptor metadata.
+    locaddr.0 dup.5 inline.assert_binding_ranges
+    # => [path_start, path_end, D, NEW_IMPLEMENTATION, original_D, ROOT, KEY, ...]
+    movup.7 drop
+    repeat.4 movup.6 end
+    # => [NEW_IMPLEMENTATION, path_start, path_end, D, ROOT, KEY, ...]
+    loc_storew_le.0 dropw
+    dup.2 loc_store.4
+    dup loc_store.5
+    dup.1 loc_store.6
+    # Locals: 0..3=NEW_IMPLEMENTATION; 4=D; 5=path_start; 6=path_end; 7=unused.
+    # => [path_start, path_end, D, ROOT, KEY, ...]
+    inline.verify_checked_binding
+    # => [D, NAMESPACE, ...]; the old root and callable key have both authenticated.
+    drop dropw
+
+    loc_load.6 loc_load.5 loc_load.4
+    padw loc_loadw_le.0
+    # => [NEW_IMPLEMENTATION, D, path_start, path_end, ...]
+    inline.record_root_for_binding
+    # => [NEW_ROOT, ...]
+end

@@ -8,6 +8,7 @@ pub mod aead_eidos;
 pub mod debug;
 pub mod ecdsa_k256_keccak;
 pub mod ecdsa_p256_sha256;
+pub mod environment;
 pub mod falcon_div;
 pub mod precompiles;
 pub mod readonly;

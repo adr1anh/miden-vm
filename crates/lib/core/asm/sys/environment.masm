@@ -1,0 +1,302 @@
+#! Typed environment commitments compatible with the VM's native EnvNode and Namespace types.
+#! Constructors record raw hash payloads in the advice map; fixed-size openings authenticate
+#! those payloads. Namespace derivation alone does not authenticate a binding or authorize a root.
+#! The library module constructs complete flat procedure trees; paths verifies and updates
+#! individual bindings through typed binary ancestors.
+#!
+#! Cycle counts are raw VM operations on successful execution, including inlined helpers,
+#! local-frame setup/cleanup, and Noops for skipped loops or empty branches. They exclude
+#! invocation boundaries, control/basic-block rows, operation packing/padding, host advice
+#! preparation, and chiplet work.
+
+pub mod library
+pub mod paths
+
+# Eidos::init_chaining_word(domain, length), with fixed domain and length folded at assembly time.
+# Apart from the explicitly native MERKLE frame below, these are Felt-sequence frames:
+# [0xbb67ae8500000000 + domain, 0xa54ff53a00000000 + length,
+# 0x9b05688c00000000, 0x5be0cd1900000000]. Native-equivalence tests pin every construction.
+# domain 0x01010101, length 8
+const NAMESPACE_INIT_CV = [
+    13503953893964448001,
+    11912009168875159560,
+    11170449401267093504,
+    6620516959492505600
+]
+# domain 0x01010201, length 8
+const PROCEDURE_INIT_CV = [
+    13503953893964448257,
+    11912009168875159560,
+    11170449401267093504,
+    6620516959492505600
+]
+# domain 0x01010401, length 8
+pub const ENV_INIT_CV = [
+    13503953893964448769,
+    11912009168875159560,
+    11170449401267093504,
+    6620516959492505600
+]
+# domain 0x01010501, length 8
+pub const MAST_INIT_CV = [
+    13503953893964449025,
+    11912009168875159560,
+    11170449401267093504,
+    6620516959492505600
+]
+# domain 0x01010601, length 9
+const DATA_INIT_CV = [
+    13503953893964449281,
+    11912009168875159561,
+    11170449401267093504,
+    6620516959492505600
+]
+# Native Merkle-node frame: tag 0 and parameters [0, 0, 0], matching mtree_verify/mtree_set.
+# Unlike a Felt-sequence frame, its second lane does not include the eight-Felt payload length.
+pub const MERKLE_INIT_CV = [
+    13503953893947604992,
+    11912009168875159552,
+    11170449401267093504,
+    6620516959492505600
+]
+const LIST_INIT_CV_0 = 13503953893964449793 # domain 0x01010801
+const INIT_CV_1_BASE = 11912009168875159552
+const INIT_CV_2 = 11170449401267093504
+const INIT_CV_3 = 6620516959492505600
+# Frozen forward-order vectors from core/tests/fixtures/librarytree-vectors.txt.
+const INITIAL_NAMESPACE = [6554493223373468461, 8954317118201261599, 3332049382679531586, 698300210645908104]
+pub const EMPTY_LIST = [3627761970644528567, 802923872635074999, 6752068228248324534, 8798542386309968540]
+
+#! Hashes and records a two-word payload using its already-framed chaining word.
+#! Input: [CV, A, B, ...]. Output: [ROOT, ...].
+#! Inlined into the three constructors so framing and compression share one basic block.
+#!
+#! Cycles: 14.
+proc hash_object_pair
+    movdnw.2
+    # => [A, B, CV, ...]
+    adv.insert_compress
+    # => [A, B, CV, ...]; advice[ROOT] = A || B, with ROOT computed by the host.
+    compress dropw dropw
+    # => [ROOT, ...]; the VM independently computes the same compression.
+end
+
+#! Returns the fixed initial namespace used by native environment resolution.
+#! Input: [...]. Output: [NAMESPACE, ...].
+#! The fixed empty-message digest is a four-Felt constant, checked against Namespace::initial().
+#!
+#! Cycles: 4.
+pub proc initial_namespace() -> word
+    push.INITIAL_NAMESPACE
+    # => [NAMESPACE, ...]
+end
+
+#! Extends an accumulated namespace with a local label commitment.
+#! Input: [PARENT, LABEL, ...]. Output: [NAMESPACE, ...].
+#! Derivation alone does not authenticate an environment path.
+#!
+#! Cycles: 15.
+pub proc child_namespace(parent: word, label: word) -> word
+    push.NAMESPACE_INIT_CV movdnw.2
+    # => [PARENT, LABEL, CV, ...]
+    compress dropw dropw
+    # => [NAMESPACE, ...]
+end
+
+#! Derives a callable key from its immediate parent namespace and export label commitment.
+#! Input: [PARENT, LABEL, ...]. Output: [KEY, ...].
+#! The implementation root is independent of this key.
+#!
+#! Cycles: 15.
+pub proc procedure_key(parent: word, label: word) -> word
+    push.PROCEDURE_INIT_CV movdnw.2
+    # => [PARENT, LABEL, CV, ...]
+    compress dropw dropw
+    # => [KEY, ...]
+end
+
+#! Commits a labeled child environment and records [LABEL, CHILD] under the returned root.
+#! Input: [LABEL, CHILD, ...]. Output: [ROOT, ...].
+#!
+#! Cycles: 18.
+pub proc hash_env(label: word, child: word) -> word
+    push.ENV_INIT_CV
+    # => [CV, LABEL, CHILD, ...]
+    inline.hash_object_pair
+    # => [ROOT, ...]
+end
+
+#! Commits a labeled implementation and records [LABEL, IMPLEMENTATION] under its root.
+#! Input: [LABEL, IMPLEMENTATION, ...]. Output: [ROOT, ...].
+#! This binds an implementation commitment; it does not establish code availability.
+#!
+#! Cycles: 18.
+pub proc hash_mast(label: word, implementation: word) -> word
+    push.MAST_INIT_CV
+    # => [CV, LABEL, IMPLEMENTATION, ...]
+    inline.hash_object_pair
+    # => [ROOT, ...]
+end
+
+#! Commits an ordered pair of environment children and records [LEFT, RIGHT] under its root.
+#! Input: [LEFT, RIGHT, ...]. Output: [ROOT, ...].
+#! Uses the native Merkle-node framing shared by mtree_verify, mtree_set, and mtree_merge.
+#!
+#! Cycles: 18.
+pub proc hash_merkle(left: word, right: word) -> word
+    push.MERKLE_INIT_CV
+    # => [CV, LEFT, RIGHT, ...]
+    inline.hash_object_pair
+    # => [ROOT, ...]
+end
+
+#! Opens a labeled child environment using its raw advice-map preimage.
+#! Input: [ROOT, ...]. Output: [LABEL, CHILD, ...].
+#! Authenticates the exact payload against ROOT before returning it.
+#!
+#! Cycles: 37.
+pub proc open_env(root: word) -> (word, word)
+    adv.push_mapvaln adv_push
+    # => [length, ROOT, ...]; advice stack contains LABEL || CHILD.
+    eq.8 assert.err="environment object preimage must contain two words"
+    adv_pushw adv_pushw swapw
+    # => [LABEL, CHILD, ROOT, ...]
+    push.ENV_INIT_CV movdnw.2 compress
+    # => [LABEL, CHILD, COMPUTED_ROOT, ROOT, ...]; compress preserves both payload words.
+    swapdw assert_eqw.err="environment object commitment mismatch"
+    # => [LABEL, CHILD, ...]; no copying or advice-map reinsertion is required.
+end
+
+#! Opens a labeled executable leaf using its raw advice-map preimage.
+#! Input: [ROOT, ...]. Output: [LABEL, IMPLEMENTATION, ...].
+#! This authenticates the leaf payload, not membership under a different environment root.
+#!
+#! Cycles: 37.
+pub proc open_mast(root: word) -> (word, word)
+    adv.push_mapvaln adv_push
+    # => [length, ROOT, ...]; advice stack contains LABEL || IMPLEMENTATION.
+    eq.8 assert.err="environment object preimage must contain two words"
+    adv_pushw adv_pushw swapw
+    # => [LABEL, IMPLEMENTATION, ROOT, ...]
+    push.MAST_INIT_CV movdnw.2 compress
+    # => [LABEL, IMPLEMENTATION, COMPUTED_ROOT, ROOT, ...]
+    swapdw assert_eqw.err="environment object commitment mismatch"
+    # => [LABEL, IMPLEMENTATION, ...]
+end
+
+#! Opens an ordered binary environment collection using its raw advice-map preimage.
+#! Input: [ROOT, ...]. Output: [LEFT, RIGHT, ...].
+#! Authenticates the exact payload against ROOT before returning it.
+#!
+#! Cycles: 37.
+pub proc open_merkle(root: word) -> (word, word)
+    adv.push_mapvaln adv_push
+    # => [length, ROOT, ...]; advice stack contains LEFT || RIGHT.
+    eq.8 assert.err="environment object preimage must contain two words"
+    adv_pushw adv_pushw swapw
+    # => [LEFT, RIGHT, ROOT, ...]
+    push.MERKLE_INIT_CV movdnw.2 compress
+    # => [LEFT, RIGHT, COMPUTED_ROOT, ROOT, ...]
+    swapdw assert_eqw.err="environment object commitment mismatch"
+    # => [LEFT, RIGHT, ...]
+end
+
+#! Commits an ordered list of child roots from memory, including the empty list.
+#! Input: [children_ptr, count, ...]. Output: [ROOT, ...].
+#! Records exactly the 4*count payload elements under ROOT, without a header or padding.
+#! The pointer must be a word-aligned u32, and the exclusive end must fit in a u32.
+#! This stack-only procedure and its inlined operations allocate no local frame or working
+#! memory, so input may also occupy caller locals or addresses above the current local frame.
+#! All range checks precede input reads.
+#! An odd final child reads only its own word. Computing this root does not validate children.
+#!
+#! Cycles: 34 if count = 0; 88 if count = 1; otherwise
+#! `76 + 6*floor(count/2) + 11*(count mod 2)`.
+pub proc hash_list(children_ptr: ptr<word>, count: u32) -> word
+    u32assert2.err="environment list pointer and count must fit in u32"
+    dup push.3 u32and assertz.err="environment list pointer must be word-aligned"
+    swap mul.4 u32assert.err="environment list length exceeds a u32"
+    # => [n=4*count, start, ...]; n and start are checked u32s.
+    dup.1 dup.1 add u32assert.err="environment list range exceeds a u32"
+    # => [end=start+n, n, start, ...]; no local frame or scratch memory is needed.
+
+    dup.1 eq.0
+    if.true
+        drop drop dup push.EMPTY_LIST
+        # => [ROOT, start, start, ...]; the empty payload needs no runtime compression.
+    else
+        movdn.2 dup.1 movdn.3
+        # => [n, start, end, original_start, ...]
+        dup dup push.7 u32and
+        # => [remainder=n%8, n, n, start, end, original_start, ...]
+        sub dup.2 add movdn.2
+        # => [n, start, pairs_end=start+n-remainder, end, original_start, ...]
+
+        push.INIT_CV_1_BASE add
+        push.INIT_CV_3.INIT_CV_2 movup.2 push.LIST_INIT_CV_0
+        # => [CV(n), start, pairs_end, end, original_start, ...]; n is already checked.
+        padw padw
+        # => [BLOCK_LO=0w, BLOCK_HI=0w, CV, read, pairs_end, end, original_start, ...]
+
+        # Invariant: read advances eight Felts per iteration and never exceeds pairs_end.
+        # Pointer duplicates use depth 13, a single VM instruction, rather than depth 12.
+        dup.13 dup.13 neq
+        while.true
+            mem_stream compress
+            # => [BLOCK_LO, BLOCK_HI, CV', read+8, pairs_end, end, original_start, ...]
+            dup.13 dup.13 neq
+        end
+
+        # A final child exists exactly when pairs_end != full end. Both pointer duplicates
+        # are at cheap odd depths, avoiding a stored remainder flag and its entire local frame.
+        dup.13 dup.15 neq
+        if.true
+            padw swapw.2 dropw
+            # => [previous_BLOCK_LO, 0w, CV, read=pairs_end, pairs_end, end, original_start, ...]
+            dup.13 mem_loadw_le compress
+            # => [last_child, 0w, ROOT, pairs_end, pairs_end, end, original_start, ...]
+            # Only the four final payload Felts are read; the high word remains zero.
+        end
+        dropw dropw movup.4 drop movup.4 drop
+        # => [ROOT, end, original_start, ...]
+        movup.5 movdn.4
+        # => [ROOT, original_start, end, ...]
+    end
+
+    adv.insert_mem
+    # => [ROOT, start, end, ...]; advice[ROOT] contains exactly [start,end).
+    movup.4 drop movup.4 drop
+    # => [ROOT, ...]
+end
+
+#! Commits typed opaque application data and records its nine-element payload under ROOT.
+#! Input: [kind, LABEL, VALUE, ...]. Output: [ROOT, ...].
+#! The kind must fit in a u32. Data nodes do not create executable bindings.
+#!
+#! Cycles: 90 (76 body operations plus 14 local-frame operations).
+@locals(12)
+pub proc hash_data(kind: u32, label: word, value: word) -> word
+    # Locals 0..8 retain [kind, LABEL, VALUE] for the final nine-Felt advice insertion.
+    # Let A=[kind,l0,l1,l2], B=[l3,v0,v1,v2], and t=v3. Locals 9..11 are frame padding.
+    u32assert.err="environment data kind must fit in a u32"
+    loc_storew_le.0
+    swapw loc_storew_le.4 swapw
+    dup.8 loc_store.8
+    # => [A, B, t, ...]; two word writes and one scalar write preserve the original payload.
+
+    push.DATA_INIT_CV movdnw.2 compress
+    # => [A, B, CV', t, ...]
+    dropw dropw movup.4
+    # => [t, CV', ...]
+    repeat.7 push.0 end
+    movup.7 compress
+    # => [[t,0,0,0], 0w, ROOT, ...]; the second compression contains one Felt plus seven zeros.
+    dropw dropw
+    # => [ROOT, ...]
+
+    locaddr.0 add.9 movdn.4 locaddr.0 movdn.4
+    # => [ROOT, payload_start, payload_start+9, ...]
+    adv.insert_mem
+    movup.4 drop movup.4 drop
+    # => [ROOT, ...]
+end

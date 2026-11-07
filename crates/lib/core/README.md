@@ -20,6 +20,9 @@ cargo run -p miden-core-lib-codegen -- --out target/miden-core-lib-generated-asm
 For recursive-verifier source ownership, generation rules, and focused checks, see
 [Maintaining recursive-verifier MASM](RECURSIVE_VERIFIER.md).
 
+For typed environment construction, authenticated inspection, and procedure upgrades, see
+[Environment helpers](ENVIRONMENT.md).
+
 ## Caller-maintained precompile roots
 
 Deferred precompile procedures have `_with_root` variants that return an independent obligation

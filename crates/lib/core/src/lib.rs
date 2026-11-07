@@ -30,6 +30,7 @@ use crate::handlers::{
     debug::default_debug_handlers,
     ecdsa_k256_keccak::{ECDSA_K256_KECCAK_RECOVER_EVENT_NAME, handle_ecdsa_k256_keccak_recover},
     ecdsa_p256_sha256::{ECDSA_P256_SHA256_RECOVER_EVENT_NAME, handle_ecdsa_p256_sha256_recover},
+    environment::{ENVIRONMENT_BUILD_TREE_EVENT_NAME, handle_environment_build_tree},
     falcon_div::{FALCON_DIV_EVENT_NAME, handle_falcon_div},
     precompiles::{
         ed25519::{ED25519_DECOMPRESS_EVENT_NAME, handle_ed25519_decompress},
@@ -234,6 +235,7 @@ impl CoreLibrary {
         let mut handlers: Vec<(EventName, Arc<dyn EventHandler>)> = vec![
             (AEAD_EIDOS_DECRYPT_EVENT_NAME, Arc::new(handle_aead_eidos_decrypt)),
             (SMT_PEEK_EVENT_NAME, Arc::new(handle_smt_peek)),
+            (ENVIRONMENT_BUILD_TREE_EVENT_NAME, Arc::new(handle_environment_build_tree)),
             (U64_DIV_EVENT_NAME, Arc::new(handle_u64_div)),
             (U128_DIV_EVENT_NAME, Arc::new(handle_u128_div)),
             (U256_DIV_EVENT_NAME, Arc::new(handle_u256_div)),

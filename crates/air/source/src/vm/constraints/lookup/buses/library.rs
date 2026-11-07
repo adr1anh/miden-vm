@@ -54,7 +54,7 @@ pub(crate) fn emit_library<G, V>(
         "library_merkle_a",
         phases.kind_a(kinds.is_merkle.clone()),
         local,
-        domain::domain_tag(domain::ENV_MERKLE),
+        [Felt::ZERO; 4],
     );
     group.batch(
         "library_merkle_b",
@@ -68,7 +68,7 @@ pub(crate) fn emit_library<G, V>(
         "library_env_a",
         phases.kind_a(kinds.is_env.clone()),
         local,
-        domain::domain_tag(domain::ENV_ENVIRONMENT),
+        felt_pair_frame(domain::domain_tag(domain::ENV_ENVIRONMENT)),
     );
     group.batch(
         "library_env_b",
@@ -77,7 +77,10 @@ pub(crate) fn emit_library<G, V>(
             let depth: G::Expr = local.d.into();
             batch.add(
                 "library_namespace_compression",
-                fixed_compression(local, domain::domain_tag(domain::ENV_NAMESPACE)),
+                fixed_compression(
+                    local,
+                    felt_pair_frame(domain::domain_tag(domain::ENV_NAMESPACE)),
+                ),
                 Deg { v: 5, u: 6 },
             );
             batch.add(
@@ -98,7 +101,7 @@ pub(crate) fn emit_library<G, V>(
         "library_mast_a",
         phases.kind_a(kinds.is_mast.clone()),
         local,
-        domain::domain_tag(domain::ENV_MAST),
+        felt_pair_frame(domain::domain_tag(domain::ENV_MAST)),
     );
     group.batch(
         "library_mast_b",
@@ -106,7 +109,10 @@ pub(crate) fn emit_library<G, V>(
         |batch| {
             batch.add(
                 "library_key_compression",
-                fixed_compression(local, domain::domain_tag(domain::ENV_PROCEDURE)),
+                fixed_compression(
+                    local,
+                    felt_pair_frame(domain::domain_tag(domain::ENV_PROCEDURE)),
+                ),
                 Deg { v: 5, u: 6 },
             );
             batch.insert(
@@ -198,7 +204,7 @@ fn emit_header<G, V>(
     name: &'static str,
     flag: G::Expr,
     local: &LibraryCols<V>,
-    domain_tag: Felt,
+    frame: [Felt; 4],
 ) where
     G: LookupGroup,
     G::Expr: Algebra<Felt>,
@@ -211,7 +217,7 @@ fn emit_header<G, V>(
             batch.remove("library_header", header(local), Deg { v: 5, u: 6 });
             batch.add(
                 "library_object_compression",
-                fixed_compression(local, domain_tag),
+                fixed_compression(local, frame),
                 Deg { v: 5, u: 6 },
             );
         },
@@ -230,7 +236,13 @@ where
     }
 }
 
-fn fixed_compression<E, V>(local: &LibraryCols<V>, domain_tag: Felt) -> HasherCompressionLinkMsg<E>
+/// Standard Felt-sequence framing for the fixed two-word environment and key payloads.
+/// Native binary Merkle nodes instead use the reserved all-zero frame.
+fn felt_pair_frame(domain_tag: Felt) -> [Felt; 4] {
+    [domain_tag, Felt::from_u8(8), Felt::ZERO, Felt::ZERO]
+}
+
+fn fixed_compression<E, V>(local: &LibraryCols<V>, frame: [Felt; 4]) -> HasherCompressionLinkMsg<E>
 where
     E: Algebra<Felt>,
     V: Copy + Into<E>,
@@ -243,7 +255,7 @@ where
                 local.y[i - 4].into()
             }
         }),
-        cv_in: initial_cv_from_frame([domain_tag.into(), E::from_u8(8), E::ZERO, E::ZERO]),
+        cv_in: initial_cv_from_frame(frame.map(Into::into)),
         cv_out: local.z.map(Into::into),
     }
 }

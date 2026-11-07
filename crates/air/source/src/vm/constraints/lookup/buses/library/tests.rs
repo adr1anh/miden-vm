@@ -141,10 +141,10 @@ fn open_denominator(depth: Felt, commitment: [Felt; 4], namespace: [Felt; 4]) ->
 
 #[test]
 fn library_headers_consume_unit_open_and_request_all_compressions() {
-    for (kind, domain_tag) in [
-        (MERKLE, domain::domain_tag(domain::ENV_MERKLE)),
-        (ENV, domain::domain_tag(domain::ENV_ENVIRONMENT)),
-        (MAST, domain::domain_tag(domain::ENV_MAST)),
+    for (kind, frame) in [
+        (MERKLE, [Felt::ZERO; 4]),
+        (ENV, felt_pair_frame(domain::domain_tag(domain::ENV_ENVIRONMENT))),
+        (MAST, felt_pair_frame(domain::domain_tag(domain::ENV_MAST))),
     ] {
         let mut rows = [row(kind), row(PAD)];
         // These cells are not Open frequencies, even on a malformed row.
@@ -156,7 +156,7 @@ fn library_headers_consume_unit_open_and_request_all_compressions() {
             at(&actual, 0),
             &[
                 (-Felt::ONE, open_denominator(local.d, local.z, local.w)),
-                (Felt::ONE, compression_denominator(local, fixed_input(domain_tag))),
+                (Felt::ONE, compression_denominator(local, initial_cv_from_frame(frame))),
             ]
         );
     }
