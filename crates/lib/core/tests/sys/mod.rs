@@ -1,6 +1,10 @@
 #[cfg(feature = "arbitrary")]
 use miden_utils_testing::{MIN_STACK_DEPTH, proptest::prelude::*};
 
+mod environment;
+mod environment_library;
+mod environment_paths;
+
 #[test]
 fn truncate_stack() {
     let source = "use miden::core::sys begin repeat.12 push.0 end exec.sys::truncate_stack end";
