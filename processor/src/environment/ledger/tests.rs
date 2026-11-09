@@ -30,7 +30,7 @@ fn root_mast_has_exact_preimage_and_one_seed_without_an_incoming_edge() {
     assert_eq!(prepared.opening_id().index(), 0);
     assert_eq!(prepared.counters().occurrences, 1);
     assert_eq!(prepared.counters().library_rows, 2);
-    assert_eq!(prepared.counters().compression_requests, 2);
+    assert_eq!(prepared.counters().compression_requests, 1);
     assert_eq!(prepared.commit().index(), 0);
     assert_eq!(ledger.root().unwrap().index(), 0);
     assert_eq!(assert_path(&ledger, &fixture).index(), 0);
@@ -115,7 +115,7 @@ fn equal_commitments_in_distinct_slots_keep_distinct_occurrences() {
     assert_eq!(left_node.parent().unwrap().child_slot(), 0);
     assert_eq!(right_node.parent().unwrap().child_slot(), 1);
     assert_eq!(ledger.counters().occurrences, 3);
-    assert_eq!(ledger.counters().compression_requests, 1 + 2 + 2);
+    assert_eq!(ledger.counters().compression_requests, 1 + 1 + 1);
     assert_topology(&ledger);
 }
 
@@ -209,7 +209,7 @@ fn complete_odd_and_even_lists_preserve_real_zero_and_unselected_slots() {
         }
         let pairs = (count / 2) + (count % 2);
         assert_eq!(ledger.counters().library_rows, 2 * pairs + 2);
-        assert_eq!(ledger.counters().compression_requests, pairs + 2);
+        assert_eq!(ledger.counters().compression_requests, pairs + 1);
         assert_eq!(ledger.counters().total_list_children, count);
         assert_eq!(ledger.counters().encoded_bytes, fixture.encoded_bytes());
         assert_path(&ledger, &fixture);
@@ -440,10 +440,11 @@ fn peak_for_extension_includes_old_ledger_input_staging_and_replacement() {
 fn post_reservation_capacity_excess_is_readmitted_before_publication() {
     let fixture = nested();
     let binding = fixture.binding();
+    let terminal_namespace = binding.namespace();
     let path = binding.into_path();
     let mut ledger = OpeningLedger::new(fixture.root, generous_limits());
     let prefix = ledger.shared_prefix(&path).unwrap();
-    let plan = ledger.plan(&path, path.capacity(), &prefix).unwrap();
+    let plan = ledger.plan(&path, path.capacity(), &prefix, terminal_namespace).unwrap();
     let (retained, peak) = ledger
         .check_storage(&plan, plan.new_occurrences, plan.replacement_capacity, plan.slot_bytes)
         .unwrap();
@@ -495,19 +496,21 @@ fn post_reservation_capacity_excess_is_readmitted_before_publication() {
 
 #[test]
 fn logical_costs_include_empty_list_pair_and_count_requests_before_interning() {
-    assert_eq!(logical_cost(&mast("entry", 40), 0), Ok((2, 2)));
+    let initial = Namespace::initial();
+    assert_eq!(logical_cost(&mast("entry", 40), 0, initial), Ok((2, 1)));
+    assert_eq!(logical_cost(&mast("entry", 40), 1, initial.child(label("env"))), Ok((2, 2)));
     assert_eq!(
-        logical_cost(&EnvNode::Env { label: label("env"), child: root(40) }, 0),
+        logical_cost(&EnvNode::Env { label: label("env"), child: root(40) }, 0, initial),
         Ok((2, 2))
     );
     assert_eq!(
-        logical_cost(&EnvNode::Merkle { left: root(40), right: root(80) }, 0),
+        logical_cost(&EnvNode::Merkle { left: root(40), right: root(80) }, 0, initial),
         Ok((2, 1))
     );
     for (count, expected) in
         [(0, (2, 1)), (1, (2, 1)), (2, (2, 1)), (3, (4, 2)), (4, (4, 2)), (5, (6, 3))]
     {
-        assert_eq!(logical_cost(&EnvNode::List(vec![root(40); count]), 0), Ok(expected));
+        assert_eq!(logical_cost(&EnvNode::List(vec![root(40); count]), 0, initial), Ok(expected));
     }
 }
 

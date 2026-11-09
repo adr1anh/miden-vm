@@ -51,7 +51,7 @@ use crate::vm::{
 /// Upper bound on fractions this emitter pushes into its column per row.
 ///
 /// Row-type-disjoint interaction sets, mutually exclusive via chiplet active flags:
-/// - **Library**: at most three simultaneous interactions on Mast B rows.
+/// - **Library**: at most two simultaneous interactions on any row.
 /// - **Sibling-table** on hasher controller rows (`chiplet_active.controller`): the MV/MU split is
 ///   mutually exclusive (`s2` vs `1-s2`) and the direction bit cuts within each side, so at most
 ///   one of the four fires per row -> 1 fraction.
@@ -64,7 +64,7 @@ use crate::vm::{
 ///   `d1`, `w0`, `w1`) fires unconditionally when the outer batch flag is active -> 4 fractions.
 ///
 /// Row-type disjointness means only one set fires per row, so the per-row max is
-/// `max(3, 1, 1, 1, 2, 4) = 4`.
+/// `max(2, 1, 1, 1, 2, 4) = 4`.
 pub(in crate::vm::constraints::lookup) const MAX_INTERACTIONS_PER_ROW: usize = 4;
 
 /// Emit the hash-kernel virtual table bus.

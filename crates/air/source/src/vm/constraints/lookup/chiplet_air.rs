@@ -151,7 +151,7 @@ mod tests {
                 BusId, BytePairLookupMsg, LibraryResolveMsg, MIDEN_MAX_MESSAGE_WIDTH, RangeMsg,
             },
         },
-        trace::chiplets::library::MAST,
+        trace::chiplets::library::ROOT_MAST,
     };
 
     #[test]
@@ -300,19 +300,19 @@ mod tests {
     }
 
     #[test]
-    fn packed_library_mast_batch_uses_existing_column_with_both_resolve_frequencies() {
+    fn packed_library_root_mast_batch_uses_existing_column_with_both_resolve_frequencies() {
         let indices = core::array::from_fn::<_, NUM_CHIPLETS_COLS, _>(|index| index);
         let columns: &ChipletCols<_> = indices.as_slice().borrow();
         let library = columns.library();
         let mut row = [Felt::ZERO; NUM_CHIPLETS_COLS];
         row[0] = Felt::ONE;
-        for (index, kind) in library.k.into_iter().zip(MAST) {
+        for (index, kind) in library.k.into_iter().zip(ROOT_MAST) {
             row[index] = kind;
         }
         row[library.a] = Felt::from_u8(3);
         row[library.b] = Felt::from_u8(5);
         for index in 0..4 {
-            row[library.z[index]] = Felt::from_usize(50 + index);
+            row[library.y[index]] = Felt::from_usize(50 + index);
             row[library.w[index]] = Felt::from_usize(70 + index);
         }
         let expected_resolve: Vec<_> =
@@ -322,7 +322,7 @@ mod tests {
                         frequency,
                         LibraryResolveMsg {
                             requires_syscall,
-                            key: library.z.map(|index| row[index]),
+                            key: library.y.map(|index| row[index]),
                             implementation: library.w.map(|index| row[index]),
                         }
                         .encode(&challenges()),
@@ -331,12 +331,9 @@ mod tests {
                 .to_vec();
         let actual = fractions(row);
         for row in 0..8 {
-            assert_eq!(
-                &actual.counts()[row * 4..row * 4 + 4],
-                &[0, if row % 2 == 0 { 2 } else { 3 }, 0, 0]
-            );
+            assert_eq!(&actual.counts()[row * 4..row * 4 + 4], &[0, 2, 0, 0]);
             if row % 2 == 1 {
-                assert_eq!(&at(&actual, row, 1)[1..], expected_resolve);
+                assert_eq!(at(&actual, row, 1), expected_resolve);
             }
         }
     }

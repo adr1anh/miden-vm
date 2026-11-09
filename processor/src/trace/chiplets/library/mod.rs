@@ -11,7 +11,8 @@ use miden_air_definitions::vm::{
     trace::{
         CHIPLETS_WIDTH,
         chiplets::library::{
-            EMPTY_LIST, ENV, LIBRARY_COL_RANGE, LIST_CONTINUE, LIST_START, MAST, MERKLE,
+            EMPTY_LIST, ENV, LIBRARY_COL_RANGE, LIST_CONTINUE, LIST_START, MAST, MERKLE, ROOT_MAST,
+            namespace_difference_norms,
         },
     },
 };
@@ -20,6 +21,7 @@ use miden_core::{
         BLOCK_HI_RANGE, BLOCK_LO_RANGE, CV_RANGE, DIGEST_RANGE, STATE_WIDTH, compress_state,
     },
     crypto::hash::Eidos,
+    field::Field,
     program::{EnvNode, EnvironmentRoot, Namespace, domain},
 };
 
@@ -303,6 +305,7 @@ fn visit_object<'a>(
     requests: &mut Requests<'_, impl FnMut(&[Felt; STATE_WIDTH]) -> Result<(), ExecutionError>>,
     emit: &mut impl FnMut(&[Felt; 2 * CHIPLETS_WIDTH]) -> Result<(), ExecutionError>,
 ) -> Result<(), ExecutionError> {
+    let namespace = occurrence.namespace();
     let (kind, x, y, frame) = match occurrence.node() {
         EnvNode::Env { label, child } => (
             ENV,
@@ -317,7 +320,11 @@ fn visit_object<'a>(
             Eidos::merkle_node_init_chaining_word(),
         ),
         EnvNode::Mast { label, implementation } => (
-            MAST,
+            if namespace == Namespace::initial() {
+                ROOT_MAST
+            } else {
+                MAST
+            },
             label.into_word(),
             implementation.into_word(),
             Eidos::init_chaining_word(domain::ENV_MAST, 8),
@@ -328,7 +335,7 @@ fn visit_object<'a>(
         return Err(inconsistent());
     }
     let mut rows = [ZERO; 2 * CHIPLETS_WIDTH];
-    let (a, b) = pair(&mut rows, kind, occurrence.namespace(), occurrence.depth())?;
+    let (a, b) = pair(&mut rows, kind, namespace, occurrence.depth())?;
     a.x = x.into_elements();
     a.y = y.into_elements();
     a.z = occurrence.commitment().into_word().into_elements();
@@ -340,36 +347,44 @@ fn visit_object<'a>(
         b.x = a.w;
         b.y = a.x;
         b.w = a.y;
-        b.z = match occurrence.node() {
+        match occurrence.node() {
             EnvNode::Env { label, .. } => {
-                let output = occurrence.namespace().child(*label).into_word();
+                let output = namespace.child(*label).into_word();
                 if requests.compress(
-                    occurrence.namespace().into_word(),
+                    namespace.into_word(),
                     x,
                     Eidos::init_chaining_word(domain::ENV_NAMESPACE, 8),
                 )? != output
                 {
                     return Err(inconsistent());
                 }
-                output.into_elements()
+                b.z = output.into_elements();
             },
             EnvNode::Mast { .. } => {
                 let binding = bindings.next().ok_or_else(inconsistent)?;
-                let output = binding.procedure_key().into_word();
-                if requests.compress(
-                    occurrence.namespace().into_word(),
-                    x,
-                    Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8),
-                )? != output
-                {
-                    return Err(inconsistent());
-                }
                 b.a = bounded_felt(binding.counts().normal)?;
                 b.b = bounded_felt(binding.counts().syscall)?;
-                output.into_elements()
+                if kind == MAST {
+                    let [low, high] = namespace_difference_norms(a.w);
+                    if let Some(inverse) = low.try_inverse() {
+                        a.a = inverse;
+                    } else {
+                        a.b = high.try_inverse().ok_or_else(inconsistent)?;
+                    }
+                    let output = binding.procedure_key().into_word();
+                    if requests.compress(
+                        namespace.into_word(),
+                        x,
+                        Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8),
+                    )? != output
+                    {
+                        return Err(inconsistent());
+                    }
+                    b.z = output.into_elements();
+                }
             },
             _ => return Err(inconsistent()),
-        };
+        }
     }
     emit(&rows)
 }

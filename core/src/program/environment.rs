@@ -7,7 +7,7 @@
 //! ordering.
 
 use crate::{
-    Word,
+    Felt, Word,
     chiplets::hasher,
     program::domain,
     serde::{ByteReader, ByteWriter, Deserializable, DeserializationError, Serializable},
@@ -72,7 +72,7 @@ macro_rules! word_identity {
 }
 
 word_identity! {
-    /// A callable procedure's namespace-qualified key, independent of its selected implementation.
+    /// A callable procedure's key in an environment, independent of its selected implementation.
     ProcedureKey
 }
 
@@ -100,12 +100,18 @@ word_identity! {
 }
 
 impl Namespace {
-    /// Derives the fixed initial namespace, independent of the environment root.
+    /// Returns the fixed initial namespace, independent of the environment root.
     ///
     /// This is the root namespace itself, without an additional root label. Derivation does not
     /// authenticate an environment path or authorize the namespace.
-    pub fn initial() -> Self {
-        Self::new(hasher::hash_elements_in_domain(&[], domain::ENV_INITIAL_NAMESPACE))
+    pub const fn initial() -> Self {
+        // The empty-message digest under ENV_INITIAL_NAMESPACE.
+        Self::new(Word::new([
+            Felt::new_unchecked(0x5af63cdc05e1732d),
+            Felt::new_unchecked(0x7c441ffa1c95ee1f),
+            Felt::new_unchecked(0x2e3dd14274ac5042),
+            Felt::new_unchecked(0x09b0dc5782213a88),
+        ]))
     }
 
     /// Derives a child namespace from this parent and its local label commitment.
@@ -121,9 +127,12 @@ impl Namespace {
 
     /// Derives an export's procedure key directly under this immediate parent namespace.
     ///
-    /// The export label does not extend the namespace first. The implementation commitment does
-    /// not enter this derivation, and the derived key does not authenticate a binding.
+    /// At the initial namespace, the key is the export label commitment. In a child namespace,
+    /// the key is the domain-separated hash of the namespace and the export label commitment.
     pub fn procedure_key(self, export_label: LabelCommitment) -> ProcedureKey {
+        if self == Self::initial() {
+            return ProcedureKey::new(export_label.into_word());
+        }
         let payload = [self.into_word(), export_label.into_word()];
         ProcedureKey::new(hasher::hash_elements_in_domain(
             Word::words_as_elements(&payload),
@@ -165,7 +174,7 @@ impl ExecutionTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Felt, program::test_vectors::vector};
+    use crate::program::test_vectors::vector;
 
     #[test]
     fn identities_preserve_canonical_word_encoding() {
@@ -193,6 +202,7 @@ mod tests {
         let expected = fixture_word("namespace_initial");
 
         assert_eq!(Namespace::initial().into_word(), expected);
+        assert_eq!(hasher::hash_elements_in_domain(&[], domain::ENV_INITIAL_NAMESPACE), expected);
     }
 
     #[test]
@@ -205,6 +215,7 @@ mod tests {
 
         assert_eq!(parent.child(label).into_word(), expected_child);
         assert_eq!(parent.procedure_key(label).into_word(), expected_key);
+        assert_eq!(Namespace::initial().procedure_key(label).into_word(), label.into_word());
     }
 
     #[test]

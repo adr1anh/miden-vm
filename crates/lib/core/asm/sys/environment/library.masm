@@ -220,9 +220,10 @@ end
 #! Empty and singleton libraries use direct root checks because Merkle opcodes require depth>0.
 #! Namespace, loop cursors, and counts remain on the stack; no local frame is allocated.
 #!
-#! Cycles: 74 for count=0; 190 for count=1. For count in 2..=7:
-#! `61 + 129*count + 132*t + R`, where R is 54, 123, 177, 285, 334, 399, respectively.
-#! For count>=8: `79 + 155*count + 127*popcount(count) + 132*t`.
+#! Cycles: 74 for count=0 and `190 + k` for count=1. For count in 2..=7:
+#! `61 + (129 + k)*count + 132*t + R`, where R is 54, 123, 177, 285, 334, 399, respectively.
+#! For count>=8: `79 + (155 + k)*count + 127*popcount(count) + 132*t`.
+#! Here `k` is 12 for the initial namespace and 23 otherwise.
 #! Here `t` is the number of adjacent key pairs whose coordinate 3 is equal, requiring the
 #! full-word comparison. `popcount(count)` is the number of perfect frontier blocks.
 pub proc create(namespace: word, entries_ptr: ptr<felt>, count: u32, scratch_ptr: ptr<word>) -> word
@@ -330,7 +331,8 @@ end
 #! A singleton is checked and replaced directly because the opcode does not accept depth zero.
 #! New internal nodes enter the Merkle store; the new Mast's raw payload enters the advice map.
 #!
-#! Cycles: 315 at depth zero; 351 at depths 1..=64, including 14 local-frame operations.
+#! Cycles: `315 + k` at depth zero or `351 + k` at depths 1..=64, including 14 local-frame
+#! operations. Here `k` is 12 for the initial namespace and 23 otherwise.
 #! The native update's old and new Merkle-path chiplet work grows with depth.
 @locals(24)
 pub proc update_at(descriptor_ptr: ptr<felt>, root: word, key: word, namespace: word) -> word

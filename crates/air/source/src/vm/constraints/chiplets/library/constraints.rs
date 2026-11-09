@@ -10,13 +10,16 @@ use super::{
     LibraryKindFlags, LibraryPhaseFlags, LibraryRowContext, columns::LibraryCols, sigma_hi,
     sigma_validity,
 };
-use crate::{shared::eidos::framing::initial_cv_from_frame, vm::MidenAirBuilder};
+use crate::{
+    shared::eidos::framing::initial_cv_from_frame,
+    vm::{MidenAirBuilder, trace::chiplets::library::namespace_difference_norms},
+};
 
 /// Enforces the complete local Library relation with explicit section and periodic inputs.
 ///
 /// Hashing and rooted authorization are supplied by the paired Library lookup entry point. This
-/// function constrains routing, complete reverse Lists, prefix boundaries, and each syscall
-/// supplier's full namespace against the fixed initial namespace.
+/// function constrains routing, complete reverse Lists, prefix boundaries, and whether each Mast
+/// supplier belongs to the initial namespace.
 pub fn enforce_library_constraints<AB: MidenAirBuilder>(
     builder: &mut AB,
     local: &LibraryCols<AB::Var>,
@@ -27,6 +30,7 @@ pub fn enforce_library_constraints<AB: MidenAirBuilder>(
     let next_kinds = LibraryKindFlags::<AB::Expr>::new(next);
     let phases = LibraryPhaseFlags::new(context.is_active.clone(), context.phase.clone());
     let list = kinds.is_list_start.clone() + kinds.is_list_continue.clone();
+    let mast = kinds.is_mast.clone() + kinds.is_root_mast.clone();
     let transition = builder.is_transition();
 
     // Library occupies a nonempty proper prefix and complete A/B pairs. Scope is Boolean even
@@ -47,7 +51,6 @@ pub fn enforce_library_constraints<AB: MidenAirBuilder>(
         for bit in local.k {
             builder.assert_bool(bit);
         }
-        builder.assert_zero(kinds.is_invalid.clone());
     }
     builder.when_first_row().assert_zero(kinds.is_list_continue.clone());
     {
@@ -81,12 +84,19 @@ pub fn enforce_library_constraints<AB: MidenAirBuilder>(
         builder.assert_zero(local.b);
     }
 
-    // All ordinary object A rows have zero scalar payloads.
-    let ordinary = kinds.is_merkle.clone() + kinds.is_env.clone() + kinds.is_mast.clone();
+    let zero_scalars = kinds.is_merkle.clone() + kinds.is_env.clone() + kinds.is_root_mast.clone();
     {
-        let builder = &mut builder.when(phases.kind_a(ordinary));
+        let builder = &mut builder.when(phases.kind_a(zero_scalars));
         builder.assert_zero(local.a);
         builder.assert_zero(local.b);
+    }
+    {
+        // An ordinary Mast must have a nonzero namespace difference. The two degree-two norms
+        // and their witness coefficients give degree eight under the Mast A selector.
+        let [low, high] = namespace_difference_norms::<AB::Expr>(local.w.map(Into::into));
+        builder
+            .when(phases.kind_a(kinds.is_mast.clone()))
+            .assert_one(low * local.a + high * local.b);
     }
     {
         let builder =
@@ -106,8 +116,8 @@ pub fn enforce_library_constraints<AB: MidenAirBuilder>(
         builder.assert_zero(sigma_validity::<AB::Expr>(local.b.into()));
     }
     {
-        let builder = &mut builder
-            .when(transition.clone() * phases.kind_a(kinds.is_env.clone() + kinds.is_mast.clone()));
+        let builder =
+            &mut builder.when(transition.clone() * phases.kind_a(kinds.is_env.clone() + mast));
         for i in 0..4 {
             builder.assert_eq(next.x[i], local.w[i]);
             builder.assert_eq(next.y[i], local.x[i]);
@@ -119,14 +129,12 @@ pub fn enforce_library_constraints<AB: MidenAirBuilder>(
         builder.assert_zero(local.a);
         builder.assert_zero(local.b);
     }
+    builder.when(phases.kind_b(kinds.is_mast.clone())).assert_zero(local.b);
     {
-        let builder = &mut builder.when(phases.kind_b(kinds.is_mast.clone()));
-        // Separate supplier-local equations prevent cancellation across different namespaces.
-        // Normal resolution remains unrestricted, including under the initial namespace.
+        let builder = &mut builder.when(phases.kind_b(kinds.is_root_mast.clone()));
         let initial = Namespace::initial().into_word().into_elements();
         for (coordinate, authorized) in local.x.into_iter().zip(initial) {
-            let namespace: AB::Expr = coordinate.into();
-            builder.assert_zero(local.b * (namespace - AB::Expr::from(authorized)));
+            builder.assert_eq(coordinate, AB::Expr::from(authorized));
         }
     }
 

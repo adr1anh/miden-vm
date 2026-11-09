@@ -178,11 +178,9 @@ fn syscall_accepts_fixed_root_declarations_and_defers_literal_keys_to_runtime() 
         SourceSpan::UNKNOWN,
         Arc::from(Path::new("::dep::run")),
     ));
+    let key = ProcedureKey::new(CanonicalLabel::text("run").unwrap().commitment().into_word());
     for kind in [InvokeKind::SysCall, InvokeKind::Exec, InvokeKind::Call, InvokeKind::ProcRef] {
-        assert_eq!(
-            assembler.resolve_target(kind, &target, caller.module).unwrap().key,
-            root_binding().key(),
-        );
+        assert_eq!(assembler.resolve_target(kind, &target, caller.module).unwrap().key, key);
     }
 
     // A literal key carries no authenticated parent at assembly time, even when the same word

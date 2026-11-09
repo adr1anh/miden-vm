@@ -2,9 +2,10 @@ use alloc::vec::Vec;
 
 use miden_core::{
     Felt, WORD_SIZE, Word,
+    chiplets::hasher,
     program::{
         CanonicalLabel, EnvNode, EnvironmentRoot, ImplementationRoot, LabelCommitment, Namespace,
-        ProcedureKey,
+        ProcedureKey, domain,
     },
 };
 
@@ -14,10 +15,26 @@ use super::{
 
 #[test]
 fn root_mast_authenticates_key_namespace_and_implementation() {
-    let fixture = direct(label("entry"), implementation(40));
+    let label = label("entry");
+    let fixture = direct(label, implementation(40));
+    assert_eq!(fixture.key.into_word(), label.into_word());
     assert_ne!(fixture.key.into_word(), fixture.implementation.into_word());
     let limits = exact_limits(&fixture.path);
     assert_eq!(limits.max_depth, 0);
+    let legacy_payload = [Namespace::initial().into_word(), label.into_word()];
+    let legacy_key = ProcedureKey::new(hasher::hash_elements_in_domain(
+        Word::words_as_elements(&legacy_payload),
+        domain::ENV_PROCEDURE,
+    ));
+    assert_eq!(
+        ResolutionWitness { path: copy_path(&fixture.path) }
+            .verify(fixture.root, legacy_key, limits)
+            .unwrap_err(),
+        OpeningError::KeyMismatch {
+            expected: legacy_key,
+            actual: fixture.key
+        },
+    );
     assert_binding(fixture, limits);
 }
 

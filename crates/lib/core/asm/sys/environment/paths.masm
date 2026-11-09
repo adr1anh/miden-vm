@@ -19,6 +19,7 @@
 #! frame setup/cleanup. They exclude control rows, block framing, padding, retained invocation
 #! boundaries, and host/chiplet work. In the formulas, `e` and `m` count Env and Merkle records;
 #! `z` is 1 for an empty path and 0 otherwise, counting the nop executed by each skipped loop.
+#! `k` is 12 when the binding's namespace is the initial namespace and 23 otherwise.
 
 use miden::core::sys::environment
 use {ENV_INIT_CV, MAST_INIT_CV, MERKLE_INIT_CV} from miden::core::sys::environment
@@ -178,7 +179,7 @@ end
 #! Output: [descriptor_ptr, NAMESPACE, ...]
 #! Locals: 0=D; 1=start; 2=end; 4..7=expected ROOT; 8..11=expected KEY; 12..15=NAMESPACE.
 #! Local slot 3 is unused padding. No input can alias this frame or any nested working frame.
-#! Cycles: `221 + 82*e + 63*m + 2*z` raw VM operations, including its local frame.
+#! Cycles: `221 + 82*e + 63*m + 2*z + k` raw VM operations, including its local frame.
 @locals(16)
 proc verify_checked_binding
     loc_store.1 loc_store.2 loc_store.0
@@ -223,7 +224,7 @@ end
 #! Root authorization, global key uniqueness, and executable code availability remain caller
 #! obligations. The supplied ROOT may, for example, be an authorized public input.
 #!
-#! Cycles: `313 + 82*e + 63*m + 2*z` raw VM operations, including both local frames.
+#! Cycles: `313 + 82*e + 63*m + 2*z + k` raw VM operations, including both local frames.
 @locals(4)
 pub proc verify_binding(descriptor_ptr: ptr<felt>, root: word, key: word) -> (word, word)
     # The reserved local word establishes a boundary through the supported locals API.
@@ -249,7 +250,7 @@ end
 #! Cost is linear in path length, hence logarithmic for a balanced binary library tree.
 #! The new root's two-word node preimages are added to the advice map by the hash helpers.
 #!
-#! Cycles: `402 + 119*e + 106*m + 3*z` raw VM operations, including both local frames.
+#! Cycles: `402 + 119*e + 106*m + 3*z + k` raw VM operations, including both local frames.
 @locals(8)
 pub proc update_binding(
     implementation: word,

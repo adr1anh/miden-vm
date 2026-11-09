@@ -1,6 +1,6 @@
 use alloc::{string::ToString, sync::Arc};
 
-use miden_core::program::{CanonicalLabel, ImplementationRoot, Namespace};
+use miden_core::program::{CanonicalLabel, ImplementationRoot, Namespace, ProcedureKey};
 use miden_mast_package::{CallableProcedurePath, NamespacePath};
 use miden_project::TargetType;
 
@@ -513,9 +513,12 @@ fn kernel_root_exports_follow_public_submodules_and_keep_private_helpers_in_chil
         .assemble_library_modules("kernel".into(), root, [api, hidden], TargetType::Kernel)
         .unwrap();
     for (path, name) in [("::$kernel::run", "run"), ("::$kernel::api::child", "child")] {
-        let expected = root_binding(name);
-        assert_eq!(product.callable_key_for_definition(Path::new(path)), Some(expected.key()));
-        assert_eq!(expected.parent_namespace(), Namespace::initial());
+        let key = ProcedureKey::new(CanonicalLabel::text(name).unwrap().commitment().into_word());
+        assert_eq!(product.callable_key_for_definition(Path::new(path)), Some(key));
+        assert_eq!(
+            product.callables().binding(key).unwrap().parent_namespace(),
+            Namespace::initial()
+        );
     }
     for components in [
         vec!["$kernel", "helper"],

@@ -57,10 +57,10 @@ pub const DIGEST_WIDTH: usize = 4;
 /// Compile-time constant binding the Fiat-Shamir transcript to the Miden VM AIR. The generated
 /// `sys::vm` wrapper embeds it, and the pinned VM verifier root covers that module.
 pub const RELATION_DIGEST: RelationDigest = [
-    Felt::new_unchecked(5821994734153298154),
-    Felt::new_unchecked(3542146237100816732),
-    Felt::new_unchecked(7012121951076460052),
-    Felt::new_unchecked(4266662850979393598),
+    Felt::new_unchecked(3179955849373346053),
+    Felt::new_unchecked(5397302881838215181),
+    Felt::new_unchecked(7192857469950090069),
+    Felt::new_unchecked(6968090050061852443),
 ];
 
 /// Eidos digest of the order-invariant recursive-verifier ACE circuit's instruction stream.
@@ -68,10 +68,10 @@ pub const RELATION_DIGEST: RelationDigest = [
 /// One circuit serves every proof order, so this digest names the accepted circuit outright: it
 /// is the advice-map key the stream is served under and the value the MASM loader pins it to.
 pub const ACE_CIRCUIT_DIGEST: [Felt; 4] = [
-    Felt::new_unchecked(8048601197351681720),
-    Felt::new_unchecked(2792031398895669505),
-    Felt::new_unchecked(1712541351520826216),
-    Felt::new_unchecked(4629386908416097782),
+    Felt::new_unchecked(8146696630031950312),
+    Felt::new_unchecked(4511896981071622145),
+    Felt::new_unchecked(7893025484018454247),
+    Felt::new_unchecked(3376182520619915094),
 ];
 
 // Fixed And8 commitments for the three VM proof configurations, each built from the canonical VM
