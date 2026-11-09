@@ -231,9 +231,10 @@ word encoding. A scalar list and a word therefore have different push-order conv
 | --- | --- | --- | ---: | --- |
 | `clk` | `[...]` | `[t,...]` | 1 | Pushes the current VM clock cycle. |
 | `sdepth` | `[...]` | `[d,...]` | 1 | Pushes the current operand-stack depth, which is at least 16. |
-| `caller` | `[W,...]` | `[KEY,...]` | 1 | Overwrites the top word with the current context's principal procedure key. Entry establishes the execution descriptor's entry key; `call`/`dyncall` establish their requested key; `exec`, `dynexec`, and `syscall` preserve it; returns restore it. This is a callable key, not an implementation commitment. |
+| `caller` | `[W,...]` | `[D,...]` | 1 | Overwrites the top word with the implementation digest installed by the call that established the current user context. It starts at zero. Same-context invocations and syscalls preserve it, and returns restore it. |
 | `locaddr.i` | `[...]` | `[address,...]` | 4 | Pushes the absolute address of allocated local i. The procedure must allocate locals and i must be in range; invalid local references are assembly errors. |
-| `procref.name` | `[...]` | `[KEY,...]` | 4 | Pushes the namespace-qualified callable key of `name`, with key[0] on top. It does not freeze an implementation or authenticate a binding. |
+| `procref.name` | `[...]` | `[KEY,...]` | 4 | Pushes the callable key of `name`, with element 0 on top. |
+| `procdigest.name` | `[...]` | `[D,...]` | 4 | Pushes the selected implementation digest of `name`, with element 0 on top. |
 
 ### Nondeterministic Inputs (Advice Provider)
 
@@ -538,19 +539,21 @@ body/condition operations and framing.
 
 ## Procedure Invocation
 
-Retained invocations resolve a **procedure key** under the execution's fixed environment root.
-An implementation commitment is not a substitute for that key. Each retained invocation has
-one entry and one return control row, plus the selected body's operations, local-frame work,
-control nodes, and framing/padding. Local or bundled code is not implicitly inlined.
+Keyed invocations authenticate a **procedure key** under the execution's fixed environment root.
+Digest invocations select a body by its **implementation digest**. A named `calldigest` or
+`procdigest` requires a selected implementation digest at assembly time. Both instructions also
+accept a hexadecimal digest directly.
+Each retained invocation has one entry and one return control row, plus the selected body's
+operations, local-frame work, control nodes, and framing/padding.
 
 | Instruction | Stack / context effect | Invocation control cycles |
 | --- | --- | --- |
-| `exec.name` | Uses the callee's declared stack ABI in the same context, preserving access to its stack overflow, memory, and established principal. | 2 plus body |
-| `inline.name` | Structurally expands a selected body at assembly time. Requires a local fixed body or an explicitly implementation-pinned import; Latest imports and inline cycles are rejected. The body's own local-frame work remains. | No retained invocation boundary; body costs remain |
-| `call.name` | Passes the top 16 operand slots into a new isolated user-memory context, hiding caller overflow. Establishes the requested procedure key as principal. Return restores the caller's context, overflow, and principal; callee depth must be exactly 16. | 2 plus body |
-| `syscall.name` | Passes the top 16 slots into the root memory context, hiding caller overflow and preserving the established principal. The binding's immediate parent namespace must be `Namespace::initial()`. Return requires depth 16 and restores caller state. | 2 plus body |
-| `dynexec` | `[ptr,...]`: consumes a word-aligned u32 pointer, reads a procedure key from that memory word, then applies `exec` semantics. | 2 plus body |
-| `dyncall` | Consumes the same kind of pointer, then applies `call` semantics to the top 16 slots remaining after that pop. | 2 plus body |
+| `exec.name` | Resolves a key and executes the selected body in the same context, sharing stack overflow, memory, and caller digest. | 2 plus body |
+| `inline.name` | Expands a local fixed body or an explicitly implementation-pinned import at assembly time. The assembler rejects Latest imports and inline cycles. The body's own local-frame work remains. | Body costs only |
+| `call.name` / `calldigest.name` | Resolve by key and select by digest, respectively. Both pass the top 16 operand slots into a new isolated user-memory context, hide caller overflow, and install the selected implementation digest. Return restores the caller's context, overflow, and digest, and requires a callee depth of 16. | 2 plus body |
+| `syscall.name` | Passes the top 16 slots into the root memory context, hiding caller overflow and preserving the caller digest. The authenticated binding's immediate parent namespace must be `Namespace::initial()`. Return requires depth 16 and restores caller state. | 2 plus body |
+| `dynexec` / `dynexecdigest` | Consume a word-aligned u32 pointer and read a key or digest, respectively, from that address. Execute the selected body in the same context. | 2 plus body |
+| `dyncall` / `dyncalldigest` | Consume the same kind of pointer and read a key or digest, respectively. Apply `call` context and stack behavior to the top 16 slots remaining after that pop. | 2 plus body |
 
 The dynamic instructions do not push a key or return address. See
 [execution contexts](execution_contexts.md) for context, principal, and return details.

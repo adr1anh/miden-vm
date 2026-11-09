@@ -1449,9 +1449,7 @@ impl Assembler {
         for &gid in &worklist {
             self.callable_binding(gid)?;
         }
-        // Only explicit inline edges require callee bodies before callers. Runtime references,
-        // including cycles that cross inline boundaries, still require identities alone.
-        worklist = self.linker.inline_compilation_order(&worklist)?;
+        worklist = self.linker.body_compilation_order(&worklist)?;
         worklist.reverse();
 
         self.process_graph_worklist(&mut worklist, &root, mast_forest_builder)
@@ -1464,7 +1462,7 @@ impl Assembler {
         root: &SubgraphRoot,
         mast_forest_builder: &mut MastForestBuilder,
     ) -> Result<(), Report> {
-        // The worklist orders structural inline dependencies only.
+        // The worklist orders dependencies that require the callee's body or digest.
         while let Some(procedure_gid) = worklist.pop() {
             // If we have already compiled this procedure, do not recompile
             if let Some(proc) = mast_forest_builder.get_procedure(procedure_gid) {
@@ -1945,6 +1943,39 @@ impl Assembler {
         // Literal K has no declaration parent here. The runtime authenticates its immediate
         // parent against Namespace::initial() using the execution-environment witness.
         Ok(ResolvedProcedure { key })
+    }
+
+    /// Selects the structural body for a digest reference. A literal may refer to external code.
+    pub(super) fn resolve_digest_target(
+        &self,
+        kind: InvokeKind,
+        target: &InvocationTarget,
+        caller_module: ModuleIndex,
+        mast_forest_builder: &mut MastForestBuilder,
+    ) -> Result<MastNodeUse, Report> {
+        let caller = SymbolResolutionContext {
+            span: target.span(),
+            module: caller_module,
+            kind: Some(kind),
+        };
+        match self.linker.resolve_invoke_target(&caller, target)? {
+            SymbolResolution::MastRoot(digest) => self.materialize_procedure_root(
+                digest.into_inner(),
+                None,
+                None,
+                None,
+                mast_forest_builder,
+            ),
+            SymbolResolution::Exact { gid, .. } => {
+                let proc = mast_forest_builder.get_procedure(gid).ok_or_else(|| {
+                    Report::msg(format!(
+                        "{kind} target '{target}' requires a selected implementation"
+                    ))
+                })?;
+                Ok(proc.body_node_use())
+            },
+            _ => unreachable!("invoke resolver returns callable identities"),
+        }
     }
 
     /// Adds a selected implementation root to the forest without deriving callable identity.

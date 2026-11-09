@@ -29,6 +29,9 @@ const SPARSE_DYN: u8 = 6;
 const SPARSE_DYNCALL: u8 = 7;
 const SPARSE_EXTERNAL: u8 = 8;
 const SPARSE_EXEC: u8 = 9;
+const SPARSE_DIGEST_CALL: u8 = 10;
+const SPARSE_DIGEST_DYN: u8 = 11;
+const SPARSE_DIGEST_DYNCALL: u8 = 12;
 
 #[cfg(test)]
 mod tests;
@@ -104,9 +107,15 @@ fn write_sparse_node<W: ByteWriter>(node: &MastNode, target: &mut W) {
             loop_node.body().write_into(target);
         },
         MastNode::Call(call) => {
-            target.write_u8(if call.is_syscall() { SPARSE_SYSCALL } else { SPARSE_CALL });
-            node.digest().write_into(target);
-            call.target().write_into(target);
+            if let Some(callee) = call.digest_callee() {
+                target.write_u8(SPARSE_DIGEST_CALL);
+                node.digest().write_into(target);
+                callee.write_into(target);
+            } else {
+                target.write_u8(if call.is_syscall() { SPARSE_SYSCALL } else { SPARSE_CALL });
+                node.digest().write_into(target);
+                call.target().write_into(target);
+            }
         },
         MastNode::Exec(exec) => {
             target.write_u8(SPARSE_EXEC);
@@ -114,10 +123,11 @@ fn write_sparse_node<W: ByteWriter>(node: &MastNode, target: &mut W) {
             exec.target().write_into(target);
         },
         MastNode::Dyn(dyn_node) => {
-            target.write_u8(if dyn_node.is_dyncall() {
-                SPARSE_DYNCALL
-            } else {
-                SPARSE_DYN
+            target.write_u8(match (dyn_node.is_dyncall(), dyn_node.is_digest()) {
+                (false, false) => SPARSE_DYN,
+                (true, false) => SPARSE_DYNCALL,
+                (false, true) => SPARSE_DIGEST_DYN,
+                (true, true) => SPARSE_DIGEST_DYNCALL,
             });
             node.digest().write_into(target);
         },
@@ -285,15 +295,20 @@ fn read_sparse_node<R: ByteReader>(
             };
             Ok(builder.with_digest(digest).build().into())
         },
+        SPARSE_DIGEST_CALL => CallNodeBuilder::new_digest(read_node_id(source, "call callee")?)
+            .with_digest(digest)
+            .build_linked()
+            .map(Into::into),
         SPARSE_EXEC => Ok(ExecNodeBuilder::new(ProcedureKey::read_from(source)?)
             .with_digest(digest)
             .build()
             .into()),
-        SPARSE_DYN | SPARSE_DYNCALL => {
-            let builder = if tag == SPARSE_DYNCALL {
-                DynNodeBuilder::new_dyncall()
-            } else {
-                DynNodeBuilder::new_dyn()
+        SPARSE_DYN | SPARSE_DYNCALL | SPARSE_DIGEST_DYN | SPARSE_DIGEST_DYNCALL => {
+            let builder = match tag {
+                SPARSE_DYNCALL => DynNodeBuilder::new_dyncall(),
+                SPARSE_DIGEST_DYN => DynNodeBuilder::new_digest(),
+                SPARSE_DIGEST_DYNCALL => DynNodeBuilder::new_digest_dyncall(),
+                _ => DynNodeBuilder::new_dyn(),
             };
             Ok(builder.with_digest(digest).build().into())
         },

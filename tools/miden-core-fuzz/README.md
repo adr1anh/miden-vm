@@ -78,7 +78,7 @@ make fuzz-execution-proof
 ```
 
 The **`execution_witness_deserialize`** target reads a fuzz-only caller envelope:
-`K_entry[32] || R_E[32] || replay-v6 bytes`. Both prefix identities use canonical `Word`
+`K_entry[32] || R_E[32] || replay-v7 bytes`. Both prefix identities use canonical `Word`
 encoding and are supplied to the bounded witness reader as the caller's expected target.
 The harness never discovers authority from the witness payload. Fixed explicit policies cap the
 payload at 4 MiB and keyed validation peak at 16 MiB, with separate finite opening, ledger,

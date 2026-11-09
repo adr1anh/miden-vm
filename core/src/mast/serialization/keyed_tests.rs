@@ -112,6 +112,45 @@ fn assert_structure_rejected(bytes: &[u8]) {
 }
 
 #[test]
+fn digest_invocations_round_trip_and_commit_their_modes() {
+    let mut builder = DenseMastForestBuilder::new();
+    builder.push_node(BasicBlockNodeBuilder::new(vec![Operation::Noop])).unwrap();
+    let callee_digest = key(10).into_word();
+    let callee = builder.push_node(ExternalNodeBuilder::new(callee_digest)).unwrap();
+    let digest_call = builder.push_node(CallNodeBuilder::new_digest(callee)).unwrap();
+    let keyed_call = builder.push_node(CallNodeBuilder::new(key(10))).unwrap();
+    let digest_dyn = builder.push_node(DynNodeBuilder::new_digest()).unwrap();
+    let digest_dyncall = builder.push_node(DynNodeBuilder::new_digest_dyncall()).unwrap();
+    for root in [digest_call, keyed_call, digest_dyn, digest_dyncall] {
+        builder.mark_root(root);
+    }
+    let (forest, remap) = builder.build_with_id_map().unwrap();
+    let digest_call = remap.get(digest_call).unwrap();
+    let digest_dyn = remap.get(digest_dyn).unwrap();
+    assert_eq!(forest[digest_call].unwrap_call().digest_callee(), remap.get(callee));
+    assert_ne!(forest[digest_call].digest(), forest[remap.get(keyed_call).unwrap()].digest());
+    assert_ne!(forest[digest_dyn].digest(), crate::mast::DynNode::DYN_DEFAULT_DIGEST);
+    assert_ne!(
+        forest[remap.get(digest_dyncall).unwrap()].digest(),
+        crate::mast::DynNode::DYNCALL_DEFAULT_DIGEST
+    );
+    for hashless in [false, true] {
+        let bytes = encode(&forest, hashless);
+        assert_eq!(
+            UntrustedMastForest::read_from_bytes(&bytes).unwrap().validate().unwrap(),
+            forest
+        );
+    }
+
+    let mut bytes = forest.to_bytes();
+    let layout = layout(&bytes);
+    let index = u32::from(digest_dyn) as usize;
+    replace_entry(&mut bytes, layout, index, MastNodeEntry::Dyn);
+    let result = UntrustedMastForest::read_from_bytes(&bytes).unwrap().validate();
+    assert!(matches!(result, Err(MastForestError::HashMismatch { .. })));
+}
+
+#[test]
 fn keyed_dense_roundtrip_preserves_modes_keys_and_views() {
     let forest = keyed_forest().with_advice_map(AdviceMap::from_iter([(
         key(30).into_word(),
@@ -402,6 +441,7 @@ fn keyed_dense_entries_preserve_tags_and_reject_unused_payload_bits() {
         (4u64, MastNodeEntry::Call { target_slot: u32::MAX }),
         (5, MastNodeEntry::SysCall { target_slot: u32::MAX }),
         (9, MastNodeEntry::Exec { target_slot: u32::MAX }),
+        (10, MastNodeEntry::DigestCall { callee_id: u32::MAX }),
     ] {
         let bytes = entry.to_bytes();
         assert_eq!(bytes.len(), 8);
@@ -419,9 +459,14 @@ fn keyed_dense_entries_preserve_tags_and_reject_unused_payload_bits() {
                 MastNodeEntry::Call { .. }
                 | MastNodeEntry::SysCall { .. }
                 | MastNodeEntry::Exec { .. }
+                | MastNodeEntry::DigestCall { .. }
                 | MastNodeEntry::Block { .. }
                 | MastNodeEntry::Loop { .. } => 1u64 << 32,
-                MastNodeEntry::Dyn | MastNodeEntry::Dyncall | MastNodeEntry::External => 1,
+                MastNodeEntry::Dyn
+                | MastNodeEntry::Dyncall
+                | MastNodeEntry::DigestDyn
+                | MastNodeEntry::DigestDyncall
+                | MastNodeEntry::External => 1,
                 MastNodeEntry::Join { .. } | MastNodeEntry::Split { .. } => continue,
             };
             let mut malformed = bytes.clone();
@@ -430,7 +475,7 @@ fn keyed_dense_entries_preserve_tags_and_reject_unused_payload_bits() {
             malformed[offset..offset + 8].copy_from_slice(&(raw | unused_bit).to_le_bytes());
             assert_structure_rejected(&malformed);
         }
-        for tag in 10u64..=15 {
+        for tag in 13u64..=15 {
             let mut malformed = bytes.clone();
             let offset = layout.node_entry_offset();
             malformed[offset..offset + 8].copy_from_slice(&(tag << 60).to_le_bytes());

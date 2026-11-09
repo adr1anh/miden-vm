@@ -43,9 +43,8 @@ where
     Ok(OperationHelperRegisters::Empty)
 }
 
-/// Overwrites the top four stack items with the value of the CALLER_HASH register, which is the
-/// hash of the procedure that initiated the most recent SYSCALL, or ZERO if not in a syscall
-/// context.
+/// Overwrites the top four stack items with the implementation digest that established the
+/// current context, or the zero word in the entry context.
 #[expect(
     clippy::unnecessary_wraps,
     reason = "uniform return type with sibling op_* handlers dispatched in execute_op"

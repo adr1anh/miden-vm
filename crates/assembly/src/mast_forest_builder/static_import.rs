@@ -8,8 +8,8 @@ use core::fmt::Debug;
 use miden_core::{
     Word,
     mast::{
-        BasicBlockNode, CallNodeBuilder, ExecNodeBuilder, ExecutableMastForest, MastForest,
-        MastNode, MastNodeExt, MastNodeId, SubtreeIterator,
+        BasicBlockNode, CallNode, CallNodeBuilder, ExecNodeBuilder, ExecutableMastForest,
+        MastForest, MastNode, MastNodeExt, MastNodeId, SubtreeIterator,
     },
 };
 use miden_mast_package::debug_info::{
@@ -191,6 +191,10 @@ impl MastForestBuilder {
         }
         let invocation_digest = match &source_node {
             MastNode::Exec(node) => Some(ExecNodeBuilder::new(node.target()).build().digest()),
+            MastNode::Call(node) if node.digest_callee().is_some() => {
+                let callee = self.pending_node_mast_root(child_uses[0].node_ref());
+                Some(CallNode::digest_for_callee(callee))
+            },
             MastNode::Call(node) => {
                 let builder = if node.is_syscall() {
                     CallNodeBuilder::new_syscall(node.target())
@@ -202,9 +206,7 @@ impl MastForestBuilder {
             _ => None,
         };
         if invocation_digest.is_some_and(|digest| digest != source_node.digest()) {
-            return Err(Report::msg(
-                "statically linked keyed invocation has a noncanonical digest",
-            ));
+            return Err(Report::msg("statically linked invocation has a noncanonical digest"));
         }
         let child_refs = child_uses.iter().copied().map(MastNodeUse::node_ref).collect();
         let source_child_refs =

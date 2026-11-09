@@ -281,10 +281,14 @@ pub enum Instruction {
     // ----- invocations -------------------------------------------------------------------------
     Exec(InvocationTarget),
     Call(InvocationTarget),
+    CallDigest(InvocationTarget),
     SysCall(InvocationTarget),
     DynExec,
+    DynExecDigest,
     DynCall,
+    DynCallDigest,
     ProcRef(InvocationTarget),
+    ProcDigest(InvocationTarget),
     /// Explicitly expands an eligible fixed body at assembly time.
     ///
     /// Parsing a target does not establish body ownership or an explicit import pin. The frontend

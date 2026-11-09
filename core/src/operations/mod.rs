@@ -156,8 +156,8 @@ pub enum Operation {
     /// Pushes the current depth of the stack onto the stack.
     SDepth = opcodes::SDEPTH,
 
-    /// Overwrites the top four stack items with the hash of a function which initiated the current
-    /// SYSCALL. Thus, this operation can be executed only inside a SYSCALL code block.
+    /// Overwrites the top four stack items with the implementation digest that established the
+    /// current context, or the zero word in the entry context.
     Caller = opcodes::CALLER,
 
     /// Pushes the current value of the clock cycle onto the stack. This operation can be used to

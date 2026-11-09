@@ -24,10 +24,10 @@ where
     }
 }
 
-/// A root CALL restores the entry principal before authenticating the completed digest.
+/// Authenticates the completed digest against the public entry key carried by the next HALT.
 pub(super) fn root_completion_message<E, V>(
     decoder: &DecoderCols<V>,
-    next_principal: [V; 4],
+    next_decoder: &DecoderCols<V>,
 ) -> LibraryResolveMsg<E>
 where
     E: PrimeCharacteristicRing,
@@ -35,7 +35,7 @@ where
 {
     LibraryResolveMsg {
         requires_syscall: E::ZERO,
-        key: next_principal.map(Into::into),
+        key: next_decoder.halt_entry_key().map(Into::into),
         implementation: array::from_fn(|i| decoder.hasher_state[i].into()),
     }
 }
@@ -183,6 +183,40 @@ mod tests {
     }
 
     #[test]
+    fn digest_invocations_commit_mode_and_execute_without_environment_resolution() {
+        for opcode in [opcodes::CALL, opcodes::DYN, opcodes::DYNCALL] {
+            let mut local = invocation(opcode);
+            local.decoder.op_index = Felt::ONE;
+            local.decoder.hasher_state[..4].copy_from_slice(&word(201));
+            let mut next = row(opcodes::SPAN);
+            next.decoder.addr = Felt::from_u8(17);
+            let mut input = [Felt::ZERO; 8];
+            if opcode == opcodes::CALL {
+                input[..4].copy_from_slice(&word(201));
+            }
+            input[4] = Felt::ONE;
+            let actual = fractions(&[local.clone(), next.clone()]);
+            assert_eq!(at(&actual, 0, 0).len(), 1, "caller frame or continuation remains");
+            assert!(resolution_at(&actual, 0).is_empty());
+            let control = encode(HasherMsg::control_block(next.decoder.addr, &input, opcode));
+            assert!(at(&actual, 0, 2).contains(&(-Felt::ONE, control)));
+            let child = encode(BlockHashMsg::Child {
+                parent: next.decoder.addr,
+                child_hash: word(201),
+            });
+            assert_eq!(at(&actual, 0, 1), &[(Felt::ONE, child)]);
+
+            local.decoder.op_index = Felt::ZERO;
+            let keyed = fractions(&[local, next]);
+            assert!(!at(&keyed, 0, 2).contains(&(-Felt::ONE, control)));
+            assert_eq!(
+                resolution_at(&keyed, 0),
+                &[(-Felt::ONE, resolve(Felt::ZERO, word(201), word(201)))]
+            );
+        }
+    }
+
+    #[test]
     fn dyncall_batches_resolution_with_the_derived_post_pop_caller_frame() {
         for depth in [16_u32, 17, 20] {
             let mut invoke = invocation(opcodes::DYNCALL);
@@ -240,7 +274,8 @@ mod tests {
                 end.decoder.hasher_state[7] = Felt::from_bool(root);
                 let mut next = row(if root { opcodes::HALT } else { opcodes::JOIN });
                 next.decoder.addr = Felt::from_u32(11);
-                next.system.fn_hash = word(601);
+                next.system.fn_hash = word(501);
+                next.decoder.hasher_state[4..8].copy_from_slice(&word(601));
                 let frame = if caller_frame {
                     encode(BlockStackMsg::CallerFrame {
                         block_id: end.decoder.addr,
@@ -273,14 +308,14 @@ mod tests {
     }
 
     #[test]
-    fn root_completion_uses_restored_next_principal_and_actual_completed_digest() {
+    fn root_completion_uses_entry_key_and_actual_completed_digest() {
         let mut end = row(opcodes::END);
         end.system.fn_hash = word(301);
         end.decoder.hasher_state[..4].copy_from_slice(&word(401));
         end.decoder.hasher_state[6] = Felt::ONE; // The root itself can be a CALL.
         end.decoder.hasher_state[7] = Felt::ONE;
         let mut halt = row(opcodes::HALT);
-        halt.system.fn_hash = word(601);
+        halt.decoder.hasher_state[4..8].copy_from_slice(&word(601));
         let rows = [end, halt];
         let actual = fractions(&rows);
         let expected = resolve(Felt::ZERO, word(601), word(401));
@@ -294,6 +329,8 @@ mod tests {
         for lane in 0..4 {
             let mut wrong = rows.clone();
             wrong[1].system.fn_hash[lane] += Felt::ONE;
+            assert_eq!(resolution_at(&fractions(&wrong), 0), &[(-Felt::ONE, expected)]);
+            wrong[1].decoder.hasher_state[4 + lane] += Felt::ONE;
             assert_ne!(
                 expected.inverse() + sum(resolution_at(&fractions(&wrong), 0)),
                 QuadFelt::ZERO
@@ -310,11 +347,10 @@ mod tests {
     #[test]
     fn root_completion_requires_exactly_one_demand_against_fixed_unit_library_supply() {
         let mut end = row(opcodes::END);
-        end.system.fn_hash = word(601);
         end.decoder.hasher_state[..4].copy_from_slice(&word(401));
         end.decoder.hasher_state[7] = Felt::ONE;
         let mut halt = row(opcodes::HALT);
-        halt.system.fn_hash = word(601);
+        halt.decoder.hasher_state[4..8].copy_from_slice(&word(601));
 
         // Fix the independently authenticated Library response before building Core fractions.
         // Its frequency is one; neither the demand count nor its payload derives this supply.
@@ -330,9 +366,9 @@ mod tests {
 
         // Exercise two actual root-branch emissions, each with the same fixed K and D.
         // Decoder root-bit/next-HALT constraints independently reject the extra root marker.
-        let doubled = fractions(&[end.clone(), end, halt]);
-        let demands = [resolution_at(&doubled, 0), resolution_at(&doubled, 1)].concat();
-        assert_eq!(demands.len(), 2);
+        let doubled = fractions(&[end.clone(), halt.clone(), end, halt]);
+        let demands = [resolution_at(&doubled, 0), resolution_at(&doubled, 2)].concat();
+        assert_eq!(demands, vec![(-Felt::ONE, supply[0].1); 2]);
         assert_ne!(sum(&supply) + sum(&demands), QuadFelt::ZERO);
     }
 
@@ -373,7 +409,7 @@ mod tests {
         root_end.decoder.hasher_state[..4].copy_from_slice(&word(301));
         root_end.decoder.hasher_state[7] = Felt::ONE;
         let mut halt = row(opcodes::HALT);
-        halt.system.fn_hash = word(401);
+        halt.decoder.hasher_state[4..8].copy_from_slice(&word(401));
         let rows = [invoke, span, child_end, root_end, halt];
         let actual = fractions(&rows);
         let block_hash_events = [at(&actual, 0, 1), at(&actual, 2, 1), at(&actual, 3, 1)].concat();

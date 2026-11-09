@@ -49,8 +49,8 @@ pub(super) struct PendingMastNode {
 /// Compact representation of a pending node's structural variant.
 ///
 /// Child references live on [`PendingMastNode`]; this enum stores only the data needed to
-/// materialize the final node variant. Immediate invocation targets are procedure keys and never
-/// contribute structural child references.
+/// materialize the final node variant. Keyed invocations are childless. Digest calls retain their
+/// selected callee as a structural child.
 #[derive(Clone, Debug)]
 pub(super) enum PendingMastNodeKind {
     BasicBlock { op_batches: Vec<OpBatch> },
@@ -59,7 +59,8 @@ pub(super) enum PendingMastNodeKind {
     Loop,
     Exec { target: ProcedureKey },
     Call { target: ProcedureKey, is_syscall: bool },
-    Dyn { is_dyncall: bool },
+    DigestCall,
+    Dyn { is_dyncall: bool, is_digest: bool },
     External,
 }
 
@@ -72,6 +73,7 @@ impl PendingMastNodeKind {
             Self::Loop => "loop",
             Self::Exec { .. } => "exec",
             Self::Call { .. } => "call",
+            Self::DigestCall => "digest call",
             Self::Dyn { .. } => "dyn",
             Self::External => "external",
         }
@@ -84,11 +86,15 @@ impl PendingMastNodeKind {
             MastNode::Split(_) => Self::Split,
             MastNode::Loop(_) => Self::Loop,
             MastNode::Exec(node) => Self::Exec { target: node.target() },
+            MastNode::Call(node) if node.digest_callee().is_some() => Self::DigestCall,
             MastNode::Call(node) => Self::Call {
                 target: node.target(),
                 is_syscall: node.is_syscall(),
             },
-            MastNode::Dyn(node) => Self::Dyn { is_dyncall: node.is_dyncall() },
+            MastNode::Dyn(node) => Self::Dyn {
+                is_dyncall: node.is_dyncall(),
+                is_digest: node.is_digest(),
+            },
             MastNode::External(_) => Self::External,
         }
     }

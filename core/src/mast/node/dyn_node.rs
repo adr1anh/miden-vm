@@ -1,7 +1,7 @@
 use alloc::{boxed::Box, vec::Vec};
 use core::fmt;
 
-use super::{MastForestContributor, MastNodeContext, MastNodeExt};
+use super::{MastForestContributor, MastNodeContext, MastNodeExt, digest_invocation_digest};
 use crate::{
     Felt, Word,
     mast::{MastForest, MastForestError, MastNodeId},
@@ -13,10 +13,11 @@ use crate::{
 // DYN NODE
 // ================================================================================================
 
-/// A Dyn node specifies that the node to be executed next is defined dynamically via the stack.
+/// A Dyn node executes a callee selected by a word read from memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DynNode {
     is_dyncall: bool,
+    is_digest: bool,
     digest: Word,
 }
 
@@ -46,6 +47,15 @@ impl DynNode {
         Felt::new_unchecked(8979003943310009950),
         Felt::new_unchecked(3514735682419267206),
     ]);
+
+    pub(in crate::mast) fn default_digest(is_dyncall: bool, is_digest: bool) -> Word {
+        match (is_dyncall, is_digest) {
+            (false, false) => Self::DYN_DEFAULT_DIGEST,
+            (true, false) => Self::DYNCALL_DEFAULT_DIGEST,
+            (false, true) => digest_invocation_digest(Word::default(), Self::DYN_DOMAIN),
+            (true, true) => digest_invocation_digest(Word::default(), Self::DYNCALL_DOMAIN),
+        }
+    }
 }
 
 /// Public accessors
@@ -53,6 +63,11 @@ impl DynNode {
     /// Returns true if the [`DynNode`] represents a dyncall operation, and false for dynexec.
     pub fn is_dyncall(&self) -> bool {
         self.is_dyncall
+    }
+
+    /// Returns true when the memory word is interpreted as an implementation digest.
+    pub fn is_digest(&self) -> bool {
+        self.is_digest
     }
 
     /// Returns the domain of this dyn node.
@@ -83,10 +98,11 @@ impl DynNode {
 
 impl PrettyPrint for DynNode {
     fn render(&self) -> Document {
-        if self.is_dyncall() {
-            const_text("dyncall")
-        } else {
-            const_text("dyn")
+        match (self.is_dyncall(), self.is_digest()) {
+            (false, false) => const_text("dyn"),
+            (true, false) => const_text("dyncall"),
+            (false, true) => const_text("dyn_digest"),
+            (true, true) => const_text("dyncall_digest"),
         }
     }
 }
@@ -136,12 +152,11 @@ impl MastNodeExt for DynNode {
     type Builder = DynNodeBuilder;
 
     fn to_builder(self, _forest: &MastForest) -> Self::Builder {
-        let builder = if self.is_dyncall {
-            DynNodeBuilder::new_dyncall()
-        } else {
-            DynNodeBuilder::new_dyn()
-        };
-        builder.with_digest(self.digest)
+        DynNodeBuilder {
+            is_dyncall: self.is_dyncall,
+            is_digest: self.is_digest,
+            digest: Some(self.digest),
+        }
     }
 }
 
@@ -150,32 +165,57 @@ impl MastNodeExt for DynNode {
 #[derive(Debug)]
 pub struct DynNodeBuilder {
     is_dyncall: bool,
+    is_digest: bool,
     digest: Option<Word>,
 }
 
 impl DynNodeBuilder {
     /// Creates a new builder for a DynNode representing a dynexec operation.
     pub fn new_dyn() -> Self {
-        Self { is_dyncall: false, digest: None }
+        Self {
+            is_dyncall: false,
+            is_digest: false,
+            digest: None,
+        }
     }
 
     /// Creates a new builder for a DynNode representing a dyncall operation.
     pub fn new_dyncall() -> Self {
-        Self { is_dyncall: true, digest: None }
+        Self {
+            is_dyncall: true,
+            is_digest: false,
+            digest: None,
+        }
+    }
+
+    /// Creates a builder for a digest-target dynexec.
+    pub fn new_digest() -> Self {
+        Self {
+            is_dyncall: false,
+            is_digest: true,
+            digest: None,
+        }
+    }
+
+    /// Creates a builder for a digest-target dyncall.
+    pub fn new_digest_dyncall() -> Self {
+        Self {
+            is_dyncall: true,
+            is_digest: true,
+            digest: None,
+        }
     }
 
     /// Builds the DynNode.
     pub fn build(self) -> DynNode {
-        // Use the forced digest if provided, otherwise use the default digest
-        let digest = if let Some(forced_digest) = self.digest {
-            forced_digest
-        } else if self.is_dyncall {
-            DynNode::DYNCALL_DEFAULT_DIGEST
-        } else {
-            DynNode::DYN_DEFAULT_DIGEST
-        };
-
-        DynNode { is_dyncall: self.is_dyncall, digest }
+        let digest = self
+            .digest
+            .unwrap_or_else(|| DynNode::default_digest(self.is_dyncall, self.is_digest));
+        DynNode {
+            is_dyncall: self.is_dyncall,
+            is_digest: self.is_digest,
+            digest,
+        }
     }
 }
 
@@ -194,13 +234,9 @@ impl MastForestContributor for DynNodeBuilder {
         _context: &impl MastNodeContext,
         _hash_by_node_id: &impl LookupByIdx<MastNodeId, Word>,
     ) -> Result<Word, MastForestError> {
-        Ok(if let Some(forced_digest) = self.digest {
-            forced_digest
-        } else if self.is_dyncall {
-            DynNode::DYNCALL_DEFAULT_DIGEST
-        } else {
-            DynNode::DYN_DEFAULT_DIGEST
-        })
+        Ok(self
+            .digest
+            .unwrap_or_else(|| DynNode::default_digest(self.is_dyncall, self.is_digest)))
     }
 
     fn remap_children(self, _remapping: &impl LookupByIdx<MastNodeId, MastNodeId>) -> Self {

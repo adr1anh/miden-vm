@@ -232,7 +232,12 @@ fn validate_full_node_child_digests(
                     ))
                 })?;
             },
-            MastNode::External(_) | MastNode::Dyn(_) | MastNode::Exec(_) | MastNode::Call(_) => {},
+            MastNode::External(_) | MastNode::Dyn(_) | MastNode::Exec(_) => {},
+            MastNode::Call(call) => {
+                if let Some(callee) = call.digest_callee() {
+                    require_child_digest(node_id, callee, nodes, digests)?;
+                }
+            },
             MastNode::Join(join) => {
                 require_child_digest(node_id, join.first(), nodes, digests)?;
                 require_child_digest(node_id, join.second(), nodes, digests)?;

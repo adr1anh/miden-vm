@@ -2,7 +2,7 @@
 
 use core::ops::ControlFlow;
 
-use miden_core::program::{ImplementationRoot, Namespace, ProcedureKey};
+use miden_core::program::{ImplementationRoot, Namespace};
 
 use super::*;
 use crate::{
@@ -10,9 +10,9 @@ use crate::{
     Stopper,
     continuation_stack::Continuation,
     execution::{
-        ExecutionState, InternalBreakReason, KeyedRequest, LoadedTarget, RootEndRequest,
-        execute_impl, finish_emit_op_execution, finish_keyed_invocation,
-        finish_load_mast_forest_from_external, finish_root_end, preflight_keyed_invocation,
+        ExecutionState, InternalBreakReason, InvocationRequest, InvocationTarget, LoadedTarget,
+        RootEndRequest, execute_impl, finish_emit_op_execution, finish_invocation,
+        finish_load_mast_forest_from_external, finish_root_end, preflight_invocation,
         preflight_root_end,
     },
     fast::{
@@ -216,26 +216,6 @@ impl FastProcessor {
         )
     }
 
-    fn publish_preflighted_code(
-        &mut self,
-        prepared: &PreparedLoadedTarget,
-    ) -> Result<(), ExecutionError> {
-        let forest = prepared.loaded_mast_forest.mast_forest();
-        let commitment = forest.commitment();
-        if !self.merged_mast_forests.contains(&commitment) {
-            self.advice.prepare_extend_map(forest.advice_map()).map_exec_err()?.commit();
-            self.merged_mast_forests.insert(commitment);
-        }
-        Self::cache_loaded_mast_forest(&mut self.loaded_mast_forests, &prepared.loaded_mast_forest);
-        // A successful request memo records availability only. The authenticated binding and
-        // syscall mode have already been checked before either cache is consulted.
-        if prepared.request.key().is_some() {
-            self.loaded_code_requests
-                .insert(prepared.request, prepared.loaded_mast_forest.clone());
-        }
-        Ok(())
-    }
-
     fn pending_code_not_found(
         resume: &ResumeContext,
         implementation: ImplementationRoot,
@@ -363,14 +343,7 @@ impl FastProcessor {
         T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
     {
         let request = resume.pending.as_ref().expect("pending resolution").request;
-        let target = LoadedTarget {
-            implementation,
-            root: prepared.root_id,
-            forest: prepared.loaded_mast_forest.mast_forest().clone(),
-            package_debug_info: prepared.package_debug_info.clone(),
-            loaded_owner: Some(prepared.loaded_mast_forest.clone()),
-            source_node_id: prepared.source_node_id,
-        };
+        let target = prepared.target();
         let invocation = if let PendingKey::Invoke(request) = request {
             let mut state = ExecutionState {
                 processor: self,
@@ -383,12 +356,7 @@ impl FastProcessor {
                 current_source_node_id: request.source_node_id,
                 inline_call_contexts: &mut resume.inline_call_contexts,
             };
-            Some(preflight_keyed_invocation(
-                &mut state,
-                &resume.current_forest,
-                request,
-                &target,
-            )?)
+            Some(preflight_invocation(&mut state, &resume.current_forest, request, &target)?)
         } else {
             if self.clk.as_u32() != 0
                 || resume.session.phase() != SessionPhase::Unentered
@@ -423,7 +391,7 @@ impl FastProcessor {
             .expect("authenticated pending binding");
         let result = (|| {
             match request {
-                PendingKey::Entry(key) => {
+                PendingKey::Entry(_) => {
                     let PendingBinding::Verified(binding) = binding else {
                         return Err(ExecutionError::Internal(
                             "entry cannot use an unentered cache",
@@ -437,7 +405,6 @@ impl FastProcessor {
                         tracer.prepare_environment(&resume.target, native.binding())?;
                     self.publish_preflighted_code(&prepared)?;
                     native.commit();
-                    self.caller_hash = *key.as_word();
                     tracer.commit_environment(reservation);
                     resume.current_forest = target.forest;
                     resume.package_debug_info = target.package_debug_info;
@@ -454,14 +421,14 @@ impl FastProcessor {
                     };
                     let native = match binding {
                         PendingBinding::Verified(binding) => {
-                            resume.session.prepare(request.key, binding, tag, request.row)
+                            resume.session.prepare(request.key(), binding, tag, request.row)
                         },
                         PendingBinding::Cached(_) => {
-                            resume.session.prepare_cached(request.key, tag, request.row)
+                            resume.session.prepare_cached(request.key(), tag, request.row)
                         },
                     }
                     .map_err(ExecutionError::EnvironmentSession)?;
-                    let principal = ProcedureKey::new(self.caller_hash);
+                    let principal = self.caller_hash;
                     let event = KeyedEvent {
                         kind: KeyedEventKind::Invoke(request.mode),
                         use_record: native.use_record(),
@@ -470,7 +437,7 @@ impl FastProcessor {
                             request.mode,
                             KeyedMode::Call | KeyedMode::DynCall
                         ) {
-                            request.key
+                            target.implementation.into_word()
                         } else {
                             principal
                         },
@@ -499,14 +466,13 @@ impl FastProcessor {
                         current_source_node_id: request.source_node_id,
                         inline_call_contexts: &mut resume.inline_call_contexts,
                     };
-                    let flow = finish_keyed_invocation(
+                    let flow = finish_invocation(
                         &mut state,
                         &mut resume.current_forest,
                         request,
                         target,
                         invocation.expect("prepared invocation"),
-                        event,
-                        reservation,
+                        Some((event, reservation)),
                     );
                     // Source ownership switches even when stepping stops on the invocation row.
                     resume.package_debug_info = state.source_debug_info.clone();
@@ -518,6 +484,89 @@ impl FastProcessor {
             self.invalidate(resume);
         }
         result
+    }
+
+    fn local_digest_target(
+        resume: &ResumeContext,
+        request: InvocationRequest,
+    ) -> Result<Option<LoadedTarget<Arc<MastForest>>>, ExecutionError> {
+        let InvocationTarget::Digest { implementation, callee } = request.target else {
+            unreachable!("digest dispatch requires a digest target");
+        };
+        let forest = &resume.current_forest;
+        let (root, source_node_id) = if let Some(root) = callee {
+            let source = match (resume.package_debug_info.as_deref(), request.source_node_id) {
+                (Some(debug), Some(parent)) => debug
+                    .child_source_node(parent, 0)
+                    .map_err(|_| ExecutionError::Internal("malformed digest CALL source child"))?
+                    .map(|(id, _)| id),
+                _ => None,
+            };
+            (root, source)
+        } else {
+            let Some(root) = Self::find_local_procedure_root(forest, implementation.into_word())
+            else {
+                return Ok(None);
+            };
+            let source = resume
+                .package_debug_info
+                .as_deref()
+                .and_then(|debug| debug.unique_source_root_for_exec_node(root).unwrap_or_default());
+            (root, source)
+        };
+        Ok(Some(LoadedTarget {
+            implementation,
+            root,
+            forest: forest.clone(),
+            package_debug_info: resume.package_debug_info.clone(),
+            loaded_owner: resume.loaded_owner.clone(),
+            source_node_id,
+        }))
+    }
+
+    fn finish_digest_invocation<H, S, T>(
+        &mut self,
+        host: &mut H,
+        tracer: &mut T,
+        stopper: &S,
+        resume: &mut ResumeContext,
+        request: InvocationRequest,
+        local: Option<LoadedTarget<Arc<MastForest>>>,
+        external: Option<PreparedLoadedTarget>,
+    ) -> Result<ControlFlow<BreakReason<Arc<MastForest>>>, ExecutionError>
+    where
+        H: BaseHost,
+        S: Stopper<Processor = Self, Forest = Arc<MastForest>>,
+        T: Tracer<Processor = Self, Forest = Arc<MastForest>>,
+    {
+        let target = local
+            .or_else(|| external.as_ref().map(PreparedLoadedTarget::target))
+            .ok_or(ExecutionError::Internal("digest invocation has no code supply"))?;
+        let mut state = ExecutionState {
+            processor: self,
+            continuation_stack: &mut resume.continuation_stack,
+            host,
+            tracer,
+            stopper,
+            source_debug_info: resume.package_debug_info.clone(),
+            loaded_owner: &mut resume.loaded_owner,
+            current_source_node_id: request.source_node_id,
+            inline_call_contexts: &mut resume.inline_call_contexts,
+        };
+        let prepared = preflight_invocation(&mut state, &resume.current_forest, request, &target)?;
+        if let Some(external) = &external {
+            state.processor.publish_preflighted_code(external)?;
+        }
+        let flow = finish_invocation(
+            &mut state,
+            &mut resume.current_forest,
+            request,
+            target,
+            prepared,
+            None,
+        );
+        resume.package_debug_info = state.source_debug_info;
+        Ok(flow)
     }
 
     fn complete_root_end<H, S, T>(
@@ -555,8 +604,8 @@ impl FastProcessor {
         let event = KeyedEvent {
             kind: KeyedEventKind::RootEnd,
             use_record: native.use_record(),
-            principal_before: ProcedureKey::new(self.caller_hash),
-            principal_after: request.principal,
+            principal_before: self.caller_hash,
+            principal_after: Word::default(),
         };
         let root = request.continuation.exec_node().expect("root preflight checked actual node");
         let reservation = tracer.prepare_keyed_transition(
@@ -655,7 +704,7 @@ impl FastProcessor {
         }
     }
 
-    fn retain_key_request(resume: &mut ResumeContext, request: KeyedRequest) {
+    fn retain_key_request(resume: &mut ResumeContext, request: InvocationRequest) {
         debug_assert!(resume.pending.is_none());
         resume.pending = Some(PendingResolution {
             request: PendingKey::Invoke(request),
@@ -699,6 +748,28 @@ impl FastProcessor {
             match reason {
                 InternalBreakReason::ResolveKey(request) => {
                     Self::retain_key_request(resume, request)
+                },
+                InternalBreakReason::ResolveDigest(request) => {
+                    let local = Self::local_digest_target(resume, request)?;
+                    let external = if local.is_none() {
+                        let InvocationTarget::Digest { implementation, .. } = request.target else {
+                            unreachable!("digest dispatch requires a digest target");
+                        };
+                        Some(self.prepare_load_mast_forest_sync(
+                            implementation.into_word(),
+                            host,
+                            resume.package_debug_info.as_deref(),
+                            request.source_node_id,
+                            resume.source_aware,
+                        )?)
+                    } else {
+                        None
+                    };
+                    if let ControlFlow::Break(reason) = self.finish_digest_invocation(
+                        host, tracer, stopper, resume, request, local, external,
+                    )? {
+                        return self.stopped(resume, reason);
+                    }
                 },
                 InternalBreakReason::RootEnd(request) => {
                     if let ControlFlow::Break(reason) =
@@ -811,6 +882,31 @@ impl FastProcessor {
             match reason {
                 InternalBreakReason::ResolveKey(request) => {
                     Self::retain_key_request(resume, request)
+                },
+                InternalBreakReason::ResolveDigest(request) => {
+                    let local = Self::local_digest_target(resume, request)?;
+                    let external = if local.is_none() {
+                        let InvocationTarget::Digest { implementation, .. } = request.target else {
+                            unreachable!("digest dispatch requires a digest target");
+                        };
+                        Some(
+                            self.prepare_load_mast_forest(
+                                implementation.into_word(),
+                                host,
+                                resume.package_debug_info.as_deref(),
+                                request.source_node_id,
+                                resume.source_aware,
+                            )
+                            .await?,
+                        )
+                    } else {
+                        None
+                    };
+                    if let ControlFlow::Break(reason) = self.finish_digest_invocation(
+                        host, tracer, stopper, resume, request, local, external,
+                    )? {
+                        return self.stopped(resume, reason);
+                    }
                 },
                 InternalBreakReason::RootEnd(request) => {
                     if let ControlFlow::Break(reason) =

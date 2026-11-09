@@ -50,6 +50,12 @@ pub(super) fn invocation_digest(target: ProcedureKey, domain: Felt) -> Word {
     hasher::merge_in_mast_domain(&[target.into_word(), Word::default()], domain)
 }
 
+/// Commits to a digest-target invocation with a mode marker in the second word.
+pub(super) fn digest_invocation_digest(implementation: Word, domain: Felt) -> Word {
+    let marker = Word::from([1, 0, 0, 0].map(Felt::from_u32));
+    hasher::merge_in_mast_domain(&[implementation, marker], domain)
+}
+
 pub trait MastNodeExt {
     /// Returns a commitment/hash of the node.
     fn digest(&self) -> Word;

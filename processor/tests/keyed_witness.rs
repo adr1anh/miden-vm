@@ -1,4 +1,4 @@
-//! Public replay-v6 transport and native trace-reconstruction regressions.
+//! Public replay transport and native trace-reconstruction regressions.
 //!
 //! The single-Mast environment and finite budgets are fixtures, not a Protocol policy. These
 //! programs retain entry resolution, whose completed session supplies the packed Library prefix.
@@ -88,7 +88,7 @@ fn assert_single_mast_prefix(
     assert_eq!(main.addr(RowIndex::from(1)), ONE);
 
     let entry = descriptor.entry_key().into_word().into_elements();
-    assert_eq!(main.fn_hash(RowIndex::from(0)), entry);
+    assert_eq!(main.fn_hash(RowIndex::from(0)), [ZERO; 4]);
     let mut root_ends = 0;
     let mut halt_system = None;
     for index in 0..main.core_height() {
@@ -96,7 +96,7 @@ fn assert_single_mast_prefix(
         let core = main.core_row(row);
         assert_eq!(main.decoder_resolved_digest(row).into_elements(), [ZERO; 4]);
         assert_eq!(core.system.clk, Felt::new_unchecked(index as u64));
-        assert_eq!(core.system.fn_hash, entry);
+        assert_eq!(core.system.fn_hash, [ZERO; 4]);
         if main.is_root_end(row) == ONE {
             root_ends += 1;
             assert_eq!(main.get_op_code(row), Felt::from_u8(miden_core::operations::opcodes::END));
@@ -117,6 +117,7 @@ fn assert_single_mast_prefix(
         {
             assert_eq!(core.system.ctx, system.ctx);
             assert_eq!(core.system.fn_hash, system.fn_hash);
+            assert_eq!(main.decoder_hasher_state_second_half(row).into_elements(), entry);
         }
     }
     assert_eq!(root_ends, 1);
@@ -307,7 +308,7 @@ fn completed_witness_source_and_async_paths_rebuild_the_same_native_trace() {
         );
     }
     let bytes = witnesses[0].to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
-    assert_eq!(bytes[0], 6);
+    assert_eq!(bytes[0], 7);
     let claim = witnesses[0].claim();
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
@@ -480,7 +481,7 @@ fn witness_wire_limits_accept_exact_size_and_reject_one_byte_less() {
 fn witness_wire_rejects_unsupported_version() {
     let fixture = deferred_witness();
     let mut bytes = fixture.witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
-    assert_eq!(bytes[0], 6, "keyed replay witnesses must use wire version 6");
+    assert_eq!(bytes[0], 7, "keyed replay witnesses must use wire version 7");
     assert!(
         ExecutionWitness::read_from_bytes_with_limits(
             &bytes,
@@ -493,7 +494,7 @@ fn witness_wire_rejects_unsupported_version() {
     );
 
     // Versions reject before any replay or precompile payload is decoded.
-    for version in [0, 1, 2, 3, 4, 5, 7] {
+    for version in [0, 1, 2, 3, 4, 5, 6, 8] {
         bytes[0] = version;
         let error = ExecutionWitness::read_from_bytes_with_limits(
             &bytes,

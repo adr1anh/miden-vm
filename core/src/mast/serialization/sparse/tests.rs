@@ -1,3 +1,5 @@
+use alloc::vec;
+
 use super::*;
 use crate::{Felt, mast::ExecutableMastForest};
 
@@ -151,8 +153,47 @@ fn invocation_reader_rejects_trailing_bytes() {
 }
 
 #[test]
-fn sparse_reader_rejects_unknown_tags_after_exec() {
-    for tag in [SPARSE_EXEC + 1, u8::MAX] {
+fn sparse_digest_call_requires_its_callee_digest() {
+    let callee = MastNodeId::from(2);
+    let digest = target().into_word();
+    let call = CallNodeBuilder::new_digest(callee)
+        .with_digest(crate::mast::CallNode::digest_for_callee(digest))
+        .build()
+        .into();
+    let call_id = MastNodeId::from(7);
+    let dyn_id = MastNodeId::from(8);
+    let dyncall_id = MastNodeId::from(9);
+    let nodes = vec![
+        (call_id, call),
+        (dyn_id, DynNodeBuilder::new_digest().build().into()),
+        (dyncall_id, DynNodeBuilder::new_digest_dyncall().build().into()),
+    ];
+    assert!(
+        SparseMastForest::from_serialized_parts(
+            nodes.clone(),
+            Vec::new(),
+            vec![call_id],
+            AdviceMap::default(),
+        )
+        .is_err()
+    );
+    let forest = SparseMastForest::from_serialized_parts(
+        nodes,
+        vec![(callee, digest)],
+        vec![call_id],
+        AdviceMap::default(),
+    )
+    .unwrap();
+    let bytes = forest.to_bytes();
+    let restored = SparseMastForest::read_from_bytes(&bytes).unwrap();
+    assert_eq!(restored.nodes(), forest.nodes());
+    assert_eq!(restored.get_digest_by_id(callee), Some(digest));
+    assert_eq!(restored.to_bytes(), bytes);
+}
+
+#[test]
+fn sparse_reader_rejects_unknown_tags_after_digest_invocations() {
+    for tag in [SPARSE_DIGEST_DYNCALL + 1, u8::MAX] {
         let (bytes, _) = raw_node_payload(tag, &[]);
         let error = SparseMastForest::read_from_bytes(&bytes).unwrap_err();
         assert!(error.to_string().contains("invalid sparse MAST node tag"));

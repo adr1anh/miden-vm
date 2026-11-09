@@ -258,6 +258,15 @@ impl VisitMut for VerifyInvokeTargets<'_> {
         self.invoked.insert(Invoke::new(InvokeKind::ProcRef, target.clone()));
         ControlFlow::Continue(())
     }
+    fn visit_mut_digest_invoke(
+        &mut self,
+        kind: InvokeKind,
+        target: &mut InvocationTarget,
+    ) -> ControlFlow<()> {
+        self.visit_mut_invoke_target(target)?;
+        self.invoked.insert(Invoke::new(kind, target.clone()));
+        ControlFlow::Continue(())
+    }
     fn visit_mut_invoke_target(&mut self, target: &mut InvocationTarget) -> ControlFlow<()> {
         let span = target.span();
         let path = match &*target {

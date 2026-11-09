@@ -318,6 +318,7 @@ impl PrettyPrint for Instruction {
             Self::Call(InvocationTarget::Path(path)) => {
                 const_text("call") + const_text(".") + display(path)
             },
+            Self::CallDigest(target) => inst_with_digest_target("calldigest", target),
             Self::SysCall(InvocationTarget::MastRoot(root)) => {
                 const_text("syscall")
                     + const_text(".")
@@ -330,7 +331,9 @@ impl PrettyPrint for Instruction {
                 const_text("syscall") + const_text(".") + display(path)
             },
             Self::DynExec => const_text("dynexec"),
+            Self::DynExecDigest => const_text("dynexecdigest"),
             Self::DynCall => const_text("dyncall"),
+            Self::DynCallDigest => const_text("dyncalldigest"),
             Self::ProcRef(InvocationTarget::MastRoot(key)) => {
                 const_text("procref")
                     + const_text(".")
@@ -342,6 +345,7 @@ impl PrettyPrint for Instruction {
             Self::ProcRef(InvocationTarget::Path(path)) => {
                 flatten(const_text("procref") + const_text(".") + display(path))
             },
+            Self::ProcDigest(target) => inst_with_digest_target("procdigest", target),
 
             // ----- events -----------------------------------------------------------------------
             Self::Emit => const_text("emit"),
@@ -357,6 +361,18 @@ impl PrettyPrint for Instruction {
             },
         }
     }
+}
+
+fn inst_with_digest_target(mnemonic: &'static str, target: &InvocationTarget) -> Document {
+    use crate::prettier::*;
+
+    let operand = match target {
+        InvocationTarget::MastRoot(root) => {
+            text(format!("{:#x}", DisplayHex(root.as_bytes().as_slice())))
+        },
+        _ => display(target),
+    };
+    flatten(const_text(mnemonic) + const_text(".") + operand)
 }
 
 fn inst_with_event_imm(name: &'static str, imm: &EventImmediate) -> Document {
@@ -482,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn invocation_source_compatibility_word_display() {
+    fn invocation_word_display() {
         let key = Word::new([
             Felt::new_unchecked(0x0807060504030201),
             Felt::new_unchecked(0x1817161514131211),
@@ -492,8 +508,10 @@ mod tests {
         for (mnemonic, build) in [
             ("exec", Instruction::Exec as fn(InvocationTarget) -> Instruction),
             ("call", Instruction::Call),
+            ("calldigest", Instruction::CallDigest),
             ("syscall", Instruction::SysCall),
             ("procref", Instruction::ProcRef),
+            ("procdigest", Instruction::ProcDigest),
             ("inline", Instruction::Inline),
         ] {
             let instruction = build(InvocationTarget::MastRoot(Span::unknown(key)));

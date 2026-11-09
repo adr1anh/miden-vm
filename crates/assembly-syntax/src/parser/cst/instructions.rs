@@ -369,8 +369,16 @@ static PRIMITIVE_SPECS: &[PrimitiveSpec] = &[
         build: || Instruction::DynCall,
     },
     PrimitiveSpec {
+        spelling: "dyncalldigest",
+        build: || Instruction::DynCallDigest,
+    },
+    PrimitiveSpec {
         spelling: "dynexec",
         build: || Instruction::DynExec,
+    },
+    PrimitiveSpec {
+        spelling: "dynexecdigest",
+        build: || Instruction::DynExecDigest,
     },
     PrimitiveSpec {
         spelling: "emit",
@@ -1254,12 +1262,20 @@ static EXTENDED_INSTRUCTION_SPECS: &[ExtendedInstructionSpec] = &[
         kind: ExtendedInstructionKind::Invocation(Instruction::Call),
     },
     ExtendedInstructionSpec {
+        keyword: "calldigest",
+        kind: ExtendedInstructionKind::Invocation(Instruction::CallDigest),
+    },
+    ExtendedInstructionSpec {
         keyword: "syscall",
         kind: ExtendedInstructionKind::Invocation(Instruction::SysCall),
     },
     ExtendedInstructionSpec {
         keyword: "procref",
         kind: ExtendedInstructionKind::Invocation(Instruction::ProcRef),
+    },
+    ExtendedInstructionSpec {
+        keyword: "procdigest",
+        kind: ExtendedInstructionKind::Invocation(Instruction::ProcDigest),
     },
     ExtendedInstructionSpec {
         keyword: "emit",
@@ -1345,7 +1361,7 @@ fn lower_push_instruction(
     lower_push_list(context, instruction_span, rest)
 }
 
-/// Lowers `exec`, `call`, `syscall`, `procref`, and `inline` invocation forms.
+/// Lowers named invocation and procedure reference instructions.
 fn lower_invocation_instruction(
     context: &mut LoweringContext<'_>,
     instruction_span: SourceSpan,
@@ -1429,7 +1445,7 @@ fn lower_error_code_instruction(
     Ok(Some(vec![inst_op(instruction_span, build(value))]))
 }
 
-/// Lowers an invocation target operand into a symbol, path, or opaque procedure key literal.
+/// Lowers an invocation target operand into a symbol, path, or opaque word literal.
 fn lower_invocation_target(
     context: &mut LoweringContext<'_>,
     tokens: &[SyntaxToken],

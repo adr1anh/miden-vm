@@ -222,7 +222,7 @@ pub fn enforce_main<AB>(
     // Operation | Constraint                          | Why
     // ----------+-------------------------------------+------------------------------------
     // SPLIT     | s0 in {0, 1}                        | s0 selects true/false branch
-    // Invokes   | resolved D overlays h4..h7          | target K lives in h0..h3
+    // Invokes   | implementation D overlays h4..h7    | operand lives in h0..h3
     // REPEAT    | s0 = 1                              | loop condition must be true
     // END+loop  | is_loop (h5) => s0 = 0              | exiting loop: condition became false
     // END+REP'  | is_loop_body (h4) = 1               | REPEAT follows a loop-body END
@@ -232,8 +232,20 @@ pub fn enforce_main<AB>(
     let branch_condition = local.stack.get(0);
     builder.when(op_flags.split()).assert_bool(branch_condition);
 
-    // Invocation rows hold K in h0..h3 and D in h4..h7. The hasher lookup constructs the
-    // committed zero word explicitly, leaving this overlay independent of the MAST payload.
+    // The invocation's MAST hash commits its digest mode. Digest calls take D directly from the
+    // operand rather than demanding an environment binding. EXEC and SYSCALL always use keys.
+    let digest_mode = local.decoder.digest_mode();
+    let digest_capable = op_flags.call() + op_flags.dyn_op() + op_flags.dyncall();
+    let mut invocation = builder.when(digest_capable);
+    invocation.assert_bool(digest_mode);
+    let mut digest = invocation.when(digest_mode);
+    for (operand, implementation) in
+        hasher_state[..4].iter().copied().zip(local.decoder.resolved_digest())
+    {
+        digest.assert_eq(operand, implementation);
+    }
+    builder.when(op_flags.exec() + op_flags.syscall()).assert_zero(digest_mode);
+
     // DYNCALL saves its post-pop overflow pointer in group_count; its caller depth is derived
     // directly by the caller-frame lookup. With empty overflow the pointer must be zero here.
     {
@@ -296,8 +308,12 @@ pub fn enforce_main<AB>(
         .when(op_flags.halt_next())
         .assert_zero((op_flags.halt() + op_flags.end()).not());
 
-    // HALT is absorbing: once entered, the VM stays in HALT for all remaining rows.
-    builder.when_transition().when(op_flags.halt()).assert_one(op_flags.halt_next());
+    // HALT is absorbing and carries the same entry key from the first HALT through the last row.
+    // Root END reads that first key, and the final public boundary authenticates it.
+    let mut transition = builder.when_transition();
+    let mut halt = transition.when(op_flags.halt());
+    halt.assert_one(op_flags.halt_next());
+    halt.assert_eq_arrays(next.decoder.halt_entry_key(), local.decoder.halt_entry_key());
 
     // =============================================
     // Group count constraints
@@ -393,7 +409,8 @@ pub fn enforce_main<AB>(
     // =============================================
     // The op_index column tracks the position of the current operation within its operation
     // group. op_index ranges from 0 to 8 (up to 9 operations per group), resets to 0 when
-    // entering a new group, and increments by 1 for each operation within a group.
+    // entering a new group, and increments by 1 for each operation within a group. Outside a
+    // span, invocation rows reuse this column to record the digest mode.
     //
     // ## new_group flag
     //
@@ -746,6 +763,31 @@ mod tests {
     }
 
     #[test]
+    fn digest_mode_requires_a_matching_operand_and_digest() {
+        let next = generate_test_row(opcodes::JOIN.into());
+        for opcode in [opcodes::CALL, opcodes::DYN, opcodes::DYNCALL] {
+            let mut row = generate_test_row(opcode.into());
+            row.decoder.op_index = Felt::ONE;
+            row.decoder.hasher_state.fill(Felt::from_u8(17));
+            assert!(decoder_accepts(&row, &next));
+
+            for lane in 0..4 {
+                let mut wrong = row.clone();
+                wrong.decoder.hasher_state[4 + lane] += Felt::ONE;
+                assert!(!decoder_accepts(&wrong, &next));
+            }
+            row.decoder.op_index = Felt::TWO;
+            assert!(!decoder_accepts(&row, &next));
+        }
+
+        for opcode in [opcodes::EXEC, opcodes::SYSCALL] {
+            let mut row = generate_test_row(opcode.into());
+            row.decoder.op_index = Felt::ONE;
+            assert!(!decoder_accepts(&row, &next));
+        }
+    }
+
+    #[test]
     fn dyncall_overflow_overlay_does_not_act_as_an_op_group_counter() {
         let mut local = generate_test_row(opcodes::DYNCALL.into());
         local.stack.b0 = Felt::from_u8(18);
@@ -793,6 +835,18 @@ mod tests {
         let mut builder = ConstraintEvalBuilder::new().with_row_flags(true, false, true);
         enforce_main(&mut builder, &halt, &halt, &flags);
         assert!(builder.evaluations.iter().any(|v| *v != QuadFelt::ZERO));
+    }
+
+    #[test]
+    fn halt_rows_must_carry_the_same_entry_key() {
+        let mut halt = generate_test_row(opcodes::HALT.into());
+        halt.decoder.hasher_state[4..8].fill(Felt::from_u8(17));
+        assert!(decoder_accepts(&halt, &halt));
+        for lane in 4..8 {
+            let mut next = halt.clone();
+            next.decoder.hasher_state[lane] += Felt::ONE;
+            assert!(!decoder_accepts(&halt, &next));
+        }
     }
 
     #[test]

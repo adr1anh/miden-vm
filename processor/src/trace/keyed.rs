@@ -11,6 +11,7 @@ use core::{
 };
 
 use miden_core::{
+    Word,
     program::{
         EnvNode, EnvNodeError, ExecutionTarget, ImplementationRoot, Namespace, ProcedureKey,
     },
@@ -743,8 +744,8 @@ pub(crate) struct KeyedReplayRecord {
     implementation: ImplementationRoot,
     opening: usize,
     row: RowIndex,
-    principal_before: ProcedureKey,
-    principal_after: ProcedureKey,
+    principal_before: Word,
+    principal_after: Word,
     target_forest: MastForestId,
     target_root: MastNodeId,
     native_use: Option<InvocationUse>,
@@ -810,9 +811,9 @@ impl KeyedReplayRecord {
         }
         match self.kind {
             KeyedEventKind::Invoke(KeyedMode::Call | KeyedMode::DynCall) => {
-                if self.principal_after != self.key {
+                if self.principal_after != self.implementation.into_word() {
                     return Err(KeyedReplayError::Invalid(
-                        "call does not establish the requested principal",
+                        "call does not establish the resolved implementation digest",
                     ));
                 }
             },
@@ -864,8 +865,8 @@ impl KeyedReplayRecord {
             implementation: ImplementationRoot::read_from(source)?,
             opening: read_index(source)?,
             row: RowIndex::from(source.read_u32()?),
-            principal_before: ProcedureKey::read_from(source)?,
-            principal_after: ProcedureKey::read_from(source)?,
+            principal_before: Word::read_from(source)?,
+            principal_after: Word::read_from(source)?,
             target_forest: MastForestId::from(source.read_u32()?),
             target_root: MastNodeId::new_unchecked(source.read_u32()?),
             native_use: None,

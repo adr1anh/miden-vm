@@ -465,7 +465,7 @@ fn available_implementation_never_substitutes_for_missing_key_evidence() {
 }
 
 #[test]
-fn same_body_aliases_preserve_exec_principal_and_establish_each_call_key() {
+fn same_body_aliases_preserve_exec_principal_and_establish_the_shared_call_digest() {
     let entry = key(&["app"], "entry");
     let aliases = [key(&["lib"], "a"), key(&["lib"], "b")];
     let callee = body(observe());
@@ -487,20 +487,20 @@ fn same_body_aliases_preserve_exec_principal_and_establish_each_call_key() {
         let mut resume = processor.get_initial_resume_context(environment.target(entry)).unwrap();
         run_steps(&mut processor, &mut host, &mut resume);
         assert_eq!(host.observations.len(), 3);
-        for (observation, alias) in host.observations[..2].iter().zip(aliases) {
+        for observation in &host.observations[..2] {
             match mode {
                 Mode::Exec => {
-                    assert_eq!(observation.principal, entry.into_word());
+                    assert_eq!(observation.principal, Word::default());
                     assert!(observation.context.is_root());
                 },
                 Mode::Call => {
-                    assert_eq!(observation.principal, alias.into_word());
+                    assert_eq!(observation.principal, fixture_entry_digest(&callee));
                     assert!(!observation.context.is_root());
                 },
                 _ => unreachable!(),
             }
         }
-        assert_eq!(host.observations[2].principal, entry.into_word());
+        assert_eq!(host.observations[2].principal, Word::default());
         assert!(host.observations[2].context.is_root());
         if matches!(mode, Mode::Call) {
             assert_ne!(host.observations[0].context, host.observations[1].context);
@@ -582,10 +582,11 @@ fn bounded_keyed_self_recursion_restores_frames_and_closes_entry_only_at_root_en
         4
     );
     assert!(
-        host.observations
+        host.observations[..3]
             .iter()
-            .all(|observation| observation.principal == recursive.into_word())
+            .all(|observation| observation.principal == fixture_entry_digest(&program))
     );
+    assert_eq!(host.observations[3].principal, Word::default());
     assert_eq!(host.requests_for(recursive), 1, "recursive invocations reuse authenticated K");
     assert_eq!(
         *host.code_requests.borrow(),
@@ -639,7 +640,7 @@ fn syscall_requires_fixed_root_namespace_before_code_lookup() {
     let kernel_path = [];
     let target = key(&kernel_path, "read_principal");
     // Start the successful syscall inside an ordinary user CALL: kernel entry must switch
-    // back to root context, preserve the established user key, then restore the user frame.
+    // back to root context, preserve the established user digest, then restore the user frame.
     let user = key(&["app"], "user");
     let mut forest = MastForest::new();
     let syscall = invocation(&mut forest, Mode::Syscall, target);
@@ -657,9 +658,9 @@ fn syscall_requires_fixed_root_namespace_before_code_lookup() {
     let mut resume = processor.get_initial_resume_context(environment.target(entry)).unwrap();
     run_steps(&mut processor, &mut host, &mut resume);
     assert_eq!(host.observations.len(), 2);
-    assert_eq!(host.observations[0].principal, user.into_word());
+    assert_eq!(host.observations[0].principal, fixture_entry_digest(&user_body));
     assert!(host.observations[0].context.is_root());
-    assert_eq!(host.observations[1].principal, user.into_word());
+    assert_eq!(host.observations[1].principal, fixture_entry_digest(&user_body));
     assert!(!host.observations[1].context.is_root());
     assert!(processor.state().ctx().is_root());
     assert_eq!(
@@ -689,7 +690,12 @@ fn entry_and_ordinary_call_may_use_root_exports() {
         let output = new_processor(StackInputs::default())
             .execute_sync(environment.target(entry), &mut host)
             .unwrap();
-        assert_eq!(output.stack.get_word(0), Some(target.into_word()));
+        let digest = if expected_root {
+            Word::default()
+        } else {
+            fixture_entry_digest(&callee)
+        };
+        assert_eq!(output.stack.get_word(0), Some(digest));
         assert_eq!(host.observations[0].context.is_root(), expected_root);
     }
 }
@@ -728,7 +734,7 @@ fn assert_native_core_bindings(
     use miden_processor::{ONE, ZERO, trace::RowIndex};
 
     let main = trace.main_trace();
-    assert_eq!(main.fn_hash(RowIndex::from(0)), entry.into_word().into_elements());
+    assert_eq!(main.fn_hash(RowIndex::from(0)), [ZERO; 4]);
     let mut invocations = Vec::new();
     let mut dyncall_frames = Vec::new();
     let mut root_ends = Vec::new();
@@ -750,8 +756,12 @@ fn assert_native_core_bindings(
             assert_eq!(main.decoder_hasher_state_second_half(row), implementation);
             let next = RowIndex::from(index + 1);
             let establishes_principal = matches!(opcode, opcodes::CALL | opcodes::DYNCALL);
-            let principal = if establishes_principal { key } else { entry };
-            assert_eq!(main.fn_hash(next), principal.into_word().into_elements());
+            let principal = if establishes_principal {
+                implementation.into_elements()
+            } else {
+                main.fn_hash(row)
+            };
+            assert_eq!(main.fn_hash(next), principal);
             if establishes_principal {
                 assert_ne!(main.ctx(next), main.ctx(row));
             } else {
@@ -802,13 +812,14 @@ fn assert_native_core_bindings(
                 );
                 let next = RowIndex::from(index + 1);
                 assert_eq!(main.get_op_code(next), Felt::from_u8(opcodes::HALT));
-                assert_eq!(main.fn_hash(next), entry.into_word().into_elements());
+                assert_eq!(main.fn_hash(next), [ZERO; 4]);
             } else {
                 assert_eq!(main.is_root_end(row), ZERO);
             }
         }
         if opcode == opcodes::HALT {
-            assert_eq!(main.fn_hash(row), entry.into_word().into_elements());
+            assert_eq!(main.fn_hash(row), [ZERO; 4]);
+            assert_eq!(main.decoder_hasher_state_second_half(row), entry.into_word());
             assert_eq!(main.ctx(row), ZERO);
             assert_eq!(main.is_root_end(row), ZERO);
             let state = (core.stack.top, core.stack.b0, core.stack.b1, core.stack.h0);
@@ -1143,7 +1154,7 @@ fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay(
 
 #[test]
 fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
-    use miden_core::serde::{DeserializationError, Serializable};
+    use miden_core::serde::{Deserializable, DeserializationError, Serializable};
 
     let entry = key(&["app"], "entry");
     let target = key(&["lib"], "child");
@@ -1202,7 +1213,7 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
         original_trace.main_trace().clone_air_matrices(),
     );
 
-    // Locate the public v4 observation by its mode/tag/K/D prefix, rather than depending on the
+    // Locate the keyed observation by its mode/tag/K/D prefix, rather than depending on the
     // unrelated serialized stack, sparse MAST or Controller layouts. All reads use caller limits.
     let mut prefix = vec![1, 0]; // CALL, normal Resolve
     target.write_into(&mut prefix);
@@ -1267,25 +1278,31 @@ fn bounded_public_replay_rejects_mutated_or_missing_core_invocation_evidence() {
             },
         }
     };
+    let mut wrong_key = target.to_bytes();
+    wrong_key[0] ^= 1;
+    let wrong_key = ProcedureKey::read_from_bytes(&wrong_key).unwrap();
     for (name, field, expected) in [
         ("mode", 0, Rejection::NativeRecord("same-principal mode changes principal")),
         ("tag", 1, Rejection::NativeRecord("mode and native invocation tag differ")),
         (
             "key",
             2,
-            Rejection::NativeRecord("call does not establish the requested principal"),
+            Rejection::NativeOpening(OpeningError::KeyMismatch {
+                expected: wrong_key,
+                actual: target,
+            }),
         ),
         (
             "implementation",
             34,
-            Rejection::NativeRecord("record differs from natively reconstructed use"),
+            Rejection::NativeRecord("call does not establish the resolved implementation digest"),
         ),
         ("row", 74, Rejection::InvocationTransition),
         ("principal before", 78, Rejection::InvocationTransition),
         (
             "principal after",
             110,
-            Rejection::NativeRecord("call does not establish the requested principal"),
+            Rejection::NativeRecord("call does not establish the resolved implementation digest"),
         ),
     ] {
         let mut forged = bytes.clone();
@@ -1432,11 +1449,11 @@ fn dyn_shares_ram_fmp_and_principal_while_dyncall_uses_call_conventions() {
         assert_eq!(before.depth, 17, "address is consumed before the 16-element body + event");
         assert_eq!(after.depth, 17);
         assert!(after.context.is_root());
-        assert_eq!(after.principal, entry.into_word());
-        assert_eq!(output.stack.get_word(0), Some(entry.into_word()));
+        assert_eq!(after.principal, Word::default());
+        assert_eq!(output.stack.get_word(0), Some(Word::default()));
         match mode {
             Mode::Dyn => {
-                assert_eq!(before.principal, entry.into_word());
+                assert_eq!(before.principal, Word::default());
                 assert!(before.context.is_root());
                 assert_eq!(before.value, Some(felt(77)));
                 assert_eq!(before.fmp, Some(felt(88)));
@@ -1444,7 +1461,7 @@ fn dyn_shares_ram_fmp_and_principal_while_dyncall_uses_call_conventions() {
                 assert_eq!(after.fmp, Some(felt(222)));
             },
             Mode::DynCall => {
-                assert_eq!(before.principal, target.into_word());
+                assert_eq!(before.principal, fixture_entry_digest(&callee));
                 assert!(!before.context.is_root());
                 assert_eq!(before.value, None);
                 assert_eq!(before.fmp, Some(FMP_INIT_VALUE));
@@ -1494,7 +1511,7 @@ fn root_call_and_terminal_dyncall_restore_before_discharge_at_actual_entry_end()
         assert!(!processor.state().ctx().is_root());
         run_steps(&mut processor, &mut host, &mut resume);
         assert!(processor.state().ctx().is_root());
-        assert_eq!(host.observations[0].principal, target.into_word());
+        assert_eq!(host.observations[0].principal, fixture_entry_digest(&callee));
         assert_eq!(resume.resolution_session().uses().count(), 2);
         assert_eq!(resume.resolution_session().uses().last().unwrap().procedure_key(), entry);
 
@@ -1531,10 +1548,10 @@ fn root_call_and_terminal_dyncall_restore_before_discharge_at_actual_entry_end()
             .find(|&row| main.is_root_end(row) == miden_processor::ONE)
             .unwrap();
         if matches!(mode, Mode::Call) {
-            assert_eq!(main.fn_hash(root_end), target.into_word().into_elements());
+            assert_eq!(main.fn_hash(root_end), fixture_entry_digest(&callee).into_elements());
             assert_eq!(main.restores_caller_frame_flag(root_end), miden_processor::ONE);
         } else {
-            assert_eq!(main.fn_hash(root_end), entry.into_word().into_elements());
+            assert_eq!(main.fn_hash(root_end), Word::default().into_elements());
             assert_eq!(main.restores_caller_frame_flag(root_end), miden_processor::ZERO);
         }
     }
@@ -1714,7 +1731,7 @@ fn explicit_native_budgets_and_missing_trace_policy_fail_closed() {
 }
 
 #[test]
-fn replay_v6_roundtrip_uses_caller_authority_and_explicit_budgets() {
+fn replay_roundtrip_uses_caller_authority_and_explicit_budgets() {
     let entry = key(&[], "entry");
     let target = key(&["lib"], "child");
     let callee = body(observe());
@@ -1735,7 +1752,7 @@ fn replay_v6_roundtrip_uses_caller_authority_and_explicit_budgets() {
         .execute_for_proving_sync(configuration, &mut host)
         .unwrap();
     let bytes = witness.to_bytes_with_limits(trace_limits(), read_limits()).unwrap();
-    assert_eq!(bytes[0], 6);
+    assert_eq!(bytes[0], 7);
     let restored = ExecutionWitness::read_from_bytes_with_limits(
         &bytes,
         configuration,
@@ -1747,7 +1764,7 @@ fn replay_v6_roundtrip_uses_caller_authority_and_explicit_budgets() {
     assert_eq!(restored.execution_descriptor(), configuration);
     assert_eq!(restored.claim(), witness.claim());
     assert_eq!(restored.to_bytes_with_limits(trace_limits(), read_limits()).unwrap(), bytes);
-    for version in [3, 4, 5, 7] {
+    for version in [3, 4, 5, 6, 8] {
         assert!(
             ExecutionWitness::read_from_bytes_with_limits(
                 &[version],
@@ -1900,7 +1917,7 @@ fn cancelling_async_code_await_retains_verified_binding_for_retry() {
         vec![procedure_request(entry, fixture_entry_digest(&authenticated)); 2]
     );
     assert_eq!(host.inner.observations.len(), 1);
-    assert_eq!(host.inner.observations[0].principal, entry.into_word());
+    assert_eq!(host.inner.observations[0].principal, Word::default());
     assert_eq!(resume.resolution_session().uses().count(), 1);
 }
 
@@ -2050,7 +2067,7 @@ fn reach_source_dyncall(
                 processor.state().get_stack_state()[17..].iter().all(|value| *value != felt(0))
             );
             assert_eq!(host.inner.observations.len(), 1);
-            assert_eq!(host.inner.observations[0].principal, fixture.entry.into_word());
+            assert_eq!(host.inner.observations[0].principal, Word::default());
             assert_eq!(
                 *host.inner.code_requests.borrow(),
                 vec![procedure_request(fixture.entry, fixture_entry_digest(&fixture.program))],
@@ -2238,13 +2255,13 @@ fn source_dyncall_cancellation_and_bad_code_retries_publish_one_context_and_use(
     assert!(processor.state().ctx().is_root());
     assert_eq!(host.inner.observations.len(), 3);
     let callee = &host.inner.observations[1];
-    assert_eq!(callee.principal, fixture.target.into_word());
+    assert_eq!(callee.principal, fixture_entry_digest(&fixture.callee));
     assert_eq!(callee.context, callee_context);
     assert_eq!(callee.depth, 21);
     assert_eq!(callee.value, None);
     assert_eq!(callee.fmp, Some(FMP_INIT_VALUE));
     let returned = &host.inner.observations[2];
-    assert_eq!(returned.principal, fixture.entry.into_word());
+    assert_eq!(returned.principal, Word::default());
     assert!(returned.context.is_root());
     assert_eq!(returned.depth, 25);
     assert_eq!(returned.value, Some(felt(77)));
@@ -3052,14 +3069,22 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
                         assert_ne!(target_context, user_context);
                     }
                     let target_stack = if shared { &user_stack[..] } else { &user_stack[..16] };
+                    let user_digest =
+                        fixture.program.package().mast_forest()[fixture.points[1].0].digest();
                     let expected = [
-                        (fixture.entry, ContextId::root(), Some(felt(17)), felt(18), &original[..]),
-                        (fixture.user, user_context, Some(felt(77)), felt(88), &user_stack[..]),
+                        (
+                            Word::default(),
+                            ContextId::root(),
+                            Some(felt(17)),
+                            felt(18),
+                            &original[..],
+                        ),
+                        (user_digest, user_context, Some(felt(77)), felt(88), &user_stack[..]),
                         (
                             if shared || syscall {
-                                fixture.user
+                                user_digest
                             } else {
-                                fixture.target
+                                fixture_entry_digest(&fixture.callee)
                             },
                             target_context,
                             if shared {
@@ -3079,14 +3104,14 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
                             target_stack,
                         ),
                         (
-                            fixture.user,
+                            user_digest,
                             user_context,
                             Some(felt(if shared { 111 } else { 77 })),
                             felt(if shared { 222 } else { 88 }),
                             &user_stack[..],
                         ),
                         (
-                            fixture.entry,
+                            Word::default(),
                             ContextId::root(),
                             Some(felt(if syscall { 111 } else { 17 })),
                             felt(if syscall { 222 } else { 18 }),
@@ -3096,7 +3121,7 @@ fn native_modes_cover_local_and_host_code_with_all_public_step_apis() {
                     for (observed, (principal, context, value, fmp, stack)) in
                         observations.iter().zip(expected)
                     {
-                        assert_eq!(observed.principal, principal.into_word());
+                        assert_eq!(observed.principal, principal);
                         assert_eq!(observed.context, context);
                         assert_eq!(observed.value, value);
                         assert_eq!(observed.fmp, Some(fmp));
@@ -3228,7 +3253,7 @@ fn source_async_host_call_event_error_invalidates_the_published_target() {
     }
     assert!(failed);
     assert_eq!(host.inner.observations.len(), 3);
-    assert_eq!(host.inner.observations[2].principal, fixture.target.into_word());
+    assert_eq!(host.inner.observations[2].principal, fixture_entry_digest(&fixture.callee));
     assert_eq!(host.inner.observations[2].context, target_context);
     assert_eq!(host.inner.observations[2].value, None);
     assert_eq!(host.inner.observations[2].fmp, Some(FMP_INIT_VALUE));

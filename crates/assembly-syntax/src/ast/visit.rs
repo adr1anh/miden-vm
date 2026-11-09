@@ -149,6 +149,13 @@ pub trait Visit<T = ()> {
     fn visit_procref(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
         visit_procref(self, target)
     }
+    fn visit_digest_invoke(
+        &mut self,
+        _kind: InvokeKind,
+        target: &InvocationTarget,
+    ) -> ControlFlow<T> {
+        self.visit_invoke_target(target)
+    }
     fn visit_invoke_target(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
         visit_invoke_target(self, target)
     }
@@ -245,6 +252,13 @@ where
     }
     fn visit_procref(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
         (**self).visit_procref(target)
+    }
+    fn visit_digest_invoke(
+        &mut self,
+        kind: InvokeKind,
+        target: &InvocationTarget,
+    ) -> ControlFlow<T> {
+        (**self).visit_digest_invoke(kind, target)
     }
     fn visit_invoke_target(&mut self, target: &InvocationTarget) -> ControlFlow<T> {
         (**self).visit_invoke_target(target)
@@ -494,6 +508,8 @@ where
         Call(target) => visitor.visit_call(target),
         SysCall(target) => visitor.visit_syscall(target),
         ProcRef(target) => visitor.visit_procref(target),
+        CallDigest(target) => visitor.visit_digest_invoke(InvokeKind::CallDigest, target),
+        ProcDigest(target) => visitor.visit_digest_invoke(InvokeKind::ProcDigest, target),
 
         Nop | Assert | AssertEq | AssertEqw | Assertz | Add | Sub | Mul | Div | Neg | ILog2
         | Inv | Incr | Pow2 | Exp | ExpBitLength(_) | Not | And | Or | Xor | Eq | Neq | Eqw
@@ -516,10 +532,9 @@ where
         | Caller | Clk | MemLoad | MemLoadWBe | MemLoadWLe | MemStore | MemStoreWBe
         | MemStoreWLe | MemStream | AdvPipe | AdvPush | AdvPushW | AdvLoadW | Hash | HDword
         | Compress | MTreeGet | MTreeSet | MTreeMerge | MTreeVerify | FriExt2Fold4 | DynExec
-        | DynCall | DebugVar(_) | DebugInlineCall(_) | DebugInlineCallClear | HornerBase
-        | HornerExt | CryptoStream | EvalCircuit | LogDeferred | Emit | Trace => {
-            ControlFlow::Continue(())
-        },
+        | DynExecDigest | DynCall | DynCallDigest | DebugVar(_) | DebugInlineCall(_)
+        | DebugInlineCallClear | HornerBase | HornerExt | CryptoStream | EvalCircuit
+        | LogDeferred | Emit | Trace => ControlFlow::Continue(()),
     }
 }
 
@@ -731,6 +746,13 @@ pub trait VisitMut<T = ()> {
     fn visit_mut_procref(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
         visit_mut_procref(self, target)
     }
+    fn visit_mut_digest_invoke(
+        &mut self,
+        _kind: InvokeKind,
+        target: &mut InvocationTarget,
+    ) -> ControlFlow<T> {
+        self.visit_mut_invoke_target(target)
+    }
     fn visit_mut_invoke_target(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
         visit_mut_invoke_target(self, target)
     }
@@ -827,6 +849,13 @@ where
     }
     fn visit_mut_procref(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
         (**self).visit_mut_procref(target)
+    }
+    fn visit_mut_digest_invoke(
+        &mut self,
+        kind: InvokeKind,
+        target: &mut InvocationTarget,
+    ) -> ControlFlow<T> {
+        (**self).visit_mut_digest_invoke(kind, target)
     }
     fn visit_mut_invoke_target(&mut self, target: &mut InvocationTarget) -> ControlFlow<T> {
         (**self).visit_mut_invoke_target(target)
@@ -1080,6 +1109,8 @@ where
         Call(target) => visitor.visit_mut_call(target),
         SysCall(target) => visitor.visit_mut_syscall(target),
         ProcRef(target) => visitor.visit_mut_procref(target),
+        CallDigest(target) => visitor.visit_mut_digest_invoke(InvokeKind::CallDigest, target),
+        ProcDigest(target) => visitor.visit_mut_digest_invoke(InvokeKind::ProcDigest, target),
 
         Nop | Assert | AssertEq | AssertEqw | Assertz | Add | Sub | Mul | Div | Neg | ILog2
         | Inv | Incr | Pow2 | Exp | ExpBitLength(_) | Not | And | Or | Xor | Eq | Neq | Eqw
@@ -1102,10 +1133,9 @@ where
         | Caller | Clk | MemLoad | MemLoadWBe | MemLoadWLe | MemStore | MemStoreWBe
         | MemStoreWLe | MemStream | AdvPipe | AdvPush | AdvPushW | AdvLoadW | Hash | HDword
         | Compress | MTreeGet | MTreeSet | MTreeMerge | MTreeVerify | FriExt2Fold4 | DynExec
-        | DynCall | DebugVar(_) | DebugInlineCall(_) | DebugInlineCallClear | HornerBase
-        | HornerExt | EvalCircuit | CryptoStream | LogDeferred | Emit | Trace => {
-            ControlFlow::Continue(())
-        },
+        | DynExecDigest | DynCall | DynCallDigest | DebugVar(_) | DebugInlineCall(_)
+        | DebugInlineCallClear | HornerBase | HornerExt | EvalCircuit | CryptoStream
+        | LogDeferred | Emit | Trace => ControlFlow::Continue(()),
     }
 }
 

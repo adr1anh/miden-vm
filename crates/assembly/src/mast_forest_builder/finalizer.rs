@@ -247,7 +247,8 @@ impl MastForestFinalizer {
                     })
                 })?;
             let node = &mast_forest[exec_node];
-            if matches!(node, MastNode::Exec(_) | MastNode::Call(_))
+            if (matches!(node, MastNode::Exec(_))
+                || matches!(node, MastNode::Call(call) if call.digest_callee().is_none()))
                 && !pending_source_node.children.is_empty()
             {
                 return Err(Report::new(
@@ -535,12 +536,20 @@ fn build_pending_node_with_final_ids(
             };
             MastNodeBuilder::Call(builder)
         },
-        PendingMastNodeKind::Dyn { is_dyncall } => {
+        PendingMastNodeKind::DigestCall => {
+            ensure_child_count(node_ref, pending_node, 1)?;
+            let [callee] = final_child_ids::<1>(node_ref, pending_node, final_node_id_by_ref)?;
+            MastNodeBuilder::Call(
+                CallNodeBuilder::new_digest(callee).with_digest(pending_node.digest),
+            )
+        },
+        PendingMastNodeKind::Dyn { is_dyncall, is_digest } => {
             ensure_child_count(node_ref, pending_node, 0)?;
-            let builder = if *is_dyncall {
-                DynNodeBuilder::new_dyncall()
-            } else {
-                DynNodeBuilder::new_dyn()
+            let builder = match (*is_dyncall, *is_digest) {
+                (false, false) => DynNodeBuilder::new_dyn(),
+                (true, false) => DynNodeBuilder::new_dyncall(),
+                (false, true) => DynNodeBuilder::new_digest(),
+                (true, true) => DynNodeBuilder::new_digest_dyncall(),
             };
             MastNodeBuilder::Dyn(builder.with_digest(pending_node.digest))
         },

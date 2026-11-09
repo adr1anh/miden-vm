@@ -196,11 +196,10 @@ const EXECUTION_WITNESS_BYTE_READ_BUDGET_MULTIPLIER: usize = 4;
 /// Current wire format version for [`ExecutionWitness`] serialization.
 ///
 /// The version is written as the first byte of every serialized witness. Deserialization only
-/// accepts this exact value; older formats are intentionally unsupported. Version 6 removes legacy
-/// ProgramInfo; the validated replay retains the execution target, authenticated entry
-/// implementation and per-fragment keyed observations. This replay version is separate from proof
-/// transport and execution-claim versions.
-const EXECUTION_WITNESS_WIRE_VERSION: u8 = 6;
+/// accepts this exact value. Version 7 records caller implementation digests in keyed
+/// observations and uses the code-resolution queue for digest-based dynamic invocations. This
+/// replay version is separate from proof transport and execution-claim versions.
+const EXECUTION_WITNESS_WIRE_VERSION: u8 = 7;
 
 impl ExecutionWitness {
     fn write_payload<W: ByteWriter>(&self, target: &mut W) {

@@ -104,12 +104,12 @@ pub enum MastNodeBuilder {
 impl MastNodeBuilder {
     /// Build the node from this builder.
     ///
-    /// Join, Loop and Split require the context to retrieve structural children. BasicBlock,
-    /// Exec, Call, Dyn and External ignore the context.
+    /// Join, Loop, Split and digest-target Call require the context to retrieve structural
+    /// children.
     pub fn build(self, context: &impl MastNodeContext) -> Result<MastNode, MastForestError> {
         match self {
             MastNodeBuilder::BasicBlock(builder) => Ok(builder.build()?.into()),
-            MastNodeBuilder::Call(builder) => Ok(builder.build().into()),
+            MastNodeBuilder::Call(builder) => Ok(builder.build_in_context(context)?.into()),
             MastNodeBuilder::Dyn(builder) => Ok(builder.build().into()),
             MastNodeBuilder::Exec(builder) => Ok(builder.build().into()),
             MastNodeBuilder::External(builder) => Ok(builder.build().into()),
@@ -127,7 +127,7 @@ impl MastNodeBuilder {
     pub fn build_linked(self) -> Result<MastNode, MastForestError> {
         match self {
             MastNodeBuilder::BasicBlock(builder) => Ok(builder.build()?.into()),
-            MastNodeBuilder::Call(builder) => Ok(builder.build().into()),
+            MastNodeBuilder::Call(builder) => Ok(builder.build_linked()?.into()),
             MastNodeBuilder::Dyn(builder) => Ok(builder.build().into()),
             MastNodeBuilder::Exec(builder) => Ok(builder.build().into()),
             MastNodeBuilder::External(builder) => Ok(builder.build().into()),

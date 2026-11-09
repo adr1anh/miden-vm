@@ -6,7 +6,7 @@ use miden_core::{
     crypto::merkle::MerklePath,
     field::{BasedVectorSpace, Field, PrimeCharacteristicRing, PrimeField64, QuadFelt},
     mast::{ExecutableMastForest, MastNodeId},
-    program::{ExecutionTarget, ImplementationRoot, ProcedureKey},
+    program::{ExecutionTarget, ImplementationRoot},
 };
 
 use crate::{
@@ -47,8 +47,8 @@ pub enum KeyedEventKind {
 pub struct KeyedEvent {
     pub kind: KeyedEventKind,
     pub use_record: InvocationUse,
-    pub principal_before: ProcedureKey,
-    pub principal_after: ProcedureKey,
+    pub principal_before: Word,
+    pub principal_after: Word,
 }
 
 /// The actual loaded body associated with a keyed transition.
@@ -227,17 +227,16 @@ pub trait Tracer {
     // MAST FOREST RESOLUTION
     // --------------------------------------------------------------------------------------------
 
-    /// Records and replays the resolutions of [crate::host::Host::get_mast_forest], either due to
-    /// an [miden_core::mast::ExternalNode] or a [miden_core::mast::DynNode] for which the callee
-    /// digest is not found in the current MAST forest.
+    /// Records the exact body selected for a structural External or digest-based dynamic call.
+    ///
+    /// Dynamic calls record this inside their invocation cycle, even when the body is local.
     ///
     /// Note that when execution encounters a [miden_core::mast::ExternalNode], the external node
     /// gets resolved to the MAST node it refers to in the new MAST forest, without consuming the
     /// clock cycle (or writing anything to the trace). Hence, a clock cycle where execution
     /// encounters an external node effectively has 2 nodes associated with it.
     /// [Tracer::start_clock_cycle] is called on the resolved node (i.e. *not* the external node).
-    /// This method is called on the external node before it is resolved, and hence is guaranteed to
-    /// be called before [Tracer::start_clock_cycle] for clock cycles involving an external node.
+    /// For structural External, this hook precedes [Tracer::start_clock_cycle] for the body.
     fn record_mast_forest_resolution(&mut self, _node_id: MastNodeId, _forest: &Self::Forest) {}
 
     /// Records that the [miden_core::mast::ExternalNode] with the given id is being entered in

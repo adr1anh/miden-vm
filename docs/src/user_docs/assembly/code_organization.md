@@ -33,13 +33,13 @@ A procedure label must start with a letter and can contain any combination of nu
 
 The number of locals, given by `@locals(N)`, specifies that the procedure requires `N` elements of scratch memory be allocated for use by the VM when it is executed. The default number of locals is 0, so this attribute is not required unless a non-zero number of locals is required. The individual elements of the procedure local memory may be accessed by zero-based index using `loc_load`/`loc_store`, or treated like regular memory by obtaining the address of a specific slot via `locaddr`, and then using any other memory instruction. See [here](./io_operations.md#random-access-memory) for more information on those instructions. A procedure can have at most $2^{16}$ locals, and the total number of locals available to all procedures at runtime is limited to $2^{31} - 1$. Note that the assembler internally always rounds up the number of declared locals to the nearest multiple of 4.
 
-To execute a procedure, the `exec.<label>`, `call.<label>`, and `syscall.<label>` instructions can be used. For example:
+Use `exec.<label>`, `call.<label>`, or `syscall.<label>` to invoke a procedure by key. Use `calldigest.<label>` to call a selected implementation by its digest.
 ```
 exec.foo
 ```
 The difference between using each of these instructions is explained in the [next section](./execution_contexts.md#procedure-invocation-semantics).
 
-A procedure may execute any other procedure, however recursion is not currently permitted, due to limitations imposed by the Merkalized Abstract Syntax Tree. Recursion is caught by static analysis of the call graph during assembly, so in general you don't need to think about this, but it is a limitation to be aware of. For example, the following code block defines a program with two procedures:
+Keyed runtime invocations can express recursion. Structural expansion and named digest references require an acyclic set of body dependencies. The following program defines two procedures.
 
 ```
 proc bar
@@ -61,29 +61,19 @@ end
 ```
 
 #### Dynamic procedure invocation
-You can invoke procedures dynamically without specifying target procedure labels at compile time. A procedure can only call itself using dynamic invocation. There are two instructions, `dynexec` and `dyncall`, which can be used to execute dynamically-specified code targets. Both instructions expect the [MAST root](../../design/programs.md) of the target to be stored in memory, and the memory address of the MAST root to be on the top of the stack. The difference between `dynexec` and `dyncall` corresponds to the difference between `exec` and `call`, see the documentation on [procedure invocation semantics](./execution_contexts.md#procedure-invocation-semantics) for more details.
-
-
-Dynamic code execution in the same context is achieved by setting the top element of the stack to the memory address where the  hash of the dynamic code block is stored, and then executing the `dynexec` or `dyncall` instruction. You can obtain the hash of a procedure in the current program, by name, using the `procref` instruction. See the following example of pairing the two:
+Dynamic invocation reads a target word from memory at the address on top of the stack. Pair `procref` with `dynexec` or `dyncall` to invoke by key.
 
 ```
-# Retrieve the hash of `foo`, store it at `ADDR`, and push `ADDR` on top of the stack
+# Store the key of `foo` at `ADDR` and put the address on top of the stack.
 procref.foo mem_storew_le.ADDR dropw push.ADDR
 
 # Execute `foo` dynamically
 dynexec
 ```
 
-During assembly, the `procref.foo` instruction is compiled to a `push.HASH`, where `HASH` is the hash of the MAST root of the `foo` procedure.
+Pair `procdigest` with `dynexecdigest` or `dyncalldigest` to invoke by [MAST root digest](../../design/programs.md). Both reference instructions emit four pushes, and each dynamic invocation consumes the address. A keyed invocation authenticates the target binding before loading the implementation. A digest invocation loads the body committed by the target word.
 
-During execution of the `dynexec` instruction, the VM does the following:
-
-1. Read the top stack element $s_0$, and read the memory word starting at address $s_0$ (the hash of the dynamic target),
-2. Shift the stack left by one element,
-3. Load the code block referenced by the hash, or trap if no such MAST root is known,
-4. Execute the loaded code block.
-
-The `dyncall` instruction is used the same way, with the difference that it involves a context switch to a new context when executing the referenced block, and switching back to the calling context once execution of the callee completes.
+`dyncall` and `dyncalldigest` execute the selected body in a new context and return to the calling context. See [procedure invocation semantics](./execution_contexts.md#procedure-invocation-semantics).
 
 ### Procedure attributes
 

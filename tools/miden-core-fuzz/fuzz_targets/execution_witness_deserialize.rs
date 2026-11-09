@@ -1,6 +1,6 @@
 //! Fuzz target for bounded `ExecutionWitness` deserialization.
 //!
-//! Fuzz inputs are a caller-owned `K_entry[32] || R_E[32]` prefix followed by replay-v6
+//! Fuzz inputs are a caller-owned `K_entry[32] || R_E[32]` prefix followed by replay
 //! bytes. The prefix is a harness envelope, never part of the production witness format.
 //!
 //! Run with: cargo +nightly fuzz run execution_witness_deserialize --fuzz-dir tools/miden-core-fuzz

@@ -1,11 +1,12 @@
-//! Prepared keyed invocation transitions, shared by live execution and deterministic replay.
+//! Prepared invocation transitions, shared by live execution and deterministic replay.
 
 use core::ops::ControlFlow;
 
 use miden_core::{FMP_ADDR, FMP_INIT_VALUE};
 
 use super::{
-    ExecutionState, KeyedRequest, LoadedTarget, finalize_clock_cycle, prepare_transition_cycle,
+    ExecutionState, InvocationRequest, InvocationTarget, LoadedTarget, finalize_clock_cycle,
+    prepare_transition_cycle,
 };
 use crate::{
     BaseHost, BreakReason, ContextId, ExecutionError, MapExecErr, Stopper,
@@ -26,10 +27,10 @@ pub(crate) struct PreparedInvocation<P: Processor> {
 }
 
 /// Checks the retained invocation and reserves exactly its continuation/source buffers.
-pub(crate) fn preflight_keyed_invocation<P, H, S, T, F>(
+pub(crate) fn preflight_invocation<P, H, S, T, F>(
     state: &mut ExecutionState<'_, P, H, S, T, F>,
     current_forest: &F,
-    request: KeyedRequest,
+    request: InvocationRequest,
     target: &LoadedTarget<F>,
 ) -> Result<PreparedInvocation<P>, ExecutionError>
 where
@@ -50,39 +51,72 @@ where
     if *node_id != request.node_id || source != request.source_node_id {
         return Err(ExecutionError::Internal("retained invocation continuation changed"));
     }
-    match current_forest.get_node_by_id(request.node_id) {
-        Some(MastNode::Exec(node))
-            if request.mode == KeyedMode::Exec
-                && request.dynamic.is_none()
-                && node.target() == request.key => {},
-        Some(MastNode::Call(node))
-            if request.dynamic.is_none()
-                && node.target() == request.key
-                && request.mode
-                    == if node.is_syscall() {
-                        KeyedMode::Syscall
-                    } else {
-                        KeyedMode::Call
-                    } => {},
-        Some(MastNode::Dyn(node))
-            if request.dynamic.is_some()
-                && request.mode
-                    == if node.is_dyncall() {
-                        KeyedMode::DynCall
-                    } else {
-                        KeyedMode::Dyn
-                    } => {},
-        _ => return Err(ExecutionError::Internal("retained invocation key or mode changed")),
-    }
+    let has_structural_child =
+        match (current_forest.get_node_by_id(request.node_id), request.target, request.mode) {
+            (Some(MastNode::Exec(node)), InvocationTarget::Key(key), KeyedMode::Exec)
+                if request.dynamic.is_none() && node.target() == key =>
+            {
+                false
+            },
+            (Some(MastNode::Call(node)), InvocationTarget::Key(key), mode)
+                if request.dynamic.is_none()
+                    && node.procedure_key() == Some(key)
+                    && mode
+                        == if node.is_syscall() {
+                            KeyedMode::Syscall
+                        } else {
+                            KeyedMode::Call
+                        } =>
+            {
+                false
+            },
+            (
+                Some(MastNode::Call(node)),
+                InvocationTarget::Digest { implementation, callee: Some(callee) },
+                KeyedMode::Call,
+            ) if request.dynamic.is_none()
+                && node.digest_callee() == Some(callee)
+                && target.root == callee
+                && target.implementation == implementation
+                && current_forest.get_digest_by_id(callee) == Some(implementation.into_word()) =>
+            {
+                true
+            },
+            (Some(MastNode::Dyn(node)), operand, mode)
+                if request.dynamic.is_some()
+                    && mode
+                        == if node.is_dyncall() {
+                            KeyedMode::DynCall
+                        } else {
+                            KeyedMode::Dyn
+                        }
+                    && match operand {
+                        InvocationTarget::Key(_) => !node.is_digest(),
+                        InvocationTarget::Digest { implementation, callee: None } => {
+                            node.is_digest() && target.implementation == implementation
+                        },
+                        InvocationTarget::Digest { callee: Some(_), .. } => false,
+                    } =>
+            {
+                false
+            },
+            _ => {
+                return Err(ExecutionError::Internal(
+                    "retained invocation operand or mode changed",
+                ));
+            },
+        };
     let body = target
         .forest
         .get_node_by_id(target.root)
         .ok_or(ExecutionError::Internal("resolved invocation root is missing"))?;
-    if body.is_external()
-        || body.digest() != *target.implementation.as_word()
-        || !target
-            .forest
-            .is_procedure_root_with_exact_digest(target.root, *target.implementation.as_word())
+    if body.digest() != *target.implementation.as_word()
+        || (!has_structural_child
+            && (body.is_external()
+                || !target.forest.is_procedure_root_with_exact_digest(
+                    target.root,
+                    target.implementation.into_word(),
+                )))
     {
         return Err(ExecutionError::Internal(
             "resolved invocation body does not match its implementation",
@@ -105,11 +139,15 @@ where
         continuation_len,
     )?;
     let (dynamic_read, dynamic_pop) = if let Some(captured) = request.dynamic {
+        let operand = match request.target {
+            InvocationTarget::Key(key) => key.into_word(),
+            InvocationTarget::Digest { implementation, .. } => implementation.into_word(),
+        };
         if state.processor.system().ctx() != captured.context
             || state.processor.stack().get(0) != captured.address
-            || captured.value != *request.key.as_word()
+            || captured.value != operand
         {
-            return Err(ExecutionError::Internal("retained dynamic address or key changed"));
+            return Err(ExecutionError::Internal("retained dynamic address or operand changed"));
         }
         let read = state
             .processor
@@ -167,14 +205,13 @@ where
 /// Publishes a fully prepared activation. Both trace hooks observe the caller forest.
 ///
 /// Every component token is consumed here; no fallible VM preparation is repeated.
-pub(crate) fn finish_keyed_invocation<P, H, S, T, F>(
+pub(crate) fn finish_invocation<P, H, S, T, F>(
     state: &mut ExecutionState<'_, P, H, S, T, F>,
     current_forest: &mut F,
-    request: KeyedRequest,
+    request: InvocationRequest,
     target: LoadedTarget<F>,
     prepared: PreparedInvocation<P>,
-    event: KeyedEvent,
-    reservation: T::KeyedReservation,
+    keyed: Option<(KeyedEvent, T::KeyedReservation)>,
 ) -> ControlFlow<BreakReason<F>>
 where
     P: Processor,
@@ -183,20 +220,25 @@ where
     T: Tracer<Processor = P, Forest = F>,
     F: ExecutableMastForest + Clone,
 {
-    debug_assert_eq!(event.kind, KeyedEventKind::Invoke(request.mode));
     let inline_call_context = state.current_inline_call_context();
     let inline_context_depth = state.inline_call_contexts.len();
     let continuation = state
         .continuation_stack
         .pop_continuation()
         .expect("prepared invocation retains its continuation");
-    state.tracer.commit_keyed_transition(reservation, event);
+    if let Some((event, reservation)) = keyed {
+        debug_assert_eq!(event.kind, KeyedEventKind::Invoke(request.mode));
+        state.tracer.commit_keyed_transition(reservation, event);
+    }
     state.tracer.start_clock_cycle(
         state.processor,
         continuation,
         state.continuation_stack,
         current_forest,
     );
+    if matches!(request.target, InvocationTarget::Digest { callee: None, .. }) {
+        state.tracer.record_mast_forest_resolution(target.root, &target.forest);
+    }
     if let Some(read) = prepared.dynamic_read {
         let word = state.processor.memory_mut().commit_word_read(read);
         debug_assert_eq!(Some(word), request.dynamic.map(|captured| captured.value));
@@ -210,7 +252,7 @@ where
         let next_context = prepared.next_context.expect("prepared context switch has its target");
         state.processor.system_mut().set_ctx(next_context);
         if request.mode != KeyedMode::Syscall {
-            state.processor.system_mut().set_caller_hash(*request.key.as_word());
+            state.processor.system_mut().set_caller_hash(target.implementation.into_word());
         }
     }
     if let Some(write) = prepared.fmp_write {

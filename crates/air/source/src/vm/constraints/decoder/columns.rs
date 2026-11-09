@@ -16,7 +16,7 @@ pub struct DecoderCols<T> {
     pub in_span: T,
     /// Remaining operation group count, or DYNCALL's saved post-pop overflow pointer.
     pub group_count: T,
-    /// Position within operation group (0-8).
+    /// Position within operation group (0-8), or the digest mode on an invocation row.
     pub op_index: T,
     /// Boolean flag selecting a full 8-group operation batch.
     pub full_batch: T,
@@ -27,6 +27,11 @@ pub struct DecoderCols<T> {
 }
 
 impl<T: Copy> DecoderCols<T> {
+    /// Returns whether an invocation uses a digest operand instead of a procedure key.
+    pub fn digest_mode(&self) -> T {
+        self.op_index
+    }
+
     /// Returns the authenticated implementation overlay on an invocation row.
     /// Other opcodes assign their own meanings to these hasher lanes.
     pub fn resolved_digest(&self) -> [T; 4] {
@@ -36,6 +41,11 @@ impl<T: Copy> DecoderCols<T> {
             self.hasher_state[6],
             self.hasher_state[7],
         ]
+    }
+
+    /// Returns the entry key carried by a HALT row.
+    pub fn halt_entry_key(&self) -> [T; 4] {
+        core::array::from_fn(|i| self.hasher_state[4 + i])
     }
 
     /// Returns DYNCALL's saved caller overflow pointer after consuming its address operand.

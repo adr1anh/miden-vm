@@ -185,7 +185,7 @@ fn caller() {
 
     let test = build_test!(program_source, &[1, 2, 3, 4, 5]).with_kernel(kernel_source);
 
-    // Top 4 elements should be overwritten with the canonical key of `bar`, but the 5th
+    // Top 4 elements should be overwritten with the implementation digest of `bar`, but the 5th
     // element should remain untouched (position 4 in input [1,2,3,4,5] is 5)
     let bar_key = ProcedureName::new(
         FixtureNamespace::assembly_tests().namespace_plan().clone(),
@@ -196,17 +196,16 @@ fn caller() {
     .key()
     .into_word();
 
-    // Independently rebuild bar's implementation from foo's root binding. The caller oracle
-    // remains its canonical key, even though the syscall implementation has a different digest.
+    // Independently rebuild bar's implementation from foo's root binding.
     let bar_hash = build_bar_hash();
     let (program, ..) = test.compile().unwrap();
     assert!(program.package().mast_forest().find_procedure_root(bar_hash).is_some());
     assert_ne!(bar_key, bar_hash);
     test.expect_stack(&[
-        bar_key[0].as_canonical_u64(),
-        bar_key[1].as_canonical_u64(),
-        bar_key[2].as_canonical_u64(),
-        bar_key[3].as_canonical_u64(),
+        bar_hash[0].as_canonical_u64(),
+        bar_hash[1].as_canonical_u64(),
+        bar_hash[2].as_canonical_u64(),
+        bar_hash[3].as_canonical_u64(),
         5,
     ]);
 

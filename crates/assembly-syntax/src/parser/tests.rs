@@ -940,8 +940,10 @@ fn invocation_target(instruction: &Instruction) -> &InvocationTarget {
     match instruction {
         Instruction::Exec(target)
         | Instruction::Call(target)
+        | Instruction::CallDigest(target)
         | Instruction::SysCall(target)
         | Instruction::ProcRef(target)
+        | Instruction::ProcDigest(target)
         | Instruction::Inline(target) => target,
         other => panic!("expected an invocation, got {other:?}"),
     }
@@ -959,7 +961,7 @@ fn invocation_source_compatibility_word_literals_roundtrip() {
     assert_eq!(literal, "0x0102030405060708111213141516171821222324252627283132333435363738");
     // Preserve the existing odd-digit spelling: its leading zero is restored before decoding.
     let short_literal = format!("0x{}", &literal[3..]);
-    for mnemonic in ["exec", "call", "syscall", "procref", "inline"] {
+    for mnemonic in ["exec", "call", "calldigest", "syscall", "procref", "procdigest", "inline"] {
         for spelling in [&literal, &short_literal] {
             let instruction = parse_single_invocation(&format!("{mnemonic}.{spelling}"));
             assert_matches!(invocation_target(&instruction), InvocationTarget::MastRoot(value)
@@ -984,7 +986,8 @@ fn invocation_source_compatibility_named_targets_roundtrip() {
         (r#"module::"proc.name""#, vec!["module", "proc.name"]),
         (r#""mod::segment"::"proc::name""#, vec!["mod::segment", "proc::name"]),
     ] {
-        for mnemonic in ["exec", "call", "syscall", "procref", "inline"] {
+        for mnemonic in ["exec", "call", "calldigest", "syscall", "procref", "procdigest", "inline"]
+        {
             let instruction = parse_single_invocation(&format!("{mnemonic}.{spelling}"));
             let target_components = |instruction: &Instruction| match invocation_target(instruction)
             {
@@ -1006,7 +1009,7 @@ fn invocation_source_compatibility_named_targets_roundtrip() {
 
 #[test]
 fn invocation_source_compatibility_rejects_malformed_words() {
-    for mnemonic in ["exec", "call", "syscall", "procref", "inline"] {
+    for mnemonic in ["exec", "call", "calldigest", "syscall", "procref", "procdigest", "inline"] {
         for literal in [
             "0x1234".to_string(),
             format!("0x{}", "0".repeat(62)),
@@ -1018,7 +1021,7 @@ fn invocation_source_compatibility_rejects_malformed_words() {
             let source = format!("begin\n    {mnemonic}.{literal}\nend\n");
             assert!(
                 parse_forms(test_source_file(&source)).is_err(),
-                "accepted malformed procedure key: {mnemonic}.{literal}"
+                "accepted malformed invocation target: {mnemonic}.{literal}"
             );
         }
     }
