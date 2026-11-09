@@ -289,12 +289,17 @@ fn forward_reference(entry: MastNodeEntry, node_index: usize) -> Option<u32> {
             .into_iter()
             .find(|&child_id| child_id as usize >= node_index),
         MastNodeEntry::Loop { body_id } => (body_id as usize >= node_index).then_some(body_id),
+        MastNodeEntry::DigestCall { callee_id } => {
+            (callee_id as usize >= node_index).then_some(callee_id)
+        },
         MastNodeEntry::Block { .. }
         | MastNodeEntry::Call { .. }
         | MastNodeEntry::SysCall { .. }
         | MastNodeEntry::Exec { .. }
         | MastNodeEntry::Dyn
         | MastNodeEntry::Dyncall
+        | MastNodeEntry::DigestDyn
+        | MastNodeEntry::DigestDyncall
         | MastNodeEntry::External => None,
     }
 }
@@ -426,8 +431,14 @@ fn recompute_hash_table(
                 };
                 invocation_digest(target, domain)
             },
+            MastNodeEntry::DigestCall { callee_id } => {
+                let callee = checked_child_index(index, callee_id, layout.node_count)?;
+                CallNode::digest_for_callee(digests[callee])
+            },
             MastNodeEntry::Dyn => DynNode::DYN_DEFAULT_DIGEST,
             MastNodeEntry::Dyncall => DynNode::DYNCALL_DEFAULT_DIGEST,
+            MastNodeEntry::DigestDyn => DynNode::default_digest(false, true),
+            MastNodeEntry::DigestDyncall => DynNode::default_digest(true, true),
             MastNodeEntry::External => {
                 let digest =
                     read_digest_entry(bytes, layout.external_digest_offset(), external_slot)?;

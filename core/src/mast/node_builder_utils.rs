@@ -36,7 +36,7 @@ where
             MastNodeBuilder::Loop(builder)
         },
         MastNode::Call(call_node) => {
-            let builder = call_node.to_builder(source_forest);
+            let builder = call_node.to_builder(source_forest).remap_children(node_remapping);
             MastNodeBuilder::Call(builder)
         },
         MastNode::Exec(exec_node) => {

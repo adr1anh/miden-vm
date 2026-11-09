@@ -221,7 +221,8 @@ const FLAGS_RESERVED_MASK: u8 = 0xfd;
 ///   operation semantics on load paths that do not recompute node digests.
 ///
 /// - [0, 0, 6]: Childless keyed CALL/SYSCALL and new EXEC. Added the invocation-target count and
-///   canonical procedure-key section, retained even in hashless payloads.
+///   canonical procedure-key section, retained even in hashless payloads. Digest invocation
+///   variants use additional node tags with the same layout.
 ///
 /// Legacy wire versions (pre-#3192 decorator terminology):
 ///   [0,0,1] stored metadata as serialized decorator variants in CSR per-node slots.

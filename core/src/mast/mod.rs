@@ -787,14 +787,16 @@ impl MastForest {
                     let body_digest = computed_hashes[body_id.0 as usize];
                     hasher::merge_in_mast_domain(&[body_digest, Word::default()], LoopNode::DOMAIN)
                 },
-                MastNode::Call(call) => node::invocation_digest(call.target(), call.domain()),
+                MastNode::Call(call) => match call.digest_callee() {
+                    Some(callee) => {
+                        check_no_forward_ref(node_id, callee)?;
+                        CallNode::digest_for_callee(computed_hashes[callee.0 as usize])
+                    },
+                    None => node::invocation_digest(call.target(), call.domain()),
+                },
                 MastNode::Exec(exec) => node::invocation_digest(exec.target(), ExecNode::DOMAIN),
                 MastNode::Dyn(dyn_node) => {
-                    if dyn_node.is_dyncall() {
-                        DynNode::DYNCALL_DEFAULT_DIGEST
-                    } else {
-                        DynNode::DYN_DEFAULT_DIGEST
-                    }
+                    DynNode::default_digest(dyn_node.is_dyncall(), dyn_node.is_digest())
                 },
                 MastNode::External(_) => {
                     // External nodes have externally-provided digests that cannot be recomputed.

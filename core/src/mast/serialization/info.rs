@@ -20,6 +20,9 @@ const DYN: u8 = 6;
 const DYNCALL: u8 = 7;
 const EXTERNAL: u8 = 8;
 const EXEC: u8 = 9;
+const DIGEST_CALL: u8 = 10;
+const DIGEST_DYN: u8 = 11;
+const DIGEST_DYNCALL: u8 = 12;
 
 // MAST NODE ENTRIES
 // ================================================================================================
@@ -29,8 +32,8 @@ const EXEC: u8 = 9;
 /// This is the random-access portion of the node table. Digests are intentionally modeled
 /// separately so the wire format can move them into dedicated sections.
 ///
-/// Structural child indices are stored inline. Immediate invocations instead store an index
-/// into the separate procedure-key section; the key is never a structural child.
+/// Structural child indices are stored inline. Keyed immediate invocations store an index into
+/// the separate procedure-key section.
 ///
 /// The serialized representation is always 8 bytes, which keeps the node-entry table fixed-width
 /// on the wire.
@@ -68,6 +71,11 @@ pub enum MastNodeEntry {
     Exec {
         target_slot: u32,
     } = EXEC,
+    DigestCall {
+        callee_id: u32,
+    } = DIGEST_CALL,
+    DigestDyn = DIGEST_DYN,
+    DigestDyncall = DIGEST_DYNCALL,
 }
 
 /// Constructors
@@ -77,8 +85,8 @@ impl MastNodeEntry {
 
     /// Constructs a fixed entry from a node and its serialization indices.
     ///
-    /// `target_slot` must be present for immediate invocations. The forest writer assigns these
-    /// slots in node order; they do not identify structural children.
+    /// `target_slot` must be present for keyed immediate invocations. The forest writer assigns
+    /// these slots in node order; they do not identify structural children.
     ///
     /// # Panics
     /// Panics if an immediate invocation has no target slot.
@@ -101,7 +109,9 @@ impl MastNodeEntry {
             },
             Loop(loop_node) => Self::Loop { body_id: loop_node.body().0 },
             Call(call_node) => {
-                if call_node.is_syscall() {
+                if let Some(callee) = call_node.digest_callee() {
+                    Self::DigestCall { callee_id: callee.0 }
+                } else if call_node.is_syscall() {
                     Self::SysCall {
                         target_slot: target_slot.expect("invocation requires a target slot"),
                     }
@@ -114,12 +124,11 @@ impl MastNodeEntry {
             Exec(_) => Self::Exec {
                 target_slot: target_slot.expect("invocation requires a target slot"),
             },
-            Dyn(dyn_node) => {
-                if dyn_node.is_dyncall() {
-                    Self::Dyncall
-                } else {
-                    Self::Dyn
-                }
+            Dyn(dyn_node) => match (dyn_node.is_dyncall(), dyn_node.is_digest()) {
+                (false, false) => Self::Dyn,
+                (true, false) => Self::Dyncall,
+                (false, true) => Self::DigestDyn,
+                (true, true) => Self::DigestDyncall,
             },
             External(_) => Self::External,
         }
@@ -189,6 +198,12 @@ impl MastNodeEntry {
                 .with_digest(digest);
                 Ok(MastNodeBuilder::Call(builder))
             },
+            Self::DigestCall { callee_id } => {
+                let callee = MastNodeId::from_u32_with_node_count(callee_id, node_count)?;
+                Ok(MastNodeBuilder::Call(
+                    crate::mast::node::CallNodeBuilder::new_digest(callee).with_digest(digest),
+                ))
+            },
             Self::Exec { .. } => {
                 let target = target.ok_or_else(|| {
                     DeserializationError::InvalidValue("missing invocation target".into())
@@ -202,6 +217,12 @@ impl MastNodeEntry {
             )),
             Self::Dyncall => Ok(MastNodeBuilder::Dyn(
                 crate::mast::node::DynNodeBuilder::new_dyncall().with_digest(digest),
+            )),
+            Self::DigestDyn => Ok(MastNodeBuilder::Dyn(
+                crate::mast::node::DynNodeBuilder::new_digest().with_digest(digest),
+            )),
+            Self::DigestDyncall => Ok(MastNodeBuilder::Dyn(
+                crate::mast::node::DynNodeBuilder::new_digest_dyncall().with_digest(digest),
             )),
             Self::External => {
                 Ok(MastNodeBuilder::External(crate::mast::node::ExternalNodeBuilder::new(digest)))
@@ -229,7 +250,8 @@ impl Serializable for MastNodeEntry {
             Self::Call { target_slot }
             | Self::SysCall { target_slot }
             | Self::Exec { target_slot } => Self::encode_u32_payload(target_slot),
-            Self::Dyn | Self::Dyncall | Self::External => 0,
+            Self::DigestCall { callee_id } => Self::encode_u32_payload(callee_id),
+            Self::Dyn | Self::Dyncall | Self::DigestDyn | Self::DigestDyncall | Self::External => 0,
         };
 
         let value = (discriminant << 60) | payload;
@@ -277,7 +299,11 @@ impl Deserializable for MastNodeEntry {
                 let target_slot = Self::decode_u32_payload(payload)?;
                 Ok(Self::Exec { target_slot })
             },
-            DYN | DYNCALL | EXTERNAL => {
+            DIGEST_CALL => {
+                let callee_id = Self::decode_u32_payload(payload)?;
+                Ok(Self::DigestCall { callee_id })
+            },
+            DYN | DYNCALL | DIGEST_DYN | DIGEST_DYNCALL | EXTERNAL => {
                 if payload != 0 {
                     return Err(DeserializationError::InvalidValue(
                         "unused MAST node payload bits must be zero".into(),
@@ -286,6 +312,8 @@ impl Deserializable for MastNodeEntry {
                 Ok(match discriminant {
                     DYN => Self::Dyn,
                     DYNCALL => Self::Dyncall,
+                    DIGEST_DYN => Self::DigestDyn,
+                    DIGEST_DYNCALL => Self::DigestDyncall,
                     _ => Self::External,
                 })
             },
@@ -359,7 +387,7 @@ impl MastNodeEntry {
 /// Returns an immediate invocation's semantic target without resolving an implementation.
 pub(super) fn invocation_target(node: &MastNode) -> Option<ProcedureKey> {
     match node {
-        MastNode::Call(node) => Some(node.target()),
+        MastNode::Call(node) => node.procedure_key(),
         MastNode::Exec(node) => Some(node.target()),
         _ => None,
     }
@@ -498,8 +526,11 @@ mod arbitrary {
                 any::<u32>().prop_map(|callee| Self::Call { target_slot: callee }).boxed(),
                 any::<u32>().prop_map(|callee| Self::SysCall { target_slot: callee }).boxed(),
                 any::<u32>().prop_map(|target_slot| Self::Exec { target_slot }).boxed(),
+                any::<u32>().prop_map(|callee_id| Self::DigestCall { callee_id }).boxed(),
                 Just(Self::Dyn),
                 Just(Self::Dyncall),
+                Just(Self::DigestDyn),
+                Just(Self::DigestDyncall),
                 Just(Self::External),
             ]
             .boxed()
