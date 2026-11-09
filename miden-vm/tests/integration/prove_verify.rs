@@ -1052,7 +1052,7 @@ mod execution_witness_serialization {
         fixture
             .read(&bytes)
             .expect("witness seed should pass adversarial byte-slice decoding");
-        // The fuzz caller supplies authority separately from replay-v6. This envelope uses the
+        // The fuzz caller supplies authority separately from the replay witness. This uses the
         // fixture owner's selected target; it never extracts expected identities from the wire.
         let target = fixture.named.1.target();
         let mut seed = Vec::with_capacity(2 * Word::SERIALIZED_SIZE + bytes.len());

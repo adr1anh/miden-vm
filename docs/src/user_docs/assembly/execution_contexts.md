@@ -7,7 +7,7 @@ sidebar_position: 3
 
 Miden assembly program execution can span multiple isolated contexts. An execution context defines its own memory space which is not accessible from other execution contexts.
 
-All programs start executing in a _root_ context. Thus, the main procedure of a program is always executed in the root context. To move execution into a different context, we can invoke a procedure using the `call` instruction. In fact, any time we invoke a procedure using the `call` instruction, the procedure is executed in a new context. We refer to all non-root contexts as _user contexts_.
+All programs start executing in a _root_ context. A `call`, `calldigest`, `dyncall`, or `dyncalldigest` creates a new context for the invoked procedure. We refer to all non-root contexts as _user contexts_.
 
 While executing in a user context, we can request to execute a procedure in the root context via the `syscall` instruction. The invoked procedure must have an authenticated binding whose immediate parent namespace is the fixed, nonzero `N0 = Namespace::initial()`. The caller-authorized environment root determines these bindings; a compiled kernel export list does not authorize syscalls. Once the procedure returns, execution moves back to the user context from which it was invoked. The diagram below illustrates this graphically:
 
@@ -15,15 +15,15 @@ While executing in a user context, we can request to execute a procedure in the 
 
 ### Procedure invocation semantics
 
-As mentioned in the [previous section](./code_organization.md), procedures in Miden assembly can be invoked via five different instructions: `exec`, `call`, `syscall`, `dynexec`, and `dyncall`. Each runtime invocation uses a procedure key and authenticates its binding under the same fixed environment root. `call` and `dyncall` create user contexts and establish the requested procedure key as the principal. `syscall` requires the authenticated parent namespace to equal `N0`, enters the root context, and preserves the caller's principal. `exec` and `dynexec` preserve the current context and principal, as described below.
+Keyed invocations authenticate their binding under the same fixed environment root. `calldigest`, `dynexecdigest`, and `dyncalldigest` select a body by its implementation digest. Both keyed and digest calls that create user contexts install the selected implementation digest for `caller`. `syscall` enters the root context and preserves the caller digest. Same-context invocations also preserve that digest. The entry starts with a zero caller digest.
 
 #### Invoking via `call`, `dyncall`, and `syscall` instructions
 
-When a procedure is invoked via a `call`, `dyncall`, or a `syscall` instruction, the following happens:
+When a procedure is invoked via `call`, `calldigest`, `dyncall`, `dyncalldigest`, or `syscall`, the following happens:
 
-- Execution moves into a different context. In case of the `call` and `dyncall` instructions, a new user context is created. In case of a `syscall` instruction, the execution moves back into the root context.
+- `syscall` switches to the root context. The other call instructions create a new user context.
 - All stack items beyond the 16th item get "hidden" from the invoked procedure. That is, from the standpoint of the invoked procedure, the initial stack depth is set to 16.
-    - Note that for `dyncall`, the stack is shifted left by one element before being set to 16.
+    - `dyncall` and `dyncalldigest` consume the address before setting the callee's stack depth to 16.
 
 When the callee returns, the following happens:
 
@@ -34,16 +34,16 @@ The manipulations of the stack depth described above have the following implicat
 
 - The top 16 elements of the stack can be used to pass parameters and return values between the caller and the callee.
 - Caller's stack beyond the top 16 elements is inaccessible to the callee, and thus, is guaranteed not to change as the result of the call.
-    - As mentioned above, in the case of `dyncall`, the elements at indices 1 to 17 at the call site will be accessible to the callee (shifted to indices 0 to 16)
+    - For `dyncall` and `dyncalldigest`, the callee receives the 16 slots below the address at the call site.
 - At the end of its execution, the callee must ensure that stack depth is exactly 16. If this is difficult to ensure manually, the [`truncate_stack`](../core_lib/sys.md) procedure can be used to drop all elements from the stack except for the top 16.
 
 #### Invoking via `exec` and `dynexec` instructions
 
 The `exec` instruction can be thought of as the "normal" way of invoking procedures, i.e. it has semantics that would be familiar to anyone coming from a standard programming language, or that is familiar with procedure call instructions in a typical assembly language.
 
-In Miden Assembly, `exec` executes a procedure in the same context as the caller, sharing its memory, operand stack, overflow, and frame memory pointer. `dynexec` has the same context and principal behavior with a dynamically supplied procedure key. Both are runtime keyed invocations: their bindings are authenticated even for local or bundled helpers. Bundling code does not inline it or freeze a Latest dependency's implementation.
+In Miden Assembly, `exec` executes a procedure in the same context as the caller, sharing its memory, operand stack, overflow, and frame memory pointer. `dynexec` reads a key from memory and `dynexecdigest` reads a digest. Both execute in the same context. Keyed `exec` and `dynexec` authenticate the binding even for local or bundled helpers.
 
-Structural inlining requires an explicit `inline.<target>` instruction and an eligible fixed body. It is limited to local targets or imports with an explicit fixed-body pin; Latest targets and structural inline cycles are rejected. This is separate from runtime recursion through keyed invocations.
+Use `inline.<target>` to expand an eligible local or explicitly pinned body at assembly time. Structural cycles are rejected. Keyed runtime invocations can express recursion.
 
 ### Kernels
 
@@ -118,8 +118,8 @@ Execution of the above program proceeds as follows:
 3. Instructions executed inside `foo` can access memory of `ctx1` only. The address of the first procedure local in `foo` (e.g., accessed via `loc_load.0`) is $2^{31}$.
 4. When `call.bar` is executed, a new context is created (`ctx2`). The stack depth is set to 16 again, and any instruction executed in this context can access memory of `ctx2` only. The first procedure local of `bar` is also located at address $2^{31}$.
 5. When `syscall.baz` is executed, the execution moves back into the root context. That is, instructions executed inside `baz` have access to the memory of `ctx0`. The first procedure local of `baz` is located at address $2^{31}$. When `baz` starts executing, the stack depth is again set to 16.
-6. When `caller` is executed inside `baz`, the first 4 elements of the stack are populated with the procedure key of `bar`, the principal established by `call.bar` and preserved by `syscall.baz`.
+6. When `caller` is executed inside `baz`, the first four elements of the stack are populated with the implementation digest of `bar`, installed by `call.bar` and preserved by `syscall.baz`.
 7. Once `baz` returns, execution moves back to `ctx2`, and then, when `bar` returns, execution moves back to `ctx1`. We assume that instructions executed right before each procedure returns ensure that the stack depth is exactly 16 right before procedure's end.
 8. Next, when `exec.bar` is executed, `bar` is executed again, but this time it is executed in the same context as `foo`. Thus, it can access memory of `ctx1`. Moreover, the stack depth is not changed, and thus, `bar` can access the entire stack of `foo`. Lastly, this first procedure local of `bar` now will be at address $2^{31} + 3$ (since the first 3 locals in this context are reserved for `foo`).
-9. When `syscall.baz` is executed the second time, execution moves into the root context again. Now `caller` exposes the procedure key of `foo`: `exec.bar` preserved the principal established by `call.foo`, and `syscall.baz` preserves it as well.
+9. When `syscall.baz` is executed the second time, execution moves into the root context again. Now `caller` exposes the implementation digest of `foo`. Both `exec.bar` and `syscall.baz` preserve the digest installed by `call.foo`.
 10. Finally, when `baz` returns, execution moves back to `ctx1`, and then as `bar` and `foo` return, back to `ctx0`, and the program terminates.

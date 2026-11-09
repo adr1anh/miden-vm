@@ -230,6 +230,52 @@ fn cli_compile_emits_package_with_independently_expected_naming() {
 }
 
 #[test]
+fn cli_mixed_invocations_compile_and_run() {
+    use miden_core::mast::MastNode;
+
+    let working_dir = TempDir::new().unwrap();
+    let source = working_dir.path().join("mixed.masm");
+    let output = source.with_extension("masp");
+    fs::write(
+        &source,
+        "proc helper add.1 end
+         begin
+             calldigest.helper
+             procdigest.helper mem_storew_le.40 dropw
+             push.40 dynexecdigest
+             push.40 dyncalldigest
+             call.helper
+         end",
+    )
+    .unwrap();
+    fs::write(source.with_extension("inputs"), r#"{"operand_stack":[]}"#).unwrap();
+    let inputs = ProgramFixture::new(working_dir.path(), &source, None, &[]);
+
+    let mut compile = bin_under_test(working_dir.path());
+    compile.arg("compile").arg("--assembly").arg(&source);
+    inputs.compile(&mut compile);
+    compile.assert().success();
+    let package = Package::deserialize_from_file(&output).unwrap();
+    package.check_naming(inputs.named.0.symbols()).unwrap();
+    assert!(
+        package
+            .mast_forest()
+            .nodes()
+            .iter()
+            .any(|node| { matches!(node, MastNode::Call(call) if call.digest_callee().is_some()) })
+    );
+
+    for program in [&source, &output] {
+        inputs
+            .command(working_dir.path(), "run", program)
+            .args(["--num-outputs", "1"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("Output: [4]"));
+    }
+}
+
+#[test]
 fn cli_bundle_debug() {
     let working_dir = TempDir::new().unwrap();
     let output_file = working_dir.path().join("cli_bundle_debug.masp");
