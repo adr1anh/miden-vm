@@ -1307,6 +1307,7 @@ fn controller_addresses_ignore_library_prefix_across_resumed_parallel_fragments(
             &mast_forest_store,
             max_stack_depth,
             layout,
+            target.entry_key().into_word(),
         )
         .unwrap()
     }

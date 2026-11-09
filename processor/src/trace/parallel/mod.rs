@@ -168,9 +168,10 @@ fn build_trace_inner(
     } = trace;
     let execution_descriptor = environment.descriptor();
 
-    if core_trace_contexts.first().is_none_or(|context| {
-        context.state.system.fn_hash != execution_descriptor.entry_key().into_word()
-    }) {
+    if core_trace_contexts
+        .first()
+        .is_none_or(|context| context.state.system.fn_hash != Word::default())
+    {
         return Err(ExecutionError::InvalidExecutionState);
     }
 
@@ -226,6 +227,7 @@ fn build_trace_inner(
         &mast_forest_store,
         max_stack_depth,
         layout,
+        execution_descriptor.entry_key().into_word(),
     )?;
 
     let core_trace_len = core_trace_data.len() / CORE_STORAGE_WIDTH;
@@ -355,6 +357,7 @@ fn generate_core_trace_row_major(
     mast_forest_store: &[Arc<SparseMastForest>],
     max_stack_depth: usize,
     layout: ChipletsLayout,
+    entry_key: Word,
 ) -> Result<Vec<Felt>, ExecutionError> {
     let num_fragments = core_trace_contexts.len();
     let total_allocated_rows = num_fragments * fragment_size;
@@ -451,6 +454,7 @@ fn generate_core_trace_row_major(
     push_halt_opcode_row(
         &mut core_trace_data,
         total_core_trace_rows,
+        entry_key,
         system_rows
             .last()
             .ok_or(ExecutionError::Internal("no trace fragments provided in the trace witness"))?,
@@ -582,6 +586,7 @@ fn fixup_stack_and_system_rows(
 fn push_halt_opcode_row(
     core_trace_data: &mut Vec<Felt>,
     num_rows_before: usize,
+    entry_key: Word,
     last_system_state: &SystemCols<Felt>,
     last_stack_state: &StackCols<Felt>,
 ) {
@@ -613,8 +618,9 @@ fn push_halt_opcode_row(
 
         // Pad hasher state columns (8 columns)
         // - First 4 columns: copy the last value (to propagate program hash)
-        // - Remaining 4 columns: fill with ZEROs
+        // - Remaining 4 columns: public entry key used by root completion
         row.decoder.hasher_state[..4].copy_from_slice(&prev_hasher_state_first_half);
+        row.decoder.hasher_state[4..].copy_from_slice(entry_key.as_elements());
 
         // Pad op_bit_extra columns (2 columns)
         // - First column: do nothing (pre-filled with ZEROs, HALT doesn't use this)
@@ -940,11 +946,9 @@ fn pad_core_row_major(core_trace_data: &mut Vec<Felt>, core_height: usize) {
 
     // Safety: per our documented safety guarantees, we know that `total_program_rows > 0`,
     // and row `total_program_rows - 1` is initialized.
-    let (last_hasher_first_half, last_stack, last_system) = {
+    let (last_hasher_state, last_stack, last_system) = {
         let last: &CoreCols<Felt> = core_trace_data[last_row_start..last_row_start + w].borrow();
-        let hs = &last.decoder.hasher_state;
-        let last_hasher: [Felt; 4] = [hs[0], hs[1], hs[2], hs[3]];
-        (last_hasher, last.stack.clone(), last.system.clone())
+        (last.decoder.hasher_state, last.stack.clone(), last.system.clone())
     };
 
     let mut template_data = [ZERO; CORE_STORAGE_WIDTH];
@@ -959,10 +963,8 @@ fn pad_core_row_major(core_trace_data: &mut Vec<Felt>, core_height: usize) {
         for i in 0..NUM_OP_BITS {
             template.decoder.op_bits[i] = Felt::from_u8((halt_opcode >> i) & 1);
         }
-        // Pad hasher state columns (8 columns)
-        // - First 4 columns: copy the last value (to propagate program hash)
-        // - Remaining 4 columns: fill with ZEROs
-        template.decoder.hasher_state[..4].copy_from_slice(&last_hasher_first_half);
+        // Keep the completed implementation and public entry key throughout the HALT suffix.
+        template.decoder.hasher_state = last_hasher_state;
 
         // Pad op_bit_extra columns (2 columns)
         // - First column: do nothing (filled with ZEROs, HALT doesn't use this)

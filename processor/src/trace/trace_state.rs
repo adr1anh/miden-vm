@@ -107,10 +107,9 @@ pub struct SystemState {
     /// Execution context ID - starts at 0 (root context), changes on CALL/SYSCALL operations
     pub ctx: ContextId,
 
-    /// Procedure key of the principal established in the current execution context.
-    /// - Entry initializes the principal to the descriptor's entry key.
-    /// - CALL/DYNCALL establish the requested key; returns restore the saved principal.
-    /// - EXEC/DYN/SYSCALL preserve the established principal.
+    /// Implementation digest of the procedure that established the current context.
+    /// Entry starts at zero. CALL/DYNCALL install the callee digest, and returns restore the
+    /// saved digest. EXEC/DYN/SYSCALL preserve it.
     pub fn_hash: Word,
 
     /// Deferred root used for recording `log_deferred` calls.

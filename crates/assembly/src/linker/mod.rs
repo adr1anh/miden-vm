@@ -143,8 +143,8 @@ pub enum LinkStatus {
 /// which will, when successful, return the set of module indices corresponding to the modules that
 /// comprise the public interface of the assembled artifact. The assembler then constructs the MAST
 /// starting from public exports and explicitly selected callable roots, tracing named runtime
-/// references to retain available code. Every retained invocation uses the callee's canonical key;
-/// selected body supply is independent of that identity and does not impose a compilation order.
+/// references to retain available code. Keyed invocations use the callee's canonical identity.
+/// Digest references and structural expansion require selected implementations before lowering.
 #[derive(Clone)]
 pub struct Linker {
     /// The set of libraries to link against.
@@ -159,10 +159,10 @@ pub struct Linker {
     /// The global set of items known to the linker
     modules: Vec<LinkModule>,
     /// Named runtime references, including address-taken procedures and recursive groups.
-    /// Literal procedure keys do not reverse-resolve to bodies.
+    /// Literal target words do not add source dependency edges.
     callgraph: CallGraph,
-    /// Structural expansion dependencies only. Unlike runtime references, these must be acyclic.
-    inline_callgraph: CallGraph,
+    /// Dependencies which need a selected body before lowering. These must be acyclic.
+    body_callgraph: CallGraph,
     /// The set of MAST roots which have procedure definitions in this graph. There can be
     /// multiple procedures bound to the same root due to having identical code.
     procedures_by_mast_root: BTreeMap<Word, SmallVec<[GlobalItemIndex; 1]>>,
@@ -187,7 +187,7 @@ impl Linker {
             static_libraries: Default::default(),
             modules: Default::default(),
             callgraph: Default::default(),
-            inline_callgraph: Default::default(),
+            body_callgraph: Default::default(),
             procedures_by_mast_root: Default::default(),
             kernel_index: None,
             kernel_library: None,
@@ -750,7 +750,7 @@ impl Linker {
         self.link_modules(support)?;
         let original_module_len = self.modules.len();
         let original_callgraph = self.callgraph.clone();
-        let original_inline_callgraph = self.inline_callgraph.clone();
+        let original_body_callgraph = self.body_callgraph.clone();
         let module_index = self.link_module(&mut kernel)?;
         let original_kernel_index = self.kernel_index;
         let original_module_kinds = self
@@ -784,7 +784,7 @@ impl Linker {
             err => {
                 self.kernel_index = original_kernel_index;
                 self.callgraph = original_callgraph;
-                self.inline_callgraph = original_inline_callgraph;
+                self.body_callgraph = original_body_callgraph;
                 self.modules.truncate(original_module_len);
                 for (module_index, module_kind) in original_module_kinds {
                     self.modules[module_index].set_kind(module_kind);
@@ -816,8 +816,8 @@ impl Linker {
     /// graph, the module becomes immutable/clone-on-write, so as to allow the graph to be
     /// cheaply cloned.
     ///
-    /// Runtime-reference edges support code retention, not structural expansion. They may contain
-    /// cycles, and do not require callee bodies or implementation roots before callers are lowered.
+    /// Runtime-reference edges support code retention and may contain cycles. Compilation orders
+    /// body dependencies separately according to the selected lowering.
     fn link_and_rewrite(
         &mut self,
         namespaces: &NamespaceGraph,
@@ -849,7 +849,7 @@ impl Linker {
             .map(|(module_index, module)| (module_index, module.clone()))
             .collect::<Vec<_>>();
         let original_callgraph = self.callgraph.clone();
-        let original_inline_callgraph = self.inline_callgraph.clone();
+        let original_body_callgraph = self.body_callgraph.clone();
 
         let result = (|| {
             let resolver = SymbolResolver::with_namespaces(self, namespaces, imports);
@@ -917,22 +917,25 @@ impl Linker {
             }
 
             let mut callgraph = self.callgraph.clone();
-            let mut inline_callgraph = self.inline_callgraph.clone();
+            let mut body_callgraph = self.body_callgraph.clone();
             for (caller, callee, kind) in edges {
                 callgraph.add_edge(caller, callee);
-                if kind == InvokeKind::Inline {
-                    inline_callgraph.add_edge(caller, callee);
+                if matches!(
+                    kind,
+                    InvokeKind::Inline | InvokeKind::CallDigest | InvokeKind::ProcDigest
+                ) {
+                    body_callgraph.add_edge(caller, callee);
                 }
             }
-            inline_callgraph.toposort().map_err(|error| self.inline_cycle_error(error))?;
+            body_callgraph.toposort().map_err(|error| self.body_cycle_error(error))?;
 
-            Ok::<_, LinkerError>((linked_modules, callgraph, inline_callgraph))
+            Ok::<_, LinkerError>((linked_modules, callgraph, body_callgraph))
         })();
 
         match result {
-            Ok((linked_modules, callgraph, inline_callgraph)) => {
+            Ok((linked_modules, callgraph, body_callgraph)) => {
                 self.callgraph = callgraph;
-                self.inline_callgraph = inline_callgraph;
+                self.body_callgraph = body_callgraph;
                 for module_index in linked_modules {
                     self.modules[module_index.as_usize()].set_status(LinkStatus::Linked);
                 }
@@ -940,7 +943,7 @@ impl Linker {
             },
             Err(err) => {
                 self.callgraph = original_callgraph;
-                self.inline_callgraph = original_inline_callgraph;
+                self.body_callgraph = original_body_callgraph;
                 for (module_index, module) in pending_modules {
                     self.modules[module_index] = module;
                 }
@@ -994,9 +997,9 @@ impl Linker {
         self.callgraph.reachable_from(roots)
     }
 
-    /// Orders selected procedures with structural inline callees before their callers.
-    /// Runtime references do not constrain this ordering, and isolated procedures are retained.
-    pub(crate) fn inline_compilation_order(
+    /// Orders selected procedures with required callee implementations before their callers.
+    /// Keyed references require only declarations, and isolated procedures are retained.
+    pub(crate) fn body_compilation_order(
         &self,
         procedures: &[GlobalItemIndex],
     ) -> Result<Vec<GlobalItemIndex>, LinkerError> {
@@ -1004,37 +1007,43 @@ impl Linker {
         let mut graph = CallGraph::default();
         for &caller in &selected {
             graph.get_or_insert_node(caller);
-            for &callee in self.inline_callgraph.out_edges(caller) {
+            for &callee in self.body_callgraph.out_edges(caller) {
                 if selected.contains(&callee) {
                     graph.add_edge(callee, caller);
                 }
             }
         }
-        graph.toposort().map_err(|error| self.inline_cycle_error(error))
+        graph.toposort().map_err(|error| self.body_cycle_error(error))
     }
 
-    fn inline_cycle_error(&self, error: CycleError) -> LinkerError {
-        let gids = error.into_node_ids().collect::<BTreeSet<_>>();
+    fn body_cycle_error(&self, error: CycleError) -> LinkerError {
+        let gids = error.into_node_ids().collect::<Vec<_>>();
         let nodes = gids
             .iter()
             .map(|gid| self[gid.module].path().join(self[*gid].name()).to_string())
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let span =
-            gids.iter()
-                .find_map(|gid| {
-                    let SymbolItem::Procedure(procedure) = self[*gid].item() else {
-                        return None;
-                    };
-                    procedure.borrow().invoked().find_map(|invoke| {
-                        (invoke.kind == InvokeKind::Inline).then(|| invoke.span())
-                    })
-                })
-                .unwrap_or(SourceSpan::UNKNOWN);
+        let mut inline_span = SourceSpan::UNKNOWN;
+        for gid in gids {
+            let SymbolItem::Procedure(procedure) = self[gid].item() else {
+                continue;
+            };
+            for invoke in procedure.borrow().invoked() {
+                match invoke.kind {
+                    InvokeKind::CallDigest | InvokeKind::ProcDigest => {
+                        return LinkerError::Cycle { nodes };
+                    },
+                    InvokeKind::Inline if inline_span == SourceSpan::UNKNOWN => {
+                        inline_span = invoke.span();
+                    },
+                    _ => {},
+                }
+            }
+        }
         LinkerError::InlineCycle {
             nodes,
-            span,
-            source_file: self.source_manager.get(span.source_id()).ok(),
+            span: inline_span,
+            source_file: self.source_manager.get(inline_span.source_id()).ok(),
         }
     }
 
@@ -2091,7 +2100,7 @@ mod tests {
             .expect_err("an unresolved call must be fatal");
 
             assert!(
-                !err.to_string().contains("found a cycle in the call graph"),
+                !err.to_string().contains("found a cycle in implementation dependencies"),
                 "an unresolved call must not be reported as a cycle, got: {err}"
             );
             assert!(linker[ModuleIndex::new(0)].is_unlinked());

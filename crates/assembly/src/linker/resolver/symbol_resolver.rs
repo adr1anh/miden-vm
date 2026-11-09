@@ -226,8 +226,7 @@ impl<'a> SymbolResolver<'a> {
         target: &InvocationTarget,
     ) -> Result<SymbolResolution, LinkerError> {
         let resolution = match target {
-            // Existing digest-shaped syntax denotes K directly. Code availability and reverse-D
-            // lookup cannot change the identity of a retained invocation.
+            // Literal words are interpreted by the selected invocation lowering.
             InvocationTarget::MastRoot(key) => SymbolResolution::MastRoot(*key),
             InvocationTarget::Symbol(symbol) => {
                 let path = Path::from_ident(symbol);

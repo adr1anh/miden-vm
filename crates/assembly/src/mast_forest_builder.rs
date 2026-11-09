@@ -13,9 +13,9 @@ use miden_core::{
     advice::AdviceMap,
     chiplets::hasher,
     mast::{
-        BasicBlockNode, BasicBlockNodeBuilder, CallNodeBuilder, DynNode, ExecNodeBuilder, JoinNode,
-        LoopNode, MastForest, MastForestRootMap, MastNode, MastNodeExt, OpBatch, SplitNode,
-        error_code_from_msg,
+        BasicBlockNode, BasicBlockNodeBuilder, CallNode, CallNodeBuilder, DynNodeBuilder,
+        ExecNodeBuilder, JoinNode, LoopNode, MastForest, MastForestRootMap, MastNode, MastNodeExt,
+        OpBatch, SplitNode, error_code_from_msg,
     },
     operations::{AssemblyOp, Operation},
     program::ProcedureKey,
@@ -1498,22 +1498,37 @@ impl MastForestBuilder {
     pub(crate) fn ensure_dyn_node_use(
         &mut self,
         is_dyncall: bool,
+        is_digest: bool,
         asm_op: AssemblyOp,
         inline_calls: Vec<DebugSourceInlineCall>,
     ) -> Result<MastNodeUse, Report> {
-        let dyn_digest = if is_dyncall {
-            DynNode::DYNCALL_DEFAULT_DIGEST
-        } else {
-            DynNode::DYN_DEFAULT_DIGEST
+        let builder = match (is_dyncall, is_digest) {
+            (false, false) => DynNodeBuilder::new_dyn(),
+            (true, false) => DynNodeBuilder::new_dyncall(),
+            (false, true) => DynNodeBuilder::new_digest(),
+            (true, true) => DynNodeBuilder::new_digest_dyncall(),
         };
-        let child_refs = Vec::new();
         let mut draft = PendingMastNodeDraft::new(
-            PendingMastNodeKind::Dyn { is_dyncall },
-            dyn_digest,
-            child_refs,
+            PendingMastNodeKind::Dyn { is_dyncall, is_digest },
+            builder.build().digest(),
+            Vec::new(),
         );
         draft.inline_calls = inline_calls;
         self.intern_pending_node_with_asm_op_use(draft, asm_op, Vec::new())
+    }
+
+    pub(crate) fn ensure_digest_call_node_use(
+        &mut self,
+        callee: MastNodeUse,
+        asm_op: AssemblyOp,
+        inline_calls: Vec<DebugSourceInlineCall>,
+    ) -> Result<MastNodeUse, Report> {
+        let child = callee.node_ref();
+        let digest = CallNode::digest_for_callee(self.pending_node_mast_root(child));
+        let mut draft =
+            PendingMastNodeDraft::new(PendingMastNodeKind::DigestCall, digest, vec![child]);
+        draft.inline_calls = inline_calls;
+        self.intern_pending_node_with_asm_op_use(draft, asm_op, vec![callee.source_ref()])
     }
 
     fn merge_contiguous_basic_block_uses(

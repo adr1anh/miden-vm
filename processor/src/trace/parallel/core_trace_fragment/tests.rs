@@ -1158,29 +1158,29 @@ fn test_call_decoding() {
 
     // --- check fn hash columns ------------------------------------------------------------------
 
-    // before the CALL, the principal is the authenticated entry key.
+    // Before the CALL, the caller digest is zero.
     for i in 0..9 {
-        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("entry", false).key().into_word());
+        assert_eq!(get_fn_hash(&sys_trace, i), EMPTY_WORD);
     }
 
-    // inside the first CALL, the principal is bar's key
+    // Inside the first CALL, the caller digest is bar's implementation digest.
     for i in 9..14 {
-        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("bar", false).key().into_word());
+        assert_eq!(get_fn_hash(&sys_trace, i), bar_root_hash);
     }
 
     // fn_hash set to foo inside the second CALL
     for i in 14..18 {
-        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("foo", false).key().into_word());
+        assert_eq!(get_fn_hash(&sys_trace, i), foo_root_hash);
     }
 
     // return from the first call
     for i in 18..20 {
-        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("bar", false).key().into_word());
+        assert_eq!(get_fn_hash(&sys_trace, i), bar_root_hash);
     }
 
     // after the CALL block is ended, we are back in the root context
     for i in 20..trace_len {
-        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("entry", false).key().into_word());
+        assert_eq!(get_fn_hash(&sys_trace, i), EMPTY_WORD);
     }
 }
 
@@ -1463,20 +1463,19 @@ fn test_syscall_decoding() {
 
     // --- check fn hash columns ------------------------------------------------------------------
 
-    // before the CALL, the principal is the authenticated entry key.
+    // Before the CALL, the caller digest is zero.
     for i in 0..9 {
-        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("entry", false).key().into_word());
+        assert_eq!(get_fn_hash(&sys_trace, i), EMPTY_WORD);
     }
 
-    // inside the CALL block (and the invoked from it SYSCALL block), the principal remains the key
-    // of the bar procedure
+    // Both the CALL body and its SYSCALL observe bar's implementation digest.
     for i in 9..20 {
-        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("bar", false).key().into_word());
+        assert_eq!(get_fn_hash(&sys_trace, i), bar_root_hash);
     }
 
     // after the CALL block is ended, we are back in the root context
     for i in 20..trace_len {
-        assert_eq!(get_fn_hash(&sys_trace, i), fixture_binding("entry", false).key().into_word());
+        assert_eq!(get_fn_hash(&sys_trace, i), EMPTY_WORD);
     }
 }
 

@@ -314,7 +314,7 @@ impl MainTrace {
         self.core_row(i).decoder.hasher_state[element]
     }
 
-    /// Returns the current principal key at row i (legacy `fn_hash` column name).
+    /// Returns the current caller digest at row i.
     pub fn fn_hash(&self, i: RowIndex) -> [Felt; DIGEST_LEN] {
         self.core_row(i).system.fn_hash
     }
@@ -342,7 +342,11 @@ impl MainTrace {
 
     /// Returns whether an END row completes the root and enters HALT.
     pub fn is_root_end(&self, i: RowIndex) -> Felt {
-        self.core_row(i).decoder.end_block_flags().is_root_end
+        if self.get_op_code(i) == Felt::from_u8(opcodes::END) {
+            self.core_row(i).decoder.end_block_flags().is_root_end
+        } else {
+            Felt::ZERO
+        }
     }
 
     /// Returns the decoder's `group_count` value at row i.

@@ -227,12 +227,13 @@ impl ReplayProcessor {
                         let record = self.keyed.peek().map_err(replay_keyed_error)?;
                         let event = record.event().map_err(replay_keyed_error)?;
                         if event.kind != crate::KeyedEventKind::Invoke(request.mode)
-                            || event.use_record.procedure_key() != request.key
+                            || event.use_record.procedure_key() != request.key()
                             || event.use_record.row() != request.row
-                            || *event.principal_before.as_word() != self.system.fn_hash
+                            || event.principal_before != self.system.fn_hash
                             || match request.mode {
                                 crate::KeyedMode::Call | crate::KeyedMode::DynCall => {
-                                    event.principal_after != request.key
+                                    event.principal_after
+                                        != event.use_record.implementation_root().into_word()
                                 },
                                 _ => event.principal_before != event.principal_after,
                             }
@@ -264,7 +265,7 @@ impl ReplayProcessor {
                             current_source_node_id: request.source_node_id,
                             inline_call_contexts: &mut inline_call_contexts,
                         };
-                        let prepared = crate::execution::preflight_keyed_invocation(
+                        let prepared = crate::execution::preflight_invocation(
                             &mut state,
                             current_forest,
                             request,
@@ -281,14 +282,66 @@ impl ReplayProcessor {
                             prepared.projection,
                         )?;
                         state.processor.keyed.pop_front().map_err(replay_keyed_error)?;
-                        Ok(crate::execution::finish_keyed_invocation(
+                        Ok(crate::execution::finish_invocation(
                             &mut state,
                             current_forest,
                             request,
                             target,
                             prepared,
-                            event,
-                            reservation,
+                            Some((event, reservation)),
+                        ))
+                    })();
+                    match result {
+                        Ok(flow) => flow?,
+                        Err(error) => return ControlFlow::Break(BreakReason::Err(error)),
+                    }
+                },
+                InternalBreakReason::ResolveDigest(request) => {
+                    let result = (|| -> Result<_, ExecutionError> {
+                        let crate::execution::InvocationTarget::Digest { implementation, callee } =
+                            request.target
+                        else {
+                            unreachable!("digest replay requires a digest target");
+                        };
+                        let (root, forest) = if let Some(callee) = callee {
+                            (callee, current_forest.clone())
+                        } else {
+                            let (root, id) =
+                                self.mast_forest_resolution_replay.replay_resolution()?;
+                            (root, super::lookup_mast_forest(&self.mast_forest_store, id)?.clone())
+                        };
+                        let target = crate::execution::LoadedTarget {
+                            implementation,
+                            root,
+                            forest,
+                            package_debug_info: None,
+                            loaded_owner: None,
+                            source_node_id: None,
+                        };
+                        let mut state = crate::execution::ExecutionState {
+                            processor: self,
+                            continuation_stack: &mut *continuation_stack,
+                            host: &mut *host,
+                            tracer: &mut *tracer,
+                            stopper,
+                            source_debug_info: None,
+                            loaded_owner: &mut loaded_owner,
+                            current_source_node_id: request.source_node_id,
+                            inline_call_contexts: &mut inline_call_contexts,
+                        };
+                        let prepared = crate::execution::preflight_invocation(
+                            &mut state,
+                            current_forest,
+                            request,
+                            &target,
+                        )?;
+                        Ok(crate::execution::finish_invocation(
+                            &mut state,
+                            current_forest,
+                            request,
+                            target,
+                            prepared,
+                            None,
                         ))
                     })();
                     match result {
@@ -307,9 +360,9 @@ impl ReplayProcessor {
                         if event.kind != crate::KeyedEventKind::RootEnd
                             || event.use_record.row() != request.row
                             || event.use_record.implementation_root() != request.implementation
-                            || event.use_record.procedure_key() != request.principal
-                            || *event.principal_before.as_word() != self.system.fn_hash
-                            || event.principal_after != request.principal
+                            || event.use_record.procedure_key() != request.entry_key
+                            || event.principal_before != self.system.fn_hash
+                            || event.principal_after != Word::default()
                             || record.target_root() != root
                             || !Arc::ptr_eq(
                                 current_forest,
@@ -515,24 +568,7 @@ impl SystemInterface for ReplayProcessor {
     }
 
     fn prepare_save_call_state(&mut self) -> Result<(), ExecutionError> {
-        // Replay captures saved frames at END. Before starting a frame, check the authenticated
-        // invocation that authorizes this save without consuming that record.
-        let event = self
-            .keyed
-            .peek()
-            .map_err(replay_keyed_error)?
-            .event()
-            .map_err(replay_keyed_error)?;
-        if !matches!(
-            event.kind,
-            crate::KeyedEventKind::Invoke(
-                crate::KeyedMode::Call | crate::KeyedMode::Syscall | crate::KeyedMode::DynCall
-            )
-        ) || event.use_record.row() != self.system.clk
-            || *event.principal_before.as_word() != self.system.fn_hash
-        {
-            return Err(ExecutionError::Internal("saved replay frame differs from invocation"));
-        }
+        // Replay reads saved frames at END. Invocation and row checks happen before this point.
         Ok(())
     }
 

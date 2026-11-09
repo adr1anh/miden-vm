@@ -13,7 +13,7 @@ use crate::{
     CycleProjection, ExecutionError, FastProcessor, LoadedMastForest, ResolutionLimits,
     ResolutionSession, ResolvedBinding, SessionBinding, SourceInlineCallContext, Stopper,
     continuation_stack::{Continuation, ContinuationStack},
-    execution::KeyedRequest,
+    execution::InvocationRequest,
 };
 
 // RESUME CONTEXT
@@ -47,14 +47,14 @@ pub(crate) enum ExecutionLifecycle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PendingKey {
     Entry(ProcedureKey),
-    Invoke(KeyedRequest),
+    Invoke(InvocationRequest),
 }
 
 impl PendingKey {
     pub(crate) fn key(self) -> ProcedureKey {
         match self {
             Self::Entry(key) => key,
-            Self::Invoke(request) => request.key,
+            Self::Invoke(request) => request.key(),
         }
     }
 }

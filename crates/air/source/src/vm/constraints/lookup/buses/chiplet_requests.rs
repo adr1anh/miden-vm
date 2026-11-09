@@ -53,6 +53,7 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_requests<LB>(
     let addr = dec.addr;
     let addr_next = next.decoder.addr;
     let h = dec.hasher_state;
+    let digest_mode = dec.digest_mode();
     let group_count = dec.group_count;
     let helper0 = user_helpers[0];
     let clk = local.system.clk;
@@ -122,22 +123,20 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_requests<LB>(
                         Deg { v: 5, u: 6 },
                     );
 
-                    // CALL: control-block remove + FMP write under a fresh header (ctx_next /
-                    // FMP_ADDR / clk).
+                    // CALL commits its operand and digest mode, and initializes the new FMP.
                     g.batch(
                         "call",
                         op_flags.call(),
                         move |b| {
                             let parent = addr_next.into();
-                            let h =
-                                array::from_fn(
-                                    |i| {
-                                        if i < 4 { h[i].into() } else { LB::Expr::ZERO }
-                                    },
-                                );
+                            let input = array::from_fn(|i| match i {
+                                0..=3 => h[i].into(),
+                                4 => digest_mode.into(),
+                                _ => LB::Expr::ZERO,
+                            });
                             b.remove(
                                 "call_ctrl_block",
-                                HasherMsg::control_block(parent, &h, opcodes::CALL),
+                                HasherMsg::control_block(parent, &input, opcodes::CALL),
                                 Deg { v: 4, u: 5 },
                             );
                             b.remove(
@@ -211,10 +210,11 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_requests<LB>(
                             op_flags.dyn_op(),
                             move |b| {
                                 let parent = addr_next.into();
-                                let zeros8: [LB::Expr; 8] = array::from_fn(|_| LB::Expr::ZERO);
+                                let mut input = array::from_fn(|_| LB::Expr::ZERO);
+                                input[4] = digest_mode.into();
                                 b.remove(
                                     "dyn_ctrl_block",
-                                    HasherMsg::control_block(parent, &zeros8, opcodes::DYN),
+                                    HasherMsg::control_block(parent, &input, opcodes::DYN),
                                     Deg { v: 5, u: 6 },
                                 );
                                 let word = array::from_fn(|i| h[i].into());
@@ -238,10 +238,11 @@ pub(in crate::vm::constraints::lookup) fn emit_chiplet_requests<LB>(
                             op_flags.dyncall(),
                             move |b| {
                                 let parent = addr_next.into();
-                                let zeros8: [LB::Expr; 8] = array::from_fn(|_| LB::Expr::ZERO);
+                                let mut input = array::from_fn(|_| LB::Expr::ZERO);
+                                input[4] = digest_mode.into();
                                 b.remove(
                                     "dyncall_ctrl_block",
-                                    HasherMsg::control_block(parent, &zeros8, opcodes::DYNCALL),
+                                    HasherMsg::control_block(parent, &input, opcodes::DYNCALL),
                                     Deg { v: 5, u: 6 },
                                 );
                                 let word = array::from_fn(|i| h[i].into());

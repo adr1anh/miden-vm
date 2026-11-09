@@ -38,8 +38,8 @@ pub enum LinkerError {
         #[related]
         labels: Box<[RelatedLabel]>,
     },
-    #[error("found a cycle in the call graph, involving these procedures: {}", nodes.join(", "))]
-    #[diagnostic()]
+    #[error("found a cycle in implementation dependencies, involving these procedures: {}", nodes.join(", "))]
+    #[diagnostic(help("use a keyed reference to break the implementation cycle"))]
     Cycle { nodes: Box<[String]> },
     #[error("found a structural inline cycle, involving these procedures: {}", nodes.join(", "))]
     #[diagnostic(help("use a retained exec or call for runtime recursion"))]

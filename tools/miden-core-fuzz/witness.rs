@@ -1,6 +1,6 @@
 //! Shared bounded execution-witness fuzz policy and oracles.
 //!
-//! Inputs are a caller-owned `K_entry[32] || R_E[32]` prefix followed by replay-v6 bytes.
+//! Inputs are a caller-owned `K_entry[32] || R_E[32]` prefix followed by replay witness bytes.
 //! The prefix is a harness envelope, never part of the production witness format.
 
 use miden_core::{

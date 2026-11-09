@@ -285,7 +285,7 @@ fn static_inventory_fixture_with_join(join: bool) -> StaticInventoryFixture {
         .unwrap();
     let export = if join {
         let dynamic = builder
-            .ensure_dyn_node_use(false, test_asm_op("exported_entry", "dynexec"), vec![])
+            .ensure_dyn_node_use(false, false, test_asm_op("exported_entry", "dynexec"), vec![])
             .unwrap();
         builder
             .join_node_uses(vec![invocation, dynamic], Some(test_asm_op("exported_entry", "begin")))

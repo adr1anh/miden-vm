@@ -931,8 +931,9 @@ impl<E: PrimeCharacteristicRing> OpFlags<E> {
         /// Operation Flag of PUSH operation.
         push => opcodes::PUSH,
         /// Operation Flag of EXEC operation.
-        #[cfg(test)]
         exec => opcodes::EXEC,
+        /// Operation Flag of DYN operation.
+        dyn_op => opcodes::DYN,
         /// Operation Flag of DYNCALL operation.
         dyncall => opcodes::DYNCALL,
         /// Operation Flag of HORNERBASE operation.

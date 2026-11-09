@@ -46,10 +46,10 @@
 //! |Interaction                                  |Gate deg|Payload              |U degree|V degree|
 //! |---------------------------------------------|--------|---------------------|--------|--------|
 //! |JOIN/SPLIT/SPAN continuation add              |5       |Continuation, denom 1|6       |5       |
-//! |EXEC/DYN continuation + Resolve batch         |5       |2 linear denoms      |7       |6       |
+//! |EXEC/DYN continuation + optional Resolve     |5       |2 linear denoms      |7       |7       |
 //! |LOOP continuation add                        |5       |Continuation, denom 1|6       |5       |
-//! |DYNCALL caller-frame + Resolve batch         |5       |denoms 2 + 1         |8       |7       |
-//! |CALL/SYSCALL frame + Resolve batches          |4       |2 linear denoms      |6       |5       |
+//! |DYNCALL caller-frame + optional Resolve       |5       |denoms 2 + 1         |8       |8       |
+//! |CALL/SYSCALL frame + Resolve batches          |4       |2 linear denoms      |6       |6       |
 //! |END continuation + optional root Resolve     |5       |2 linear denoms      |7       |7       |
 //! |END caller-frame + optional root Resolve     |5       |2 linear denoms      |7       |7       |
 //! |RESPAN batch (k=2, f=respan deg 4)           |—       |Continuation         |6       |5       |
@@ -58,7 +58,7 @@
 //! |MRUPDATE Merkle batch (k=4, f=mrupdate deg 4)|—       |Range, denom 1       |**8**   |**7**   |
 //! |logpre batch (k=2, f=log_deferred deg 5)     |—       |LogDeferred, denom 1 |**7**   |**6**   |
 //!
-//! Column max: `U = 8, V = 7`; transition degree is `max(1 + 8, 7) = 9`.
+//! Column max: `U = 8, V = 8`; transition degree is `max(1 + 8, 8) = 9`.
 
 use core::array;
 
@@ -108,6 +108,7 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
     let addr_next = dec_next.addr;
     let h1_next = dec_next.hasher_state[1];
     let end_flags = dec.end_block_flags();
+    let resolve_demand = LB::Expr::from(dec.digest_mode()) - LB::Expr::ONE;
 
     let b0 = stk.b0;
     let b1 = stk.b1;
@@ -144,8 +145,8 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                 |g| {
                     // ---- Block-stack relation (Continuation / CallerFrame tagged entries) ----
 
-                    // Structural nodes only push their continuation. Invocations below also
-                    // demand one authenticated binding, in the same simultaneous batch.
+                    // Structural nodes push their continuation. Keyed invocations also demand
+                    // one authenticated binding, in the same batch as their frame push.
                     let f = op_flags.join() + op_flags.split() + op_flags.span();
                     g.add(
                         "join_split_span",
@@ -170,13 +171,14 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                                 },
                                 Deg { v: 5, u: 6 },
                             );
-                            b.remove(
+                            b.insert(
                                 "ordinary_invocation",
+                                resolve_demand.clone(),
                                 resolution::invocation_message(dec, LB::Expr::ZERO),
-                                Deg { v: 5, u: 6 },
+                                Deg { v: 6, u: 6 },
                             );
                         },
-                        Deg { v: 6, u: 7 },
+                        Deg { v: 7, u: 7 },
                     );
 
                     // LOOP unconditionally enters the body and records its continuation kind.
@@ -191,8 +193,8 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                         Deg { v: 5, u: 6 },
                     );
 
-                    // The derived post-pop depth is quadratic, so this batch's two
-                    // denominators have degrees two and one: (V,U)=(2+5,3+5).
+                    // The derived post-pop depth is quadratic. The optional Resolve demand has
+                    // linear multiplicity, so the batch has (V,U)=(3+5,3+5).
                     g.batch(
                         "dyncall",
                         op_flags.dyncall(),
@@ -209,19 +211,20 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                                 },
                                 Deg { v: 5, u: 7 },
                             );
-                            b.remove(
+                            b.insert(
                                 "ordinary_invocation",
+                                resolve_demand.clone(),
                                 resolution::invocation_message(dec, LB::Expr::ZERO),
-                                Deg { v: 5, u: 6 },
+                                Deg { v: 6, u: 6 },
                             );
                         },
-                        Deg { v: 7, u: 8 },
+                        Deg { v: 8, u: 8 },
                     );
 
                     // Separate branches keep the syscall tag literal in each linear message.
-                    for (name, flag, syscall) in [
-                        ("call", op_flags.call(), LB::Expr::ZERO),
-                        ("syscall", op_flags.syscall(), LB::Expr::ONE),
+                    for (name, flag, syscall, demand, demand_degree) in [
+                        ("call", op_flags.call(), LB::Expr::ZERO, resolve_demand, 5),
+                        ("syscall", op_flags.syscall(), LB::Expr::ONE, -LB::Expr::ONE, 4),
                     ] {
                         g.batch(
                             name,
@@ -239,13 +242,14 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                                     },
                                     Deg { v: 4, u: 5 },
                                 );
-                                b.remove(
+                                b.insert(
                                     "invocation_resolution",
+                                    demand,
                                     resolution::invocation_message(dec, syscall),
-                                    Deg { v: 4, u: 5 },
+                                    Deg { v: demand_degree, u: 5 },
                                 );
                             },
-                            Deg { v: 5, u: 6 },
+                            Deg { v: demand_degree + 1, u: 6 },
                         );
                     }
 
@@ -270,7 +274,7 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                             b.insert(
                                 "root_completion",
                                 -LB::Expr::from(end_flags.is_root_end),
-                                resolution::root_completion_message(dec, fn_hash_next),
+                                resolution::root_completion_message(dec, dec_next),
                                 Deg { v: 6, u: 6 },
                             );
                         },
@@ -297,7 +301,7 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                             b.insert(
                                 "root_completion",
                                 -LB::Expr::from(end_flags.is_root_end),
-                                resolution::root_completion_message(dec, fn_hash_next),
+                                resolution::root_completion_message(dec, dec_next),
                                 Deg { v: 6, u: 6 },
                             );
                         },
@@ -378,9 +382,9 @@ pub(in crate::vm::constraints::lookup) fn emit_block_stack_and_range_logcap<LB>(
                         Deg { v: 6, u: 7 }, // (V, U) = (1 + 5, 2 + 5)
                     );
                 },
-                Deg { v: 7, u: 8 },
+                Deg { v: 8, u: 8 },
             );
         },
-        Deg { v: 7, u: 8 },
+        Deg { v: 8, u: 8 },
     );
 }

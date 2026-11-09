@@ -240,12 +240,14 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                         &processor.stack,
                         callee_hash,
                         ctx_info,
+                        dyn_node.is_digest(),
                     )?;
                 } else {
                     self.fill_dyn_start_trace_row(
                         &processor.system,
                         &processor.stack,
                         callee_hash,
+                        dyn_node.is_digest(),
                     )?;
                 }
             },
@@ -424,7 +426,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         if let Continuation::StartNode(id) = continuation {
             let mode_and_key = match get_node_in_forest(forest, *id)? {
                 MastNode::Exec(node) => Some((KeyedMode::Exec, node.target())),
-                MastNode::Call(node) => Some((
+                MastNode::Call(node) if node.digest_callee().is_none() => Some((
                     if node.is_syscall() {
                         KeyedMode::Syscall
                     } else {
@@ -432,7 +434,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                     },
                     node.target(),
                 )),
-                MastNode::Dyn(node) => Some((
+                MastNode::Dyn(node) if !node.is_digest() => Some((
                     if node.is_dyncall() {
                         KeyedMode::DynCall
                     } else {
@@ -524,7 +526,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
             || event.use_record.row() != projection.row
             || processor.system.clk != projection.row
             || event.use_record.implementation_root() != target.implementation
-            || processor.system.fn_hash != *event.principal_before.as_word()
+            || processor.system.fn_hash != event.principal_before
         {
             return Err(ExecutionError::Internal(
                 "keyed event does not match replay row or principal",
@@ -533,13 +535,10 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
         if self.prepared_keyed_cycle != Some((event.kind, event.use_record.procedure_key()))
             || match event.kind {
                 KeyedEventKind::Invoke(KeyedMode::Call | KeyedMode::DynCall) => {
-                    event.principal_after != event.use_record.procedure_key()
+                    event.principal_after != event.use_record.implementation_root().into_word()
                 },
                 KeyedEventKind::Invoke(_) => event.principal_before != event.principal_after,
-                KeyedEventKind::RootEnd => {
-                    Some(event.principal_after)
-                        != self.prepared_keyed_cycle.map(|(_, principal)| principal)
-                },
+                KeyedEventKind::RootEnd => event.principal_after != Word::default(),
             }
         {
             return Err(ExecutionError::Internal("keyed replay event differs from actual mode"));
@@ -585,7 +584,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
         processor: &ReplayProcessor,
         continuation: Continuation<Arc<SparseMastForest>>,
         continuation_stack: &ContinuationStack<Arc<SparseMastForest>>,
-        current_forest: &Arc<SparseMastForest>,
+        _current_forest: &Arc<SparseMastForest>,
     ) {
         if self.error_encountered.is_some() {
             return;
@@ -593,15 +592,6 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
 
         let result = (|| -> Result<(), ExecutionError> {
             let event = self.keyed_event;
-            if matches!(&continuation, Continuation::StartNode(id)
-                if matches!(current_forest.get_node_by_id(*id),
-                    Some(MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_))))
-                && event.is_none()
-            {
-                return Err(ExecutionError::Internal(
-                    "invocation row has no authenticated keyed event",
-                ));
-            }
             if self.prepared_keyed_cycle.take()
                 != event.map(|event| (event.kind, event.use_record.procedure_key()))
             {
@@ -609,7 +599,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
             }
             if let Some(event) = event
                 && (event.use_record.row() != processor.system.clk
-                    || *event.principal_before.as_word() != processor.system.fn_hash)
+                    || event.principal_before != processor.system.fn_hash)
             {
                 return Err(ExecutionError::Internal("authenticated event belongs to another row"));
             }
@@ -647,7 +637,7 @@ impl Tracer for CoreTraceGenerationTracer<'_> {
 
         let result = (|| -> Result<(), ExecutionError> {
             if let Some(event) = self.keyed_event
-                && *event.principal_after.as_word() != processor.system.fn_hash
+                && event.principal_after != processor.system.fn_hash
             {
                 return Err(ExecutionError::Internal(
                     "keyed replay principal after transition differs from actual mode",

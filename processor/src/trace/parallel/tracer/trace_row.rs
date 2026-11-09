@@ -392,22 +392,25 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         system: &SystemState,
         stack: &StackState,
         call_node: &CallNode,
-        _current_forest: &Arc<SparseMastForest>,
+        current_forest: &Arc<SparseMastForest>,
     ) -> Result<(), ExecutionError> {
-        // Immediate invocation hashing commits K || ZERO, independently of the resolved D.
-        let callee_hash = call_node.target().into_word();
-        let zero_hash = Word::default();
+        let callee = call_node.digest_callee();
+        let operand = match callee {
+            Some(id) => get_digest_in_forest(current_forest, id)?,
+            None => call_node.target().into_word(),
+        };
 
-        let decoder_row = DecoderRow::new_control_flow(
+        let mut decoder_row = DecoderRow::new_control_flow(
             if call_node.is_syscall() {
                 opcodes::SYSCALL
             } else {
                 opcodes::CALL
             },
-            (callee_hash, zero_hash),
+            (operand, Word::default()),
             self.decoder_state.parent_addr,
         );
 
+        decoder_row.op_index = if callee.is_some() { ONE } else { ZERO };
         self.fill_trace_row(system, stack, decoder_row)?;
         Ok(())
     }
@@ -421,12 +424,14 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         system: &SystemState,
         stack: &StackState,
         callee_hash: Word,
+        is_digest: bool,
     ) -> Result<(), ExecutionError> {
-        let decoder_row = DecoderRow::new_control_flow(
+        let mut decoder_row = DecoderRow::new_control_flow(
             opcodes::DYN,
             (callee_hash, Word::default()),
             self.decoder_state.parent_addr,
         );
+        decoder_row.op_index = if is_digest { ONE } else { ZERO };
         self.fill_trace_row(system, stack, decoder_row)
     }
 
@@ -441,6 +446,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         stack: &StackState,
         callee_hash: Word,
         ctx_info: ExecutionContextInfo,
+        is_digest: bool,
     ) -> Result<(), ExecutionError> {
         let mut decoder_row = DecoderRow::new_control_flow(
             opcodes::DYNCALL,
@@ -450,6 +456,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
         // h4..h7 hold the resolved implementation. Save only the overflow link here;
         // the caller's post-pop depth is derived from the current stack columns.
         decoder_row.group_count = ctx_info.parent_next_overflow_addr;
+        decoder_row.op_index = if is_digest { ONE } else { ZERO };
         self.fill_trace_row(system, stack, decoder_row)
     }
 
@@ -601,7 +608,12 @@ impl<'a> CoreTraceGenerationTracer<'a> {
             opcodes::DYNCALL => Some(KeyedMode::DynCall),
             _ => None,
         };
-        if let Some(mode) = mode {
+        if mode.is_some() && decoder_row.op_index == ONE {
+            if self.keyed_event.is_some() {
+                return Err(ExecutionError::Internal("digest invocation has a keyed event"));
+            }
+            decoder_row.hasher_state.1 = decoder_row.hasher_state.0;
+        } else if let Some(mode) = mode {
             let event = self.keyed_event.ok_or(ExecutionError::Internal(
                 "invocation trace row has no authenticated keyed event",
             ))?;
@@ -626,7 +638,7 @@ impl<'a> CoreTraceGenerationTracer<'a> {
                 || event.use_record.tag() != InvocationTag::Normal
                 || event.use_record.row() != system.clk
                 || event.use_record.implementation_root().into_word() != decoder_row.hasher_state.0
-                || event.use_record.procedure_key() != event.principal_after
+                || event.principal_after != Word::default()
                 || decoder_row.hasher_state.1[0] != ZERO
                 || decoder_row.hasher_state.1[3] != ONE
             {

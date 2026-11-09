@@ -4,7 +4,7 @@ use miden_assembly::{
     Assembler, DefaultSourceManager, Parse, PathBuf, Report, ast::ModuleKind,
     testing::FixtureNamespace,
 };
-use miden_core::program::ProcedureKey;
+use miden_core::{Felt, program::ProcedureKey};
 use miden_core_lib::CoreLibrary;
 use miden_mast_package::{CallableProcedurePath, TargetType};
 use miden_processor::{
@@ -13,9 +13,12 @@ use miden_processor::{
 };
 use miden_utils_testing::{
     Test, build_debug_test, build_test, expect_exec_error_matches,
-    librarytree::assemble_fixture_program, push_inputs,
+    librarytree::{assemble_fixture_program, trace_limits},
+    push_inputs,
 };
-use miden_vm::Module;
+use miden_vm::{
+    DefaultHost, ExecutionOptions, FastProcessor, Module, Prover, StackInputs, Verifier,
+};
 
 /// Derives the expected identity from the fixture owner's declared home/path, independently of
 /// code digests, forest ordering, or the processor's observed stack outputs.
@@ -621,7 +624,7 @@ fn simple_dyncall() {
 }
 
 /// Calls `bar` dynamically, which issues a syscall. We ensure that the `caller` instruction in the
-/// kernel procedure correctly returns the requested callable key of `bar`.
+/// kernel procedure returns the implementation digest of `bar`.
 ///
 /// We also populate the stack before `dyncall` to ensure that stack depth is properly restored
 /// after `dyncall`.
@@ -652,15 +655,19 @@ fn dyncall_with_syscall_and_caller() {
 
     let test = build_debug_test!(program_source).with_kernel(kernel_source);
 
-    let bar_key = fixture_procedure_key(&test, "bar").into_word();
+    let bar_key = fixture_procedure_key(&test, "bar");
+    let (code, _) = test.compile().unwrap();
+    let bar_digest = code.symbols().callables().selected_implementation(bar_key).unwrap();
+    assert_ne!(bar_key.as_word(), bar_digest.as_word());
+    let bar_digest = bar_digest.into_word();
 
-    // SYSCALL preserves the principal established by the dynamic call to bar. CALLER pushes
-    // that requested key with element[0] on top, followed by the caller's original stack.
+    // SYSCALL preserves the digest installed by DYNCALL. CALLER writes that digest with
+    // element 0 on top, followed by the caller's original stack.
     test.expect_stack(&[
-        bar_key[0].as_canonical_u64(),
-        bar_key[1].as_canonical_u64(),
-        bar_key[2].as_canonical_u64(),
-        bar_key[3].as_canonical_u64(),
+        bar_digest[0].as_canonical_u64(),
+        bar_digest[1].as_canonical_u64(),
+        bar_digest[2].as_canonical_u64(),
+        bar_digest[3].as_canonical_u64(),
         4,
         3,
         2,
@@ -668,6 +675,60 @@ fn dyncall_with_syscall_and_caller() {
     ]);
 
     test.check_constraints();
+}
+
+#[test]
+fn digest_and_mixed_invocations_prove_under_the_same_relation() {
+    let keyed_calls = "
+        call.bump
+        exec.bump
+        procref.bump mem_storew_le.44 dropw
+        push.44 dynexec
+        push.44 dyncall
+    ";
+    for (keyed_calls, expected) in [("", 8), (keyed_calls, 12)] {
+        let source = format!(
+            "
+            proc bump add.1 end
+            begin
+                push.4
+                inline.bump
+                calldigest.bump
+                procdigest.bump mem_storew_le.40 dropw
+                push.40 dynexecdigest
+                push.40 dyncalldigest
+                {keyed_calls}
+                swap drop
+                movdn.4 caller
+            end"
+        );
+        let (code, environment) =
+            assemble_fixture_program(Assembler::default(), "mixed", source, &[]);
+        assert!(
+            code.symbols()
+                .callables()
+                .selected_implementations()
+                .all(|(key, implementation)| key.as_word() != implementation.as_word())
+        );
+
+        let mut host = DefaultHost::default().with_environment_source(environment.source());
+        host.load_library(code).unwrap();
+        let options = ExecutionOptions::default()
+            .with_environment_trace_limits(trace_limits())
+            .with_resolution_limits(environment.resolution_limits());
+        let witness =
+            FastProcessor::new_with_options(StackInputs::default(), Default::default(), options)
+                .unwrap()
+                .execute_for_proving_sync(environment.target(), &mut host)
+                .unwrap();
+        let claim = witness.claim();
+        assert_eq!(
+            &claim.stack_outputs()[..5],
+            &[Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::ZERO, Felt::from_u32(expected)]
+        );
+        let proof = Prover::new().prove_full(witness).unwrap();
+        assert!(Verifier::new().verify(&claim, &proof).unwrap().is_complete());
+    }
 }
 
 // PROCREF INSTRUCTION

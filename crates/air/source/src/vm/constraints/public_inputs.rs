@@ -1,9 +1,10 @@
 //! Public input boundary constraints.
 //!
-//! Enforces that the stack and principal match the claimed public inputs:
+//! Enforces the stack boundaries and the authenticated entry key:
 //! - First row: stack[0..16] == stack_inputs[0..16]
 //! - Last row:  stack[0..16] == stack_outputs[0..16]
-//! - First and last row: fn_hash == K_entry
+//! - First and last row: fn_hash == 0
+//! - Last row: the HALT entry key equals K_entry
 
 use miden_core::WORD_SIZE;
 use miden_stark::air::AirBuilder;
@@ -21,11 +22,12 @@ const PUBLIC_LEN: usize = STACK_DEPTH + STACK_DEPTH + WORD_SIZE;
 // ENTRY POINTS
 // ================================================================================================
 
-/// Enforces public boundaries for the stack and entry-established principal.
+/// Enforces public boundaries for the stack and entry key.
 ///
 /// - First row: `stack[i] == stack_inputs[i]` for i in 0..16
 /// - Last row:  `stack[i] == stack_outputs[i]` for i in 0..16
-/// - First and last row: `fn_hash == K_entry`
+/// - First and last row: `fn_hash == 0`
+/// - Last row: the HALT entry key equals `K_entry`
 pub fn enforce_main<AB>(builder: &mut AB, local: &CoreCols<AB::Var>)
 where
     AB: MidenAirBuilder,
@@ -38,10 +40,9 @@ where
     let so: [AB::PublicVar; STACK_DEPTH] = core::array::from_fn(|i| pv[STACK_DEPTH + i]);
     let entry: [AB::PublicVar; WORD_SIZE] = core::array::from_fn(|i| pv[2 * STACK_DEPTH + i]);
 
-    // Both ends of the trace carry K_entry. Principal preservation through HALT then binds the
-    // root END's next principal to the same public key, including root caller-frame returns.
-    builder.when_first_row().assert_eq_arrays(local.system.fn_hash, entry);
-    builder.when_last_row().assert_eq_arrays(local.system.fn_hash, entry);
+    builder.when_first_row().assert_zeros(local.system.fn_hash);
+    builder.when_last_row().assert_zeros(local.system.fn_hash);
+    builder.when_last_row().assert_eq_arrays(local.decoder.halt_entry_key(), entry);
 
     // First row: stack[i] == stack_inputs[i]
     {

@@ -755,6 +755,7 @@ impl ExecutionTracer {
         let Some(block_addr) = self.record_address_result(result) else {
             return;
         };
+        let digest_marker = Word::new([ONE, ZERO, ZERO, ZERO]);
         let ctx_info = match node {
             MastNode::Join(node) => {
                 let child1_hash = current_forest
@@ -817,9 +818,18 @@ impl ExecutionTracer {
                 None
             },
             MastNode::Call(node) => {
+                let (operand, marker) = if let Some(callee) = node.digest_callee() {
+                    let digest = current_forest
+                        .get_node_by_id(callee)
+                        .expect("digest CALL child was checked in preflight")
+                        .digest();
+                    (digest, digest_marker)
+                } else {
+                    (node.target().into_word(), EMPTY_WORD)
+                };
                 self.hasher_for_chiplet.record_hash_control_block(
-                    node.target().into_word(),
-                    EMPTY_WORD,
+                    operand,
+                    marker,
                     node.domain(),
                     node.digest(),
                 );
@@ -834,7 +844,11 @@ impl ExecutionTracer {
             MastNode::Dyn(dyn_node) => {
                 self.hasher_for_chiplet.record_hash_control_block(
                     EMPTY_WORD,
-                    EMPTY_WORD,
+                    if dyn_node.is_digest() {
+                        digest_marker
+                    } else {
+                        EMPTY_WORD
+                    },
                     dyn_node.domain(),
                     dyn_node.digest(),
                 );
@@ -1082,7 +1096,7 @@ impl Tracer for ExecutionTracer {
             || event.use_record.row() != projection.row
             || processor.system().clock() != projection.row
             || event.use_record.implementation_root() != target.implementation
-            || processor.system().caller_hash() != *event.principal_before.as_word()
+            || processor.system().caller_hash() != event.principal_before
             || target.forest.get_node_by_id(target.root).is_none_or(|node| {
                 node.is_external() || node.digest() != *target.implementation.as_word()
             })
@@ -1097,13 +1111,10 @@ impl Tracer for ExecutionTracer {
         if self.prepared_keyed_cycle != Some((event.kind, event.use_record.procedure_key()))
             || match event.kind {
                 KeyedEventKind::Invoke(KeyedMode::Call | KeyedMode::DynCall) => {
-                    event.principal_after != event.use_record.procedure_key()
+                    event.principal_after != event.use_record.implementation_root().into_word()
                 },
                 KeyedEventKind::Invoke(_) => event.principal_before != event.principal_after,
-                KeyedEventKind::RootEnd => {
-                    Some(event.principal_after)
-                        != self.prepared_keyed_cycle.map(|(_, principal)| principal)
-                },
+                KeyedEventKind::RootEnd => event.principal_after != Word::default(),
             }
         {
             return Err(ExecutionError::Internal("keyed event differs from actual trace mode"));
@@ -1269,14 +1280,14 @@ impl Tracer for ExecutionTracer {
                 self.hasher_chiplet_shim.preflight_rows(count, CONTROLLER_ROWS_PER_HASHER_OP)?;
                 self.block_stack.prepare_push()?;
                 let mode_and_key = match node {
-                    MastNode::Exec(node) => Some((KeyedMode::Exec, node.target())),
+                    MastNode::Exec(node) => Some((KeyedMode::Exec, Some(node.target()))),
                     MastNode::Call(node) => Some((
                         if node.is_syscall() {
                             KeyedMode::Syscall
                         } else {
                             KeyedMode::Call
                         },
-                        node.target(),
+                        node.procedure_key(),
                     )),
                     MastNode::Dyn(node) => {
                         let word = processor
@@ -1293,13 +1304,13 @@ impl Tracer for ExecutionTracer {
                             } else {
                                 KeyedMode::Dyn
                             },
-                            ProcedureKey::new(word),
+                            (!node.is_digest()).then_some(ProcedureKey::new(word)),
                         ))
                     },
                     _ => None,
                 };
                 if let Some((mode, key)) = mode_and_key {
-                    prepared_keyed_cycle = Some((KeyedEventKind::Invoke(mode), key));
+                    prepared_keyed_cycle = key.map(|key| (KeyedEventKind::Invoke(mode), key));
                     prepared_fragment_replays
                         .as_mut()
                         .map(|replays| &mut replays.block_addresses)
@@ -1506,13 +1517,17 @@ impl Tracer for ExecutionTracer {
         continuation_stack: &ContinuationStack<Arc<MastForest>>,
         current_forest: &Arc<MastForest>,
     ) {
-        if matches!(&continuation, Continuation::StartNode(id)
-            if matches!(current_forest.get_node_by_id(*id),
-                Some(MastNode::Exec(_) | MastNode::Call(_) | MastNode::Dyn(_))))
-            && self.pending_keyed.is_none()
-        {
-            self.keyed_invalidated = true;
-            return;
+        if let Continuation::StartNode(id) = &continuation {
+            let requires_binding = match current_forest.get_node_by_id(*id) {
+                Some(MastNode::Exec(_)) => true,
+                Some(MastNode::Call(node)) => node.digest_callee().is_none(),
+                Some(MastNode::Dyn(node)) => !node.is_digest(),
+                _ => false,
+            };
+            if requires_binding && self.pending_keyed.is_none() {
+                self.keyed_invalidated = true;
+                return;
+            }
         }
         // check if we need to start a new trace state
         if processor.system().clock().as_usize().is_multiple_of(self.fragment_size) {
@@ -1549,7 +1564,7 @@ impl Tracer for ExecutionTracer {
         if let Some((record, event, queue)) = pending_keyed {
             if expected_keyed != Some((event.kind, event.use_record.procedure_key()))
                 || event.use_record.row() != processor.system().clock()
-                || *event.principal_before.as_word() != processor.system().caller_hash()
+                || event.principal_before != processor.system().caller_hash()
             {
                 self.keyed_invalidated = true;
                 return;
@@ -1977,7 +1992,7 @@ impl Tracer for ExecutionTracer {
             return Err(error);
         }
         if let Some(event) = self.active_keyed_event.take()
-            && processor.system().caller_hash() != *event.principal_after.as_word()
+            && processor.system().caller_hash() != event.principal_after
         {
             self.keyed_invalidated = true;
             return Err(ExecutionError::InvalidExecutionState);
@@ -2399,8 +2414,8 @@ mod serialization_tests {
         let event = KeyedEvent {
             kind: KeyedEventKind::RootEnd,
             use_record: prepared.use_record(),
-            principal_before: descriptor.entry_key(),
-            principal_after: descriptor.entry_key(),
+            principal_before: Word::default(),
+            principal_after: Word::default(),
         };
         let mut limits = trace_limits();
         // The environment and moved native capacities fit exactly; the root-END queue still

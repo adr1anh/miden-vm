@@ -1,13 +1,13 @@
 //! System constraints module.
 //!
 //! This module contains constraints for the system component of the Miden VM,
-//! which manages execution context and principal-key system column transitions.
+//! which manages execution context and caller digest transitions.
 //!
 //! ## System Columns
 //!
 //! - `clk`: VM execution clock (clk[0] = 0, clk' = clk + 1)
 //! - `ctx`: Execution context ID (determines memory context isolation)
-//! - `fn_hash` (four elements): Current principal key (legacy column name)
+//! - `fn_hash` (four elements): Implementation digest of the current caller
 //!
 //! ## Context Transitions
 //!
@@ -23,7 +23,7 @@
 //!
 //! | Operation                       | fn_hash'           | Description                 |
 //! |---------------------------------|--------------------|-----------------------------|
-//! | CALL or DYNCALL                 | decoder h0..h3     | Load requested principal key     |
+//! | CALL or DYNCALL                 | decoder h4..h7     | Load the implementation digest |
 //! | Caller-frame END                | (from block stack) | Restore previous hash       |
 //! | Continuation END                | fn_hash            | Unchanged                   |
 //! | Other ops (incl. EXEC, DYN, SYSCALL)  | fn_hash            | Unchanged                   |
@@ -55,8 +55,7 @@ pub fn enforce_main<AB>(
 ) where
     AB: MidenAirBuilder,
 {
-    // Clock and context start at 0. The public boundary binds the initial principal to K_entry.
-    // Clock increments by 1 on each transition.
+    // Clock and context start at 0. Clock increments by 1 on each transition.
     {
         let builder = &mut builder.when_first_row();
         builder.assert_zero(local.system.clk);
@@ -96,12 +95,9 @@ pub fn enforce_main<AB>(
         let f_load = f_call + f_dyncall;
         let f_preserve = (f_load.dup() + f_restore_caller_frame).not();
 
-        {
-            let builder = &mut builder.when(f_load);
-            for i in 0..4 {
-                builder.assert_eq(next.system.fn_hash[i], local.decoder.hasher_state[i]);
-            }
-        }
+        builder
+            .when(f_load)
+            .assert_eq_arrays(next.system.fn_hash, local.decoder.resolved_digest());
 
         builder
             .when_transition()
@@ -309,10 +305,10 @@ mod tests {
     }
 
     #[test]
-    fn public_boundary_binds_initial_and_final_principals_to_the_entry_key() {
+    fn public_boundary_separates_zero_caller_digest_from_the_entry_key() {
         let entry = core::array::from_fn(|i| Felt::from_u8(17 + i as u8));
         let mut row = generate_test_row(opcodes::HALT.into());
-        row.system.fn_hash = entry;
+        row.decoder.hasher_state[4..8].copy_from_slice(&entry);
         for (first, last) in [(true, false), (false, true)] {
             assert!(
                 eval_public_boundary(&row, entry, first, last)
@@ -328,16 +324,19 @@ mod tests {
                         .any(|v| *v != QuadFelt::ZERO)
                 );
             }
-            let mut zero_principal = row.clone();
-            zero_principal.system.fn_hash.fill(Felt::ZERO);
+        }
+
+        for lane in 4..8 {
+            let mut forged = row.clone();
+            forged.decoder.hasher_state[lane] += Felt::ONE;
             assert!(
-                eval_public_boundary(&zero_principal, entry, first, last)
+                eval_public_boundary(&forged, entry, false, true)
                     .iter()
                     .any(|v| *v != QuadFelt::ZERO)
             );
         }
 
-        // The public boundary does not overwrite a nested call's interior principal.
+        // Interior rows can carry the caller digest of a nested call.
         row.system.fn_hash = [Felt::from_u8(99); 4];
         assert!(
             eval_public_boundary(&row, entry, false, false)
@@ -412,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn invocation_modes_load_only_requested_call_principals() {
+    fn call_modes_load_implementation_digests() {
         let principal = [Felt::from_u8(11); 4];
         let key = [Felt::from_u8(22); 4];
         let implementation = [Felt::from_u8(33); 4];
@@ -434,11 +433,15 @@ mod tests {
             } else {
                 local.system.ctx
             };
-            next.system.fn_hash = if establishes_principal { key } else { principal };
+            next.system.fn_hash = if establishes_principal {
+                implementation
+            } else {
+                principal
+            };
             assert!(eval_system(&local, &next).iter().all(|v| *v == QuadFelt::ZERO));
 
             let mut wrong_principal = next.clone();
-            wrong_principal.system.fn_hash = implementation;
+            wrong_principal.system.fn_hash = key;
             assert!(eval_system(&local, &wrong_principal).iter().any(|v| *v != QuadFelt::ZERO));
             let mut wrong_ctx = next;
             wrong_ctx.system.ctx += Felt::ONE;
@@ -447,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn halt_preserves_the_entry_principal() {
+    fn halt_preserves_the_caller_digest() {
         let mut local = generate_test_row(opcodes::HALT.into());
         local.system.fn_hash = [Felt::from_u8(17); 4];
         let mut next = local.clone();

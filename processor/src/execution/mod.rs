@@ -32,16 +32,16 @@ mod split;
 // RE-EXPORTS
 // ================================================================================================
 pub(crate) use basic_block::finish_emit_op_execution;
-pub(crate) use exec::{finish_keyed_invocation, preflight_keyed_invocation};
+pub(crate) use exec::{finish_invocation, preflight_invocation};
 pub(crate) use external::finish_load_mast_forest_from_external;
 #[cfg(test)]
 pub(crate) use operations::eval_circuit_impl;
 use operations::execute_op;
 
-/// A retained keyed invocation selected before any continuation or tracer mutation.
+/// A retained invocation selected before any continuation or tracer mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct KeyedRequest {
-    pub key: ProcedureKey,
+pub(crate) struct InvocationRequest {
+    pub target: InvocationTarget,
     pub mode: KeyedMode,
     pub node_id: MastNodeId,
     pub source_node_id: Option<DebugSourceNodeId>,
@@ -49,7 +49,26 @@ pub(crate) struct KeyedRequest {
     pub dynamic: Option<DynamicKey>,
 }
 
-/// The exact memory observation selecting a dynamic ProcedureKey, retained across host waits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InvocationTarget {
+    Key(ProcedureKey),
+    Digest {
+        implementation: ImplementationRoot,
+        /// The exact structural child of a digest CALL. Dynamic targets use code lookup.
+        callee: Option<MastNodeId>,
+    },
+}
+
+impl InvocationRequest {
+    pub fn key(self) -> ProcedureKey {
+        let InvocationTarget::Key(key) = self.target else {
+            unreachable!("key resolution only receives keyed invocation targets");
+        };
+        key
+    }
+}
+
+/// The exact memory observation selecting a dynamic invocation, retained across host waits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DynamicKey {
     pub context: ContextId,
@@ -61,7 +80,7 @@ pub(crate) struct DynamicKey {
 pub(crate) struct RootEndRequest<F> {
     pub continuation: Continuation<F>,
     pub implementation: ImplementationRoot,
-    pub principal: ProcedureKey,
+    pub entry_key: ProcedureKey,
     pub row: RowIndex,
     pub source_node_id: Option<DebugSourceNodeId>,
 }
@@ -221,8 +240,14 @@ impl<'a, P, H: BaseHost, S, T, F> ExecutionState<'a, P, H, S, T, F> {
 ///         InternalBreakReason::ResolveKey(request) => {
 ///             // Authenticate (R_E, K), authorize actual SYSCALL, then prepare D-indexed code.
 ///             let (target, event, reservation) = self.resolve_and_prepare(request);
-///             let prepared = preflight_keyed_invocation(...);
-///             finish_keyed_invocation(..., prepared, event, reservation);
+///             let prepared = preflight_invocation(...);
+///             finish_invocation(..., prepared, Some((event, reservation)));
+///         },
+///         InternalBreakReason::ResolveDigest(request) => {
+///             // Select the exact structural child or load a dynamic target by its digest.
+///             let target = self.resolve_digest(request);
+///             let prepared = preflight_invocation(...);
+///             finish_invocation(..., prepared, None);
 ///         },
 ///         InternalBreakReason::RootEnd(request) => {
 ///             // Prepare the retained actual END and its reserved entry demand before commit.
@@ -376,7 +401,7 @@ where
     };
 
     while state.continuation_stack.peek_continuation().is_some() {
-        if let Some(request) = next_keyed_transition(&mut state, current_forest)
+        if let Some(request) = next_invocation_or_root_end(&mut state, current_forest)
             .map_err(|err| InternalBreakReason::User(BreakReason::Err(err)))
             .map_or_else(ControlFlow::Break, ControlFlow::Continue)?
         {
@@ -551,7 +576,7 @@ where
     };
 
     while state.continuation_stack.peek_continuation().is_some() {
-        if let Some(request) = next_keyed_transition(&mut state, current_forest)
+        if let Some(request) = next_invocation_or_root_end(&mut state, current_forest)
             .map_err(|err| InternalBreakReason::User(BreakReason::Err(err)))
             .map_or_else(ControlFlow::Break, ControlFlow::Continue)?
         {
@@ -714,12 +739,13 @@ where
 /// [`finish_emit_op_execution`] to complete the execution of the `Emit` operation and resume
 /// execution immediately after the `Emit` operation.
 ///
-/// # ResolveKey and RootEnd
+/// # ResolveKey, ResolveDigest and RootEnd
 ///
 /// Keyed requests retain their original StartNode, row, source occurrence and dynamic memory
 /// observation. The outer driver authenticates fixed-environment evidence before D-indexed supply,
-/// then calls the shared prepared invocation transition. RootEnd retains the actual entry END;
-/// its paired return frames or loop pop are prepared before native completion publishes.
+/// then calls the shared prepared invocation transition. Digest requests select the exact
+/// structural child or load code by digest and use that same transition. RootEnd retains the
+/// actual entry END; its paired return frames or loop pop are prepared before native completion.
 ///
 /// # LoadMastForestFromExternal
 ///
@@ -734,7 +760,8 @@ where
 /// [`finish_load_mast_forest_from_external`] to complete the execution of the operation and resume
 /// execution with the first operation of the called procedure.
 pub enum InternalBreakReason<F> {
-    ResolveKey(KeyedRequest),
+    ResolveKey(InvocationRequest),
+    ResolveDigest(InvocationRequest),
     RootEnd(RootEndRequest<F>),
     User(BreakReason<F>),
     Emit {
@@ -862,8 +889,9 @@ where
     stopper.should_stop(processor, continuation_stack, continuation_after_stop)
 }
 
-/// Selects retained keyed work before the generic execution loop pops or starts tracing a row.
-fn next_keyed_transition<P, H, S, T, F>(
+/// Selects retained invocation or root completion work before the generic execution loop pops or
+/// starts tracing a row.
+fn next_invocation_or_root_end<P, H, S, T, F>(
     state: &mut ExecutionState<'_, P, H, S, T, F>,
     current_forest: &F,
 ) -> Result<Option<InternalBreakReason<F>>, ExecutionError>
@@ -881,42 +909,68 @@ where
     if let Continuation::StartNode(node_id) = continuation {
         let node_id = *node_id;
         let selected = match current_forest.get_node_by_id(node_id) {
-            Some(MastNode::Exec(node)) => Some((node.target(), KeyedMode::Exec, None)),
-            Some(MastNode::Call(node)) => Some((
-                node.target(),
-                if node.is_syscall() {
-                    KeyedMode::Syscall
+            Some(MastNode::Exec(node)) => {
+                Some((InvocationTarget::Key(node.target()), KeyedMode::Exec, None))
+            },
+            Some(MastNode::Call(node)) => {
+                let (target, mode) = if let Some(callee) = node.digest_callee() {
+                    let digest = current_forest
+                        .get_digest_by_id(callee)
+                        .ok_or(ExecutionError::Internal("digest CALL callee is missing"))?;
+                    (
+                        InvocationTarget::Digest {
+                            implementation: ImplementationRoot::new(digest),
+                            callee: Some(callee),
+                        },
+                        KeyedMode::Call,
+                    )
                 } else {
-                    KeyedMode::Call
-                },
-                None,
-            )),
+                    (
+                        InvocationTarget::Key(node.target()),
+                        if node.is_syscall() {
+                            KeyedMode::Syscall
+                        } else {
+                            KeyedMode::Call
+                        },
+                    )
+                };
+                Some((target, mode, None))
+            },
             Some(MastNode::Dyn(node)) => {
                 let context = state.processor.system().ctx();
                 let address = state.processor.stack().get(0);
                 let value =
                     state.processor.memory_mut().peek_word(context, address, row).map_exec_err()?;
-                Some((
-                    ProcedureKey::new(value),
-                    if node.is_dyncall() {
-                        KeyedMode::DynCall
-                    } else {
-                        KeyedMode::Dyn
-                    },
-                    Some(DynamicKey { context, address, value }),
-                ))
+                let target = if node.is_digest() {
+                    InvocationTarget::Digest {
+                        implementation: ImplementationRoot::new(value),
+                        callee: None,
+                    }
+                } else {
+                    InvocationTarget::Key(ProcedureKey::new(value))
+                };
+                let mode = if node.is_dyncall() {
+                    KeyedMode::DynCall
+                } else {
+                    KeyedMode::Dyn
+                };
+                Some((target, mode, Some(DynamicKey { context, address, value })))
             },
             _ => None,
         };
-        if let Some((key, mode, dynamic)) = selected {
-            return Ok(Some(InternalBreakReason::ResolveKey(KeyedRequest {
-                key,
+        if let Some((target, mode, dynamic)) = selected {
+            let request = InvocationRequest {
+                target,
                 mode,
                 node_id,
                 source_node_id,
                 row,
                 dynamic,
-            })));
+            };
+            return Ok(Some(match target {
+                InvocationTarget::Key(_) => InternalBreakReason::ResolveKey(request),
+                InvocationTarget::Digest { .. } => InternalBreakReason::ResolveDigest(request),
+            }));
         }
     }
     let is_end = match continuation {
@@ -939,7 +993,7 @@ where
         return Ok(Some(InternalBreakReason::RootEnd(RootEndRequest {
             continuation: continuation.clone(),
             implementation: ImplementationRoot::new(node.digest()),
-            principal,
+            entry_key: principal,
             row,
             source_node_id,
         })));
@@ -1039,7 +1093,7 @@ where
         .root_boundary_after_next()
         .ok_or(ExecutionError::Internal("root END is not immediately above the entry boundary"))?;
     if expected != request.implementation
-        || principal != request.principal
+        || principal != request.entry_key
         || state.processor.system().clock() != request.row
     {
         return Err(ExecutionError::Internal(
@@ -1070,8 +1124,8 @@ where
         || state.processor.system().caller_hash(),
         |prepared| <P::System as SystemInterface>::restored_caller_hash(&prepared.system),
     );
-    if principal_after != *principal.as_word() {
-        return Err(ExecutionError::Internal("root END does not restore the entry principal"));
+    if principal_after != Word::default() {
+        return Err(ExecutionError::Internal("root END does not restore the entry caller digest"));
     }
     let loop_pop = if matches!(retained, Continuation::FinishLoop(_)) {
         if state.processor.stack().get(0) != crate::ZERO {
