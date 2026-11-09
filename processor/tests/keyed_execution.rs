@@ -834,7 +834,7 @@ fn assert_native_core_bindings(
 
 #[test]
 fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
-    use miden_air_definitions::vm::trace::chiplets::library::MAST;
+    use miden_air_definitions::vm::trace::chiplets::library::{MAST, ROOT_MAST};
     use miden_core::operations::opcodes;
     use miden_processor::{
         ZERO,
@@ -979,11 +979,15 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
                 assert_native_core_bindings(&trace, entry, &expected);
                 let main = trace.main_trace();
                 for (key, count) in [(entry, 1), (aliases[0], 2), (aliases[1], 1)] {
-                    let responses: Vec<_> = (0..main.chiplets_height())
+                    let responses: Vec<_> = (1..main.chiplets_height())
+                        .step_by(2)
                         .map(RowIndex::from)
                         .filter(|&row| main.is_library_row(row))
                         .map(|row| main.chiplet_cols(row).library())
-                        .filter(|row| row.k == MAST && row.z == key.into_word().into_elements())
+                        .filter(|row| {
+                            let key = key.into_word().into_elements();
+                            (row.k == MAST && row.z == key) || (row.k == ROOT_MAST && row.y == key)
+                        })
                         .collect();
                     assert_eq!(responses.len(), 1);
                     let count = Felt::from_u32(count);
@@ -1056,7 +1060,7 @@ fn native_core_rows_bind_all_invocation_modes_aliases_and_cache_hit_demands() {
 
 #[test]
 fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay() {
-    use miden_air_definitions::vm::trace::chiplets::library::MAST;
+    use miden_air_definitions::vm::trace::chiplets::library::{MAST, ROOT_MAST};
     use miden_core::operations::opcodes;
     use miden_processor::trace::{RowIndex, build_trace};
 
@@ -1118,11 +1122,15 @@ fn shared_opening_keeps_normal_and_syscall_counts_across_cached_fragment_replay(
             assert_native_core_bindings(&trace, entry, &expected);
             let main = trace.main_trace();
             for (key, normal, syscall) in [(entry, 1, 0), (target, 2, 2)] {
-                let responses: Vec<_> = (0..main.chiplets_height())
+                let responses: Vec<_> = (1..main.chiplets_height())
+                    .step_by(2)
                     .map(RowIndex::from)
                     .filter(|&row| main.is_library_row(row))
                     .map(|row| main.chiplet_cols(row).library())
-                    .filter(|row| row.k == MAST && row.z == key.into_word().into_elements())
+                    .filter(|row| {
+                        let key = key.into_word().into_elements();
+                        (row.k == MAST && row.z == key) || (row.k == ROOT_MAST && row.y == key)
+                    })
                     .collect();
                 assert_eq!(responses.len(), 1, "one occurrence must serve both invocation tags");
                 assert_eq!((responses[0].a, responses[0].b), (felt(normal), felt(syscall)));

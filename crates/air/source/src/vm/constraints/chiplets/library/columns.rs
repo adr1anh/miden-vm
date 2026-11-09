@@ -16,9 +16,9 @@ pub struct LibraryCols<T> {
     pub w: [T; WORD_SIZE],
     /// Authentication depth.
     pub d: T,
-    /// Row-kind-dependent frequency or List length.
+    /// Row-kind-dependent normal frequency, List length, or non-root Mast A norm coefficient.
     pub a: T,
-    /// Row-kind-dependent frequency, odd flag, or selection scalar.
+    /// Row-kind-dependent syscall frequency, odd flag, selection scalar, or norm coefficient.
     pub b: T,
     /// Kind bits in little-endian order: `k[0] + 2*k[1] + 4*k[2]`.
     pub k: [T; 3],

@@ -1,11 +1,9 @@
 //! External Range/And8 provider closure remains a production-integration gate; generated
 //! Eidos cycles here validate production equations and fresh lookup auxiliaries.
 //!
-//! Combined tests of the dormant Library MAIN and existing-group lookup entry points.
+//! Combined tests of Library MAIN and the existing-group lookup entry points.
 //!
 //! These fixtures use the actual 24-cell shared rows and fixed nine-column periodic order.
-//! They do not register an AIR or activate Library in production. Packed selectors, public4,
-//! Controller initialization, and statement-boundary propagation remain integration obligations.
 
 use alloc::{vec, vec::Vec};
 use core::borrow::{Borrow, BorrowMut};
@@ -38,6 +36,7 @@ use crate::vm::{
     },
     trace::chiplets::library::{
         EMPTY_LIST, ENV, LIBRARY_COL_RANGE, LIST_CONTINUE, LIST_START, MAST, MERKLE, PAD,
+        ROOT_MAST, namespace_difference_norms,
     },
 };
 
@@ -73,7 +72,7 @@ impl<LB: LookupBuilder<F = Felt>> LookupAir<LB> for RelationLookup {
         };
         for column in 0..SHAPE.len() {
             let degree = if column == 1 {
-                Deg { v: 9, u: 8 }
+                Deg { v: 9, u: 7 }
             } else {
                 Deg { v: 0, u: 0 }
             };
@@ -148,7 +147,7 @@ fn ordinary_pair(
     let mut pair = [row(kind), row(kind)];
     let input = if kind == ENV {
         fixed_input(domain::domain_tag(domain::ENV_ENVIRONMENT))
-    } else if kind == MAST {
+    } else if kind == MAST || kind == ROOT_MAST {
         fixed_input(domain::domain_tag(domain::ENV_MAST))
     } else {
         assert_eq!(kind, MERKLE);
@@ -160,6 +159,14 @@ fn ordinary_pair(
     a.z = compress(input, x, y);
     a.w = namespace;
     a.d = Felt::from_usize(depth);
+    if kind == MAST {
+        let [low, high] = namespace_difference_norms(namespace);
+        if low != Felt::ZERO {
+            a.a = low.inverse();
+        } else {
+            a.b = high.inverse();
+        }
+    }
     let b = cols_mut(&mut pair[1]);
     b.d = Felt::from_usize(depth);
     if kind == MERKLE {
@@ -171,19 +178,26 @@ fn ordinary_pair(
         b.x = namespace;
         b.y = x;
         b.w = y;
-        let tag = if kind == ENV {
-            domain::domain_tag(domain::ENV_NAMESPACE)
-        } else {
-            domain::domain_tag(domain::ENV_PROCEDURE)
-        };
-        b.z = compress(fixed_input(tag), b.x, b.y);
+        if kind != ROOT_MAST {
+            let tag = if kind == ENV {
+                domain::domain_tag(domain::ENV_NAMESPACE)
+            } else {
+                domain::domain_tag(domain::ENV_PROCEDURE)
+            };
+            b.z = compress(fixed_input(tag), b.x, b.y);
+        }
     }
     pair
 }
 
 fn mast(namespace: [Felt; 4], depth: usize, index: usize) -> [SharedRow; 2] {
+    let kind = if namespace == Namespace::initial().into_word().into_elements() {
+        ROOT_MAST
+    } else {
+        MAST
+    };
     ordinary_pair(
-        MAST,
+        kind,
         word(100 + 10 * index as u32),
         word(500 + 10 * index as u32),
         namespace,
@@ -192,11 +206,12 @@ fn mast(namespace: [Felt; 4], depth: usize, index: usize) -> [SharedRow; 2] {
 }
 
 fn demand(pair: &[SharedRow; 2], syscall: bool, multiplicity: usize) -> Demand {
+    let b = cols(&pair[1]);
     Demand {
         multiplicity: Felt::from_usize(multiplicity),
         syscall: Felt::from_bool(syscall),
-        key: cols(&pair[1]).z,
-        implementation: cols(&pair[1]).w,
+        key: if b.k == ROOT_MAST { b.y } else { b.z },
+        implementation: b.w,
     }
 }
 
@@ -418,6 +433,8 @@ fn compression_responses(rows: &[SharedRow], challenges: &Challenges<QuadFelt>) 
             } else {
                 domain::domain_tag(domain::ENV_NAMESPACE)
             })
+        } else if c.k == ROOT_MAST && index % 2 == 0 {
+            Some(domain::domain_tag(domain::ENV_MAST))
         } else if c.k == MAST {
             Some(if index % 2 == 0 {
                 domain::domain_tag(domain::ENV_MAST)
@@ -642,22 +659,31 @@ fn library_combined_accepts_rooted_env_mast_merkle_and_complete_lists() {
 }
 
 #[test]
-fn library_combined_rejects_syscall_under_env_but_keeps_the_same_ordinary_key() {
+fn library_combined_rejects_a_nonroot_leaf_using_the_raw_key() {
     let ordinary = list_fixture(3, false);
     assert_accept(&ordinary);
-    let mut syscall = ordinary.clone();
+    let mut forged = ordinary;
     let mast_a = 2 + 2 * 3_usize.div_ceil(2);
-    let pair = [syscall.rows[mast_a], syscall.rows[mast_a + 1]];
-    cols_mut(&mut syscall.rows[mast_a + 1]).b = Felt::from_u8(3);
-    syscall.demands.push(demand(&pair, true, 3));
-    assert!(!main_accepts(&syscall));
-    assert!(lookup_accepts(&syscall, true)); // Genuine Env/List openings authenticate the child N.
-    assert_eq!(cols(&ordinary.rows[mast_a + 1]).z, cols(&syscall.rows[mast_a + 1]).z);
-    assert_eq!(ordinary.demands[0].key, syscall.demands[0].key);
+    let a = cols_mut(&mut forged.rows[mast_a]);
+    a.k = ROOT_MAST;
+    a.a = Felt::ZERO;
+    a.b = Felt::ZERO;
+    let b = cols_mut(&mut forged.rows[mast_a + 1]);
+    b.k = ROOT_MAST;
+    b.z = [Felt::ZERO; 4];
+    forged.demands[0].key = b.y;
+    assert!(!main_accepts(&forged));
+    assert!(lookup_accepts(&forged, true)); // Env/List openings authenticate the true nonroot N.
+
+    cols_mut(&mut forged.rows[mast_a + 1]).b = Felt::from_u8(3);
+    let pair = [forged.rows[mast_a], forged.rows[mast_a + 1]];
+    forged.demands.push(demand(&pair, true, 3));
+    assert!(!main_accepts(&forged));
+    assert!(lookup_accepts(&forged, true));
 }
 
 #[test]
-fn library_combined_rejects_every_forged_root_namespace_coordinate_for_syscall() {
+fn library_combined_rejects_each_forged_root_namespace_coordinate() {
     let fixture = mast_fixture();
     let initial = Namespace::initial().into_word().into_elements();
     assert_ne!(initial, [Felt::ZERO; 4]);
@@ -665,18 +691,35 @@ fn library_combined_rejects_every_forged_root_namespace_coordinate_for_syscall()
         let mut forged = fixture.clone();
         cols_mut(&mut forged.rows[0]).w[coordinate] += Felt::ONE;
         cols_mut(&mut forged.rows[1]).x[coordinate] += Felt::ONE;
-        let b = cols_mut(&mut forged.rows[1]);
-        assert_ne!(b.b, Felt::ZERO);
-        b.z = compress(fixed_input(domain::domain_tag(domain::ENV_PROCEDURE)), b.x, b.y);
-        // Update both consumers to the genuine recomputed key. The unchanged root seed still
-        // rejects the false namespace, and the supplier-local fixed-N0 equation also rejects it.
-        let key = b.z;
-        for demand in &mut forged.demands {
-            demand.key = key;
-        }
+        // The raw key remains valid while both the fixed root seed and MAIN reject the namespace.
         assert!(!main_accepts(&forged));
         assert!(!lookup_accepts(&forged, true));
     }
+}
+
+#[test]
+fn library_combined_rejects_the_hashed_key_for_a_root_mast() {
+    let fixture = mast_fixture();
+    let b = cols(&fixture.rows[1]);
+    let hashed = compress(fixed_input(domain::domain_tag(domain::ENV_PROCEDURE)), b.x, b.y);
+    assert_ne!(hashed, b.y);
+    for index in 0..2 {
+        let mut forged = fixture.clone();
+        cols_mut(&mut forged.rows[1]).z = hashed;
+        forged.demands[index].key = hashed;
+        assert_lookup_reject(&forged);
+    }
+
+    let mut forged = fixture;
+    cols_mut(&mut forged.rows[0]).k = MAST;
+    let b = cols_mut(&mut forged.rows[1]);
+    b.k = MAST;
+    b.b = Felt::ZERO;
+    b.z = hashed;
+    forged.demands.pop();
+    forged.demands[0].key = hashed;
+    assert!(lookup_accepts(&forged, true));
+    assert!(!main_accepts(&forged));
 }
 
 #[test]
@@ -728,17 +771,8 @@ fn library_combined_binds_each_commitment_namespace_depth_key_implementation_and
         forged.public_root[coordinate] += Felt::ONE;
         assert_lookup_reject(&forged); // Even balancing Open cannot authenticate the false hash.
         let mut forged = fixture.clone();
-        cols_mut(&mut forged.rows[1]).z[coordinate] += Felt::ONE;
+        forged.demands[0].key[coordinate] += Felt::ONE;
         assert_lookup_reject(&forged);
-        let mut forged = fixture.clone();
-        forged.demands.pop();
-        cols_mut(&mut forged.rows[1]).b = Felt::ZERO;
-        assert_accept(&forged);
-        cols_mut(&mut forged.rows[0]).w[coordinate] += Felt::ONE;
-        cols_mut(&mut forged.rows[1]).x[coordinate] += Felt::ONE;
-        let b = cols_mut(&mut forged.rows[1]);
-        b.z = compress(fixed_input(domain::domain_tag(domain::ENV_PROCEDURE)), b.x, b.y);
-        assert_lookup_reject(&forged); // Recomputed key still has the wrong rooted namespace.
         let mut forged = fixture.clone();
         cols_mut(&mut forged.rows[0]).y[coordinate] += Felt::ONE;
         cols_mut(&mut forged.rows[1]).w[coordinate] += Felt::ONE;
@@ -820,7 +854,14 @@ fn library_combined_rejects_weighted_syscall_namespace_cancellation_locally() {
     assert_ne!(namespace, initial);
     let mut leaves = [mast(namespace, 2, 0), mast(namespace, 2, 1)];
     for (pair, frequency) in leaves.iter_mut().zip([Felt::ONE, -Felt::ONE]) {
-        cols_mut(&mut pair[1]).b = frequency;
+        let a = cols_mut(&mut pair[0]);
+        a.k = ROOT_MAST;
+        a.a = Felt::ZERO;
+        a.b = Felt::ZERO;
+        let b = cols_mut(&mut pair[1]);
+        b.k = ROOT_MAST;
+        b.b = frequency;
+        b.z = [Felt::ZERO; 4];
     }
     let merkle = ordinary_pair(MERKLE, cols(&leaves[0][0]).z, cols(&leaves[1][0]).z, namespace, 1);
     let root = ordinary_pair(ENV, label, cols(&merkle[0]).z, initial, 0);
@@ -831,7 +872,7 @@ fn library_combined_rejects_weighted_syscall_namespace_cancellation_locally() {
             .map(|pair| Demand {
                 multiplicity: cols(&pair[1]).b,
                 syscall: Felt::ONE,
-                key: cols(&pair[1]).z,
+                key: cols(&pair[1]).y,
                 implementation: cols(&pair[1]).w,
             })
             .collect(),

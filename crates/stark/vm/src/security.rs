@@ -519,22 +519,22 @@ mod tests {
     #[test]
     fn derived_security_constants_match_snapshot() {
         // Subtract ceil(log2(coefficient) * 2^16) from the 126-bit Eidos support.
-        // The lookup/composition/DEEP coefficients are 18*78, 787, and 282.
+        // The lookup/composition/DEEP coefficients are 18*78, 802, and 282.
         const FP_SHIFT: u32 = 16;
         const FP_ONE: u64 = 65_536;
         const BITS_PER_QUERY_FP: u64 = 193_381;
         const SECURITY_CAP_FP: u64 = 8_257_536;
         const LOOKUP_BASE_FP: u64 = 7_572_335;
-        const COMPOSITION_TERM_FP: u64 = 7_627_065;
+        const COMPOSITION_TERM_FP: u64 = 7_625_280;
         const OOD_BASE_FP: u64 = 8_030_818;
         const DEEP_BASE_FP: u64 = 7_724_102;
         const FOLDING_BASE_FP: u64 = 7_891_519;
         const LOOKUP_POW_BITS_SNAPSHOT: u32 = 0;
 
-        // The authored AIRs have 258/333/188/5 constraints, plus three multi-AIR batching
+        // The authored AIRs have 272/334/188/5 constraints, plus three multi-AIR batching
         // slots. Lookup capacities are 18 Core + 13 packed Chiplets + 40 Eidos + 7 And8.
         // Pin these inputs as well as the Q16 results so the snapshot records its derivation.
-        assert_eq!(AIR_SHAPE.num_composed_constraints, 258 + 333 + 188 + 5 + 3);
+        assert_eq!(AIR_SHAPE.num_composed_constraints, 272 + 334 + 188 + 5 + 3);
         assert_eq!(AIR_SHAPE.max_constraint_degree, 9);
         assert_eq!(AIR_SHAPE.num_quotient_chunks, 8);
         assert_eq!(AIR_SHAPE.max_combo, 2);
@@ -572,38 +572,38 @@ mod tests {
     fn security_report_matches_reference_vectors() {
         // (queries, query PoW, DEEP PoW, folding PoW, log height)
         //   -> [lookup, composition, ood, deep, folding, query, collision], level
-        // Independent Q16 formulas use coefficients 1404/787/282 for lookup/composition/DEEP.
+        // Independent Q16 formulas use coefficients 1404/802/282 for lookup/composition/DEEP.
         // Lookup also subtracts ceil(ceil(3*94549/78)/2^height) for the fixed root Open and
         // two deferred terminals; this is 57 at height 6 and 1 at the other heights below.
         const VECTORS: &[((u32, u32, u32, u32, u32), [u64; 7], u32)] = &[
             (
                 (27, 17, 12, 4, 6),
-                [7_179_062, 7_627_065, 7_645_438, 7_920_710, 7_760_447, 6_335_399, 8_257_536],
+                [7_179_062, 7_625_280, 7_645_438, 7_920_710, 7_760_447, 6_335_399, 8_257_536],
                 96,
             ),
             (
                 (27, 17, 12, 4, 20),
-                [6_261_614, 7_627_065, 6_729_109, 7_003_206, 6_842_943, 6_335_399, 8_257_536],
+                [6_261_614, 7_625_280, 6_729_109, 7_003_206, 6_842_943, 6_335_399, 8_257_536],
                 95,
             ),
             (
                 (27, 17, 12, 4, 23),
-                [6_065_006, 7_627_065, 6_532_501, 6_806_598, 6_646_335, 6_335_399, 8_257_536],
+                [6_065_006, 7_625_280, 6_532_501, 6_806_598, 6_646_335, 6_335_399, 8_257_536],
                 92,
             ),
             (
                 (27, 17, 12, 4, 29),
-                [5_671_790, 7_627_065, 6_139_285, 6_413_382, 6_253_119, 6_335_399, 8_257_536],
+                [5_671_790, 7_625_280, 6_139_285, 6_413_382, 6_253_119, 6_335_399, 8_257_536],
                 86,
             ),
             (
                 (7, 0, 0, 0, 20),
-                [6_261_614, 7_627_065, 6_729_109, 6_216_774, 6_580_799, 1_353_667, 8_257_536],
+                [6_261_614, 7_625_280, 6_729_109, 6_216_774, 6_580_799, 1_353_667, 8_257_536],
                 20,
             ),
             (
                 (150, 31, 31, 31, 29),
-                [5_671_790, 7_627_065, 6_139_285, 7_658_566, 8_022_591, 8_257_536, 8_257_536],
+                [5_671_790, 7_625_280, 6_139_285, 7_658_566, 8_022_591, 8_257_536, 8_257_536],
                 86,
             ),
         ];

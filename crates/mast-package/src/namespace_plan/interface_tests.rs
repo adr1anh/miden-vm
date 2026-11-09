@@ -123,7 +123,7 @@ fn explicitly_supplied_root_home_derives_keys_without_granting_authority() {
     let plan = NamespacePath::new(vec![]);
     let local_label = CanonicalLabel::text("run").unwrap();
     let root_key = plan.procedure_key(&path("run")).unwrap();
-    assert_eq!(root_key, Namespace::initial().procedure_key(local_label.commitment()));
+    assert_eq!(root_key.into_word(), local_label.commitment().into_word());
 
     // A name that resembles a Protocol role is still only a caller-supplied Text home component.
     let named_home = NamespacePath::new(vec![CanonicalLabel::text("kernel").unwrap()]);

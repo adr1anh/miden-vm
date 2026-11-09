@@ -1,7 +1,7 @@
-//! Lookup primitives for the inactive packed Library relation.
+//! Lookup primitives for the packed Library relation.
 //!
 //! The caller supplies the Library scope and fixed A/B phase explicitly. These exclusive row
-//! batches join the existing hash-kernel group at cutover; this module opens no column or group.
+//! batches share the existing hash-kernel group.
 //! Open edges are unit selections, while authenticated Mast bindings have normal/syscall
 //! frequencies. Compression requests use the existing positive HasherCompressionLink convention.
 
@@ -23,19 +23,15 @@ use crate::{
     },
 };
 
-/// Mast B simultaneously requests key compression and supplies both Resolve demand types.
-#[cfg(test)]
-pub(crate) const MAX_INTERACTIONS_PER_ROW: usize = 3;
-
 /// Emit Library interactions into an existing exclusive lookup group.
 ///
 /// `ctx.is_active` must be the direct Library selector, and `ctx.phase` the fixed period-two
 /// value. The live Controller selector must never stand in for Library scope. Constraints from
 /// `enforce_library_constraints` authenticate all payloads and enforce kind/phase exclusivity.
 ///
-/// Across these batches the exact group contribution is `Deg { v: 9, u: 8 }`: cubic child
-/// selection determines the numerator maximum, and Mast B's three fractions determine the
-/// denominator maximum. The enclosing auxiliary constraint therefore has degree at most nine.
+/// Across these batches the exact group contribution is `Deg { v: 9, u: 7 }`: cubic child
+/// selection determines the numerator maximum, and each batch has at most two linear
+/// denominators under a degree-five flag. The enclosing auxiliary constraint has degree nine.
 pub(crate) fn emit_library<G, V>(
     group: &mut G,
     local: &LibraryCols<V>,
@@ -99,7 +95,7 @@ pub(crate) fn emit_library<G, V>(
     emit_header(
         group,
         "library_mast_a",
-        phases.kind_a(kinds.is_mast.clone()),
+        phases.kind_a(kinds.is_mast.clone() + kinds.is_root_mast.clone()),
         local,
         felt_pair_frame(domain::domain_tag(domain::ENV_MAST)),
     );
@@ -125,18 +121,30 @@ pub(crate) fn emit_library<G, V>(
                 },
                 Deg { v: 6, u: 6 },
             );
-            batch.insert(
-                "library_resolve_syscall",
-                local.b.into(),
-                LibraryResolveMsg {
-                    requires_syscall: G::Expr::ONE,
-                    key: local.z.map(Into::into),
-                    implementation: local.w.map(Into::into),
-                },
-                Deg { v: 6, u: 6 },
-            );
         },
-        Deg { v: 8, u: 8 },
+        Deg { v: 7, u: 7 },
+    );
+    group.batch(
+        "library_root_mast_b",
+        phases.kind_b(kinds.is_root_mast),
+        |batch| {
+            for (name, tag, frequency) in [
+                ("library_resolve_normal", G::Expr::ZERO, local.a),
+                ("library_resolve_syscall", G::Expr::ONE, local.b),
+            ] {
+                batch.insert(
+                    name,
+                    frequency.into(),
+                    LibraryResolveMsg {
+                        requires_syscall: tag,
+                        key: local.y.map(Into::into),
+                        implementation: local.w.map(Into::into),
+                    },
+                    Deg { v: 6, u: 6 },
+                );
+            }
+        },
+        Deg { v: 7, u: 7 },
     );
 
     // Every real List block requests compression. The B row holds the input CV; the A row

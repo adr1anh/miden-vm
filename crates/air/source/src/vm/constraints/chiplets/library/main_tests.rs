@@ -6,7 +6,7 @@ use core::borrow::{Borrow, BorrowMut};
 
 use miden_core::{
     Word,
-    field::QuadFelt,
+    field::{Field, QuadFelt},
     program::{Namespace, domain},
 };
 use miden_crypto::hash::eidos::{Eidos, EidosFrame};
@@ -22,7 +22,8 @@ use crate::vm::{
         stack::test_utils::ConstraintEvalBuilder,
     },
     trace::chiplets::library::{
-        EMPTY_LIST, ENV, INVALID, LIBRARY_COL_RANGE, LIST_CONTINUE, LIST_START, MAST, MERKLE, PAD,
+        EMPTY_LIST, ENV, LIBRARY_COL_RANGE, LIST_CONTINUE, LIST_START, MAST, MERKLE, PAD,
+        ROOT_MAST, namespace_difference_norms,
     },
 };
 
@@ -62,13 +63,17 @@ fn object_pair(kind: [Felt; 3]) -> [SharedRow; 2] {
     a.x = word(1);
     a.y = word(11);
     a.w = initial_namespace();
+    if kind == MAST {
+        a.w[0] += Felt::ONE;
+        a.a = Felt::ONE;
+    }
     a.d = Felt::from_u8(3);
     let init = if kind == MERKLE {
         Eidos::merkle_node_init_chaining_word()
     } else if kind == ENV {
         Eidos::init_chaining_word(domain::ENV_ENVIRONMENT, 8)
     } else {
-        assert_eq!(kind, MAST);
+        assert!(kind == MAST || kind == ROOT_MAST);
         Eidos::init_chaining_word(domain::ENV_MAST, 8)
     };
     a.z = compress(init.into_elements(), a.x, a.y);
@@ -84,14 +89,18 @@ fn object_pair(kind: [Felt; 3]) -> [SharedRow; 2] {
         b.x = a.w;
         b.y = a.x;
         b.w = a.y;
-        let init = if kind == ENV {
-            Eidos::init_chaining_word(domain::ENV_NAMESPACE, 8)
-        } else {
-            Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8)
-        };
-        b.z = compress(init.into_elements(), b.x, b.y);
-        if kind == MAST {
+        if kind != ROOT_MAST {
+            let init = if kind == ENV {
+                Eidos::init_chaining_word(domain::ENV_NAMESPACE, 8)
+            } else {
+                Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8)
+            };
+            b.z = compress(init.into_elements(), b.x, b.y);
+        }
+        if kind != ENV {
             b.a = Felt::from_u8(5);
+        }
+        if kind == ROOT_MAST {
             b.b = Felt::from_u8(7);
         }
     }
@@ -226,7 +235,7 @@ fn recompute_list_hashes(rows: &mut [SharedRow]) {
 #[test]
 fn library_main_accepts_all_kinds_and_list_lengths_in_shared_rows() {
     let mut rows = Vec::new();
-    for kind in [MERKLE, ENV, MAST] {
+    for kind in [MERKLE, ENV, MAST, ROOT_MAST] {
         rows.extend(object_pair(kind));
     }
     for num_children in 0..8 {
@@ -240,7 +249,7 @@ fn library_main_accepts_all_kinds_and_list_lengths_in_shared_rows() {
 fn library_main_rejects_invalid_kinds_and_pair_copies() {
     let valid = finish(object_pair(MERKLE).into());
     assert_accept(&valid);
-    for kind in [INVALID, [Felt::from_u8(2), Felt::ZERO, Felt::ZERO]] {
+    for kind in [[Felt::from_u8(2), Felt::ZERO, Felt::ZERO], [Felt::ONE, -Felt::ONE, Felt::ONE]] {
         let mut forged = valid.clone();
         cols_mut(&mut forged[0]).k = kind;
         cols_mut(&mut forged[1]).k = kind;
@@ -255,19 +264,21 @@ fn library_main_rejects_invalid_kinds_and_pair_copies() {
 
 #[test]
 fn library_main_rejects_routing_and_unused_object_cells() {
-    for kind in [MERKLE, ENV, MAST] {
+    for kind in [MERKLE, ENV, MAST, ROOT_MAST] {
         let valid = finish(object_pair(kind).into());
         assert_accept(&valid);
-        // All three kinds route X/Y/W into their prescribed B overlay banks.
+        // All object kinds route X/Y/W into their prescribed B overlay banks.
         for cell in (1..9).chain(13..17) {
             let mut forged = valid.clone();
             forged[1][cell] += Felt::ONE;
             assert_reject(&forged);
         }
-        for cell in [18, 19] {
-            let mut forged = valid.clone();
-            forged[0][cell] = Felt::ONE;
-            assert_reject(&forged);
+        if kind != MAST {
+            for cell in [18, 19] {
+                let mut forged = valid.clone();
+                forged[0][cell] = Felt::ONE;
+                assert_reject(&forged);
+            }
         }
         if kind == MERKLE {
             for cell in 9..13 {
@@ -287,6 +298,13 @@ fn library_main_rejects_routing_and_unused_object_cells() {
                 forged[1][cell] = Felt::ONE;
                 assert_reject(&forged);
             }
+        } else if kind == MAST {
+            let mut forged = valid.clone();
+            cols_mut(&mut forged[0]).a = Felt::ZERO;
+            assert_reject(&forged);
+            let mut forged = valid.clone();
+            cols_mut(&mut forged[1]).b = Felt::ONE;
+            assert_reject(&forged);
         }
     }
 }
@@ -448,57 +466,55 @@ fn library_main_rejects_empty_list_payload_and_frame_changes() {
 }
 
 #[test]
-fn library_main_checks_each_syscall_supplier_namespace_without_frequency_ranges() {
-    let valid = finish(object_pair(MAST).into());
+fn library_main_pins_root_mast_namespace_independently_of_frequency() {
+    let mut valid = finish(object_pair(ROOT_MAST).into());
+    cols_mut(&mut valid[1]).a = -Felt::from_u8(2);
+    cols_mut(&mut valid[1]).b = -Felt::from_u8(3);
+    assert_accept(&valid);
+    cols_mut(&mut valid[1]).b = Felt::ZERO;
     assert_accept(&valid);
     for coordinate in 0..4 {
         let mut forged = valid.clone();
         cols_mut(&mut forged[0]).w[coordinate] += Felt::ONE;
         cols_mut(&mut forged[1]).x[coordinate] += Felt::ONE;
-        // Recompute the procedure key after changing the authenticated inherited namespace.
-        let b = cols_mut(&mut forged[1]);
-        b.z =
-            compress(Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8).into_elements(), b.x, b.y);
         assert_reject(&forged);
-        cols_mut(&mut forged[1]).b = Felt::ZERO;
-        cols_mut(&mut forged[1]).a = -Felt::ONE;
-        assert_accept(&forged); // Ordinary use may authenticate under any namespace.
     }
-    let mut unrestricted = valid;
-    cols_mut(&mut unrestricted[1]).a = -Felt::from_u8(2);
-    cols_mut(&mut unrestricted[1]).b = -Felt::from_u8(3);
-    assert_accept(&unrestricted); // Matching demands, rather than local ranges, bind frequencies.
-
-    let mut cancellation = Vec::new();
-    for sign in [Felt::ONE, -Felt::ONE] {
-        let mut pair = object_pair(MAST);
-        for coordinate in 0..4 {
-            cols_mut(&mut pair[0]).w[coordinate] += sign * Felt::from_usize(coordinate + 1);
-            cols_mut(&mut pair[1]).x[coordinate] += sign * Felt::from_usize(coordinate + 1);
-        }
-        let b = cols_mut(&mut pair[1]);
-        b.b = Felt::ONE;
-        b.z =
-            compress(Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8).into_elements(), b.x, b.y);
-        cancellation.extend(pair);
-    }
-    for (coordinate, authorized) in initial_namespace().iter().enumerate() {
-        let aggregate = cols(&cancellation[1]).b
-            * (cols(&cancellation[1]).x[coordinate] - *authorized)
-            + cols(&cancellation[3]).b * (cols(&cancellation[3]).x[coordinate] - *authorized);
-        assert_eq!(aggregate, Felt::ZERO);
-    }
-    assert_reject(&finish(cancellation));
 }
 
 #[test]
-fn library_main_rejects_zero_word_as_syscall_namespace() {
+fn library_main_requires_nonroot_mast_namespace_difference() {
+    let initial = initial_namespace();
+    for coordinate in 0..4 {
+        let mut namespace = initial;
+        namespace[coordinate] += Felt::from_u8(2);
+        let mut pair = object_pair(MAST);
+        let [low, high] = namespace_difference_norms(namespace);
+        let a = cols_mut(&mut pair[0]);
+        a.w = namespace;
+        [a.a, a.b] = if coordinate < 2 {
+            [low.inverse(), Felt::ZERO]
+        } else {
+            [Felt::ZERO, high.inverse()]
+        };
+        let b = cols_mut(&mut pair[1]);
+        b.x = namespace;
+        b.a = -Felt::ONE;
+        let mut rows = finish(pair.into());
+        assert_accept(&rows);
+
+        cols_mut(&mut rows[0]).w = initial;
+        cols_mut(&mut rows[1]).x = initial;
+        assert_reject(&rows);
+    }
+}
+
+#[test]
+fn library_main_rejects_zero_word_as_root_mast_namespace() {
     assert_ne!(initial_namespace(), [Felt::ZERO; 4]);
-    let mut pair = object_pair(MAST);
+    let mut pair = object_pair(ROOT_MAST);
     cols_mut(&mut pair[0]).w = [Felt::ZERO; 4];
     let b = cols_mut(&mut pair[1]);
     b.x = [Felt::ZERO; 4];
-    b.z = compress(Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8).into_elements(), b.x, b.y);
     assert_ne!(b.b, Felt::ZERO);
     assert_reject(&finish(pair.into()));
 }

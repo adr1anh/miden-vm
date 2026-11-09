@@ -70,6 +70,10 @@ fn namespace_derivations_match_native() {
     let input = Word::words_as_elements(&input);
     check_hash("child_namespace", input, parent.child(label).into_word(), None);
     check_hash("procedure_key", input, parent.procedure_key(label).into_word(), None);
+
+    let initial = Namespace::initial();
+    let input = [initial.into_word(), label.into_word()];
+    check_hash("procedure_key", Word::words_as_elements(&input), label.into_word(), None);
 }
 
 #[test]

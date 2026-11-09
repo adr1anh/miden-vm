@@ -11,7 +11,7 @@ use std::{
 };
 
 use miden_air_definitions::vm::trace::{
-    chiplets::library::{MAST, PAD},
+    chiplets::library::{PAD, ROOT_MAST},
     eidos_compression::{
         EIDOS_COMPRESSION_CYCLE_LEN, F_COMPRESSION_MULTIPLICITY_COL, NUM_EIDOS_COMPRESSION_COLS,
     },
@@ -56,7 +56,7 @@ fn assert_single_mast_prefix(
         assert_eq!(shared.chiplet_selectors()[0], ONE);
         assert_eq!(shared.chip_clk, ZERO, "Library rows do not carry Controller addresses");
         if index < 2 {
-            assert_eq!(shared.library().k, MAST);
+            assert_eq!(shared.library().k, ROOT_MAST);
             assert_eq!(shared.library().d, ZERO);
         } else {
             assert_eq!(shared.library().k, PAD);
@@ -78,7 +78,8 @@ fn assert_single_mast_prefix(
     assert_eq!(b.x, a.w);
     assert_eq!(b.y, label);
     assert_eq!(b.w, a.y);
-    assert_eq!(b.z, descriptor.entry_key().into_word().into_elements());
+    assert_eq!(b.y, descriptor.entry_key().into_word().into_elements());
+    assert_eq!(b.z, [ZERO; 4]);
     assert_eq!((b.a, b.b), (ONE, ZERO), "entry resolution contributes one normal request");
     let first_controller = RowIndex::from(8);
     assert!(main.is_hash_row(first_controller));
@@ -131,8 +132,8 @@ fn completed_entry_prefix_registers_compressions_once_before_exact_budget_admiss
     let (vm, _) = fixture.witness.into_parts();
     let trace = build_trace(vm, &budget).expect("completed entry should materialize its prefix");
     assert_single_mast_prefix(&trace, fixture.target);
-    // One span compression plus Mast and Procedure framing: the write traversal adds no requests.
-    assert_eq!(trace.trace_len_summary().eidos_compression_count(), 3);
+    // One span compression and one Mast compression. The write traversal adds no requests.
+    assert_eq!(trace.trace_len_summary().eidos_compression_count(), 2);
     let (_, _, eidos, _) = trace.main_trace().clone_air_matrices();
     let multiplicities: Vec<_> = eidos
         .values
@@ -144,7 +145,7 @@ fn completed_entry_prefix_registers_compressions_once_before_exact_budget_admiss
                 + F_COMPRESSION_MULTIPLICITY_COL]
         })
         .collect();
-    assert_eq!(multiplicities.iter().filter(|&&count| count == ONE).count(), 3);
+    assert_eq!(multiplicities.iter().filter(|&&count| count == ONE).count(), 2);
     assert!(multiplicities.iter().all(|&count| count == ZERO || count == ONE));
 
     let estimated = budget.prover_peak_bytes(trace.trace_len_summary().padded_heights()).unwrap();

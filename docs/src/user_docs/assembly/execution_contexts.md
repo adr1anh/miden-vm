@@ -47,7 +47,7 @@ Use `inline.<target>` to expand an eligible local or explicitly pinned body at a
 
 ### Kernels
 
-Kernel tooling places public executable exports at the canonical environment root, where their immediate parent namespace is `N0`. This includes public submodule exports and reexports, whose source aliases preserve the defining canonical procedure key. Root executable labels must be globally unique across composed kernel fragments. Private kernel helpers are placed beneath child `Env` namespaces; application homes remain explicit caller/tooling inputs.
+Kernel tooling places public executable exports at the canonical environment root, where their immediate parent namespace is `N0`. This includes public submodule exports and reexports, whose source aliases preserve the defining canonical procedure key. The key of a root binding is its label commitment. In a child namespace, the key is derived by hashing the namespace and label commitment together. Derived keys must be globally unique across the composed environment. Private kernel helpers are placed beneath child `Env` namespaces, and application homes remain explicit caller/tooling inputs.
 
 The VM authorizes an actual `syscall` solely by authenticating the requested binding and checking that its immediate parent namespace equals the fixed `N0`. Every executable binding placed there is eligible, regardless of its source visibility or package kind. There is no additional syscall-export list or configurable kernel namespace. Environment construction must therefore reserve root bindings for kernel-safe entry points.
 

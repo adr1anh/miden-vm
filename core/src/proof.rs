@@ -32,20 +32,20 @@ const COMPLETE_PROOF_DISCRIMINANT: u8 = 1;
 /// Captured from the native profile's relation, entry key, and exact configuration; the profile
 /// parity test checks that derivation against the current verifier artifacts.
 pub const CURRENT_VM_VERIFIER_IDENTITY: VerifierIdentity = VerifierIdentity::new(Word::new([
-    crate::Felt::new_unchecked(9003065850876061312),
-    crate::Felt::new_unchecked(9077397375152448415),
-    crate::Felt::new_unchecked(8078553803467605381),
-    crate::Felt::new_unchecked(6731215694932366616),
+    crate::Felt::new_unchecked(260129754975693014),
+    crate::Felt::new_unchecked(5842382263436157294),
+    crate::Felt::new_unchecked(7675645750840953228),
+    crate::Felt::new_unchecked(9010022538331949060),
 ]));
 /// The declared identity of the current recursive precompile verifier profile.
 ///
 /// Captured from the native profile's relation, entry key, and exact configuration; the profile
 /// parity test checks that derivation against the current verifier artifacts.
 pub const CURRENT_PVM_VERIFIER_IDENTITY: VerifierIdentity = VerifierIdentity::new(Word::new([
-    crate::Felt::new_unchecked(5374454354978254335),
-    crate::Felt::new_unchecked(6723294166139218238),
-    crate::Felt::new_unchecked(5086734608144891028),
-    crate::Felt::new_unchecked(7511897055780055494),
+    crate::Felt::new_unchecked(3426488399753632299),
+    crate::Felt::new_unchecked(916303820644102827),
+    crate::Felt::new_unchecked(455124083776022393),
+    crate::Felt::new_unchecked(665668915950234977),
 ]));
 
 // HASH FUNCTION

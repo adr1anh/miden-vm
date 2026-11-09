@@ -65,7 +65,7 @@ fn library_mutable_borrow_preserves_selector_and_clock() {
 
 #[test]
 fn canonical_kind_bits_are_little_endian() {
-    let patterns = [PAD, MERKLE, ENV, MAST, LIST_START, LIST_CONTINUE, EMPTY_LIST, INVALID];
+    let patterns = [PAD, MERKLE, ENV, MAST, LIST_START, LIST_CONTINUE, EMPTY_LIST, ROOT_MAST];
     for (code, bits) in patterns.into_iter().enumerate() {
         let expected: [Felt; 3] = core::array::from_fn(|i| Felt::from_u8(((code >> i) & 1) as u8));
         assert_eq!(bits, expected, "kind code {code}");
@@ -87,7 +87,7 @@ fn kind_and_phase_predicates_cover_all_patterns_and_scopes() {
             flags.is_list_start,
             flags.is_list_continue,
             flags.is_empty_list,
-            flags.is_invalid,
+            flags.is_root_mast,
         ];
 
         for (kind, indicator) in indicators.into_iter().enumerate() {

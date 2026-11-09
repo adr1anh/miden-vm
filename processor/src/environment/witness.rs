@@ -90,7 +90,7 @@ impl VerifiedOpening {
         self.environment_root
     }
 
-    /// Returns the requested key derived by the final Mast under its inherited namespace.
+    /// Returns the requested key bound by the final Mast under its inherited namespace.
     pub const fn procedure_key(&self) -> ProcedureKey {
         self.procedure_key
     }
@@ -103,9 +103,9 @@ impl VerifiedOpening {
 
 /// An authenticated key's immediate parent namespace and selected implementation commitment.
 ///
-/// No invocation mode is classified here. An actual syscall must separately compare the returned
-/// full accumulated namespace with its execution descriptor's authorized kernel namespace. Code
-/// availability and proof-system authentication are later obligations.
+/// An actual syscall must separately require the full accumulated namespace to equal
+/// [`Namespace::initial()`]. Code availability and proof-system authentication are later
+/// obligations.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ResolvedBinding {
     namespace: Namespace,
@@ -193,8 +193,9 @@ impl ResolutionWitness {
     /// Preflight bounds all candidate preimages, List work and retained native capacities before
     /// hashing. Every node commitment is recomputed with the core node implementation. Env extends
     /// the full namespace; collections preserve it. A List's complete immediate commitment vector
-    /// is hashed before its selected descendant is considered. The final Mast must derive exactly
-    /// `key`, have no selected child and terminate the candidate. No partial binding is returned.
+    /// is hashed before its selected descendant is considered. The final Mast must bind exactly
+    /// `key`, have no selected child and terminate the candidate. Its label commitment is the key
+    /// in the initial namespace. No partial binding is returned.
     pub fn verify(
         self,
         root: EnvironmentRoot,

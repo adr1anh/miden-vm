@@ -1,6 +1,6 @@
 //! Scoped Library expressions for the packed Chiplets prefix.
 //!
-//! The Chiplets MAIN dispatcher supplies the section selector and fixed periodics. Syscall
+//! The Chiplets MAIN dispatcher supplies the section selector and fixed periodics. Root Mast
 //! suppliers use the fixed initial namespace; the paired lookup relation authenticates its root.
 
 pub mod columns;
@@ -29,9 +29,8 @@ pub struct LibraryRowContext<E> {
 /// Cubic indicators for the little-endian kind bits `(k0, k1, k2)`.
 ///
 /// These expressions have no Library or phase scope. They identify codes 0 through 7 as PAD,
-/// Merkle, Env, Mast, List start, List continue, empty List, and invalid, respectively. Boolean
-/// kind-bit constraints and rejection of the invalid pattern are enforced by the scoped entry
-/// point.
+/// Merkle, Env, non-root Mast, List start, List continue, empty List, and root Mast, respectively.
+/// The scoped entry point enforces Boolean kind bits.
 #[derive(Clone)]
 pub struct LibraryKindFlags<E> {
     pub is_pad: E,
@@ -41,7 +40,7 @@ pub struct LibraryKindFlags<E> {
     pub is_list_start: E,
     pub is_list_continue: E,
     pub is_empty_list: E,
-    pub is_invalid: E,
+    pub is_root_mast: E,
 }
 
 impl<E: PrimeCharacteristicRing> LibraryKindFlags<E> {
@@ -60,7 +59,7 @@ impl<E: PrimeCharacteristicRing> LibraryKindFlags<E> {
             is_list_start: not_k0.clone() * not_k1.clone() * k2.clone(),
             is_list_continue: k0.clone() * not_k1 * k2.clone(),
             is_empty_list: not_k0 * k1.clone() * k2.clone(),
-            is_invalid: k0 * k1 * k2,
+            is_root_mast: k0 * k1 * k2,
         }
     }
 }

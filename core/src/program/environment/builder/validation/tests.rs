@@ -53,6 +53,29 @@ fn same_path_with_different_implementations_is_also_a_duplicate() {
 }
 
 #[test]
+fn a_root_label_cannot_duplicate_a_child_procedure_key() {
+    let mut builder = EnvironmentBuilder::new(limits());
+    let child_label = label(20);
+    let child_key = Namespace::initial().child(child_label).procedure_key(label(1));
+    let child_export = builder.insert(mast(1, 10)).unwrap();
+    let child = builder
+        .insert(EnvNode::Env { label: child_label, child: child_export })
+        .unwrap();
+    let root_export = builder
+        .insert(EnvNode::Mast {
+            label: LabelCommitment::new(child_key.into_word()),
+            implementation: implementation(11),
+        })
+        .unwrap();
+    let root = builder.insert(EnvNode::Merkle { left: root_export, right: child }).unwrap();
+
+    assert_eq!(
+        builder.finish(root).unwrap_err(),
+        EnvironmentBuildError::DuplicateProcedureKey(child_key)
+    );
+}
+
+#[test]
 fn shared_implementation_and_subtree_can_have_distinct_parent_namespaces() {
     let mut builder = EnvironmentBuilder::new(limits());
     let export_node = mast(1, 10);

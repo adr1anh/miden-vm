@@ -16,13 +16,14 @@ use crate::vm::{
         columns::{ChipletCols, NUM_CHIPLETS_COLS},
         lookup::messages::{BusId, MIDEN_MAX_MESSAGE_WIDTH},
     },
-    trace::chiplets::library::{EMPTY_LIST, ENV, LIST_CONTINUE, LIST_START, MAST, MERKLE, PAD},
+    trace::chiplets::library::{
+        EMPTY_LIST, ENV, LIST_CONTINUE, LIST_START, MAST, MERKLE, PAD, ROOT_MAST,
+    },
 };
 
 const SHAPE: [usize; 4] = [4, 4, 3, 2];
 
-/// Exercises the real emitter in column 1 of the selected packed shape. Other row families are
-/// absent in this fixture; production group integration remains a coordinated cutover obligation.
+/// Exercises the real emitter in column 1 of the selected packed shape.
 struct LibraryLookupAir;
 
 impl<LB: LookupBuilder<F = Felt>> LookupAir<LB> for LibraryLookupAir {
@@ -50,7 +51,7 @@ impl<LB: LookupBuilder<F = Felt>> LookupAir<LB> for LibraryLookupAir {
         };
         for column in 0..SHAPE.len() {
             let deg = if column == 1 {
-                Deg { v: 9, u: 8 }
+                Deg { v: 9, u: 7 }
             } else {
                 Deg { v: 0, u: 0 }
             };
@@ -145,6 +146,7 @@ fn library_headers_consume_unit_open_and_request_all_compressions() {
         (MERKLE, [Felt::ZERO; 4]),
         (ENV, felt_pair_frame(domain::domain_tag(domain::ENV_ENVIRONMENT))),
         (MAST, felt_pair_frame(domain::domain_tag(domain::ENV_MAST))),
+        (ROOT_MAST, felt_pair_frame(domain::domain_tag(domain::ENV_MAST))),
     ] {
         let mut rows = [row(kind), row(PAD)];
         // These cells are not Open frequencies, even on a malformed row.
@@ -218,10 +220,9 @@ fn library_env_b_requests_namespace_compression_and_supplies_one_child() {
 }
 
 #[test]
-fn library_mast_b_emits_three_simultaneous_fractions_with_independent_frequencies() {
+fn library_nonroot_mast_b_hashes_key_and_supplies_normal_frequency() {
     let mut rows = [row(PAD), row(MAST)];
-    cols_mut(&mut rows[1]).a = Felt::from_u8(5);
-    cols_mut(&mut rows[1]).b = Felt::from_u8(7);
+    cols_mut(&mut rows[1]).a = -Felt::from_u8(5);
     let local = cols(&rows[1]);
     let normal = LibraryResolveMsg {
         requires_syscall: Felt::ZERO,
@@ -229,14 +230,7 @@ fn library_mast_b_emits_three_simultaneous_fractions_with_independent_frequencie
         implementation: local.w,
     }
     .encode(&challenges());
-    let syscall = LibraryResolveMsg {
-        requires_syscall: Felt::ONE,
-        key: local.z,
-        implementation: local.w,
-    }
-    .encode(&challenges());
     let actual = fractions(&rows);
-    assert_eq!(MAX_INTERACTIONS_PER_ROW, 3);
     assert_eq!(
         at(&actual, 1),
         &[
@@ -247,26 +241,36 @@ fn library_mast_b_emits_three_simultaneous_fractions_with_independent_frequencie
                     fixed_input(domain::domain_tag(domain::ENV_PROCEDURE))
                 )
             ),
-            (Felt::from_u8(5), normal),
-            (Felt::from_u8(7), syscall),
+            (-Felt::from_u8(5), normal),
         ]
     );
-    assert_ne!(normal, syscall);
-
-    // Resolve permits arbitrary field frequencies; Open provenance does not use these cells.
-    cols_mut(&mut rows[1]).a = -Felt::from_u8(3);
-    let actual = fractions(&rows);
-    assert_eq!(at(&actual, 1)[1], (-Felt::from_u8(3), normal));
 
     cols_mut(&mut rows[1]).a = Felt::ZERO;
-    cols_mut(&mut rows[1]).b = Felt::ZERO;
     let actual = fractions(&rows);
     assert_eq!(at(&actual, 1).len(), 1, "zero-use Mast still requests its key compression");
 }
 
 #[test]
+fn library_root_mast_b_supplies_raw_key_for_both_frequencies_without_compression() {
+    let mut rows = [row(PAD), row(ROOT_MAST)];
+    cols_mut(&mut rows[1]).a = Felt::from_u8(5);
+    cols_mut(&mut rows[1]).b = -Felt::from_u8(7);
+    let local = cols(&rows[1]);
+    let expected = [(local.a, Felt::ZERO), (local.b, Felt::ONE)].map(|(frequency, tag)| {
+        let message = LibraryResolveMsg {
+            requires_syscall: tag,
+            key: local.y,
+            implementation: local.w,
+        };
+        (frequency, message.encode(&challenges()))
+    });
+    assert_eq!(at(&fractions(&rows), 1), expected);
+    assert_ne!(expected[0].1, expected[1].1);
+}
+
+#[test]
 fn library_scope_pad_and_empty_b_emit_no_interactions() {
-    for kind in [MERKLE, ENV, MAST, LIST_START, LIST_CONTINUE, EMPTY_LIST] {
+    for kind in [MERKLE, ENV, MAST, LIST_START, LIST_CONTINUE, EMPTY_LIST, ROOT_MAST] {
         let mut rows = [row(kind), row(kind)];
         rows[0][0] = Felt::ZERO;
         rows[1][0] = Felt::ZERO;

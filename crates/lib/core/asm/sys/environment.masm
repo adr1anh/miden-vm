@@ -105,14 +105,21 @@ end
 
 #! Derives a callable key from its immediate parent namespace and export label commitment.
 #! Input: [PARENT, LABEL, ...]. Output: [KEY, ...].
+#! Under the initial namespace the key is LABEL. Other namespaces hash PARENT and LABEL.
 #! The implementation root is independent of this key.
 #!
-#! Cycles: 15.
+#! Cycles: 27 for the initial namespace and 38 otherwise.
 pub proc procedure_key(parent: word, label: word) -> word
-    push.PROCEDURE_INIT_CV movdnw.2
-    # => [PARENT, LABEL, CV, ...]
-    compress dropw dropw
-    # => [KEY, ...]
+    push.INITIAL_NAMESPACE eqw
+    if.true
+        dropw dropw
+        # => [LABEL, ...]
+    else
+        dropw push.PROCEDURE_INIT_CV movdnw.2
+        # => [PARENT, LABEL, CV, ...]
+        compress dropw dropw
+        # => [KEY, ...]
+    end
 end
 
 #! Commits a labeled child environment and records [LABEL, CHILD] under the returned root.

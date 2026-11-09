@@ -55,7 +55,8 @@ pub struct LedgerCounters {
     pub encoded_bytes: usize,
     /// Pre-padding rows: two per Env/Merkle/Mast, and twice max(1, ceil(n/2)) per List.
     pub library_rows: usize,
-    /// Requests: two per Env/Mast, one per Merkle, and max(1, ceil(n/2)) per List.
+    /// Requests: two per Env or child Mast, one per Merkle or root Mast, and max(1, ceil(n/2))
+    /// per List.
     ///
     /// This is not a count of distinct controller records or actual controller cycles.
     pub compression_requests: usize,
@@ -260,7 +261,7 @@ impl OpeningLedger {
         let terminal_namespace = binding.namespace();
         let path = binding.into_path();
         let prefix = self.shared_prefix(&path)?;
-        let plan = self.plan(&path, path.capacity(), &prefix)?;
+        let plan = self.plan(&path, path.capacity(), &prefix, terminal_namespace)?;
         self.check_preparation_storage(
             &plan,
             plan.new_occurrences,
@@ -425,6 +426,7 @@ impl OpeningLedger {
         path: &[OpeningStep],
         path_capacity: usize,
         prefix: &SharedPrefix,
+        terminal_namespace: Namespace,
     ) -> Result<MergePlan, LedgerError> {
         let new_occurrences = path.len() - prefix.shared;
         let mut counters = self.counters;
@@ -441,7 +443,7 @@ impl OpeningLedger {
         let mut new_list_bytes = 0;
         let mut slot_bytes = 0;
         for (depth, step) in path.iter().enumerate().skip(prefix.shared) {
-            let (rows, requests) = logical_cost(&step.node, depth)?;
+            let (rows, requests) = logical_cost(&step.node, depth, terminal_namespace)?;
             counters.encoded_bytes = checked_add(counters.encoded_bytes, step.node.encoded_len()?)?;
             counters.library_rows = checked_add(counters.library_rows, rows)?;
             counters.compression_requests = checked_add(counters.compression_requests, requests)?;
@@ -648,9 +650,17 @@ fn child_namespace(namespace: Namespace, node: &EnvNode) -> Namespace {
     }
 }
 
-fn logical_cost(node: &EnvNode, depth: usize) -> Result<(usize, usize), LedgerError> {
+fn logical_cost(
+    node: &EnvNode,
+    depth: usize,
+    terminal_namespace: Namespace,
+) -> Result<(usize, usize), LedgerError> {
     match node {
-        EnvNode::Env { .. } | EnvNode::Mast { .. } => Ok((2, 2)),
+        EnvNode::Env { .. } => Ok((2, 2)),
+        // Every Mast hashes its object. Only a non-root Mast also hashes its key.
+        EnvNode::Mast { .. } => {
+            Ok((2, 1 + usize::from(terminal_namespace != Namespace::initial())))
+        },
         EnvNode::Merkle { .. } => Ok((2, 1)),
         EnvNode::List(children) => {
             let pairs = checked_add(children.len() / 2, children.len() % 2)?.max(1);

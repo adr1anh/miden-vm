@@ -203,7 +203,7 @@ pub struct LibraryOpenMsg<E> {
     pub namespace: WordFields<E>,
 }
 
-/// A callable binding authenticated by a Mast opening and namespace-qualified key derivation.
+/// A callable binding authenticated by a Mast opening and the namespace's key rule.
 ///
 /// `requires_syscall` is a literal zero or one at each emission site. Only these bindings use
 /// arbitrary normal/syscall witness frequencies.

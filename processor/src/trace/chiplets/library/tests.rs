@@ -31,10 +31,16 @@ fn root_export_remains_syscall_eligible_beneath_list_and_merkle_grouping() {
     session.prepare_cached(key, InvocationTag::Syscall, row(1)).unwrap().commit();
     session.prepare_root_end(implementation, row(2)).unwrap().commit();
     let trace = LibraryTrace::new(&session).unwrap();
-    let (cells, _) = materialize(&trace);
-    assert_eq!(cols(&cells, 4).k, MAST);
+    let (cells, requests) = materialize(&trace);
+    assert_eq!(requests.len(), 3); // List, Merkle, and Mast object commitments.
+    assert_eq!(cols(&cells, 4).k, ROOT_MAST);
     assert_eq!(cols(&cells, 4).w, Namespace::initial().into_word().into_elements());
-    assert_eq!((cols(&cells, 5).a, cols(&cells, 5).b), (ONE, ONE));
+    let supplier = cols(&cells, 5);
+    assert_eq!(supplier.k, ROOT_MAST);
+    assert_eq!(supplier.y, label("kernel_service").into_word().into_elements());
+    assert_eq!(supplier.y, key.into_word().into_elements());
+    assert_eq!(supplier.z, [ZERO; 4]);
+    assert_eq!((supplier.a, supplier.b), (ONE, ONE));
 }
 
 #[test]
@@ -156,6 +162,10 @@ fn completed_nested_session_maps_occurrences_and_frequencies_to_exact_packed_row
     assert_eq!(cols(&cells, 15).b, ONE);
     assert_eq!(cols(&cells, 17).z, other_key.into_word().into_elements());
     assert_eq!((cols(&cells, 17).a, cols(&cells, 17).b), (ONE, ZERO));
+    for mast in [8, 10, 16].map(|index| cols(&cells, index)) {
+        let [low, high] = namespace_difference_norms(mast.w);
+        assert_eq!(mast.a * low + mast.b * high, ONE);
+    }
 
     let mut expected = Vec::new();
     for (index, occurrence) in session.ledger().occurrences().iter().enumerate() {
@@ -196,7 +206,7 @@ fn odd_even_and_multiblock_lists_include_every_child_and_reverse_complete_cvs() 
         let (cells, requests) = materialize(&trace);
         let pairs = n.div_ceil(2);
         assert_eq!(session.ledger().counters().library_rows, 2 * pairs + 2);
-        assert_eq!(requests.len(), pairs + 2);
+        assert_eq!(requests.len(), pairs + 1);
         assert_prefix(&cells, 2 * pairs + 2);
         let offsets: Vec<_> = (0..pairs).rev().map(|pair| 2 * pair).chain([2 * pairs]).collect();
         assert_walk_matches_materialization(&trace, &cells, &requests, &offsets);
@@ -306,7 +316,8 @@ fn empty_list_helper_preserves_the_distinct_empty_frame_without_a_second_ledger_
 #[test]
 fn phase_size_and_callback_failures_do_not_mutate_the_native_authority() {
     let leaf = mast("entry", 40);
-    let resolved = binding(vec![step(&leaf, None)]);
+    let list = EnvNode::List(vec![commitment(&leaf)]);
+    let resolved = binding(vec![step(&list, Some(0)), step(&leaf, None)]);
     let implementation = resolved.implementation_root();
     let mut session = new_session(&resolved);
     assert!(matches!(
@@ -361,10 +372,10 @@ fn phase_size_and_callback_failures_do_not_mutate_the_native_authority() {
         },
     );
     assert!(matches!(result, Err(ExecutionError::Internal("pair stopped"))));
-    assert_eq!((pairs, requests), (1, 2));
+    assert_eq!((pairs, requests), (1, 1));
     assert_eq!(session.counters(), counters);
     let (retry, requests) = materialize(&trace);
-    assert_prefix(&retry, 2);
+    assert_prefix(&retry, 4);
     assert_eq!(requests.len(), 2);
 }
 
@@ -380,7 +391,7 @@ fn pre_admission_needs_only_a_fixed_request_sink_and_write_does_not_register_aga
     let counters = session.counters();
     let trace = LibraryTrace::new(&session).unwrap();
     // No prefix or growable request storage exists during pre-admission.
-    let mut requests = [[ZERO; STATE_WIDTH]; 2];
+    let mut requests = [[ZERO; STATE_WIDTH]; 1];
     let mut registered = 0;
     trace
         .visit_compression_requests(|state| {
@@ -392,26 +403,19 @@ fn pre_admission_needs_only_a_fixed_request_sink_and_write_does_not_register_aga
     let EnvNode::Mast { label, .. } = leaf else {
         unreachable!()
     };
-    assert_eq!(registered, 2);
+    assert_eq!(registered, 1);
     assert_eq!(
         requests,
-        [
-            state(
-                label.into_word(),
-                implementation.into_word(),
-                Eidos::init_chaining_word(domain::ENV_MAST, 8),
-            ),
-            state(
-                Namespace::initial().into_word(),
-                label.into_word(),
-                Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8),
-            ),
-        ]
+        [state(
+            label.into_word(),
+            implementation.into_word(),
+            Eidos::init_chaining_word(domain::ENV_MAST, 8),
+        )]
     );
     let mut destination = vec![ONE; trace.prefix_cells()];
     trace.write(&mut destination).unwrap();
     assert_eq!(registered, session.ledger().counters().compression_requests);
-    assert_eq!(cols(&destination, 1).z, key.into_word().into_elements());
+    assert_eq!(cols(&destination, 1).y, key.into_word().into_elements());
     assert_prefix(&destination, 2);
     assert_eq!(session.counters(), counters);
 }
@@ -484,11 +488,13 @@ fn assert_object_requests(
         },
         EnvNode::Mast { .. } => {
             expected.push(state(x, y, Eidos::init_chaining_word(domain::ENV_MAST, 8)));
-            expected.push(state(
-                Word::new(b.x),
-                Word::new(b.y),
-                Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8),
-            ));
+            if occurrence.namespace() != Namespace::initial() {
+                expected.push(state(
+                    Word::new(b.x),
+                    Word::new(b.y),
+                    Eidos::init_chaining_word(domain::ENV_PROCEDURE, 8),
+                ));
+            }
         },
         EnvNode::Merkle { .. } => {
             expected.push(state(x, y, Eidos::merkle_node_init_chaining_word()))

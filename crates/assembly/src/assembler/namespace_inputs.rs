@@ -67,7 +67,7 @@ impl NamespaceInputs {
     pub(crate) fn cache_commitment(&self) -> Result<Word, Report> {
         let caller = self.require_namespace_plan()?;
         let bindings = self.resolved_bindings()?;
-        let mut bytes = b"miden.assembly.namespace-inputs.v1".to_vec();
+        let mut bytes = b"miden.assembly.namespace-inputs.v2".to_vec();
         append_cache_home(&mut bytes, caller)?;
         append_cache_len(&mut bytes, bindings.len())?;
         for (declaration, binding) in bindings {
