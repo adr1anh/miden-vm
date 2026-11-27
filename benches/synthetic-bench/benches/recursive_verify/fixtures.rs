@@ -435,7 +435,8 @@ pub(super) fn load_tx_fixtures(
                 "BENCH_TX_PROOF scenario={scenario} index={proof_index} stack={stack_values:?} \
                  proof_bytes={proof_bytes_len} deferred_entries=0 \
                  proof_cache={proof_cache_status} proof_digest={proof_digest_hex} \
-                 proof_prefix={proof_prefix}",
+                 proof_prefix={proof_prefix} stack_outputs={}",
+                to_hex(&stack_outputs.to_bytes()),
             );
 
             TxProofFixture {

@@ -120,7 +120,7 @@ pub(super) fn prove_recursive_case(
     .expect("prove recursive verifier")
 }
 
-fn prove_recursive_once(prover: &Prover, case: &RecursionCase) -> (f64, usize) {
+pub(super) fn prove_recursive_once(prover: &Prover, case: &RecursionCase) -> (f64, usize) {
     let advice_inputs = case.advice_inputs.clone();
     let mut host = case.host();
     let start = Instant::now();

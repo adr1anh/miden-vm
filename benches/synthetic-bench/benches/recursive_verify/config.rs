@@ -12,6 +12,7 @@ const DEFAULT_PROOF_COUNTS: [usize; 5] = [3, 4, 5, 6, 7];
 #[derive(Clone, Copy)]
 pub(super) struct ProofComposition {
     mvm: usize,
+    include_pvm: bool,
 }
 
 impl ProofComposition {
@@ -20,17 +21,23 @@ impl ProofComposition {
     }
 
     pub(super) const fn pvm_count(self) -> usize {
-        1
+        self.include_pvm as usize
     }
 
     pub(super) fn label(self) -> String {
-        format!("{} mvm + 1 pvm ({} ecdsa)", self.mvm, self.mvm)
+        if self.include_pvm {
+            format!("{} mvm + 1 pvm ({} ecdsa)", self.mvm, self.mvm)
+        } else {
+            format!("{} mvm", self.mvm)
+        }
     }
 
     pub(super) fn machine_fields(self) -> String {
+        let pvm_proofs = self.pvm_count();
+        let precompiles = self.mvm * pvm_proofs;
         format!(
-            "mvm_proofs={} pvm_proofs=1 pvm_ecdsas={} pvm_keccaks={}",
-            self.mvm, self.mvm, self.mvm
+            "mvm_proofs={} pvm_proofs={pvm_proofs} pvm_ecdsas={precompiles} pvm_keccaks={precompiles}",
+            self.mvm
         )
     }
 }
@@ -45,7 +52,7 @@ pub(super) struct BenchConfig {
 }
 
 impl BenchConfig {
-    pub(super) fn from_env() -> Self {
+    pub(super) fn from_env(vm_only: bool) -> Self {
         let hash_lde_blocks = match std::env::var("RECURSION_HASH_LDE_BLOCKS") {
             Ok(value) if value == "0" => false,
             Ok(value) if value == "1" => true,
@@ -61,7 +68,7 @@ impl BenchConfig {
         Self {
             compositions: proof_counts_from_env(&DEFAULT_PROOF_COUNTS)
                 .into_iter()
-                .map(|mvm| ProofComposition { mvm })
+                .map(|mvm| ProofComposition { mvm, include_pvm: !vm_only })
                 .collect(),
             tx_proof_cache_dir: cache_path_from_env(
                 "RECURSION_BENCH_TX_PROOF_CACHE_DIR",

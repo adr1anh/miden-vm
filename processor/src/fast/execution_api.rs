@@ -630,7 +630,11 @@ impl FastProcessor {
             self.advice.prepare_extend_map(forest.advice_map()).map_exec_err()?.commit();
             self.merged_mast_forests.insert(commitment);
         }
-        Self::cache_loaded_mast_forest(&mut self.loaded_mast_forests, &prepared.loaded_mast_forest);
+        Self::cache_loaded_mast_forest(
+            &mut self.loaded_mast_forests,
+            prepared.request.implementation().as_word(),
+            &prepared.loaded_mast_forest,
+        );
         // A successful request memo records availability only. The authenticated binding and
         // syscall mode have already been checked before either cache is consulted.
         if prepared.request.key().is_some() {
@@ -642,8 +646,17 @@ impl FastProcessor {
 
     fn cache_loaded_mast_forest(
         loaded_mast_forests: &mut BTreeMap<Word, Vec<LoadedMastForest>>,
+        local_digest: &Word,
         loaded_mast_forest: &LoadedMastForest,
     ) {
+        // Preflight found this digest locally. Since we publish every local root together,
+        // membership here means we already indexed this exact owner throughout the forest.
+        if loaded_mast_forests
+            .get(local_digest)
+            .is_some_and(|owners| owners.contains(loaded_mast_forest))
+        {
+            return;
+        }
         for procedure_digest in loaded_mast_forest.mast_forest().local_procedure_digests() {
             let owners = loaded_mast_forests.entry(procedure_digest).or_default();
             if !owners.iter().any(|owner| owner.same_owner(loaded_mast_forest)) {
