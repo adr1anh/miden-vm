@@ -17,6 +17,8 @@
 //! `RECURSION_BENCH_STACK` defaults to `0,1`; its first value varies between inner proofs.
 //! `RECURSION_SAMPLE_SIZE`, `RECURSION_WARM_UP_TIME_SECS`, and `RECURSION_MEASUREMENT_TIME_SECS`
 //! control Criterion timing. All outer proofs use Eidos.
+//! For VM-only comparisons, set `RECURSION_VM_ONLY` to `smoke`, `execute`, or `prove`,
+//! and set `RECURSION_VM_FIXTURE_DIR` to the directory containing the two fixed MASM workloads.
 
 use std::{fmt::Write as _, path::PathBuf, sync::Arc, time::Duration};
 
@@ -45,6 +47,8 @@ mod config;
 mod fixtures;
 #[path = "recursive_verify/measurements.rs"]
 mod measurements;
+#[path = "recursive_verify/vm_only.rs"]
+mod vm_only;
 
 use config::{BenchConfig, ProofComposition, env_u64, env_usize, env_usize_allow_zero};
 use fixtures::{
@@ -85,6 +89,7 @@ fn push_word_masm(source: &mut String, word: Word) {
 fn vm_verify_proof_call_masm(
     expected_verifier: VerifierIdentity,
     claim_commitment: Word,
+    assert_empty_deferred_root: bool,
 ) -> String {
     let mut source = String::new();
     push_word_masm(&mut source, claim_commitment);
@@ -97,10 +102,17 @@ fn vm_verify_proof_call_masm(
         adv.push_mapval dropw
         exec.vm::verify_proof
         # => [security_descriptor(12), D, padding(16)]
-        dropw dropw dropw dropw
+        dropw dropw dropw
         ",
     )
     .expect("write recursive verifier call source");
+    if assert_empty_deferred_root {
+        // The recursive verifier returns the claim's authenticated deferred root.
+        // TRUE_DIGEST is the all-zero word on both benchmark revisions.
+        source.push_str("assertz assertz assertz assertz\n");
+    } else {
+        source.push_str("dropw\n");
+    }
     source
 }
 
@@ -129,13 +141,14 @@ fn verify_pvm_proof_call_masm(
 
 /// Full MASM program used by the benchmark.
 ///
-/// `verify_calls` contains the MVM calls followed by exactly one PVM call.
-fn recursive_verifier_program_masm(verify_calls: &str) -> String {
+/// `verify_calls` contains the MVM calls and an optional final PVM call.
+fn recursive_verifier_program_masm(verify_calls: &str, include_pvm: bool) -> String {
+    let pvm_import = if include_pvm { "use miden::core::sys::pvm" } else { "" };
     format!(
         "
         use miden::core::sys
         use miden::core::sys::vm
-        use miden::core::sys::pvm
+        {pvm_import}
 
         begin
             {verify_calls}
@@ -167,9 +180,10 @@ fn assemble_recursive_program(
 
 fn dump_recursive_program_source(scenario: &str, composition: ProofComposition, source: &str) {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target").join(format!(
-        "recursive_verify_{}_{}_mvm_1_pvm.masm",
+        "recursive_verify_{}_{}_mvm_{}_pvm.masm",
         slugify(scenario),
-        composition.mvm_count()
+        composition.mvm_count(),
+        composition.pvm_count()
     ));
     std::fs::create_dir_all(path.parent().expect("recursive MASM dump parent"))
         .expect("create recursive MASM directory");
@@ -185,9 +199,10 @@ fn build_recursive_verifier_case(
     core_lib: &CoreLibrary,
     fixtures: &[TxProofFixture],
     composition: ProofComposition,
-    pvm_advice: &RecursiveProofAdvice,
+    pvm_advice: Option<&RecursiveProofAdvice>,
     scenario: &str,
     write_recursive_masm: bool,
+    assert_empty_deferred_root: bool,
 ) -> RecursionCase {
     assert!(
         fixtures.len() >= composition.mvm_count(),
@@ -197,9 +212,11 @@ fn build_recursive_verifier_case(
     let vm_profile = core_lib
         .vm_recursive_verifier_profile()
         .expect("build embedded VM verifier profile");
-    let pvm_profile = core_lib
-        .pvm_recursive_verifier_profile()
-        .expect("build embedded PVM verifier profile");
+    let pvm_profile = pvm_advice.map(|_| {
+        core_lib
+            .pvm_recursive_verifier_profile()
+            .expect("build embedded PVM verifier profile")
+    });
     let mut verify_calls = String::new();
     let mut advice_inputs = AdviceInputs::default();
     let mut effective_advice = core_lib.mast_forest().advice_map().clone();
@@ -209,19 +226,24 @@ fn build_recursive_verifier_case(
         verify_calls.push_str(&vm_verify_proof_call_masm(
             vm_profile.identity(),
             proof_advice.claim_commitment,
+            assert_empty_deferred_root,
         ));
         effective_advice
             .merge(proof_advice.advice_inputs.map())
             .expect("MVM request advice must not conflict with selected package or request advice");
         advice_inputs.extend(proof_advice.advice_inputs);
     }
-    verify_calls
-        .push_str(&verify_pvm_proof_call_masm(pvm_profile.identity(), pvm_advice.claim_commitment));
-    effective_advice
-        .merge(pvm_advice.advice_inputs.map())
-        .expect("PVM request advice must not conflict with selected package or request advice");
-    advice_inputs.extend(pvm_advice.advice_inputs.clone());
-    let source = recursive_verifier_program_masm(&verify_calls);
+    if let Some((pvm_advice, pvm_profile)) = pvm_advice.zip(pvm_profile.as_ref()) {
+        verify_calls.push_str(&verify_pvm_proof_call_masm(
+            pvm_profile.identity(),
+            pvm_advice.claim_commitment,
+        ));
+        effective_advice
+            .merge(pvm_advice.advice_inputs.map())
+            .expect("PVM request advice must not conflict with selected package or request advice");
+        advice_inputs.extend(pvm_advice.advice_inputs.clone());
+    }
+    let source = recursive_verifier_program_masm(&verify_calls, pvm_advice.is_some());
     if write_recursive_masm {
         dump_recursive_program_source(scenario, composition, &source);
     }
@@ -238,7 +260,7 @@ fn build_recursive_verifier_case(
     );
     let environment = fixture_environment.validated_environment();
     let expected_root = fixture_environment.target().environment_root();
-    for profile in [&vm_profile, &pvm_profile] {
+    for profile in std::iter::once(&vm_profile).chain(pvm_profile.as_ref()) {
         profile
             .authorize(expected_root, environment, &effective_advice, environment.visits())
             .expect("recursive benchmark environment and resources must authorize");
@@ -266,7 +288,8 @@ fn recursive_host(
 }
 
 fn bench_recursive_verify(c: &mut Criterion) {
-    let config = BenchConfig::from_env();
+    let vm_only_mode = vm_only::Mode::from_env();
+    let config = BenchConfig::from_env(vm_only_mode.is_some());
     let core_lib = CoreLibrary::default();
     let prover = config.outer_prover();
     let max_proof_count = config
@@ -275,6 +298,11 @@ fn bench_recursive_verify(c: &mut Criterion) {
         .map(|composition| composition.mvm_count())
         .max()
         .expect("proof compositions");
+    if let Some(mode) = vm_only_mode {
+        mode.run(&config, &prover, max_proof_count, &core_lib);
+        return;
+    }
+
     let mut scenarios = load_scenarios(&["VM bitwise and memory", "VM compression and arithmetic"]);
     scenarios.retain(|scenario| DEFAULT_SCENARIOS.contains(&scenario.name.as_str()));
     assert!(!scenarios.is_empty(), "recursion requires a default generic VM scenario");
@@ -298,9 +326,10 @@ fn bench_recursive_verify(c: &mut Criterion) {
                 &core_lib,
                 &fixtures,
                 *composition,
-                pvm_advice,
+                Some(pvm_advice),
                 &slug,
                 config.write_recursive_masm(),
+                false,
             ));
         }
     }

@@ -555,6 +555,51 @@ fn native_peak_composes_actual_ledger_peak_old_buffers_and_all_replacement_capac
 }
 
 #[test]
+fn use_log_batches_replacements_when_the_memory_policy_has_headroom() {
+    let tree = tree();
+    for batch in [true, false] {
+        let mut limits = session_limits();
+        limits.max_cached_keys = 2;
+        limits.max_retained_bytes = 1 << 20;
+        limits.max_prepare_peak_bytes = 2 << 20;
+        let mut ledger = ledger_limits();
+        ledger.max_retained_bytes = if batch { 1 << 16 } else { limits.max_retained_bytes };
+        ledger.max_peak_bytes = if batch { 2 << 16 } else { limits.max_prepare_peak_bytes };
+        let mut session = ResolutionSession::new(tree.entry.descriptor(), ledger, limits);
+        session.prepare_entry(tree.entry.binding()).unwrap().commit();
+        for i in 1..=2 {
+            session
+                .prepare_cached(tree.entry.key, InvocationTag::Normal, row(i))
+                .unwrap()
+                .commit();
+        }
+        let before = snapshot(&session);
+        let prepared =
+            session.prepare_cached(tree.entry.key, InvocationTag::Normal, row(3)).unwrap();
+        assert_eq!(
+            prepared.native.buffers.uses.as_ref().unwrap().capacity(),
+            if batch { 4 } else { 3 }
+        );
+        drop(prepared);
+        assert_eq!(snapshot(&session), before);
+        session
+            .prepare_cached(tree.entry.key, InvocationTag::Normal, row(3))
+            .unwrap()
+            .commit();
+        // A new binding can still use its ledger budget while the log has spare capacity.
+        let prepared = session
+            .prepare(tree.normal.key, tree.normal.binding(), InvocationTag::Normal, row(4))
+            .unwrap();
+        assert_eq!(prepared.native.buffers.uses.is_none(), batch);
+        prepared.commit();
+        assert_eq!(
+            session.uses().map(|record| record.row()).collect::<Vec<_>>(),
+            [row(1), row(2), row(3), row(4)]
+        );
+    }
+}
+
+#[test]
 fn a_large_declared_ledger_peak_does_not_preclude_modest_actual_work_under_the_outer_limit() {
     let tree = tree();
     let mut calibration = entered(&tree.entry);

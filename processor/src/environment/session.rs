@@ -226,6 +226,7 @@ impl ResolutionSession {
                 phase: SessionPhase::Unentered,
                 bindings: Vec::new(),
                 uses: Vec::new(),
+                max_batched_uses: max_batched_uses(limits, ledger_limits),
                 root_use: Vec::new(),
                 counters: SessionCounters {
                     cached_keys: 0,
@@ -588,6 +589,7 @@ struct SessionState {
     phase: SessionPhase,
     bindings: Vec<SessionBinding>,
     uses: Vec<InvocationUse>,
+    max_batched_uses: usize,
     // Ordinary calls cannot consume or grow this entry-only record buffer.
     root_use: Vec<InvocationUse>,
     counters: SessionCounters,
@@ -716,10 +718,26 @@ impl PreparedBuffers {
         } else {
             None
         };
-        let uses = if let Some(capacity) = plan.uses {
-            let buffer = reserve_vec::<InvocationUse>(capacity)?;
-            plan.uses = Some(buffer.capacity());
-            plan.check(state, limits, ledger_retained, ledger_peak)?;
+        let uses = if let Some(required) = plan.uses {
+            let preferred = state
+                .uses
+                .capacity()
+                .saturating_mul(2)
+                .min(state.max_batched_uses)
+                .min(limits.max_requests.saturating_sub(1));
+            let mut reserve = |capacity| {
+                plan.uses = Some(capacity);
+                plan.check(state, limits, ledger_retained, ledger_peak)?;
+                let buffer = reserve_vec::<InvocationUse>(capacity)?;
+                plan.uses = Some(buffer.capacity());
+                plan.check(state, limits, ledger_retained, ledger_peak)?;
+                Ok::<_, SessionError>(buffer)
+            };
+            let buffer = if preferred > required {
+                reserve(preferred).or_else(|_| reserve(required))?
+            } else {
+                reserve(required)?
+            };
             Some(buffer)
         } else {
             None
@@ -787,6 +805,30 @@ impl BufferPlan {
 fn growth(len: usize, capacity: usize, add: bool) -> Result<Option<usize>, SessionError> {
     let required = checked_add(len, usize::from(add))?;
     Ok(if required > capacity { Some(required) } else { None })
+}
+
+/// Bound speculative use slots so that spare capacity cannot crowd out a later binding or
+/// opening. Policies without that headroom retain exact growth. The peak also covers overlapping
+/// old and new binding buffers and use logs while a replacement is staged.
+const fn max_batched_uses(session: SessionLimits, ledger: LedgerLimits) -> usize {
+    const fn remaining(limit: usize, ledger: usize, bindings: usize) -> usize {
+        if limit == usize::MAX {
+            return usize::MAX;
+        }
+        limit
+            .saturating_sub(ledger)
+            .saturating_sub(bindings)
+            .saturating_sub(size_of::<InvocationUse>())
+    }
+    let bindings = session.max_cached_keys.saturating_mul(size_of::<SessionBinding>());
+    let retained = remaining(session.max_retained_bytes, ledger.max_retained_bytes, bindings);
+    let peak = remaining(
+        session.max_prepare_peak_bytes,
+        ledger.max_peak_bytes,
+        bindings.saturating_mul(2),
+    );
+    let bytes = if retained < peak / 2 { retained } else { peak / 2 };
+    bytes / size_of::<InvocationUse>()
 }
 
 fn ledger_peak_available(

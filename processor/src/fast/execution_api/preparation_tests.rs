@@ -319,10 +319,12 @@ fn cache_retains_distinct_owners_and_preserves_first_loaded_fallback() {
     let digest = first.mast_forest()[roots[0]].digest();
     let mut cache = BTreeMap::new();
 
-    FastProcessor::cache_loaded_mast_forest(&mut cache, &first);
-    FastProcessor::cache_loaded_mast_forest(&mut cache, &second);
-    FastProcessor::cache_loaded_mast_forest(&mut cache, &first.clone());
+    let second_digest = first.mast_forest()[roots[1]].digest();
+    FastProcessor::cache_loaded_mast_forest(&mut cache, &digest, &first);
+    FastProcessor::cache_loaded_mast_forest(&mut cache, &digest, &second);
+    FastProcessor::cache_loaded_mast_forest(&mut cache, &second_digest, &first.clone());
 
+    assert_eq!(cache[&second_digest], cache[&digest]);
     let owners = cache.get(&digest).unwrap();
     assert_eq!(owners.len(), 2);
     assert!(owners[0].same_owner(&first));
@@ -462,7 +464,7 @@ fn generic_offer_keeps_cached_owner_but_exact_keyed_offer_can_replace_it() {
     let first = LoadedMastForest::new(forest.clone());
     let later_generic = LoadedMastForest::new(forest.clone());
     let mut cache = BTreeMap::new();
-    FastProcessor::cache_loaded_mast_forest(&mut cache, &first);
+    FastProcessor::cache_loaded_mast_forest(&mut cache, implementation.as_word(), &first);
     let cached = cache.get(implementation.as_word()).unwrap().first().cloned();
 
     let selected =
